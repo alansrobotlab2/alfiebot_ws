@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "cstring": "cpp",
+        "*.txt_009": "cpp",
+        "*.txt_010": "cpp",
+        "*.txt_012": "cpp"
+    }
+}

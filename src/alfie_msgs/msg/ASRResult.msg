@@ -1,0 +1,2 @@
+# ASRResult.msg
+string asrresult

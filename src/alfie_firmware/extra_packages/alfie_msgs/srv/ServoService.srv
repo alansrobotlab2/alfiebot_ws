@@ -1,0 +1,6 @@
+uint8 servo
+char operation
+uint8 address
+int16 value
+---
+ServoMemoryMap memorymap
