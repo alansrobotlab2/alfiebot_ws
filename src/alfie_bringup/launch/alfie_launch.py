@@ -25,7 +25,7 @@ def generate_launch_description():
             package='alfie_tts',
             namespace='',
             executable='alfietts',
-            name='alfietts_node'
+            name='tts_node'
         ),
 
         Node(

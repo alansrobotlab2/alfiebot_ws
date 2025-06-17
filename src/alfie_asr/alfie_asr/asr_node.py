@@ -32,10 +32,7 @@ class ASRNode(Node):
             threshold=0.35,
         )
 
-        self.set_parameters([rclpy.parameter.Parameter('speech_detected', rclpy.Parameter.Type.BOOL, False)])
-
         self.asr_model = onnx_asr.load_model("istupakov/parakeet-tdt-0.6b-v2-onnx", quantization="int8")
-        self.declare_parameter('speech_detected', False)
         self.get_logger().info('ASRNode initialized.')
 
     def audio_callback(self, msg):
@@ -52,10 +49,7 @@ class ASRNode(Node):
             key = "speaking"
 
         if self.micstate == 'IDLE' and key == 'start':
-            self.get_logger().info('Speech start detected')
-
-            self.set_parameters([rclpy.parameter.Parameter('speech_detected', rclpy.Parameter.Type.BOOL, True)])
-            
+            self.get_logger().info('Speech start detected')            
             self.audio_buffer = bytearray()
             self.audio_buffer.extend(samples.tobytes())
             self.micstate = 'SPEECH'
@@ -72,9 +66,6 @@ class ASRNode(Node):
             self.publisher_.publish(asr_msg)
             self.micstate = 'IDLE'
             self.audio_buffer = bytearray()
-            
-            self.set_parameters([rclpy.parameter.Parameter('speech_detected', rclpy.Parameter.Type.BOOL, False)])
-
 
 
 def main(args=None):

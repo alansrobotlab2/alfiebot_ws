@@ -44,12 +44,9 @@ class AlfieTTS(Node):
             QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         )
         self.speech_request_subscriber  # prevent unused variable warning
-        self.declare_parameter('tts_active', False)
 
     def speech_request_callback(self, msg):
         self.get_logger().info(f"Received speech request: {msg.text}")
-        # Set tts_active True at start
-        self.set_parameters([rclpy.parameter.Parameter('tts_active', rclpy.Parameter.Type.BOOL, True)])
         alsaaudio.PCM(cardindex=self.output_device)
         alsaaudio.Mixer("Master").setvolume(msg.volume)
         with sd.RawOutputStream(
@@ -68,8 +65,6 @@ class AlfieTTS(Node):
             ):
                 output_stream.write(chunk)
             output_stream.wait()  # Wait until all audio in the buffer has been played
-        # Now the stream is closed and all audio has finished playing
-        self.set_parameters([rclpy.parameter.Parameter('tts_active', rclpy.Parameter.Type.BOOL, False)])
 
 
 def main(args=None):
