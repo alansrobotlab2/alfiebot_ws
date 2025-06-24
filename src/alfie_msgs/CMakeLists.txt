@@ -41,9 +41,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DriverState.msg"
   "msg/DriverCmd.msg"
   "msg/SpeechRequest.msg"
+  "msg/Speaking.msg"
   "msg/AudioFrame.msg"
-  "srv/ServoService.srv"
   "msg/ASRResult.msg"
+  "srv/ServoService.srv"
  )
 
 ament_package()

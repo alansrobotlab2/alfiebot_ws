@@ -12,6 +12,8 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from alfie_msgs.msg import SpeechRequest
+from alfie_msgs.msg import Speaking
+
 
 class AlfieTTS(Node):
     def __init__(self):
@@ -28,6 +30,13 @@ class AlfieTTS(Node):
         self.use_cuda = False
         self.output_device = 0
         self.latency = 0.15
+        self.speaking = False
+
+        self.speaking_pub = self.create_publisher(
+            Speaking,
+            'speaking',
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        )
 
         self.voice = PiperVoice.load(self.model_path, self.config_path, use_cuda=self.use_cuda)
 
@@ -45,8 +54,18 @@ class AlfieTTS(Node):
         )
         self.speech_request_subscriber  # prevent unused variable warning
 
+        # Publish initial state (not speaking)
+        self.publish_speaking(False)
+
+    def publish_speaking(self, is_speaking):
+        msg = Speaking()
+        msg.is_speaking = is_speaking
+        self.speaking = is_speaking
+        self.speaking_pub.publish(msg)
+
     def speech_request_callback(self, msg):
         self.get_logger().info(f"Received speech request: {msg.text}")
+        self.publish_speaking(True)
         alsaaudio.PCM(cardindex=self.output_device)
         alsaaudio.Mixer("Master").setvolume(msg.volume)
         with sd.RawOutputStream(
@@ -64,7 +83,8 @@ class AlfieTTS(Node):
                 sentence_silence=self.sentence_silence,
             ):
                 output_stream.write(chunk)
-            output_stream.wait()  # Wait until all audio in the buffer has been played
+        self.publish_speaking(False)
+
 
 
 def main(args=None):

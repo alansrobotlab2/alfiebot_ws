@@ -20,6 +20,7 @@ setup(
     # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'ollama_serve_node = alfie_llm.ollama_serve_node:main',
         ],
     },
 )

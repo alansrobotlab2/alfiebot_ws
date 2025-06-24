@@ -6,6 +6,9 @@ import sounddevice as sd
 import numpy as np
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 import time
+from alfie_mic.usb_4_mic_array.tuning import Tuning
+from alfie_mic.pixel_ring import pixel_ring
+import usb.core
 
 SAMPLE_RATE = 8000
 BLOCKSIZE = 256  # 512 samples per frame
@@ -15,6 +18,17 @@ STREAM_RESET_INTERVAL = 3600  # seconds, configurable
 class AudioPublisher(Node):
     def __init__(self):
         super().__init__('audio_publisher')
+
+        self.mic = usb.core.find(idVendor=0x2886, idProduct=0x0018)
+        #print dev
+        if self.mic:
+            Mic_tuning = Tuning(self.mic)
+            Mic_tuning.write("AGCONOFF",1)
+            Mic_tuning.write("AGCGAIN",250)
+            Mic_tuning.write("ECHOONOFF",1)
+            Mic_tuning.write("AGCMAXGAIN",250)
+            Mic_tuning.write("AGCDESIREDLEVEL",20)
+
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.publisher_ = self.create_publisher(AudioFrame, 'audio_frames', qos)
         self.stream = sd.InputStream(

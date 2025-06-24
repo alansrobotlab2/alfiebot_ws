@@ -42,4 +42,11 @@ def generate_launch_description():
             name='asr_node'
         ),
 
+        Node(
+            package='alfie_llm',
+            namespace='',
+            executable='ollama_serve_node',
+            name='ollama_node'
+        ),
+
     ])
