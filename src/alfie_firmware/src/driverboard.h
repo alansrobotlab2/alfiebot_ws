@@ -113,6 +113,8 @@ public:
     volatile long A_wheel_pulse_count = 0;
 
     float pollservostatusduration = 0.0f;
+    float updateservoidleduration = 0.0f;
+    float updateservoactiveduration = 0.0f;
     float updatemotorcommandduration = 0.0f;
     float imuupdateduration = 0.0f;
 };

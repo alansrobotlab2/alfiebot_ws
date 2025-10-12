@@ -1,6 +1,7 @@
 bool drivercmd_timeout
 float32 pollservostatusduration
-float32 updatemotorcommandduration
+float32 updateservoidleduration
+float32 updateservoactiveduration
 float32 imuupdateduration
 int64 a_wheel_pulse
 int64 b_wheel_pulse

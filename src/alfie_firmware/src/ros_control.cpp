@@ -148,7 +148,8 @@ void generateLowStatus()
   b.driverState.driver_diagnostics.b_wheel_pulse = b.B_wheel_pulse_count;
 
   b.driverState.driver_diagnostics.pollservostatusduration = b.pollservostatusduration;
-  b.driverState.driver_diagnostics.updatemotorcommandduration = b.updatemotorcommandduration;
+  b.driverState.driver_diagnostics.updateservoidleduration = b.updateservoidleduration;
+  b.driverState.driver_diagnostics.updateservoactiveduration = b.updateservoactiveduration;
   b.driverState.driver_diagnostics.imuupdateduration = b.imuupdateduration;
 
   b.driverState.board_temp = b.board_temp;

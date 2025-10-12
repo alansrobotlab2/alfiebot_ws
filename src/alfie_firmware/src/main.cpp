@@ -9,25 +9,7 @@
 
 DriverBoard b;
 
-void ServoLoop()
-{
 
-  switch (b.servoLoopState)
-  {
-  case b.RUNNING:
-    TIME_FUNCTION_MS(updateServoStatus(), b.pollservostatusduration);
-    TIME_FUNCTION_MS(updateServoCommands(), b.updatemotorcommandduration);
-    TIME_FUNCTION_MS(getIMUData(), b.imuupdateduration);
-    break;
-  case b.REQUEST_STOP:
-    b.servoLoopState = b.STOPPED;
-    break;
-  case b.STOPPED:
-    break;
-  default:
-    break;
-  }
-}
 
 void vMotorEncoderTask(void *pvParameters)
 {
@@ -72,7 +54,9 @@ void vHardwareInterfaceTask(void *pvParameters)
     // Wait for the next cycle (precise 100 Hz timing)
     xTaskDelayUntil(&xLastWakeTime, xFrequency);
     TIME_FUNCTION_MS(updateServoStatus(), b.pollservostatusduration);
-    TIME_FUNCTION_MS(updateServoCommands(), b.updatemotorcommandduration);
+    TIME_FUNCTION_MS(updateServoIdle(), b.updateservoidleduration);
+    TIME_FUNCTION_MS(updateServoActive(), b.updateservoactiveduration);
+
     generateLowStatus();
     TIME_FUNCTION_MS(getIMUData(), b.imuupdateduration);
     driveMotors();

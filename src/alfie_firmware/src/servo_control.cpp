@@ -10,16 +10,16 @@ extern DriverBoard b;
 void updateServoStatus()
 {
 
-  b.st.syncReadPacketTx(b.IDS, NUMSERVOS, 56, 15);
+  b.st.syncReadPacketTx(b.IDS, NUMSERVOS, SBS_CURRENTLOCATION, 13);
 
   int RxResult = 0;
 
   for (int i = 0; i < NUMSERVOS; i++)
   {
-    RxResult = b.st.syncReadPacketRx((i + 1), b.buf.bytes + 56);
+    RxResult = b.st.syncReadPacketRx((i + 1), b.buf.bytes + SBS_CURRENTLOCATION);
     if (RxResult > 0)
     {
-      memcpy(b.mBuf[i].bytes + 56, b.buf.bytes + 56, 15);
+      memcpy(b.mBuf[i].bytes + SBS_CURRENTLOCATION, b.buf.bytes + SBS_CURRENTLOCATION, 13);
     }
     else
     {
@@ -45,12 +45,11 @@ void updateServoStatus()
     acknowledging that any change to those values automatically sets the torque switch to 1
   */
 
-void updateServoCommands()
+void updateServoIdle()
 {
   int index = 0;
 
   // update torque switch for disabled servos
-  index = 0;
   for (int i = 0; i < NUMSERVOS; i++)
   {
     if (b.mBuf[i].memory.torqueSwitch == 0)
@@ -60,19 +59,22 @@ void updateServoCommands()
       index++;
     }
   }
-  //b.st.syncWrite(b.servoCMDIDS, index, 40, b.torquecommandbuf, 1);
+  b.st.syncWrite(b.servoCMDIDS, index, SBS_TORQUEENABLE, b.torquecommandbuf, 1);
+}
 
 
+void updateServoActive()
+{
+  int index = 0;
 
   // selectively update position based on the torque switch == 1
-  index = 0;
   for (int i = 0; i < NUMSERVOS; i++)
   {
-    if (b.torquecommandbuf[i] == 1)
+    if (b.mBuf[i].memory.torqueSwitch == 1)
     {
-      b.servocommandbuf[(3 * index) + 0] = b.mBuf[i].memory.acceleration;
-      b.servocommandbuf[(3 * index) + 1] = b.mBuf[i].bytes[42];
-      b.servocommandbuf[(3 * index) + 2] = b.mBuf[i].bytes[43];
+      b.servocommandbuf[(3 * index) + 0] = b.mBuf[i].bytes[SBS_ACCELERATION];
+      b.servocommandbuf[(3 * index) + 1] = b.mBuf[i].bytes[SBS_TARGETLOCATION + 0];
+      b.servocommandbuf[(3 * index) + 2] = b.mBuf[i].bytes[SBS_TARGETLOCATION + 1];
       b.servoCMDIDS[index] = (i + 1);
       index++;
     }
@@ -80,7 +82,7 @@ void updateServoCommands()
 
   if (index > 0)
   {
-    //b.st.syncWrite(b.servoCMDIDS, index, 41, b.servocommandbuf, 3);
+    b.st.syncWrite(b.servoCMDIDS, index, 41, b.servocommandbuf, 3);
   }
 }
 
