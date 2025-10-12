@@ -1,3 +1,6 @@
+#ifndef _MEMORYSTRUCT_H_
+#define _MEMORYSTRUCT_H_
+
 #include "scservo/INST.h"
 
 // luckily the esp32 and the serial bus servos use the same endian format, 
@@ -70,3 +73,6 @@ typedef union {
     MemoryStruct memory;
     uint8_t bytes[sizeof(MemoryStruct)];
 } MemoryReplyBuf ;
+
+
+#endif // _MEMORYSTRUCT_H_

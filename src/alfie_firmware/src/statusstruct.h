@@ -1,3 +1,6 @@
+#ifndef _STATUSSTRUCT_H_
+#define _STATUSSTRUCT_H_
+
 #include "scservo/INST.h"
 
 // luckily the esp32 and the serial bus servos use the same endian format, so we can use the same struct for both
@@ -30,3 +33,6 @@ typedef union {
     StatusStruct status;
     u8 bytes[sizeof(StatusStruct)];
 } StatusReplyBuf ;
+
+
+#endif // _STATUSSTRUCT_H_

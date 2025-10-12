@@ -10,6 +10,8 @@
             "includePath": [
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/include",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/src",
+                "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
+                "/home/alfie/alfiebot_ws/src/alfie_firmware/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/platform_code/arduino",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/.pio/libdeps/esp-wrover-kit/micro_ros_platformio",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/libmicroros/include",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/platform_code",
@@ -242,7 +244,6 @@
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
-                "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
                 ""
             ],
             "browse": {
@@ -250,6 +251,8 @@
                 "path": [
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/include",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/src",
+                    "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
+                    "/home/alfie/alfiebot_ws/src/alfie_firmware/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/platform_code/arduino",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/.pio/libdeps/esp-wrover-kit/micro_ros_platformio",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/libmicroros/include",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/platform_code",
@@ -482,7 +485,6 @@
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
-                    "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
                     ""
                 ]
             },
@@ -505,7 +507,7 @@
                 "ARDUINO_BOARD=\"Espressif ESP-WROVER-KIT\"",
                 "ARDUINO_PARTITION_default",
                 "MICRO_ROS_TRANSPORT_ARDUINO_SERIAL=1",
-                "MICRO_ROS_DISTRO_IRON =1",
+                "MICRO_ROS_DISTRO_HUMBLE =1",
                 ""
             ],
             "cStandard": "gnu99",

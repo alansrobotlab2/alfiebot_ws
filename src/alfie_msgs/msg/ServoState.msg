@@ -6,6 +6,6 @@ int16 currentspeed
 uint16 currentload           
 uint8 currenttemperature    
 uint8 servostatus        
-uint8 mobilesign         
-uint8 currentvoltage
+uint8 mobilesign 
+uint8 currentvoltage        
 uint16 currentcurrent  

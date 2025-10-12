@@ -38,12 +38,15 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ServoMemoryMap.msg"
   "msg/ServoCmd.msg"
   "msg/ServoState.msg"
+  "msg/Imu.msg"
+  "msg/MagneticField.msg"
   "msg/DriverState.msg"
   "msg/DriverCmd.msg"
   "msg/SpeechRequest.msg"
   "msg/Speaking.msg"
   "msg/AudioFrame.msg"
   "msg/ASRResult.msg"
+  "msg/DriverDiagnostics.msg"
   "srv/ServoService.srv"
  )
 

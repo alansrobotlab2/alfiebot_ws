@@ -20,7 +20,7 @@ setup(
     # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'asr_node = alfie_asr.asr_node:main',
+            'parakeet_asr_node = alfie_asr.parakeet_asr_node:main',
         ],
     },
 )

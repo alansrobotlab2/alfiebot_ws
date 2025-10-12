@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'ollama_serve_node = alfie_llm.ollama_serve_node:main',
+            'mlc_llm_serve_node = alfie_llm.mlc_llm_serve_node:main',
         ],
     },
 )

@@ -1,5 +1,7 @@
+#ifndef _DRIVERBOARD_H_
+#define _DRIVERBOARD_H_
 
-
+#include "imu/IMU.h"
 
 class DriverBoard
 {
@@ -11,7 +13,8 @@ public:
           agentState(WAITING_AGENT),
           servoLoopState(RUNNING),
           start_time(0),
-          duration(0)
+          duration(0),
+          last_drivercmd_time(0)
     {
         for (uint8_t i = 0; i < MAX_SERVOS; ++i)
         {
@@ -21,6 +24,7 @@ public:
     }
 
     alfie_msgs__msg__DriverState driverState;
+    alfie_msgs__msg__DriverCmd driverCmd;
 
     rcl_publisher_t publisher;
     rcl_subscription_t subscriber;
@@ -36,10 +40,11 @@ public:
 
     SMS_STS st;
 
-    static constexpr int BAUDRATE = 921600;
-
-    TaskHandle_t xTaskServoInterface = NULL;
+    TaskHandle_t xTaskHardwareInterface = NULL;
     TaskHandle_t xTaskROS = NULL;
+    TaskHandle_t xTask100Hz = NULL;
+    TaskHandle_t xTaskMotorEncoder = NULL;
+    TaskHandle_t xTaskIMU = NULL;
     const UBaseType_t taskPriority = 0;
 
     bool micro_ros_init_successful;
@@ -67,6 +72,11 @@ public:
     unsigned long start_time;
     uint8_t duration;
 
+    // Watchdog variables
+    volatile unsigned long last_drivercmd_time;
+
+    volatile bool drivercmd_timeout = true;
+
     MemoryReplyBuf mBuf[MAX_SERVOS];
 
     uint8_t IDS[MAX_SERVOS];
@@ -77,4 +87,34 @@ public:
 
     u8 torquecommandbuf[MAX_SERVOS];
     u8 servocommandbuf[3 * MAX_SERVOS];
+
+    int16_t drivercmdbuf[2];
+
+    // IMU related variables
+    // Set the values for the Roll, Pitch, and Yaw corners, as well as the Temp temperature.
+    // Roll represents the roll angle of rotation around the X-axis, Pitch represents the pitch angle of rotation around the Y-axis, and Yaw represents the yaw angle of rotation around the Z-axis.
+    int16_t IMU_Roll = 100;
+    int16_t IMU_Pitch = 100;
+    int16_t IMU_Yaw = 100;
+    int16_t IMU_Temp = 100;
+
+    EulerAngles stAngles;                    // Create structure variable stAngles to store the three angle data
+    IMU_ST_SENSOR_DATA_FLOAT stGyroRawData;  // For storing raw gyroscope data
+    IMU_ST_SENSOR_DATA_FLOAT stAccelRawData; // Stores raw accelerometer data
+    IMU_ST_SENSOR_DATA stMagnRawData;        // Storing magnetometer raw data
+
+    volatile uint8_t board_temp = 0;
+
+    volatile bool shoulder_limit_switch = false;
+
+    // Used to calculate the number of level changes of one of the Hall sensors of the encoder during the "interval" time (in ms).
+    // Since RISING is used later to initialize the interrupt, it is specifically the number of times the low level changes to a high level.
+    volatile long B_wheel_pulse_count = 0;
+    volatile long A_wheel_pulse_count = 0;
+
+    float pollservostatusduration = 0.0f;
+    float updatemotorcommandduration = 0.0f;
+    float imuupdateduration = 0.0f;
 };
+
+#endif // _DRIVERBOARD_H_

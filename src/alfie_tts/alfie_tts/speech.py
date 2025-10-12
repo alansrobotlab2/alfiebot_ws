@@ -2,14 +2,17 @@ import sys
 import threading
 import time
 import subprocess
+import os
 
 import sounddevice as sd
 from piper.voice import PiperVoice
+from piper.config import SynthesisConfig
 import alsaaudio
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from ament_index_python.packages import get_package_share_directory
 
 from alfie_msgs.msg import SpeechRequest
 from alfie_msgs.msg import Speaking
@@ -20,13 +23,16 @@ class AlfieTTS(Node):
 
         super().__init__('alfie_speech')
 
-        self.model_path = "/home/alfie/Documents/piper/voices/en_US-libritts_r-medium.onnx"
-        self.config_path = "/home/alfie/Documents/piper/voices/en_US-libritts_r-medium.onnx.json"
+        # Get package voices directory
+        package_share_directory = get_package_share_directory('alfie_tts')
+        voices_dir = os.path.join(package_share_directory, 'voices')
+        
+        self.model_path = os.path.join(voices_dir, 'en_US-libritts_r-medium.onnx')
+        self.config_path = os.path.join(voices_dir, 'en_US-libritts_r-medium.onnx.json')
         self.speaker_id = 65
         self.length_scale = None
         self.noise_scale = None
         self.noise_w = None
-        self.sentence_silence = 0.15
         self.use_cuda = False
         self.output_device = 0
         self.latency = 0.15
@@ -68,21 +74,23 @@ class AlfieTTS(Node):
         self.publish_speaking(True)
         alsaaudio.PCM(cardindex=self.output_device)
         alsaaudio.Mixer("Master").setvolume(msg.volume)
+        
+        # Create synthesis config
+        syn_config = SynthesisConfig(
+            speaker_id=self.speaker_id,
+            length_scale=self.length_scale,
+            noise_scale=self.noise_scale,
+            noise_w_scale=self.noise_w,
+        )
+        
         with sd.RawOutputStream(
             samplerate=self.voice.config.sample_rate,
             channels=1,
             dtype='int16',
             latency=self.latency,
         ) as output_stream:
-            for chunk in self.voice.synthesize_stream_raw(
-                msg.text,
-                speaker_id=self.speaker_id,
-                length_scale=self.length_scale,
-                noise_scale=self.noise_scale,
-                noise_w=self.noise_w,
-                sentence_silence=self.sentence_silence,
-            ):
-                output_stream.write(chunk)
+            for audio_chunk in self.voice.synthesize(msg.text, syn_config):
+                output_stream.write(audio_chunk.audio_int16_bytes)
         self.publish_speaking(False)
 
 

@@ -6,7 +6,7 @@ import threading
 class OllamaServeNode(Node):
     def __init__(self):
         super().__init__('ollama_serve_node')
-        self.get_logger().info('Starting ollama serve...')
+        self.get_logger().info('Starting ollama server...')
         self.ollama_thread = threading.Thread(target=self.run_ollama, daemon=True)
         self.ollama_thread.start()
 
@@ -15,7 +15,7 @@ class OllamaServeNode(Node):
             process = subprocess.Popen(['ollama', 'serve'])
             process.wait()
         except Exception as e:
-            self.get_logger().error(f'Failed to launch ollama serve: {e}')
+            self.get_logger().error(f'Failed to launch ollama server: {e}')
 
 def main(args=None):
     rclpy.init(args=args)
