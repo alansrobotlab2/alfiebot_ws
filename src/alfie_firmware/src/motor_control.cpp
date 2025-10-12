@@ -140,3 +140,69 @@ void IRAM_ATTR A_wheel_pulse() {
     b.A_wheel_pulse_count--;
   }
 }
+
+void calculateMotorDynamics() {
+  unsigned long current_time = millis();
+  
+  // Calculate Motor A dynamics
+  if (b.A_last_update_time > 0) {
+    float delta_time = (current_time - b.A_last_update_time) / 1000.0f; // Convert to seconds
+    
+    if (delta_time > 0.0f) {
+      long delta_pulses = b.A_wheel_pulse_count - b.A_last_pulse_count;
+      
+      // Calculate velocity in pulses per second
+      float pulses_per_second = delta_pulses / delta_time;
+      
+      // Convert to meters per second using wheel parameters
+      // velocity (m/s) = pulses/sec * meters/pulse
+      b.A_velocity = pulses_per_second * METERS_PER_PULSE;
+      
+      // Calculate acceleration in m/s^2
+      b.A_acceleration = (b.A_velocity - b.A_last_velocity) / delta_time;
+      
+      // Determine if motor is moving (velocity threshold to account for noise)
+      // Threshold: 5 pulses/sec = approximately 0.001 m/s for typical small wheels
+      b.A_is_moving = (abs(pulses_per_second) > 5.0f);
+      
+      // Update last values
+      b.A_last_velocity = b.A_velocity;
+      b.A_last_pulse_count = b.A_wheel_pulse_count;
+    }
+  } else {
+    // First run initialization
+    b.A_last_pulse_count = b.A_wheel_pulse_count;
+  }
+  b.A_last_update_time = current_time;
+  
+  // Calculate Motor B dynamics
+  if (b.B_last_update_time > 0) {
+    float delta_time = (current_time - b.B_last_update_time) / 1000.0f; // Convert to seconds
+    
+    if (delta_time > 0.0f) {
+      long delta_pulses = b.B_wheel_pulse_count - b.B_last_pulse_count;
+      
+      // Calculate velocity in pulses per second
+      float pulses_per_second = delta_pulses / delta_time;
+      
+      // Convert to meters per second using wheel parameters
+      // velocity (m/s) = pulses/sec * meters/pulse
+      b.B_velocity = pulses_per_second * METERS_PER_PULSE;
+      
+      // Calculate acceleration in m/s^2
+      b.B_acceleration = (b.B_velocity - b.B_last_velocity) / delta_time;
+      
+      // Determine if motor is moving (velocity threshold to account for noise)
+      // Threshold: 5 pulses/sec = approximately 0.001 m/s for typical small wheels
+      b.B_is_moving = (abs(pulses_per_second) > 5.0f);
+      
+      // Update last values
+      b.B_last_velocity = b.B_velocity;
+      b.B_last_pulse_count = b.B_wheel_pulse_count;
+    }
+  } else {
+    // First run initialization
+    b.B_last_pulse_count = b.B_wheel_pulse_count;
+  }
+  b.B_last_update_time = current_time;
+}

@@ -38,6 +38,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ServoMemoryMap.msg"
   "msg/ServoCmd.msg"
   "msg/ServoState.msg"
+  "msg/MotorState.msg"
   "msg/Imu.msg"
   "msg/MagneticField.msg"
   "msg/DriverState.msg"

@@ -40,6 +40,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ServoState.msg"
   "msg/Imu.msg"
   "msg/MagneticField.msg"
+  "msg/MotorState.msg"
   "msg/DriverState.msg"
   "msg/DriverCmd.msg"
   "msg/SpeechRequest.msg"

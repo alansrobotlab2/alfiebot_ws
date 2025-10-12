@@ -112,6 +112,22 @@ public:
     volatile long B_wheel_pulse_count = 0;
     volatile long A_wheel_pulse_count = 0;
 
+    // Motor dynamics tracking - Motor A
+    long A_last_pulse_count = 0;
+    float A_velocity = 0.0f;  // pulses per second
+    float A_last_velocity = 0.0f;
+    float A_acceleration = 0.0f;  // pulses per second^2
+    bool A_is_moving = false;
+    unsigned long A_last_update_time = 0;
+
+    // Motor dynamics tracking - Motor B
+    long B_last_pulse_count = 0;
+    float B_velocity = 0.0f;  // pulses per second
+    float B_last_velocity = 0.0f;
+    float B_acceleration = 0.0f;  // pulses per second^2
+    bool B_is_moving = false;
+    unsigned long B_last_update_time = 0;
+
     float pollservostatusduration = 0.0f;
     float updateservoidleduration = 0.0f;
     float updateservoactiveduration = 0.0f;

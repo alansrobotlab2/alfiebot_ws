@@ -31,35 +31,40 @@ def generate_launch_description():
             package='alfie_tts',
             namespace='',
             executable='alfietts',
-            name='tts_node'
+            name='tts_node',
+            respawn=True
         ),
 
         Node(
             package='alfie_mic',
             namespace='',
             executable='audio_publisher',
-            name='audio_publisher_node'
+            name='audio_publisher_node',
+            respawn=True
         ),
 
         Node(
             package='alfie_asr',
             namespace='',
             executable='parakeet_asr_node',
-            name='asr_node'
+            name='asr_node',
+            respawn=True
         ),
 
         Node(
             package='alfie_llm',
             namespace='',
             executable='mlc_llm_serve_node',
-            name='mlc_llm_node'
+            name='mlc_llm_node',
+            respawn=True
         ),
 
         Node(
             package='foxglove_bridge',
             namespace='',
             executable='foxglove_bridge',
-            name='foxglove_bridge'
+            name='foxglove_bridge',
+            respawn=True
         ),
 
         IncludeLaunchDescription(

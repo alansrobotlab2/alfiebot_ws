@@ -122,6 +122,15 @@
 // Number of level changes of one Hall sensor of the encoder for one revolution of the output shaft
 #define SHAFT_PPR (REDUCTION_RATIO * PPR_NUM)
 
+// Wheel radius in meters - PLACEHOLDER VALUE, MEASURE YOUR ACTUAL WHEEL
+#define WHEEL_RADIUS_M 0.038f  // 38mm radius (76mm diameter) - compressed radius for alfiebot
+
+// Wheel circumference in meters
+#define WHEEL_CIRCUMFERENCE_M (2.0f * 3.14159265359f * WHEEL_RADIUS_M)
+
+// Distance traveled per encoder pulse (meters per pulse)
+#define METERS_PER_PULSE (WHEEL_CIRCUMFERENCE_M / SHAFT_PPR)
+
 
 /*
 struct DriverConfig0 {

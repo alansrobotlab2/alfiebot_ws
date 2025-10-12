@@ -139,8 +139,19 @@ void generateLowStatus()
 
   b.driverState.driver_diagnostics.drivercmd_timeout = b.drivercmd_timeout;
 
-  b.driverState.motor_state[0] = b.drivercmdbuf[0];
-  b.driverState.motor_state[1] = b.drivercmdbuf[1];
+  // Motor A state
+  b.driverState.motor_state[0].pwm_cmd = b.drivercmdbuf[0];
+  b.driverState.motor_state[0].pulse_count = b.A_wheel_pulse_count;
+  b.driverState.motor_state[0].velocity = b.A_velocity;
+  b.driverState.motor_state[0].acceleration = b.A_acceleration;
+  b.driverState.motor_state[0].is_moving = b.A_is_moving;
+
+  // Motor B state
+  b.driverState.motor_state[1].pwm_cmd = b.drivercmdbuf[1];
+  b.driverState.motor_state[1].pulse_count = b.B_wheel_pulse_count;
+  b.driverState.motor_state[1].velocity = b.B_velocity;
+  b.driverState.motor_state[1].acceleration = b.B_acceleration;
+  b.driverState.motor_state[1].is_moving = b.B_is_moving;
 
   b.driverState.shoulder_limit_state = b.shoulder_limit_switch;
 

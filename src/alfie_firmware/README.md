@@ -1,12 +1,11 @@
 What's currently broken:
- - enabling servos drives them for no reason
+ - servo command position and current position need to be adjusted to/from 12/16bit signed
  - imu values seem bad, plus no temp retrieval
  - unable to upload firmware after running alfie_bringup.  annoying
 
 
 
 What is left to implement:
- - full realtime servo control with watchdog
  - is there a way to reposition the jetson to exit air from both sides?
 
 

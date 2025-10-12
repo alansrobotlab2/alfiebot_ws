@@ -10,5 +10,6 @@ void driveMotors();
 void disableAllMotors();
 void IRAM_ATTR A_wheel_pulse();
 void IRAM_ATTR B_wheel_pulse();
+void calculateMotorDynamics();
 
 #endif // _MOTOR_CONTROL_H_
