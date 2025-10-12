@@ -13,7 +13,6 @@ DriverBoard b;
 
 void vMotorEncoderTask(void *pvParameters)
 {
-  initMotors();
 
 #if DRIVERBOARD == 0
   //  Set the interrupt and the corresponding callback function to call the B_wheel_pulse function when BEBCB changes from low to high (RISING).
@@ -43,6 +42,13 @@ void vHardwareInterfaceTask(void *pvParameters)
   initMotors();
   imuInit();
 
+#if DRIVERBOARD == 0
+  //  Set the interrupt and the corresponding callback function to call the B_wheel_pulse function when BEBCB changes from low to high (RISING).
+  attachInterrupt(digitalPinToInterrupt(BENCB), B_wheel_pulse, RISING);
+  // Set the interrupt and the corresponding callback function to call the A_wheel_pulse function when AEBCB changes from low to high (RISING).
+  attachInterrupt(digitalPinToInterrupt(AENCB), A_wheel_pulse, RISING);
+#endif
+
   TickType_t xLastWakeTime;
   const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms = 100Hz
 
@@ -56,7 +62,6 @@ void vHardwareInterfaceTask(void *pvParameters)
     TIME_FUNCTION_MS(updateServoStatus(), b.pollservostatusduration);
     TIME_FUNCTION_MS(updateServoIdle(), b.updateservoidleduration);
     TIME_FUNCTION_MS(updateServoActive(), b.updateservoactiveduration);
-
     generateLowStatus();
     TIME_FUNCTION_MS(getIMUData(), b.imuupdateduration);
     driveMotors();
@@ -70,6 +75,8 @@ void vROSTask(void *pvParameters)
 
   // Initialize the xLastWakeTime variable with the current time
   xLastWakeTime = xTaskGetTickCount();
+
+
 
   while (1)
   {
@@ -160,9 +167,19 @@ void setup()
       "ROSTask",   // A name just for humans
       10000,       // Stack size in bytes
       NULL,        // Parameter passed as input of the task
-      2,           // Priority of the task)
+      1,           // Priority of the task)
       &b.xTaskROS, // Task handle to keep track of created task
       0);          // Core where the task should run
+/*      
+  xTaskCreatePinnedToCore(
+      vMotorEncoderTask,
+      "MotorEncoderTask",      // A name just for humans
+      4096,                    // Stack size in bytes (smaller, simple task)
+      NULL,                    // Parameter passed as input of the task
+      1,                       // Priority of the task (same as hardware interface)
+      &b.xTaskMotorEncoder,    // Task handle to keep track of created task
+      0);                      // Core 0 with ROS task
+*/
 }
 
 void loop()
