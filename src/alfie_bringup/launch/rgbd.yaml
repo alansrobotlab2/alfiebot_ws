@@ -5,16 +5,16 @@
     stereo:
       i_subpixel: true
     rgb:
-      i_fps: 10.0
+      i_fps: 5.0
     depth:
-      i_fps: 10.0
+      i_fps: 5.0
     infra1:
-      i_fps: 10.0
+      i_fps: 5.0
     infra2:
-      i_fps: 10.0
+      i_fps: 5.0
     left:
-      i_fps: 10.0
+      i_fps: 5.0
     right:
-      i_fps: 10.0
+      i_fps: 5.0
     tof:
-      i_fps: 10.0
+      i_fps: 5.0

@@ -64,6 +64,11 @@ def generate_launch_description():
             namespace='',
             executable='foxglove_bridge',
             name='foxglove_bridge',
+            parameters=[{
+                'send_buffer_limit': 200000000,  # 200MB (default is 10MB)
+                'max_qos_depth': 2,  # Limit queue depth
+                'capabilities': ['clientPublish', 'connectionGraph', 'assets'],
+            }],
             respawn=True
         ),
 
