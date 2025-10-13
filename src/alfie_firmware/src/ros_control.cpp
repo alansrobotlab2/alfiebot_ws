@@ -174,9 +174,9 @@ void generateLowStatus()
   b.driverState.imu.orientation_y = b.IMU_Pitch;
   b.driverState.imu.orientation_z = b.IMU_Yaw;
   b.driverState.imu.orientation_w = 0.0;
-  b.driverState.magnetic_field.magnetic_field_x = b.stMagnRawData.s16X;
-  b.driverState.magnetic_field.magnetic_field_y = b.stMagnRawData.s16Y;
-  b.driverState.magnetic_field.magnetic_field_z = b.stMagnRawData.s16Z;
+  b.driverState.magnetic_field.magnetic_field_x = b.stMagnRawData.X;
+  b.driverState.magnetic_field.magnetic_field_y = b.stMagnRawData.Y;
+  b.driverState.magnetic_field.magnetic_field_z = b.stMagnRawData.Z;
 
 
 

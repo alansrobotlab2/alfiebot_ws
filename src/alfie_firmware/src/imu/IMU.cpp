@@ -32,7 +32,7 @@ void imuInit()
     Wire.begin(S_SDA, S_SCL, 400000);
     //Serial.begin(115200);
    
-    //if (qmi8658_.begin() == 0)
+    qmi8658_.begin();
 	  //    Serial.println("qmi8658_init fail");
 
     //if (magnetometer_.initialize())
@@ -58,7 +58,7 @@ void imuInit()
 void imuDataGet(EulerAngles *pstAngles, 
                 IMU_ST_SENSOR_DATA_FLOAT *pstGyroRawData,
                 IMU_ST_SENSOR_DATA_FLOAT *pstAccelRawData,
-                IMU_ST_SENSOR_DATA *pstMagnRawData)
+                IMU_ST_SENSOR_DATA_FLOAT *pstMagnRawData)
 {
 
   float  acc[3], gyro[3];
@@ -66,9 +66,17 @@ void imuDataGet(EulerAngles *pstAngles,
 
   magnetometer_.getData(&x, &y, &z);
 
-  pstMagnRawData->s16X = x- offset_x;
-  pstMagnRawData->s16Y = y- offset_y;
-  pstMagnRawData->s16Z = z- offset_z;
+  // Apply calibration offsets
+  int16_t x_cal = x - offset_x;
+  int16_t y_cal = y - offset_y;
+  int16_t z_cal = z - offset_z;
+
+  // Convert from raw LSB to Tesla
+  // AK09918 sensitivity: 0.15 µT/LSB
+  // Convert to Tesla: µT * 1e-6 = T
+  pstMagnRawData->X = (float)x_cal * 0.15f * 1e-6f;
+  pstMagnRawData->Y = (float)y_cal * 0.15f * 1e-6f;
+  pstMagnRawData->Z = (float)z_cal * 0.15f * 1e-6f;
 
   // qmi8658_.GetEulerAngles(&pstAngles->pitch,&pstAngles->roll,&pstAngles->yaw,acc,gyro);
   qmi8658_.read_sensor_data(acc,gyro);
@@ -89,9 +97,10 @@ void imuDataGet(EulerAngles *pstAngles,
   MotionVal[3]=acc[0];
   MotionVal[4]=acc[1];
   MotionVal[5]=acc[2];
-  MotionVal[6]=pstMagnRawData->s16X;
-  MotionVal[7]=pstMagnRawData->s16Y;
-  MotionVal[8]=pstMagnRawData->s16Z;
+  // Use calibrated values in microTesla for AHRS algorithm
+  MotionVal[6]=(float)x_cal * 0.15f;
+  MotionVal[7]=(float)y_cal * 0.15f;
+  MotionVal[8]=(float)z_cal * 0.15f;
 
   imuAHRSupdate((float)MotionVal[0] * 0.0175, (float)MotionVal[1] * 0.0175, (float)MotionVal[2] * 0.0175,
                 (float)MotionVal[3], (float)MotionVal[4], (float)MotionVal[5], 

@@ -101,7 +101,7 @@ public:
     EulerAngles stAngles;                    // Create structure variable stAngles to store the three angle data
     IMU_ST_SENSOR_DATA_FLOAT stGyroRawData;  // For storing raw gyroscope data
     IMU_ST_SENSOR_DATA_FLOAT stAccelRawData; // Stores raw accelerometer data
-    IMU_ST_SENSOR_DATA stMagnRawData;        // Storing magnetometer raw data
+    IMU_ST_SENSOR_DATA_FLOAT stMagnRawData;  // Storing magnetometer data in Tesla (T)
 
     volatile uint8_t board_temp = 0;
 
