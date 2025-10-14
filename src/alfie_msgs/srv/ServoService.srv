@@ -3,4 +3,4 @@ char operation
 uint8 address
 int16 value
 ---
-int16 retval
+ServoMemoryMap memorymap

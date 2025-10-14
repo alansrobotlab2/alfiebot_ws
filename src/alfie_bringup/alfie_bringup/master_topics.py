@@ -17,8 +17,10 @@ from ament_index_python.packages import get_package_share_directory
 class MasterTopicsNode(Node):
     def __init__(self):
         super().__init__('master_topics_node')
-        # Use RELIABLE QoS for better compatibility with subscribers
-        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        # Use BEST_EFFORT QoS for driver state subscriptions (to match driver publishers)
+        qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        # Use RELIABLE QoS for command and robot state topics
+        qos_reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         
         # Initialize state variables
         self.driver0_state = None
@@ -31,47 +33,47 @@ class MasterTopicsNode(Node):
         self.cmd_timeout = 0.1  # 100 milliseconds
         self.last_warn_time = None  # For throttling warnings
         
-        # Subscribe to driver states
+        # Subscribe to driver states (use BEST_EFFORT to match driver publishers)
         self.driver0_sub = self.create_subscription(
             DriverState,
             'driver0state',
             self.driver0_callback,
-            qos
+            qos_best_effort
         )
         
         self.driver1_sub = self.create_subscription(
             DriverState,
             'driver1state',
             self.driver1_callback,
-            qos
+            qos_best_effort
         )
         
-        # Publisher for robot low state
+        # Publisher for robot low state (use RELIABLE for subscribers)
         self.robot_state_pub = self.create_publisher(
             RobotLowState,
             'robotlowstate',
-            qos
+            qos_reliable
         )
         
-        # Subscribe to robot low command
+        # Subscribe to robot low command (use RELIABLE)
         self.robot_cmd_sub = self.create_subscription(
             RobotLowCmd,
             'robotlowcmd',
             self.robot_cmd_callback,
-            qos
+            qos_reliable
         )
         
-        # Publishers for driver commands
+        # Publishers for driver commands (use RELIABLE)
         self.driver0_cmd_pub = self.create_publisher(
             DriverCmd,
             'driver0cmd',
-            qos
+            qos_reliable
         )
         
         self.driver1_cmd_pub = self.create_publisher(
             DriverCmd,
             'driver1cmd',
-            qos
+            qos_reliable
         )
         
         # Create timers for 100Hz publishing (0.01 seconds = 10ms)

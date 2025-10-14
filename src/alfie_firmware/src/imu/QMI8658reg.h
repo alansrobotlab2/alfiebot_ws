@@ -149,101 +149,128 @@ enum qmi8658_Ctrl9Command
 };
 
 
+/**
+ * @brief Low-pass filter configuration options
+ */
 enum qmi8658_LpfConfig
 {
-	Qmi8658Lpf_Disable,
-	Qmi8658Lpf_Enable
+	Qmi8658Lpf_Disable,  ///< Disable low-pass filter
+	Qmi8658Lpf_Enable    ///< Enable low-pass filter
 };
 
+/**
+ * @brief High-pass filter configuration options
+ */
 enum qmi8658_HpfConfig
 {
-	Qmi8658Hpf_Disable,
-	Qmi8658Hpf_Enable
+	Qmi8658Hpf_Disable,  ///< Disable high-pass filter
+	Qmi8658Hpf_Enable    ///< Enable high-pass filter
 };
 
+/**
+ * @brief Self-test configuration options
+ */
 enum qmi8658_StConfig
 {
-	Qmi8658St_Disable,
-	Qmi8658St_Enable
+	Qmi8658St_Disable,   ///< Disable self-test
+	Qmi8658St_Enable     ///< Enable self-test
 };
 
+/**
+ * @brief Low-pass filter mode settings for accelerometer and gyroscope
+ */
 enum qmi8658_LpfMode
 {
-	A_LSP_MODE_0 = 0x00<<1,
-	A_LSP_MODE_1 = 0x01<<1,
-	A_LSP_MODE_2 = 0x02<<1,
-	A_LSP_MODE_3 = 0x03<<1,
+	A_LSP_MODE_0 = 0x00<<1,  ///< Accelerometer LPF mode 0
+	A_LSP_MODE_1 = 0x01<<1,  ///< Accelerometer LPF mode 1
+	A_LSP_MODE_2 = 0x02<<1,  ///< Accelerometer LPF mode 2
+	A_LSP_MODE_3 = 0x03<<1,  ///< Accelerometer LPF mode 3
 
-	G_LSP_MODE_0 = 0x00<<5,
-	G_LSP_MODE_1 = 0x01<<5,
-	G_LSP_MODE_2 = 0x02<<5,
-	G_LSP_MODE_3 = 0x03<<5
+	G_LSP_MODE_0 = 0x00<<5,  ///< Gyroscope LPF mode 0
+	G_LSP_MODE_1 = 0x01<<5,  ///< Gyroscope LPF mode 1
+	G_LSP_MODE_2 = 0x02<<5,  ///< Gyroscope LPF mode 2
+	G_LSP_MODE_3 = 0x03<<5   ///< Gyroscope LPF mode 3
 };
 
+/**
+ * @brief Accelerometer measurement range configuration
+ */
 enum qmi8658_AccRange
 {
-	Qmi8658AccRange_2g = 0x00 << 4,
-	Qmi8658AccRange_4g = 0x01 << 4,
-	Qmi8658AccRange_8g = 0x02 << 4,
-	Qmi8658AccRange_16g = 0x03 << 4
+	Qmi8658AccRange_2g = 0x00 << 4,   ///< ±2g measurement range
+	Qmi8658AccRange_4g = 0x01 << 4,   ///< ±4g measurement range
+	Qmi8658AccRange_8g = 0x02 << 4,   ///< ±8g measurement range
+	Qmi8658AccRange_16g = 0x03 << 4   ///< ±16g measurement range
 };
 
 
+/**
+ * @brief Accelerometer output data rate (ODR) configuration
+ */
 enum qmi8658_AccOdr
 {
-	Qmi8658AccOdr_8000Hz = 0x00,
-	Qmi8658AccOdr_4000Hz = 0x01,
-	Qmi8658AccOdr_2000Hz = 0x02,
-	Qmi8658AccOdr_1000Hz = 0x03,
-	Qmi8658AccOdr_500Hz = 0x04,
-	Qmi8658AccOdr_250Hz = 0x05,
-	Qmi8658AccOdr_125Hz = 0x06,
-	Qmi8658AccOdr_62_5Hz = 0x07,
-	Qmi8658AccOdr_31_25Hz = 0x08,
-	Qmi8658AccOdr_LowPower_128Hz = 0x0c,
-	Qmi8658AccOdr_LowPower_21Hz = 0x0d,
-	Qmi8658AccOdr_LowPower_11Hz = 0x0e,
-	Qmi8658AccOdr_LowPower_3Hz = 0x0f
+	Qmi8658AccOdr_8000Hz = 0x00,         ///< 8000 Hz sampling rate
+	Qmi8658AccOdr_4000Hz = 0x01,         ///< 4000 Hz sampling rate
+	Qmi8658AccOdr_2000Hz = 0x02,         ///< 2000 Hz sampling rate
+	Qmi8658AccOdr_1000Hz = 0x03,         ///< 1000 Hz sampling rate
+	Qmi8658AccOdr_500Hz = 0x04,          ///< 500 Hz sampling rate
+	Qmi8658AccOdr_250Hz = 0x05,          ///< 250 Hz sampling rate
+	Qmi8658AccOdr_125Hz = 0x06,          ///< 125 Hz sampling rate
+	Qmi8658AccOdr_62_5Hz = 0x07,             ///< 62.5 Hz sampling rate
+	Qmi8658AccOdr_31_25Hz = 0x08,            ///< 31.25 Hz sampling rate
+	Qmi8658AccOdr_LowPower_128Hz = 0x0c,     ///< 128 Hz low power mode
+	Qmi8658AccOdr_LowPower_21Hz = 0x0d,      ///< 21 Hz low power mode
+	Qmi8658AccOdr_LowPower_11Hz = 0x0e,      ///< 11 Hz low power mode
+	Qmi8658AccOdr_LowPower_3Hz = 0x0f        ///< 3 Hz low power mode
 };
 
+/**
+ * @brief Gyroscope measurement range configuration in degrees per second (dps)
+ */
 enum qmi8658_GyrRange
 {
-	Qmi8658GyrRange_16dps = 0 << 4,
-	Qmi8658GyrRange_32dps = 1 << 4,
-	Qmi8658GyrRange_64dps = 2 << 4,
-	Qmi8658GyrRange_128dps = 3 << 4,
-	Qmi8658GyrRange_256dps = 4 << 4,
-	Qmi8658GyrRange_512dps = 5 << 4,
-	Qmi8658GyrRange_1024dps = 6 << 4,
-	Qmi8658GyrRange_2048dps = 7 << 4
+	Qmi8658GyrRange_16dps = 0 << 4,      ///< ±16 dps measurement range
+	Qmi8658GyrRange_32dps = 1 << 4,      ///< ±32 dps measurement range
+	Qmi8658GyrRange_64dps = 2 << 4,      ///< ±64 dps measurement range
+	Qmi8658GyrRange_128dps = 3 << 4,     ///< ±128 dps measurement range
+	Qmi8658GyrRange_256dps = 4 << 4,     ///< ±256 dps measurement range
+	Qmi8658GyrRange_512dps = 5 << 4,     ///< ±512 dps measurement range
+	Qmi8658GyrRange_1024dps = 6 << 4,    ///< ±1024 dps measurement range
+	Qmi8658GyrRange_2048dps = 7 << 4     ///< ±2048 dps measurement range
 };
 
-/*!
- * \brief Gyroscope output rate configuration.
+/**
+ * @brief Gyroscope output data rate (ODR) configuration
  */
 enum qmi8658_GyrOdr
 {
-	Qmi8658GyrOdr_8000Hz = 0x00,
-	Qmi8658GyrOdr_4000Hz = 0x01,
-	Qmi8658GyrOdr_2000Hz = 0x02,
-	Qmi8658GyrOdr_1000Hz = 0x03,
-	Qmi8658GyrOdr_500Hz	= 0x04,
-	Qmi8658GyrOdr_250Hz	= 0x05,
-	Qmi8658GyrOdr_125Hz	= 0x06,
-	Qmi8658GyrOdr_62_5Hz 	= 0x07,
-	Qmi8658GyrOdr_31_25Hz	= 0x08
+	Qmi8658GyrOdr_8000Hz = 0x00,     ///< 8000 Hz sampling rate
+	Qmi8658GyrOdr_4000Hz = 0x01,     ///< 4000 Hz sampling rate
+	Qmi8658GyrOdr_2000Hz = 0x02,     ///< 2000 Hz sampling rate
+	Qmi8658GyrOdr_1000Hz = 0x03,     ///< 1000 Hz sampling rate
+	Qmi8658GyrOdr_500Hz	= 0x04,      ///< 500 Hz sampling rate
+	Qmi8658GyrOdr_250Hz	= 0x05,      ///< 250 Hz sampling rate
+	Qmi8658GyrOdr_125Hz	= 0x06,      ///< 125 Hz sampling rate
+	Qmi8658GyrOdr_62_5Hz = 0x07,     ///< 62.5 Hz sampling rate
+	Qmi8658GyrOdr_31_25Hz = 0x08     ///< 31.25 Hz sampling rate
 };
 
+/**
+ * @brief Accelerometer data unit selection
+ */
 enum qmi8658_AccUnit
 {
-	Qmi8658AccUnit_g,
-	Qmi8658AccUnit_ms2
+	Qmi8658AccUnit_g,      ///< Units in g (gravitational acceleration)
+	Qmi8658AccUnit_ms2     ///< Units in m/s² (SI units)
 };
 
+/**
+ * @brief Gyroscope data unit selection
+ */
 enum qmi8658_GyrUnit
 {
-	Qmi8658GyrUnit_dps,
-	Qmi8658GyrUnit_rads
+	Qmi8658GyrUnit_dps,    ///< Units in degrees per second
+	Qmi8658GyrUnit_rads    ///< Units in radians per second (SI units)
 };
 
 enum qmi8658_FifoMode
@@ -288,56 +315,63 @@ enum qmi8658_InterruptState
 
 #define QMI8658_CALI_DATA_NUM	200
 
+/**
+ * @brief Structure for IMU calibration data and state
+ */
 typedef struct qmi8658_cali
 {
-	float			acc_last[3];
-	float			acc[3];
-	float			acc_fix[3];
-	float			acc_bias[3];
-	float			acc_sum[3];
+	float			acc_last[3];       ///< Last accelerometer reading [X, Y, Z]
+	float			acc[3];            ///< Current accelerometer reading [X, Y, Z]
+	float			acc_fix[3];        ///< Fixed/calibrated accelerometer values [X, Y, Z]
+	float			acc_bias[3];       ///< Accelerometer bias/offset [X, Y, Z]
+	float			acc_sum[3];        ///< Sum for averaging accelerometer data [X, Y, Z]
 
-	float			gyr_last[3];
-	float			gyr[3];
-	float			gyr_fix[3];
-	float			gyr_bias[3];
-	float			gyr_sum[3];
+	float			gyr_last[3];       ///< Last gyroscope reading [X, Y, Z]
+	float			gyr[3];            ///< Current gyroscope reading [X, Y, Z]
+	float			gyr_fix[3];        ///< Fixed/calibrated gyroscope values [X, Y, Z]
+	float			gyr_bias[3];       ///< Gyroscope bias/offset [X, Y, Z]
+	float			gyr_sum[3];        ///< Sum for averaging gyroscope data [X, Y, Z]
 
-	unsigned char	imu_static_flag;
-	unsigned char	acc_fix_flag;
-	unsigned char	gyr_fix_flag;
-	char			acc_fix_index;
-	unsigned char	gyr_fix_index;
+	unsigned char	imu_static_flag;   ///< Flag indicating if IMU is stationary
+	unsigned char	acc_fix_flag;      ///< Flag indicating accelerometer correction active
+	unsigned char	gyr_fix_flag;      ///< Flag indicating gyroscope correction active
+	char			acc_fix_index;     ///< Index for accelerometer calibration samples
+	unsigned char	gyr_fix_index;     ///< Index for gyroscope calibration samples
 
-	unsigned char	acc_cali_flag;
-	unsigned char	gyr_cali_flag;
-	unsigned short	acc_cali_num;
-	unsigned short	gyr_cali_num;
-//    unsigned char	acc_avg_num;
-//    unsigned char	gyr_avg_num;
+	unsigned char	acc_cali_flag;     ///< Flag indicating accelerometer calibration in progress
+	unsigned char	gyr_cali_flag;     ///< Flag indicating gyroscope calibration in progress
+	unsigned short	acc_cali_num;      ///< Number of accelerometer calibration samples collected
+	unsigned short	gyr_cali_num;      ///< Number of gyroscope calibration samples collected
 } qmi8658_cali;
 
+/**
+ * @brief Structure for QMI8658 sensor configuration
+ */
 typedef struct
 {
-	unsigned char			enSensors;
-	enum qmi8658_AccRange	accRange;
-	enum qmi8658_AccOdr		accOdr;
-	enum qmi8658_GyrRange	gyrRange;
-	enum qmi8658_GyrOdr		gyrOdr;
-	unsigned char			ctrl8_value;
+	unsigned char			enSensors;     ///< Enabled sensors bitmask (bit 0=accel, bit 1=gyro)
+	enum qmi8658_AccRange	accRange;      ///< Accelerometer measurement range
+	enum qmi8658_AccOdr		accOdr;        ///< Accelerometer output data rate
+	enum qmi8658_GyrRange	gyrRange;      ///< Gyroscope measurement range
+	enum qmi8658_GyrOdr		gyrOdr;        ///< Gyroscope output data rate
+	unsigned char			ctrl8_value;   ///< Control register 8 value
 #if defined(QMI8658_USE_FIFO)
-	unsigned char			fifo_ctrl;
+	unsigned char			fifo_ctrl;     ///< FIFO control configuration
 #endif
 } qmi8658_config;
 
+/**
+ * @brief Structure for QMI8658 sensor state and data
+ */
 typedef struct
 {
-	unsigned char	slave;
-	qmi8658_config	cfg;
-	unsigned short	ssvt_a;
-	unsigned short	ssvt_g;
-	unsigned int	timestamp;
-	unsigned int	step;
-	float			imu[6];
+	unsigned char	slave;         ///< I2C slave address
+	qmi8658_config	cfg;           ///< Sensor configuration
+	unsigned short	ssvt_a;        ///< Accelerometer sensitivity scale factor
+	unsigned short	ssvt_g;        ///< Gyroscope sensitivity scale factor
+	unsigned int	timestamp;     ///< Current timestamp
+	unsigned int	step;          ///< Pedometer step count
+	float			imu[6];        ///< IMU data array [accX, accY, accZ, gyroX, gyroY, gyroZ]
 } qmi8658_state;
 
 

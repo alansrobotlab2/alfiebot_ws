@@ -60,27 +60,161 @@
 class SMS_STS : public SCSerial
 {
 public:
+	/**
+	 * @brief Default constructor for SMS_STS servo controller
+	 */
 	SMS_STS();
+	
+	/**
+	 * @brief Constructor with endian configuration
+	 * @param End Processor endian structure (0=little endian, 1=big endian)
+	 */
 	SMS_STS(u8 End);
+	
+	/**
+	 * @brief Constructor with endian and response level configuration
+	 * @param End Processor endian structure (0=little endian, 1=big endian)
+	 * @param Level Servo response level (0=no response, 1=respond to all except broadcast)
+	 */
 	SMS_STS(u8 End, u8 Level);
-	virtual int WritePosEx(u8 ID, s16 Position, u16 Speed, u8 ACC = 0);//general write for single servo
-	virtual int RegWritePosEx(u8 ID, s16 Position, u16 Speed, u8 ACC = 0);//position write asynchronously for single servo(call RegWriteAction to action)
-	virtual void SyncWritePosEx(u8 ID[], u8 IDN, s16 Position[], u16 Speed[], u8 ACC[]);//write synchronously for multi servos
-	virtual int WheelMode(u8 ID);//speed loop mode
-	virtual int WriteSpe(u8 ID, s16 Speed, u8 ACC = 0);//speed loop mode ctrl command
-	virtual int EnableTorque(u8 ID, u8 Enable);//torque ctrl command
-	virtual int unLockEprom(u8 ID);//eprom unlock
-	virtual int LockEprom(u8 ID);//eprom locked
-	virtual int CalibrationOfs(u8 ID);//set middle position
-	virtual int FeedBack(int ID);//servo information feedback
-	virtual int ReadPos(int ID);//read position
-	virtual int ReadSpeed(int ID);//read speed
-	virtual int ReadLoad(int ID);//read motor load(0~1000, 1000 = 100% max load)
-	virtual int ReadVoltage(int ID);//read voltage
-	virtual int ReadTemper(int ID);//read temperature
-	virtual int ReadMove(int ID);//read move mode
-	virtual int ReadCurrent(int ID);//read current
-	virtual int ReadMode(int ID);//read working mode
+	
+	/**
+	 * @brief Write position command with speed and acceleration to a single servo
+	 * @param ID Servo ID (1-253, 254 for broadcast)
+	 * @param Position Target position (-2048 to 2047, negative values use sign bit encoding)
+	 * @param Speed Target speed (0-65535)
+	 * @param ACC Acceleration value (0-255, default 0)
+	 * @return 1 on success, 0 on failure
+	 */
+	virtual int WritePosEx(u8 ID, s16 Position, u16 Speed, u8 ACC = 0);
+	
+	/**
+	 * @brief Register position command for asynchronous execution (requires RegWriteAction to execute)
+	 * @param ID Servo ID (1-253)
+	 * @param Position Target position (-2048 to 2047, negative values use sign bit encoding)
+	 * @param Speed Target speed (0-65535)
+	 * @param ACC Acceleration value (0-255, default 0)
+	 * @return 1 on success, 0 on failure
+	 */
+	virtual int RegWritePosEx(u8 ID, s16 Position, u16 Speed, u8 ACC = 0);
+	
+	/**
+	 * @brief Synchronously write position commands to multiple servos at once
+	 * @param ID Array of servo IDs
+	 * @param IDN Number of servos in the array
+	 * @param Position Array of target positions (one per servo, -2048 to 2047)
+	 * @param Speed Array of target speeds (one per servo, can be NULL for default)
+	 * @param ACC Array of acceleration values (one per servo, can be NULL for default)
+	 */
+	virtual void SyncWritePosEx(u8 ID[], u8 IDN, s16 Position[], u16 Speed[], u8 ACC[]);
+	
+	/**
+	 * @brief Switch servo to continuous rotation (wheel) mode
+	 * @param ID Servo ID (1-253)
+	 * @return 1 on success, 0 on failure
+	 */
+	virtual int WheelMode(u8 ID);
+	
+	/**
+	 * @brief Control speed in wheel mode
+	 * @param ID Servo ID (1-253)
+	 * @param Speed Target speed (-32767 to 32767, negative for reverse)
+	 * @param ACC Acceleration value (0-255, default 0)
+	 * @return 1 on success, 0 on failure
+	 */
+	virtual int WriteSpe(u8 ID, s16 Speed, u8 ACC = 0);
+	
+	/**
+	 * @brief Enable or disable servo torque (motor power)
+	 * @param ID Servo ID (1-253, 254 for broadcast)
+	 * @param Enable 1 to enable torque, 0 to disable
+	 * @return 1 on success, 0 on failure
+	 */
+	virtual int EnableTorque(u8 ID, u8 Enable);
+	
+	/**
+	 * @brief Unlock EPROM to allow writing to permanent storage
+	 * @param ID Servo ID (1-253)
+	 * @return 1 on success, 0 on failure
+	 */
+	virtual int unLockEprom(u8 ID);
+	
+	/**
+	 * @brief Lock EPROM to prevent writing to permanent storage
+	 * @param ID Servo ID (1-253)
+	 * @return 1 on success, 0 on failure
+	 */
+	virtual int LockEprom(u8 ID);
+	
+	/**
+	 * @brief Calibrate current position as the servo's center/zero position
+	 * @param ID Servo ID (1-253)
+	 * @return 1 on success, 0 on failure
+	 */
+	virtual int CalibrationOfs(u8 ID);
+	
+	/**
+	 * @brief Read all status information from servo into internal memory buffer
+	 * @param ID Servo ID (1-253)
+	 * @return Number of bytes read on success, -1 on failure
+	 */
+	virtual int FeedBack(int ID);
+	
+	/**
+	 * @brief Read current position from servo
+	 * @param ID Servo ID (1-253), or -1 to read from internal buffer after FeedBack()
+	 * @return Current position (-2048 to 2047), or -1 on error
+	 */
+	virtual int ReadPos(int ID);
+	
+	/**
+	 * @brief Read current speed from servo
+	 * @param ID Servo ID (1-253), or -1 to read from internal buffer after FeedBack()
+	 * @return Current speed (-32767 to 32767, negative for reverse), or -1 on error
+	 */
+	virtual int ReadSpeed(int ID);
+	
+	/**
+	 * @brief Read current load on servo motor
+	 * @param ID Servo ID (1-253), or -1 to read from internal buffer after FeedBack()
+	 * @return Current load (0-1000 where 1000 = 100% max load, negative for reverse direction), or -1 on error
+	 */
+	virtual int ReadLoad(int ID);
+	
+	/**
+	 * @brief Read current input voltage
+	 * @param ID Servo ID (1-253), or -1 to read from internal buffer after FeedBack()
+	 * @return Voltage in units (multiply by 0.1V for actual voltage), or -1 on error
+	 */
+	virtual int ReadVoltage(int ID);
+	
+	/**
+	 * @brief Read current internal temperature
+	 * @param ID Servo ID (1-253), or -1 to read from internal buffer after FeedBack()
+	 * @return Temperature in degrees Celsius, or -1 on error
+	 */
+	virtual int ReadTemper(int ID);
+	
+	/**
+	 * @brief Read whether servo is currently moving
+	 * @param ID Servo ID (1-253), or -1 to read from internal buffer after FeedBack()
+	 * @return 1 if moving, 0 if stopped, -1 on error
+	 */
+	virtual int ReadMove(int ID);
+	
+	/**
+	 * @brief Read current draw of servo motor
+	 * @param ID Servo ID (1-253), or -1 to read from internal buffer after FeedBack()
+	 * @return Current in milliamps (negative for reverse direction), or -1 on error
+	 */
+	virtual int ReadCurrent(int ID);
+	
+	/**
+	 * @brief Read servo operating mode
+	 * @param ID Servo ID (1-253), or -1 to read from internal buffer after FeedBack()
+	 * @return Mode value (0=servo mode, 1=wheel mode), or -1 on error
+	 */
+	virtual int ReadMode(int ID);
 private:
 	u8 Mem[SMS_STS_PRESENT_CURRENT_H-SMS_STS_PRESENT_POSITION_L+1];
 };

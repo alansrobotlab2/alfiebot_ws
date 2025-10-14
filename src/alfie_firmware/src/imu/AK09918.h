@@ -65,83 +65,198 @@
 #define AK09918_DOR_BIT     0x02    // Data Over Run
 #define AK09918_DRDY_BIT    0x01    // Data Ready
 
-// #define AK09918_MEASURE_PERIOD 9    // Must not be changed
-// AK09918 has following seven operation modes:
-// (1) Power-down mode: AK09918 doesn't measure
-// (2) Single measurement mode: measure when you call any getData() function
-// (3) Continuous measurement mode 1: 10Hz, measure 10 times per second,
-// (4) Continuous measurement mode 2: 20Hz, measure 20 times per second,
-// (5) Continuous measurement mode 3: 50Hz, measure 50 times per second,
-// (6) Continuous measurement mode 4: 100Hz, measure 100 times per second,
-// (7) Self-test mode
+/**
+ * @brief AK09918 magnetometer operating modes
+ * 
+ * The AK09918 supports seven operation modes:
+ * (1) Power-down mode: AK09918 doesn't measure, minimal power consumption
+ * (2) Single measurement mode (NORMAL): measure when getData() is called
+ * (3) Continuous measurement mode 1: 10Hz, measure 10 times per second
+ * (4) Continuous measurement mode 2: 20Hz, measure 20 times per second
+ * (5) Continuous measurement mode 3: 50Hz, measure 50 times per second
+ * (6) Continuous measurement mode 4: 100Hz, measure 100 times per second
+ * (7) Self-test mode: internal self-test, use selfTest() function to activate
+ */
 enum AK09918_mode_type_t {
-    AK09918_POWER_DOWN = 0x00,
-    AK09918_NORMAL = 0x01,
-    AK09918_CONTINUOUS_10HZ = 0x02,
-    AK09918_CONTINUOUS_20HZ = 0x04,
-    AK09918_CONTINUOUS_50HZ = 0x06,
-    AK09918_CONTINUOUS_100HZ = 0x08,
-    AK09918_SELF_TEST = 0x10, // ignored by switchMode() and initialize(), call selfTest() to use this mode
+    AK09918_POWER_DOWN = 0x00,        ///< Power-down mode, sensor inactive
+    AK09918_NORMAL = 0x01,            ///< Single measurement mode, trigger on read
+    AK09918_CONTINUOUS_10HZ = 0x02,   ///< Continuous mode at 10Hz sampling rate
+    AK09918_CONTINUOUS_20HZ = 0x04,   ///< Continuous mode at 20Hz sampling rate
+    AK09918_CONTINUOUS_50HZ = 0x06,   ///< Continuous mode at 50Hz sampling rate
+    AK09918_CONTINUOUS_100HZ = 0x08,  ///< Continuous mode at 100Hz sampling rate
+    AK09918_SELF_TEST = 0x10,         ///< Self-test mode (use selfTest() function, not switchMode())
 };
 
+/**
+ * @brief AK09918 error codes returned by functions
+ */
 enum AK09918_err_type_t {
-    AK09918_ERR_OK = 0,                 // ok
-    AK09918_ERR_DOR = 1,                // data skipped
-    AK09918_ERR_NOT_RDY = 2,            // not ready
-    AK09918_ERR_TIMEOUT = 3,            // read/write timeout
-    AK09918_ERR_SELFTEST_FAILED = 4,    // self test failed
-    AK09918_ERR_OVERFLOW = 5,           // sensor overflow, means |x|+|y|+|z| >= 4912uT
-    AK09918_ERR_WRITE_FAILED = 6,       // fail to write
-    AK09918_ERR_READ_FAILED = 7,        // fail to read
-
+    AK09918_ERR_OK = 0,                 ///< Operation successful, no error
+    AK09918_ERR_DOR = 1,                ///< Data overrun - data was skipped/not read in time
+    AK09918_ERR_NOT_RDY = 2,            ///< Data not ready yet
+    AK09918_ERR_TIMEOUT = 3,            ///< Read/write operation timed out
+    AK09918_ERR_SELFTEST_FAILED = 4,    ///< Self-test failed, sensor values out of spec
+    AK09918_ERR_OVERFLOW = 5,           ///< Sensor overflow, magnetic field too strong (|x|+|y|+|z| >= 4912µT)
+    AK09918_ERR_WRITE_FAILED = 6,       ///< I2C write operation failed
+    AK09918_ERR_READ_FAILED = 7,        ///< I2C read operation failed
 };
 
+/**
+ * @brief Structure to store 3-axis sensor data as 16-bit signed integers
+ */
 typedef struct imu_st_sensor_data_tag
 {
-  short int s16X;
-  short int s16Y;
-  short int s16Z;
+  short int s16X;  ///< X-axis sensor reading (signed 16-bit)
+  short int s16Y;  ///< Y-axis sensor reading (signed 16-bit)
+  short int s16Z;  ///< Z-axis sensor reading (signed 16-bit)
 }IMU_ST_SENSOR_DATA;
 
 class AK09918 {
   public:
+    /**
+     * @brief Default constructor for AK09918 magnetometer
+     */
     AK09918();
 
-    // default to AK09918_CONTINUOUS_10HZ mode
+    /**
+     * @brief Initialize the AK09918 magnetometer with specified mode
+     * @param mode Operating mode (default: AK09918_NORMAL for single measurement)
+     *             - AK09918_POWER_DOWN: Sensor powered down, no measurements
+     *             - AK09918_NORMAL: Single measurement mode, manual trigger
+     *             - AK09918_CONTINUOUS_10HZ: Continuous measurements at 10Hz
+     *             - AK09918_CONTINUOUS_20HZ: Continuous measurements at 20Hz
+     *             - AK09918_CONTINUOUS_50HZ: Continuous measurements at 50Hz
+     *             - AK09918_CONTINUOUS_100HZ: Continuous measurements at 100Hz
+     * @return AK09918_ERR_OK on success, error code on failure
+     * @note AK09918_SELF_TEST mode is not supported by this function, use selfTest() instead
+     */
     AK09918_err_type_t initialize(AK09918_mode_type_t mode = AK09918_NORMAL);
-    // At AK09918_CONTINUOUS_** mode, check if data is ready to read
+    
+    /**
+     * @brief Check if new magnetometer data is ready to read
+     * @return AK09918_ERR_OK if data is ready, AK09918_ERR_NOT_RDY if not ready, 
+     *         AK09918_ERR_READ_FAILED if I2C read fails
+     * @note Only useful in continuous measurement modes (10Hz/20Hz/50Hz/100Hz)
+     */
     AK09918_err_type_t isDataReady();
-    // At AK09918_CONTINUOUS_** mode, check if data is skipped
+    
+    /**
+     * @brief Check if any data measurements were skipped/overrun
+     * @return AK09918_ERR_DOR if data was skipped, AK09918_ERR_OK if no skip,
+     *         AK09918_ERR_READ_FAILED if I2C read fails
+     * @note Occurs when new data arrives before previous data was read
+     */
     AK09918_err_type_t isDataSkip();
-    // Get magnet data in uT
+    
+    /**
+     * @brief Read calibrated magnetic field data in microTesla (µT)
+     * @param axis_x Pointer to store X-axis magnetic field in µT
+     * @param axis_y Pointer to store Y-axis magnetic field in µT
+     * @param axis_z Pointer to store Z-axis magnetic field in µT
+     * @return AK09918_ERR_OK on success, AK09918_ERR_OVERFLOW if sensor saturated,
+     *         AK09918_ERR_TIMEOUT in normal mode if measurement times out,
+     *         AK09918_ERR_READ_FAILED if I2C read fails
+     * @note Values are calibrated (raw * 0.15µT/LSB). In NORMAL mode, triggers a measurement.
+     */
     AK09918_err_type_t getData(int16_t* axis_x, int16_t* axis_y, int16_t* axis_z);
-    // Get raw I2C magnet data
+    
+    /**
+     * @brief Read raw magnetic field data directly from sensor (LSB units)
+     * @param axis_x Pointer to store raw X-axis value (uncalibrated)
+     * @param axis_y Pointer to store raw Y-axis value (uncalibrated)
+     * @param axis_z Pointer to store raw Z-axis value (uncalibrated)
+     * @return AK09918_ERR_OK on success, AK09918_ERR_OVERFLOW if sensor saturated,
+     *         AK09918_ERR_TIMEOUT in normal mode if measurement times out,
+     *         AK09918_ERR_READ_FAILED if I2C read fails
+     * @note Raw values need to be multiplied by 0.15 to get µT. In NORMAL mode, triggers a measurement.
+     */
     AK09918_err_type_t getRawData(int16_t* axis_x, int16_t* axis_y, int16_t* axis_z);
 
 
-    // Return the working mode of AK09918
+    /**
+     * @brief Get the current operating mode of the magnetometer
+     * @return Current mode (AK09918_POWER_DOWN, AK09918_NORMAL, AK09918_CONTINUOUS_*)
+     */
     AK09918_mode_type_t getMode();
-    // Switch the working mode of AK09918
+    
+    /**
+     * @brief Switch the magnetometer to a different operating mode
+     * @param mode Target operating mode to switch to
+     * @return AK09918_ERR_OK on success, AK09918_ERR_WRITE_FAILED on I2C write failure
+     * @note Cannot switch to AK09918_SELF_TEST mode using this function, use selfTest() instead
+     */
     AK09918_err_type_t switchMode(AK09918_mode_type_t mode);
-    // Start a self-test, if pass, return AK09918_ERR_OK
+    
+    /**
+     * @brief Perform sensor self-test to verify proper operation
+     * @return AK09918_ERR_OK if self-test passes, 
+     *         AK09918_ERR_SELFTEST_FAILED if test fails (values out of spec),
+     *         AK09918_ERR_WRITE_FAILED or AK09918_ERR_READ_FAILED on I2C errors
+     * @note Self-test checks if sensor produces expected magnetic field values.
+     *       Expected ranges: X[-200,200], Y[-200,200], Z[-1000,-150] in raw units
+     */
     AK09918_err_type_t selfTest();
-    // Reset AK09918
+    
+    /**
+     * @brief Perform a soft reset of the magnetometer
+     * @return AK09918_ERR_OK on success, AK09918_ERR_WRITE_FAILED on I2C write failure
+     * @note Resets the sensor to default state, requires re-initialization after reset
+     */
     AK09918_err_type_t reset();
-    // Get details of AK09918_err_type_t
+    
+    /**
+     * @brief Convert error code to human-readable string description
+     * @param err Error code to describe
+     * @return String containing error code name and description
+     */
     String strError(AK09918_err_type_t err);
-    // Get device ID
+    
+    /**
+     * @brief Read the magnetometer device ID (company and device identification)
+     * @return 16-bit device ID (high byte = WIA1/company ID, low byte = WIA2/device ID)
+     */
     uint16_t getDeviceID();
 
 
 
   private:
+    /**
+     * @brief Read the raw mode register value from sensor
+     * @return Raw mode register value
+     */
     uint8_t _getRawMode();
+    
+    /**
+     * @brief Write a single byte to sensor register via I2C
+     * @param addr I2C device address
+     * @param reg Register address to write to
+     * @param Value Byte value to write
+     * @return true on success, false on failure
+     */
     bool writeByte(uint8_t addr,uint8_t reg ,uint8_t Value);
+    
+    /**
+     * @brief Read a single byte from sensor register via I2C
+     * @param addr I2C device address
+     * @param reg Register address to read from
+     * @param buf Pointer to buffer to store read byte
+     * @return true on success, false on failure
+     */
     bool readByte(uint8_t addr,uint8_t reg,uint8_t *buf);
+    
+    /**
+     * @brief Read multiple bytes from sensor registers via I2C
+     * @param addr I2C device address
+     * @param reg Starting register address to read from
+     * @param num Number of bytes to read
+     * @param buf Pointer to buffer to store read bytes
+     * @return true on success, false on failure
+     */
     bool readBytes(uint8_t addr,uint8_t reg,uint8_t num,uint8_t *buf);
-    uint8_t _addr;
-    AK09918_mode_type_t _mode;
-    uint8_t _buffer[16];
+    
+    uint8_t _addr;                  ///< I2C address of the device
+    AK09918_mode_type_t _mode;      ///< Current operating mode
+    uint8_t _buffer[16];            ///< Internal buffer for I2C transactions
 
 };
 

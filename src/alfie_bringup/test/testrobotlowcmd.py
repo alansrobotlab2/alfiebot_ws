@@ -33,10 +33,10 @@ class RobotLowCmdPublisher(Node):
         msg = RobotLowCmd()
         
         # Set eye PWM values to 0
-        msg.eye_pwm = [0, 0]
+        msg.eye_pwm = [1, 1]
         
         # Set driver PWM values to 0
-        msg.driver_pwm = [0, 0]
+        msg.driver_pwm = [1, 1]
         
         # Create 17 servo commands with all zeros
         for i in range(17):

@@ -1,6 +1,6 @@
 What's currently broken:
  - servo command position and current position need to be adjusted to/from 12/16bit signed
- - update services, one to pull memory block as bytes, one to update
+ - update service should update local memory map as well as servo
  - unable to upload firmware after running alfie_bringup.  annoying
 
 

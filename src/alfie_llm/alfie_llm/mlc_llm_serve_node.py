@@ -9,6 +9,10 @@ import time
 class MLCLLMServeNode(Node):
     def __init__(self):
         super().__init__('mlc_llm_serve_node')
+
+        self.model = '/data/qwen3-1.7b-q4f16_1-MLC'
+        self.lib = '/data/qwen3-1.7b-q4f16_1-MLC/lib.so'
+        
         self.container_name = f'mlc-llm-server-{int(time.time())}'
         self.container_id = None
         self.process = None
@@ -16,8 +20,7 @@ class MLCLLMServeNode(Node):
         self.mlc_thread = threading.Thread(target=self.run_mlc_llm_serve, daemon=True)
         self.mlc_thread.start()
 
-        self.model = '/data/qwen3-1.7b-q4f16_1-MLC'
-        self.lib = '/data/qwen3-1.7b-q4f16_1-MLC/lib.so'
+
         
     def run_mlc_llm_serve(self):
         try:

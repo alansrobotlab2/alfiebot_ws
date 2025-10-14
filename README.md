@@ -5,9 +5,9 @@
 Some setup instructions (there are probably more, but here's what I have for now.
  
 
-    sudo apt-get install portaudio19-dev python3-pyaudio python3-venv ros-humble-foxglove-bridge ros-humble-depthai-ros
+    sudo apt-get install portaudio19-dev python3-pyaudio python3-venv ros-humble-foxglove-bridge ros-humble-depthai-ros tmux
      
-    pip3 install pyusb spidev piper-tts pyalsaaudio onnx-asr silero-vad
+    pip3 install pyusb spidev piper-tts pyalsaaudio onnx-asr silero-vad qdarktheme
 
     ros2 run micro_ros_setup create_agent_ws.sh
     ros2 run micro_ros_setup build_agent.sh
