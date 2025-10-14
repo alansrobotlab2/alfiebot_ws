@@ -3,8 +3,11 @@
 
 #include "config.h"
 #include "driverboard.h"
+#include "scservo/INST.h"
 
 extern DriverBoard b;
+
+#define SBS_POSITIONCORRECTION  0x1F
 
 #define SBS_TORQUEENABLE        0x28
 #define SBS_ACCELERATION        0x29
@@ -47,14 +50,16 @@ void flushSerialServoLine();
  * status including position, speed, load, voltage, temperature, and other
  * parameters. Updates the global mBuf array with fresh servo data.
  * 
- * The function reads 15 bytes starting from memory address 56, which includes:
- * - Current location (position)
- * - Current speed
- * - Current load
- * - Current voltage  
- * - Current temperature
- * - Servo status flags
- * - Mobile sign and other status data
+ * The function reads 13 bytes starting from memory address 0x38 (SBS_CURRENTLOCATION), which includes:
+ * - Current location (position) - 2 bytes at 0x38
+ * - Current speed - 2 bytes at 0x3A
+ * - Current load - 2 bytes at 0x3C
+ * - Current voltage - 1 byte at 0x3E
+ * - Current temperature - 1 byte at 0x3F
+ * - Status flags - 1 byte at 0x40
+ * - Servo status - 1 byte at 0x41
+ * - Move flag - 1 byte at 0x42
+ * - Additional status - 2 bytes
  * 
  * @note Called at 100Hz from the servo control loop
  * @note Blocks for serial communication duration (1-5ms depending on servo count)
@@ -63,6 +68,7 @@ void flushSerialServoLine();
  * @see mBuf global array for where data is stored
  */
 void updateServoStatus();
+
 
 /**
  * @brief Disables torque on servos that have torqueSwitch set to 0
@@ -74,8 +80,8 @@ void updateServoStatus();
  * The function:
  * 1. Iterates through all servos in mBuf array
  * 2. Builds a list of servo IDs that have torqueSwitch = 0
- * 3. Sends sync write to memory address 40 (torque enable register)
- * 4. Transmits torque disable commands to identified servos
+ * 3. Sends sync write to memory address 0x28 (SBS_TORQUEENABLE register)
+ * 4. Transmits 1 byte (value 0) to disable torque on identified servos
  * 
  * @note Called as part of servo control loop for safety management
  * @note Uses sync write for efficient multi-servo communication
@@ -84,25 +90,26 @@ void updateServoStatus();
  */
 void updateServoIdle();
 
+
 /**
- * @brief Prepares position and acceleration commands for active servos
+ * @brief Sends position and acceleration commands to active servos
  * 
  * Second stage of servo command processing - identifies servos with torqueSwitch = 1
- * and prepares acceleration and position command data for transmission. Currently
- * the actual transmission is commented out in the implementation.
+ * and sends acceleration and position command data via sync write. This function
+ * only transmits commands if at least one servo is active.
  * 
  * The function:
  * 1. Iterates through servos with torqueSwitch = 1 (active servos)
- * 2. Extracts acceleration and position data from mBuf memory structure
- * 3. Formats data into servo command buffer for sync write transmission
- * 4. Prepares servo ID list for targeted communication
+ * 2. Extracts acceleration (1 byte) and position (2 bytes) data from mBuf memory structure
+ * 3. Formats 3 bytes per servo into command buffer: [acceleration, position_low, position_high]
+ * 4. Sends sync write to memory address 0x29 (register 41) with 3 bytes per servo
+ * 5. Only transmits if at least one servo is active (index > 0)
  * 
  * @note Position commands automatically enable torque when sent to servo
- * @note Actual transmission is currently disabled (commented out)
+ * @note Uses memory address 0x29 which maps to acceleration register, followed by target position
  * @note Called in coordination with updateServoIdle() for complete servo management
  * @see updateServoIdle() for torque disable functionality
  * @see mBuf global array for command data source
- * @warning Command transmission is commented out in current implementation
  */
 void updateServoActive();
 
@@ -135,9 +142,9 @@ void disableAllServoTorques();
  * @param servovalue Raw 12-bit encoded position value from servo
  * @return Standard 16-bit signed position value
  * @note Used when reading position data from servo memory
- * @see convertcorrection_toservo() for the inverse conversion
+ * @see convertto12bitservo() for the inverse conversion
  */
-int16_t convertcorrection_fromservo(int16_t servovalue);
+int16_t convertfrom12bitservo(int16_t servovalue);
 
 
 /**
@@ -151,10 +158,10 @@ int16_t convertcorrection_fromservo(int16_t servovalue);
  * @param controllervalue Standard 16-bit signed position value  
  * @return 12-bit encoded position value for servo transmission
  * @note Used when sending position commands to servos
- * @see convertcorrection_fromservo() for the inverse conversion
+ * @see convertfrom12bitservo() for the inverse conversion
  * @warning Input values outside ±2047 range may cause undefined behavior
  */
-int16_t convertcorrection_toservo(int16_t controllervalue);
+int16_t convertto12bitservo(int16_t controllervalue);
 
 
 #endif

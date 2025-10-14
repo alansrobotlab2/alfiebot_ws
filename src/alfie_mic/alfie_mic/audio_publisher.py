@@ -71,8 +71,8 @@ class AudioPublisher(Node):
         else:
             self._debug_counter = 0
             
-        if self._debug_counter % 100 == 0:  # Log every 100th callback
-            self.get_logger().info(f'Audio data: shape={audio_data.shape}, min={audio_data.min()}, max={audio_data.max()}, mean={audio_data.mean():.2f}')
+        #if self._debug_counter % 100 == 0:  # Log every 100th callback
+        #    self.get_logger().info(f'Audio data: shape={audio_data.shape}, min={audio_data.min()}, max={audio_data.max()}, mean={audio_data.mean():.2f}')
         
         if len(audio_data) >= 512:
             msg.audioframe = audio_data[:512].tolist()

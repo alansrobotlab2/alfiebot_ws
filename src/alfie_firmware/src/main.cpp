@@ -38,13 +38,31 @@ void vHardwareInterfaceTask(void *pvParameters)
   // Initialize the xLastWakeTime variable with the current time
   xLastWakeTime = xTaskGetTickCount();
 
+  b.servoLoopState = b.RUNNING;
+
   while (1)
   {
     // Wait for the next cycle (precise 100 Hz timing)
     xTaskDelayUntil(&xLastWakeTime, xFrequency);
-    TIME_FUNCTION_MS(updateServoStatus(), b.pollservostatusduration);
-    TIME_FUNCTION_MS(updateServoIdle(), b.updateservoidleduration);
-    TIME_FUNCTION_MS(updateServoActive(), b.updateservoactiveduration);
+
+    // we need to coordinate with service requests
+    switch(b.servoLoopState)
+    {
+      case b.RUNNING:
+        TIME_FUNCTION_MS(updateServoStatus(), b.pollservostatusduration);
+        TIME_FUNCTION_MS(updateServoIdle(), b.updateservoidleduration);
+        TIME_FUNCTION_MS(updateServoActive(), b.updateservoactiveduration);
+        break;
+      case b.REQUEST_STOP:
+        b.servoLoopState = b.STOPPED;
+        break;
+      case b.STOPPED:
+        continue; // skip the rest of the loop
+        break;
+      default:
+        break;
+    }
+
     calculateMotorDynamics();
     generateLowStatus();
     TIME_FUNCTION_MS(getIMUData(), b.imuupdateduration);
@@ -85,8 +103,6 @@ void vROSTask(void *pvParameters)
     case b.AGENT_CONNECTED:
       // Check connection health every 200ms
       EXECUTE_EVERY_N_MS(200, b.agentState = (RMW_RET_OK == rmw_uros_ping_agent(100, 10)) ? b.AGENT_CONNECTED : b.AGENT_DISCONNECTED;);
-      // 100 Hz data collection and publishing
-      //generateLowStatus();
       RCSOFTCHECK(rcl_publish(&b.publisher, &b.driverState, NULL));
 
       // Process ROS callbacks (commands) - give it 1ms to process queued messages
@@ -140,7 +156,7 @@ void setup()
   xTaskCreatePinnedToCore(
       vHardwareInterfaceTask,
       "HardwareInterfaceTask",   // A name just for humans
-      10000,                     // Stack size in bytes
+      25000,                     // Stack size in bytes
       NULL,                      // Parameter passed as input of the task
       1,                         // Priority of the task)
       &b.xTaskHardwareInterface, // Task handle to keep track of created task
@@ -149,7 +165,7 @@ void setup()
   xTaskCreatePinnedToCore(
       vROSTask,
       "ROSTask",   // A name just for humans
-      10000,       // Stack size in bytes
+      25000,       // Stack size in bytes
       NULL,        // Parameter passed as input of the task
       1,           // Priority of the task)
       &b.xTaskROS, // Task handle to keep track of created task

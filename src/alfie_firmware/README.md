@@ -1,6 +1,6 @@
 What's currently broken:
  - servo command position and current position need to be adjusted to/from 12/16bit signed
- - imu values seem bad, plus no temp retrieval
+ - update services, one to pull memory block as bytes, one to update
  - unable to upload firmware after running alfie_bringup.  annoying
 
 

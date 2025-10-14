@@ -17,9 +17,7 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+find_package(std_msgs REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -48,7 +46,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/AudioFrame.msg"
   "msg/ASRResult.msg"
   "msg/DriverDiagnostics.msg"
+  "msg/RobotLowState.msg"
+  "msg/RobotLowCmd.msg"
   "srv/ServoService.srv"
+  DEPENDENCIES std_msgs
  )
 
 ament_package()

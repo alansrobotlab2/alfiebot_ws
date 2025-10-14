@@ -1,0 +1,9 @@
+std_msgs/Header header
+uint8[2] board_temp
+Imu[2] imu
+MagneticField[2] magnetic_field
+bool shoulder_limit_state
+DriverDiagnostics[2] driver_diagnostics
+MotorState[2] eye_state
+MotorState[2] motor_state
+ServoState[17] servo_state

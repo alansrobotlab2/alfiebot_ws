@@ -99,7 +99,7 @@ void disableAllServoTorques()
   the value from the servo is a 12 bit signed value in the range of -2048 to 2047
   so we convert to a formal 16 bit signed value
 */
-int16_t convertcorrection_fromservo(int16_t servovalue)
+int16_t convertfrom12bitservo(int16_t servovalue)
 {
 
   if(servovalue & 0x800)
@@ -116,7 +116,7 @@ int16_t convertcorrection_fromservo(int16_t servovalue)
   the value from to the servo is a 12 bit signed value in the range of -2048 to 2047
   so we convert from a formal 16 bit signed value to a 12 bit signed value
 */
-int16_t convertcorrection_toservo(int16_t controllervalue)
+int16_t convertto12bitservo(int16_t controllervalue)
 {
   if (controllervalue < 0)
   {

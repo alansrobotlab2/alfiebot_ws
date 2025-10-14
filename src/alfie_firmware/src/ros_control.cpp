@@ -2,11 +2,9 @@
 #include "config.h"
 #include "driverboard.h"   
 #include "motor_control.h"
+#include "servo_control.h"
 
 extern DriverBoard b;
-extern 
-
-
 
 
 void subscription_callback(const void *msgin)
@@ -29,6 +27,57 @@ void subscription_callback(const void *msgin)
   }
 
 }
+
+
+void service_callback(const void *request, void *response)
+{
+  const alfie_msgs__srv__ServoService_Request *req = (const alfie_msgs__srv__ServoService_Request *)request;
+  alfie_msgs__srv__ServoService_Response *res = (alfie_msgs__srv__ServoService_Response *)response;
+
+  int16_t value = req->value;
+
+  // coordinate with the servo update loop to pause it while we do this operation
+  b.servoLoopState = b.REQUEST_STOP;
+
+  while(b.servoLoopState != b.STOPPED)
+  {
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+
+  switch (req->operation)
+  {
+  case 'R': // Read
+    populate_service_response(req->servo, res);
+    break;
+
+  case 'W': // Write
+  if(isWord(req->address)){
+      // if the address is 31 then set bit 11 as the negative bit and flip the sign of the short
+      if (req->address == SBS_POSITIONCORRECTION || req->address == SBS_CURRENTLOCATION || req->address == SBS_TARGETLOCATION)
+      {
+        value = convertto12bitservo(value);
+      }
+      // write the address and address + 1 as a 16 bit value
+      b.mBuf[req->servo - 1].bytes[req->address] = value & 0xFF;
+      b.mBuf[req->servo - 1].bytes[req->address + 1] = (value >> 8) & 0xFF;
+      b.st.genWrite(req->servo, req->address, &b.mBuf[req->servo - 1].bytes[req->address], 2);
+    }
+    else{
+      b.mBuf[req->servo - 1].bytes[req->address] = value;
+      b.st.genWrite(req->servo, req->address, &b.mBuf[req->servo - 1].bytes[req->address], 1);
+    }
+    populate_service_response(req->servo, res);
+    break;
+
+  default:
+    populate_service_response(req->servo, res);
+    break;
+  }
+
+  // resume the servo update loop
+  b.servoLoopState = b.RUNNING;
+}
+
 
 void populate_service_response(int servo, alfie_msgs__srv__ServoService_Response *res)
 {
@@ -58,8 +107,7 @@ void populate_service_response(int servo, alfie_msgs__srv__ServoService_Response
   res->memorymap.counterclockwiseinsensitiveregion = b.mBuf[(servo - 1)].memory.counterclockwiseInsensitiveRegion;
   res->memorymap.protectioncurrent = b.mBuf[(servo - 1)].memory.protectionCurrent;
   res->memorymap.angularresolution = b.mBuf[(servo - 1)].memory.angularResolution;
-  // TODO FIX positioncorrection
-  res->memorymap.positioncorrection = b.mBuf[(servo - 1)].memory.positionCorrection;
+  res->memorymap.positioncorrection = convertfrom12bitservo(b.mBuf[(servo - 1)].memory.positionCorrection);
   res->memorymap.operationmode = b.mBuf[(servo - 1)].memory.operationMode;
   res->memorymap.protectivetorque = b.mBuf[(servo - 1)].memory.protectiveTorque;
   res->memorymap.protectiontime = b.mBuf[(servo - 1)].memory.protectionTime;
@@ -69,7 +117,7 @@ void populate_service_response(int servo, alfie_msgs__srv__ServoService_Response
   res->memorymap.velocityclosedloopicoefficient = b.mBuf[(servo - 1)].memory.velocityClosedLoopIcoefficient;
   res->memorymap.torqueswitch = b.mBuf[(servo - 1)].memory.torqueSwitch;
   res->memorymap.acceleration = b.mBuf[(servo - 1)].memory.acceleration;
-  res->memorymap.targetlocation = b.mBuf[(servo - 1)].memory.targetLocation;
+  res->memorymap.targetlocation = convertfrom12bitservo(b.mBuf[(servo - 1)].memory.targetLocation);
   res->memorymap.runningtime = b.mBuf[(servo - 1)].memory.runningTime;
   res->memorymap.runningspeed = b.mBuf[(servo - 1)].memory.runningSpeed;
   res->memorymap.torquelimit = b.mBuf[(servo - 1)].memory.torqueLimit;
@@ -79,7 +127,7 @@ void populate_service_response(int servo, alfie_msgs__srv__ServoService_Response
   //res->memorymap.unassigned4 = b.mBuf[(servo - 1)].memory.unassigned4;
   //res->memorymap.unassigned5 = b.mBuf[(servo - 1)].memory.unassigned5;
   res->memorymap.lockmark = b.mBuf[(servo - 1)].memory.lockMark;
-  res->memorymap.currentlocation = b.mBuf[(servo - 1)].memory.currentLocation;
+  res->memorymap.currentlocation = convertfrom12bitservo(b.mBuf[(servo - 1)].memory.currentLocation);
   res->memorymap.currentspeed = b.mBuf[(servo - 1)].memory.currentSpeed;
   res->memorymap.currentload = b.mBuf[(servo - 1)].memory.currentLoad;
   res->memorymap.currentvoltage = b.mBuf[(servo - 1)].memory.currentVoltage;
@@ -92,46 +140,6 @@ void populate_service_response(int servo, alfie_msgs__srv__ServoService_Response
   res->memorymap.currentcurrent = b.mBuf[(servo - 1)].memory.currentCurrent;
 
 }
-
-void service_callback(const void *request, void *response)
-{
-  const alfie_msgs__srv__ServoService_Request *req = (const alfie_msgs__srv__ServoService_Request *)request;
-  alfie_msgs__srv__ServoService_Response *res = (alfie_msgs__srv__ServoService_Response *)response;
-
-  int16_t value = 0;
-
-  switch (req->operation)
-  {
-  case 'R': // Read
-    populate_service_response(req->servo, res);
-    break;
-
-  case 'W': // Write
-  if(isWord(req->address)){
-      // if the address is 31 then set bit 11 as the negative bit and flip the sign of the short
-      if (req->address == 31)
-      {
-        if (value < 0)
-        {
-          value = -(value - 0x800);
-        }
-      }
-      // write the address and address + 1 as a 16 bit value
-      b.mBuf[req->servo - 1].bytes[req->address] = req->value & 0xFF;
-      b.mBuf[req->servo - 1].bytes[req->address + 1] = (req->value >> 8) & 0xFF;
-    }
-    else{
-      b.mBuf[req->servo - 1].bytes[req->address] = req->value;
-    }
-    populate_service_response(req->servo, res);
-    break;
-
-  default:
-    populate_service_response(req->servo, res);
-    break;
-  }
-}
-
 
 
 void generateLowStatus()

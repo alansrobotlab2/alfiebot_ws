@@ -28,6 +28,14 @@ def generate_launch_description():
         ),
 
         Node(
+            package='alfie_bringup',
+            namespace='',
+            executable='master_topics',
+            name='master_topics_node',
+            respawn=True
+        ),
+
+        Node(
             package='alfie_tts',
             namespace='',
             executable='alfietts',

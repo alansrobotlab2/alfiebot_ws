@@ -15,6 +15,9 @@ class MLCLLMServeNode(Node):
         self.get_logger().info('Starting mlc llm server...')
         self.mlc_thread = threading.Thread(target=self.run_mlc_llm_serve, daemon=True)
         self.mlc_thread.start()
+
+        self.model = '/data/qwen3-1.7b-q4f16_1-MLC'
+        self.lib = '/data/qwen3-1.7b-q4f16_1-MLC/lib.so'
         
     def run_mlc_llm_serve(self):
         try:
@@ -51,8 +54,8 @@ class MLCLLMServeNode(Node):
                 '-v', '/run/jtop.sock:/run/jtop.sock',
                 '--name', self.container_name,
                 'dustynv/mlc:0.20.0-r36.4.0',
-                'mlc_llm', 'serve', '/data/qwen3-4b-q4f16_1-MLC',
-                '--model-lib', '/data/qwen3-4b-q4f16_1-MLC/lib.so',
+                'mlc_llm', 'serve', self.model,
+                '--model-lib', self.lib,
                 '--host', '0.0.0.0',
                 '--mode', 'interactive',
                 '--device', 'cuda'
