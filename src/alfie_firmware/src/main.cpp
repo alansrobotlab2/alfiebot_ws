@@ -9,17 +9,23 @@
 
 DriverBoard b;
 
-
-
 void vHardwareInterfaceTask(void *pvParameters)
 {
+
+  
+  
+  int retval = 0;
+
   for (int i = 0; i < NUMSERVOS; i++)
   {
     b.st.EnableTorque((i + 1), 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
     // Read servo memory into mBuf[i].bytes (raw memory layout expected by protocol)
-    b.st.Read((i + 1), 0, b.mBuf[i].bytes, sizeof(MemoryStruct));
+    retval = b.st.Read((i + 1), 0, b.mBuf[i].bytes, sizeof(MemoryStruct));
+    b.mBuf[i].memory.unassigned0 = retval; // to indicate if read was successful or not
     b.mBuf[i].memory.targetLocation = b.mBuf[i].memory.currentLocation;
     b.mBuf[i].memory.torqueSwitch = 0;
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 
   initMotors();
@@ -46,21 +52,21 @@ void vHardwareInterfaceTask(void *pvParameters)
     xTaskDelayUntil(&xLastWakeTime, xFrequency);
 
     // we need to coordinate with service requests
-    switch(b.servoLoopState)
+    switch (b.servoLoopState)
     {
-      case b.RUNNING:
-        TIME_FUNCTION_MS(updateServoStatus(), b.pollservostatusduration);
-        TIME_FUNCTION_MS(updateServoIdle(), b.updateservoidleduration);
-        TIME_FUNCTION_MS(updateServoActive(), b.updateservoactiveduration);
-        break;
-      case b.REQUEST_STOP:
-        b.servoLoopState = b.STOPPED;
-        break;
-      case b.STOPPED:
-        continue; // skip the rest of the loop
-        break;
-      default:
-        break;
+    case b.RUNNING:
+      TIME_FUNCTION_MS(updateServoStatus(), b.pollservostatusduration);
+      TIME_FUNCTION_MS(updateServoIdle(), b.updateservoidleduration);
+      TIME_FUNCTION_MS(updateServoActive(), b.updateservoactiveduration);
+      break;
+    case b.REQUEST_STOP:
+      b.servoLoopState = b.STOPPED;
+      break;
+    case b.STOPPED:
+      continue; // skip the rest of the loop
+      break;
+    default:
+      break;
     }
 
     calculateMotorDynamics();
@@ -77,8 +83,6 @@ void vROSTask(void *pvParameters)
 
   // Initialize the xLastWakeTime variable with the current time
   xLastWakeTime = xTaskGetTickCount();
-
-
 
   while (1)
   {
@@ -119,7 +123,7 @@ void vROSTask(void *pvParameters)
     case b.AGENT_DISCONNECTED:
       destroy_ros_entities();
       vTaskDelay(pdMS_TO_TICKS(100));
-      //ESP.restart();
+      // ESP.restart();
       b.agentState = b.WAITING_AGENT;
       break;
     default:
@@ -134,12 +138,12 @@ void setup()
   Serial.begin(BAUDRATE);
 
   Serial1.begin(
-      1000000,
-      SERIAL_8N1,
-      S_RXD, S_TXD,
-      false,
-      20000,
-      127);
+  1000000,
+  SERIAL_8N1,
+  S_RXD, S_TXD,
+  false,
+  20000,
+  127);
 
   b.st.pSerial = &Serial1;
 
@@ -170,10 +174,56 @@ void setup()
       1,           // Priority of the task)
       &b.xTaskROS, // Task handle to keep track of created task
       0);          // Core where the task should run
-
 }
 
 void loop()
 {
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
+
+// void setup1()
+// {
+//   // Configure serial transport
+//   Serial.begin(921600);
+
+//   Serial1.begin(
+//       1000000,
+//       SERIAL_8N1,
+//       S_RXD, S_TXD,
+//       false,
+//       20000,
+//       127);
+
+//   b.st.pSerial = &Serial1;
+
+//   vTaskDelay(pdMS_TO_TICKS(4000));
+// }
+
+// void loop1()
+// {
+
+//   int count = sizeof(MemoryStruct);
+//   int retval = 0;
+//   b.st.EnableTorque((1), 0);
+//   retval = b.st.Read(1, 0, b.mBuf[0].bytes, count);
+//   if (retval == 0)
+//   {
+//     Serial.print("Error: Read failed with code ");
+//     Serial.println(retval);
+//   }
+
+//   Serial.print("Read Firmware Major: ");
+//   Serial.println(b.mBuf[0].memory.firmwareMajor);
+//   Serial.println();
+//   Serial.println("Read bytes:");
+//   for (int i = 0; i < count; i++)
+//   {
+//     if (b.mBuf[0].bytes[i] < 0x10)
+//       Serial.print("0");
+//     Serial.print(b.mBuf[0].bytes[i], HEX);
+//     Serial.print(" ");
+//   }
+//   Serial.println();
+
+//   vTaskDelay(pdMS_TO_TICKS(2000));
+// }

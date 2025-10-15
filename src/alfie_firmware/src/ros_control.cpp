@@ -81,9 +81,17 @@ void service_callback(const void *request, void *response)
 
 void populate_service_response(int servo, alfie_msgs__srv__ServoService_Response *res)
 {
+
+  // Read fresh data from servo including all configuration bytes (0-69)
+  int retval = b.st.Read(servo, 0, b.mBuf[servo-1].bytes, sizeof(MemoryStruct));
+  if(retval == 0) {
+    // If read failed, populate response with error code and return
+    retval = 255; // Indicate read failure
+  }
+
   res->memorymap.firmwaremajor = b.mBuf[(servo - 1)].memory.firmwareMajor;
   res->memorymap.firmwaresub = b.mBuf[(servo - 1)].memory.firmwareSub;
-  //res->memorymap.unassigned0 = b.mBuf[(servo - 1)].memory.unassigned0;
+  //res->memorymap.unassigned0 = retval; // to indicate if read was successful or not
   res->memorymap.servomajor = b.mBuf[(servo - 1)].memory.servoMajor;
   res->memorymap.servosub = b.mBuf[(servo - 1)].memory.servoSub;
   res->memorymap.servoid = b.mBuf[(servo - 1)].memory.servoID;
@@ -195,11 +203,11 @@ void generateLowStatus()
     b.driverState.servo_state[i].currentvoltage = b.mBuf[i].memory.currentVoltage;
     b.driverState.servo_state[i].currentcurrent = b.mBuf[i].memory.currentCurrent;
     b.driverState.servo_state[i].currentload = b.mBuf[i].memory.currentLoad;
-    b.driverState.servo_state[i].currentlocation = b.mBuf[i].memory.currentLocation;
+    b.driverState.servo_state[i].currentlocation = convertfrom12bitservo(b.mBuf[i].memory.currentLocation);
     b.driverState.servo_state[i].currenttemperature = b.mBuf[i].memory.currentTemperature;
     b.driverState.servo_state[i].mobilesign = b.mBuf[i].memory.mobileSign;
     b.driverState.servo_state[i].servostatus = b.mBuf[i].memory.servoStatus;
-    b.driverState.servo_state[i].targetlocation = b.mBuf[i].memory.targetLocation;
+    b.driverState.servo_state[i].targetlocation = convertfrom12bitservo(b.mBuf[i].memory.targetLocation);
     b.driverState.servo_state[i].torqueswitch = b.mBuf[i].memory.torqueSwitch;
   }
 

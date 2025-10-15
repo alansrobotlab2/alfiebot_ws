@@ -77,18 +77,18 @@ public:
 
     volatile bool drivercmd_timeout = true;
 
-    MemoryReplyBuf mBuf[MAX_SERVOS];
+    MemoryReplyBuf mBuf[MAX_SERVOS] = {};  // Zero-initialize the array
 
     uint8_t IDS[MAX_SERVOS];
     uint8_t servoCMDIDS[MAX_SERVOS];
 
-    MemoryReplyBuf buf;
-    MemoryReplyBuf rbuf;
+    MemoryReplyBuf buf = {};   // Zero-initialize
+    MemoryReplyBuf rbuf = {};  // Zero-initialize
 
-    u8 torquecommandbuf[MAX_SERVOS];
-    u8 servocommandbuf[3 * MAX_SERVOS];
+    u8 torquecommandbuf[MAX_SERVOS] = {};    // Zero-initialize
+    u8 servocommandbuf[3 * MAX_SERVOS] = {}; // Zero-initialize
 
-    int16_t drivercmdbuf[2];
+    int16_t drivercmdbuf[2] = {};  // Zero-initialize
 
     // IMU related variables
     // Set the values for the Roll, Pitch, and Yaw corners, as well as the Temp temperature.

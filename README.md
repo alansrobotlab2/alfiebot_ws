@@ -38,7 +38,13 @@ then reboot.
 
 
 To Do:
-
+ - finish servotool so we can calibrate the servos
+    - fix the off by one servo id reference between servotool and the service
+    - all comms should assume using actual servoid
+ - create alfie_bringup service
+ - create simplified onshape model of alfie
+ - export model to urdf for foxglove
+ - export model to omniverse
 
 
 

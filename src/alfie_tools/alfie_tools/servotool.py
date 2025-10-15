@@ -1,6 +1,8 @@
 import sys
+import os
+from pathlib import Path
 from PyQt5 import QtWidgets
-from PyQt5.QtCore import QSize
+from PyQt5.QtCore import QSize, QTimer
 from PyQt5 import uic
 import qdarktheme
 import threading
@@ -21,7 +23,46 @@ class ServoTool(QtWidgets.QMainWindow):
     def __init__(self, *args, **kwargs):
         self.loaded = False
         super().__init__(*args, **kwargs)
-        uic.loadUi("servotool.ui", self)
+        
+        # Initialize text field update timers for debouncing
+        self.field_timers = {}
+        
+        # Define validation ranges for specific fields
+        self.field_ranges = {
+            'txtPositionCorrection': (-4096, 4096),
+            'txtMinAngle': (0, 1000),
+            'txtMaxAngle': (0, 1000),
+            'txtMaxTemperature': (50, 100),
+            'txtMaxVoltage': (60, 140),
+            'txtMinVoltage': (60, 140),
+            'txtMaxTorque': (0, 1000),
+            'txtAngularResolution': (1, 30),
+            'txtProtectionCurrent': (50, 300),
+            'txtClockwiseInsensitiveRegion': (0, 32),
+            'txtCounterClockwiseInsensitiveRegion': (0, 32),
+            'txtMinimumStartForce': (0, 100),
+            'txtPCoefficient': (0, 254),
+            'txtICoefficient': (0, 254),
+            'txtDCoefficient': (0, 254),
+            'txtProtectiveTorque': (50, 1000),
+            'txtProtectionTime': (1, 50),
+            'txtOverloadTorque': (0, 1000),
+            'txtSpeedPCoefficient': (0, 254),
+            'txtOvercurrentProtection': (1, 50),
+            'txtVelocityICoefficient': (0, 254),
+            'txtAcceleration': (0, 254),
+            'txtTargetLocation': (0, 1000),
+            'txtRunningTime': (0, 30000),
+            'txtRunningSpeed': (0, 1500),
+            'txtTorqueLimit': (10, 1000),
+            'txtReturnDelay': (0, 254)
+        }
+        
+        # Get the directory where this script is located
+        script_dir = Path(__file__).parent
+        ui_file = script_dir / "servotool.ui"
+        
+        uic.loadUi(str(ui_file), self)
         self.setFixedSize(QSize(770, 700))
         
         self.connectUI()
@@ -97,12 +138,25 @@ class ServoTool(QtWidgets.QMainWindow):
                 # results in ~ 100hz update rate
 
 
+    def print_memory_map(self, memory_map):
+        """
+        Print the servo memory map in a readable format
+        """
+        print("\n" + "="*60)
+        print("SERVO MEMORY MAP")
+        print("="*60)
+        
+        # Firmware information
+        print(f"Firmware Version: {memory_map.firmwaremajor}.{memory_map.firmwaresub}")
+        print(f"Servo Version: {memory_map.servomajor}.{memory_map.servosub}")
+        print(f"Servo ID: {memory_map.servoid}")  
+
     def retrieveMemoryMap(self, bus):
         # This function retrieves the value from the servo
         # It sends a request to the servo and waits for a response
         print("Retrieve Value")
-        self.servicerequest.servo = 0
-        self.servicerequest.operation = ord('R')
+        self.servicerequest.servo = self.id
+        self.servicerequest.operation = ord('r')
         self.servicerequest.address = 0
         self.servicerequest.value = 0
 
@@ -112,12 +166,13 @@ class ServoTool(QtWidgets.QMainWindow):
         # make the async call
         future = client.call_async(self.servicerequest)
         # block here until the service responds (or times out)
-        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=5.0)
 
         if future.done():
             resp = future.result()
             print("Memory Map Retrieved:")
             print(resp.memorymap)
+            self.print_memory_map(resp.memorymap)
             return resp.memorymap
         else:
             return -1
@@ -129,12 +184,15 @@ class ServoTool(QtWidgets.QMainWindow):
         # It sends a request to the servo and waits for a response
         print("Retrieve Value")
         self.servicerequest.servo = id
-        self.servicerequest.operation = ord('R')
+        self.servicerequest.operation = ord('r')
         self.servicerequest.address = address
         self.servicerequest.value = 0
 
         # pick the correct client
-        client = self.driver0service if bus == 0 else self.driver1service
+        if bus == 0:
+            client = self.driver0service
+        else:
+            client = self.driver1service
 
         # make the async call
         future = client.call_async(self.servicerequest)
@@ -143,7 +201,11 @@ class ServoTool(QtWidgets.QMainWindow):
 
         if future.done():
             resp = future.result()
-            return resp.retval
+            # Note: The service response only contains memorymap, not retval
+            # For read operations, we may need to extract the value from the memorymap
+            # or handle this differently depending on the servo implementation
+            print("Warning: retrieveValue2 needs to be updated to handle response correctly")
+            return 0  # Placeholder return value
         else:
             return -1
 
@@ -157,7 +219,6 @@ class ServoTool(QtWidgets.QMainWindow):
         self.txtServoSubVersion.setText(str(memorymap.servosub))
         self.txtServoID.setText(str(memorymap.servoid))
         self.txtBaudrate.setText(str(memorymap.baudrate))
-
         self.txtPositionCorrection.setText(str(memorymap.positioncorrection))
         self.txtMinAngle.setText(str(memorymap.minanglelimit))
         self.txtMaxAngle.setText(str(memorymap.maxanglelimit))
@@ -190,82 +251,6 @@ class ServoTool(QtWidgets.QMainWindow):
         self.txtLEDAlarm.setText(str(memorymap.ledalarmcondition))
         self.txtUnloadCondition.setText(str(memorymap.unloadingcondition))
         self.txtPhase.setText(str(memorymap.phase))
-        # time.sleep(0.1)
-        # self.txtFirmwareMinor.setText(str(self.retrieveValue(self.bus, self.id, 0x01)))
-        # time.sleep(0.1)
-        # self.txtServoMainVersion.setText(str(self.retrieveValue(self.bus, self.id, 0x03)))
-        # time.sleep(0.1)
-        # self.txtServoSubVersion.setText(str(self.retrieveValue(self.bus, self.id, 0x04)))
-        # time.sleep(0.1)
-        # self.txtServoID.setText(str(self.retrieveValue(self.bus, self.id, 0x05)))
-        # time.sleep(0.1)
-        # self.txtBaudrate.setText(str(self.retrieveValue(self.bus, self.id, 0x06)))
-        # time.sleep(0.1)
-        # self.txtPositionCorrection.setText(str(self.retrieveValue(self.bus, self.id, 0x1F)))
-        # time.sleep(0.1)
-        # self.txtMinAngle.setText(str(self.retrieveValue(self.bus, self.id, 0x09)))
-        # time.sleep(0.1)
-        # self.txtMaxAngle.setText(str(self.retrieveValue(self.bus, self.id, 0x0B)))
-        # time.sleep(0.1)
-        # self.txtMaxTemperature.setText(str(self.retrieveValue(self.bus, self.id, 0x0D)))
-        # time.sleep(0.1)
-        # self.txtMaxVoltage.setText(str(self.retrieveValue(self.bus, self.id, 0x0E)))
-        # time.sleep(0.1)
-        # self.txtMinVoltage.setText(str(self.retrieveValue(self.bus, self.id, 0x0F)))
-        # time.sleep(0.1)
-        # self.txtMaxTorque.setText(str(self.retrieveValue(self.bus, self.id, 0x10)))
-        # time.sleep(0.1)
-        # self.txtAngularResolution.setText(str(self.retrieveValue(self.bus, self.id, 0x1E)))
-        # time.sleep(0.1)
-        # self.txtProtectionCurrent.setText(str(self.retrieveValue(self.bus, self.id, 0x1C)))
-        # time.sleep(0.1)
-        # self.txtClockwiseInsensitiveRegion.setText(str(self.retrieveValue(self.bus, self.id, 0x1A)))
-        # time.sleep(0.1)
-        # self.txtCounterClockwiseInsensitiveRegion.setText(str(self.retrieveValue(self.bus, self.id, 0x1B)))
-        # time.sleep(0.1)
-        # self.txtMinimumStartForce.setText(str(self.retrieveValue(self.bus, self.id, 0x18)))
-        # time.sleep(0.1)
-        # self.txtPCoefficient.setText(str(self.retrieveValue(self.bus, self.id, 0x15)))
-        # time.sleep(0.1)
-        # self.txtICoefficient.setText(str(self.retrieveValue(self.bus, self.id, 0x17)))
-        # time.sleep(0.1)
-        # self.txtDCoefficient.setText(str(self.retrieveValue(self.bus, self.id, 0x16)))
-        # time.sleep(0.1)
-        # self.txtProtectiveTorque.setText(str(self.retrieveValue(self.bus, self.id, 0x22)))
-        # time.sleep(0.1)
-        # self.txtProtectionTime.setText(str(self.retrieveValue(self.bus, self.id, 0x23)))
-        # time.sleep(0.1)
-        # self.txtOverloadTorque.setText(str(self.retrieveValue(self.bus, self.id, 0x24)))
-        # time.sleep(0.1)
-        # self.txtSpeedPCoefficient.setText(str(self.retrieveValue(self.bus, self.id, 0x25)))
-        # time.sleep(0.1)
-        # self.txtOvercurrentProtection.setText(str(self.retrieveValue(self.bus, self.id, 0x26)))
-        # time.sleep(0.1)
-        # self.txtVelocityICoefficient.setText(str(self.retrieveValue(self.bus, self.id, 0x27)))
-        # time.sleep(0.1)
-        # self.txtAcceleration.setText(str(self.retrieveValue(self.bus, self.id, 0x29)))
-        # time.sleep(0.1)
-        # self.txtTargetLocation.setText(str(self.retrieveValue(self.bus, self.id, 0x2A)))
-        # time.sleep(0.1)
-        # self.txtRunningTime.setText(str(self.retrieveValue(self.bus, self.id, 0x2C)))
-        # time.sleep(0.1)
-        # self.txtRunningSpeed.setText(str(self.retrieveValue(self.bus, self.id, 0x2E)))
-        # time.sleep(0.1)
-        # self.txtTorqueLimit.setText(str(self.retrieveValue(self.bus, self.id, 0x30)))
-        # time.sleep(0.1)
-        # self.txtReturnDelay.setText(str(self.retrieveValue(self.bus, self.id, 0x07)))
-        # time.sleep(0.1)
-        # self.txtResponseStatusLevel.setText(str(self.retrieveValue(self.bus, self.id, 0x08)))
-        # time.sleep(0.1)
-        # self.txtOperationMode.setText(str(self.retrieveValue(self.bus, self.id, 0x21)))
-        # time.sleep(0.1)
-        # self.txtLEDAlarm.setText(str(self.retrieveValue(self.bus, self.id, 0x14)))
-        # time.sleep(0.1)
-        # self.txtUnloadCondition.setText(str(self.retrieveValue(self.bus, self.id, 0x13)))
-        # time.sleep(0.1)
-        # self.txtPhase.setText(str(self.retrieveValue(self.bus, self.id, 0x12)))
-        # time.sleep(0.1)
-
 
 
     def disableAllFields(self):
@@ -305,6 +290,7 @@ class ServoTool(QtWidgets.QMainWindow):
         self.txtLEDAlarm.setDisabled(True)
         self.txtUnloadCondition.setDisabled(True)
         self.txtPhase.setDisabled(True)
+
 
     def clearAllFields(self):
         # This function clears all the fields in the UI
@@ -382,25 +368,25 @@ class ServoTool(QtWidgets.QMainWindow):
     def populateServoDropdown(self):
         # This function populates the servo dropdown with available servos
         # For now, we will just add some dummy data
-        self.cmbServos.addItem("driver0/servo01 - left shoulder yaw",[0,0])
-        self.cmbServos.addItem("driver0/servo02 - left shoulder1 pitch",[0,1])
-        self.cmbServos.addItem("driver0/servo03 - left shoulder2 pitch",[0,2])
-        self.cmbServos.addItem("driver0/servo04 - left elbow pitch",[0,3])
-        self.cmbServos.addItem("driver0/servo05 - left wrist pitch",[0,4])
-        self.cmbServos.addItem("driver0/servo06 - left wrist roll",[0,5])
-        self.cmbServos.addItem("driver0/servo07 - left hand",[0,6])
+        self.cmbServos.addItem("driver0/servo01 - left shoulder yaw",[0,1])
+        self.cmbServos.addItem("driver0/servo02 - left shoulder1 pitch",[0,2])
+        self.cmbServos.addItem("driver0/servo03 - left shoulder2 pitch",[0,3])
+        self.cmbServos.addItem("driver0/servo04 - left elbow pitch",[0,4])
+        self.cmbServos.addItem("driver0/servo05 - left wrist pitch",[0,5])
+        self.cmbServos.addItem("driver0/servo06 - left wrist roll",[0,6])
+        self.cmbServos.addItem("driver0/servo07 - left hand",[0,7])
 
-        self.cmbServos.addItem("driver1/servo01 - right shoulder yaw",[1,0])
-        self.cmbServos.addItem("driver1/servo02 - right shoulder1 pitch",[1,1])
-        self.cmbServos.addItem("driver1/servo03 - right shoulder2 pitch",[1,2])
-        self.cmbServos.addItem("driver1/servo04 - right elbow pitch",[1,3])
-        self.cmbServos.addItem("driver1/servo05 - right wrist pitch",[1,4])
-        self.cmbServos.addItem("driver1/servo06 - right wrist roll",[1,5])
-        self.cmbServos.addItem("driver1/servo07 - right hand",[1,6])
+        self.cmbServos.addItem("driver1/servo01 - right shoulder yaw",[1,1])
+        self.cmbServos.addItem("driver1/servo02 - right shoulder1 pitch",[1,2])
+        self.cmbServos.addItem("driver1/servo03 - right shoulder2 pitch",[1,3])
+        self.cmbServos.addItem("driver1/servo04 - right elbow pitch",[1,4])
+        self.cmbServos.addItem("driver1/servo05 - right wrist pitch",[1,5])
+        self.cmbServos.addItem("driver1/servo06 - right wrist roll",[1,6])
+        self.cmbServos.addItem("driver1/servo07 - right hand",[1,7])
 
-        self.cmbServos.addItem("driver1/servo08 - head yaw",[1,7])
-        self.cmbServos.addItem("driver1/servo09 - head pitch",[1,8])
-        self.cmbServos.addItem("driver1/servo10 - head roll",[1,9])
+        self.cmbServos.addItem("driver1/servo08 - head yaw",[1,8])
+        self.cmbServos.addItem("driver1/servo09 - head pitch",[1,9])
+        self.cmbServos.addItem("driver1/servo10 - head roll",[1,10])
 
         self.bus = 0
         self.id = 1
@@ -436,10 +422,142 @@ class ServoTool(QtWidgets.QMainWindow):
 
         # send command to servo
 
+    def onTextFieldChanged(self, field_name, address):
+        """
+        Handle changes to text fields and send updates to servo with debouncing
+        """
+        if not self.loaded:
+            return  # Don't process changes during initial loading
+            
+        # Cancel any existing timer for this field
+        if field_name in self.field_timers:
+            self.field_timers[field_name].stop()
+        
+        # Create a new timer that will trigger the update after a delay
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: self.processTextFieldUpdate(field_name, address))
+        timer.start(500)  # 500ms delay
+        
+        self.field_timers[field_name] = timer
+
+    def processTextFieldUpdate(self, field_name, address):
+        """
+        Process the actual text field update after debouncing delay
+        """
+        # Get the text field widget by name
+        field_widget = getattr(self, field_name)
+        text = field_widget.text().strip()
+        
+        # Skip if empty 
+        if not text:
+            return
+            
+        try:
+            # Convert text to integer
+            value = int(text)
+            
+            # Get validation range for this field
+            min_val, max_val = self.field_ranges.get(field_name, (0, 65535))
+            
+            # Validate range
+            if value < min_val or value > max_val:
+                print(f"Warning: {field_name} value {value} out of range ({min_val}-{max_val})")
+                # Set background color to indicate error
+                field_widget.setStyleSheet("background-color: #ffcccc;")
+                field_widget.setToolTip(f"Value must be between {min_val} and {max_val}")
+                return
+            else:
+                # Clear any error styling and tooltip
+                field_widget.setStyleSheet("")
+                field_widget.setToolTip("")
+                
+            # Send the value to the servo
+            success = self.writeValueToServo(self.bus, self.id, address, value)
+            if success:
+                print(f"Updated {field_name} to {value} at address {address}")
+                # Flash green to indicate success
+                field_widget.setStyleSheet("background-color: #ccffcc;")
+                QTimer.singleShot(1000, lambda: field_widget.setStyleSheet(""))
+            else:
+                print(f"Failed to update {field_name}")
+                field_widget.setStyleSheet("background-color: #ffcccc;")
+                field_widget.setToolTip("Failed to send to servo")
+                QTimer.singleShot(2000, lambda: (field_widget.setStyleSheet(""), field_widget.setToolTip("")))
+            
+        except ValueError:
+            print(f"Invalid value in {field_name}: {text}")
+            field_widget.setStyleSheet("background-color: #ffcccc;")
+            field_widget.setToolTip("Invalid number format")
+            QTimer.singleShot(2000, lambda: (field_widget.setStyleSheet(""), field_widget.setToolTip("")))
+        except Exception as e:
+            print(f"Error updating {field_name}: {e}")
+
+    def writeValueToServo(self, bus, servo_id, address, value):
+        """
+        Write a value to a specific address on the servo
+        Returns True if successful, False otherwise
+        """
+        try:
+            self.servicerequest.servo = servo_id
+            self.servicerequest.operation = ord('w')  # write operation
+            self.servicerequest.address = address
+            self.servicerequest.value = value
+
+            # Pick the correct client based on bus
+            client = self.driver0service if bus == 0 else self.driver1service
+
+            # Make the async call with timeout
+            future = client.call_async(self.servicerequest)
+            rclpy.spin_until_future_complete(self.node, future, timeout_sec=1.0)
+            
+            if future.done():
+                resp = future.result()
+                # For write operations, success is indicated by the service completing
+                # The response contains a memorymap, but we just check if the call succeeded
+                return True
+            else:
+                print(f"Timeout writing to servo {servo_id} at address {address}")
+                return False
+                
+        except Exception as e:
+            print(f"Exception writing to servo: {e}")
+            return False
+
 
     def connectUI(self):
         self.cmbServos.currentIndexChanged.connect(self.onServoSelected)
         self.sliderTargetLocation.valueChanged.connect(self.onSliderValueChanged)
+        
+        # Connect all editable text fields to their change handlers
+        # Note: Status fields (txtStatus*) are read-only and should not be connected
+        self.txtPositionCorrection.textChanged.connect(lambda: self.onTextFieldChanged('txtPositionCorrection', 16))
+        self.txtMinAngle.textChanged.connect(lambda: self.onTextFieldChanged('txtMinAngle', 9))
+        self.txtMaxAngle.textChanged.connect(lambda: self.onTextFieldChanged('txtMaxAngle', 11))
+        self.txtMaxTemperature.textChanged.connect(lambda: self.onTextFieldChanged('txtMaxTemperature', 13))
+        self.txtMaxVoltage.textChanged.connect(lambda: self.onTextFieldChanged('txtMaxVoltage', 14))
+        self.txtMinVoltage.textChanged.connect(lambda: self.onTextFieldChanged('txtMinVoltage', 15))
+        self.txtMaxTorque.textChanged.connect(lambda: self.onTextFieldChanged('txtMaxTorque', 17))
+        self.txtAngularResolution.textChanged.connect(lambda: self.onTextFieldChanged('txtAngularResolution', 18))
+        self.txtProtectionCurrent.textChanged.connect(lambda: self.onTextFieldChanged('txtProtectionCurrent', 19))
+        self.txtClockwiseInsensitiveRegion.textChanged.connect(lambda: self.onTextFieldChanged('txtClockwiseInsensitiveRegion', 20))
+        self.txtCounterClockwiseInsensitiveRegion.textChanged.connect(lambda: self.onTextFieldChanged('txtCounterClockwiseInsensitiveRegion', 21))
+        self.txtMinimumStartForce.textChanged.connect(lambda: self.onTextFieldChanged('txtMinimumStartForce', 22))
+        self.txtPCoefficient.textChanged.connect(lambda: self.onTextFieldChanged('txtPCoefficient', 23))
+        self.txtICoefficient.textChanged.connect(lambda: self.onTextFieldChanged('txtICoefficient', 24))
+        self.txtDCoefficient.textChanged.connect(lambda: self.onTextFieldChanged('txtDCoefficient', 25))
+        self.txtProtectiveTorque.textChanged.connect(lambda: self.onTextFieldChanged('txtProtectiveTorque', 26))
+        self.txtProtectionTime.textChanged.connect(lambda: self.onTextFieldChanged('txtProtectionTime', 27))
+        self.txtOverloadTorque.textChanged.connect(lambda: self.onTextFieldChanged('txtOverloadTorque', 28))
+        self.txtSpeedPCoefficient.textChanged.connect(lambda: self.onTextFieldChanged('txtSpeedPCoefficient', 29))
+        self.txtOvercurrentProtection.textChanged.connect(lambda: self.onTextFieldChanged('txtOvercurrentProtection', 30))
+        self.txtVelocityICoefficient.textChanged.connect(lambda: self.onTextFieldChanged('txtVelocityICoefficient', 31))
+        self.txtAcceleration.textChanged.connect(lambda: self.onTextFieldChanged('txtAcceleration', 32))
+        self.txtTargetLocation.textChanged.connect(lambda: self.onTextFieldChanged('txtTargetLocation', 33))
+        self.txtRunningTime.textChanged.connect(lambda: self.onTextFieldChanged('txtRunningTime', 34))
+        self.txtRunningSpeed.textChanged.connect(lambda: self.onTextFieldChanged('txtRunningSpeed', 35))
+        self.txtTorqueLimit.textChanged.connect(lambda: self.onTextFieldChanged('txtTorqueLimit', 36))
+        self.txtReturnDelay.textChanged.connect(lambda: self.onTextFieldChanged('txtReturnDelay', 37))
 
 
 
