@@ -1,6 +1,6 @@
 What's currently broken:
+ - fix convert to/from 12 bit.  goes from 0 to -2068 instead of 0 to -1
  - servo low position msg feedback needs to account for 12bit int
- - memory map population from servo is not working; mostly 0s
  - update service should update local memory map as well as servo
  - unable to upload firmware after running alfie_bringup.  annoying
 

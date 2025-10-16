@@ -142,9 +142,9 @@ void disableAllServoTorques();
  * @param servovalue Raw 12-bit encoded position value from servo
  * @return Standard 16-bit signed position value
  * @note Used when reading position data from servo memory
- * @see convertto12bitservo() for the inverse conversion
+ * @see positioncorrectionto12bitservo() for the inverse conversion
  */
-int16_t convertfrom12bitservo(int16_t servovalue);
+int16_t positioncorrectionfrom12bitservo(int16_t servovalue);
 
 
 /**
@@ -158,10 +158,10 @@ int16_t convertfrom12bitservo(int16_t servovalue);
  * @param controllervalue Standard 16-bit signed position value  
  * @return 12-bit encoded position value for servo transmission
  * @note Used when sending position commands to servos
- * @see convertfrom12bitservo() for the inverse conversion
+ * @see positioncorrectionfrom12bitservo() for the inverse conversion
  * @warning Input values outside ±2047 range may cause undefined behavior
  */
-int16_t convertto12bitservo(int16_t controllervalue);
+int16_t positioncorrectionto12bitservo(int16_t controllervalue);
 
 
 #endif

@@ -15,6 +15,10 @@ def generate_launch_description():
             executable='micro_ros_agent',
             arguments=['serial', '--dev', '/dev/ttyUSB0', '--baudrate', '921600', '-v4'],
             name='microros_agent_0',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
             respawn=True
         ),
 
@@ -24,6 +28,10 @@ def generate_launch_description():
             executable='micro_ros_agent',
             arguments=['serial', '--dev', '/dev/ttyUSB1', '--baudrate', '921600', '-v4'],
             name='microros_agent_1',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
             respawn=True
         ),
 
@@ -32,6 +40,10 @@ def generate_launch_description():
             namespace='',
             executable='master_topics',
             name='master_topics_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
             respawn=True
         ),
 
@@ -40,6 +52,10 @@ def generate_launch_description():
             namespace='',
             executable='alfietts',
             name='tts_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
             respawn=True
         ),
 
@@ -48,6 +64,10 @@ def generate_launch_description():
             namespace='',
             executable='audio_publisher',
             name='audio_publisher_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
             respawn=True
         ),
 
@@ -56,6 +76,10 @@ def generate_launch_description():
             namespace='',
             executable='parakeet_asr_node',
             name='asr_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
             respawn=True
         ),
 
@@ -64,6 +88,10 @@ def generate_launch_description():
             namespace='',
             executable='mlc_llm_serve_node',
             name='mlc_llm_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
             respawn=True
         ),
 
@@ -77,6 +105,10 @@ def generate_launch_description():
                 'max_qos_depth': 2,  # Limit queue depth
                 'capabilities': ['clientPublish', 'connectionGraph', 'assets'],
             }],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
             respawn=True
         ),
 

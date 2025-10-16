@@ -1,11 +1,10 @@
 #include "ros_control.h"
 #include "config.h"
-#include "driverboard.h"   
+#include "driverboard.h"
 #include "motor_control.h"
 #include "servo_control.h"
 
 extern DriverBoard b;
-
 
 void subscription_callback(const void *msgin)
 {
@@ -25,9 +24,7 @@ void subscription_callback(const void *msgin)
     b.mBuf[i].memory.acceleration = msg->servo_cmd[i].acceleration;
     b.mBuf[i].memory.targetLocation = msg->servo_cmd[i].targetlocation;
   }
-
 }
-
 
 void service_callback(const void *request, void *response)
 {
@@ -36,10 +33,15 @@ void service_callback(const void *request, void *response)
 
   int16_t value = req->value;
 
+  uint8_t retval = 255;
+
+  uint8_t servo = req->servo;
+  uint8_t address = req->address;
+
   // coordinate with the servo update loop to pause it while we do this operation
   b.servoLoopState = b.REQUEST_STOP;
 
-  while(b.servoLoopState != b.STOPPED)
+  while (b.servoLoopState != b.STOPPED)
   {
     vTaskDelay(pdMS_TO_TICKS(1));
   }
@@ -47,30 +49,33 @@ void service_callback(const void *request, void *response)
   switch (req->operation)
   {
   case 'R': // Read
-    populate_service_response(req->servo, res);
+    populate_service_response(servo, res);
     break;
 
   case 'W': // Write
-  if(isWord(req->address)){
-      // if the address is 31 then set bit 11 as the negative bit and flip the sign of the short
-      if (req->address == SBS_POSITIONCORRECTION || req->address == SBS_CURRENTLOCATION || req->address == SBS_TARGETLOCATION)
+    if (isWord(address))
+    {
+      // positioncorrection is a 12 bit signed value for some reason
+      if (address == SBS_POSITIONCORRECTION)
       {
-        value = convertto12bitservo(value);
+        value = positioncorrectionto12bitservo(value);
       }
-      // write the address and address + 1 as a 16 bit value
-      b.mBuf[req->servo - 1].bytes[req->address] = value & 0xFF;
-      b.mBuf[req->servo - 1].bytes[req->address + 1] = (value >> 8) & 0xFF;
-      b.st.genWrite(req->servo, req->address, &b.mBuf[req->servo - 1].bytes[req->address], 2);
+      retval = b.st.writeWord(servo, address, value);
+      populate_service_response(servo, res);
+      res->memorymap.writewordresult = retval; // 0 for failure, number of bytes read on success
     }
-    else{
-      b.mBuf[req->servo - 1].bytes[req->address] = value;
-      b.st.genWrite(req->servo, req->address, &b.mBuf[req->servo - 1].bytes[req->address], 1);
+
+    else
+    {
+      retval = b.st.writeByte(servo, address, (value & 0xFF));
+      populate_service_response(servo, res);
+      res->memorymap.writebyteresult = retval; // 0 for failure, number of bytes read on success
     }
-    populate_service_response(req->servo, res);
+
     break;
 
   default:
-    populate_service_response(req->servo, res);
+    populate_service_response(servo, res);
     break;
   }
 
@@ -78,77 +83,73 @@ void service_callback(const void *request, void *response)
   b.servoLoopState = b.RUNNING;
 }
 
-
-void populate_service_response(int servo, alfie_msgs__srv__ServoService_Response *res)
+void populate_service_response(int servoid, alfie_msgs__srv__ServoService_Response *res)
 {
+  //requests are always 1-10 but our mbuf array is 0-9
+  uint8_t servoindex = servoid - 1;
 
   // Read fresh data from servo including all configuration bytes (0-69)
-  int retval = b.st.Read(servo, 0, b.mBuf[servo-1].bytes, sizeof(MemoryStruct));
-  if(retval == 0) {
-    // If read failed, populate response with error code and return
-    retval = 255; // Indicate read failure
-  }
+  int retval = b.st.Read(servoid, 0, b.mBuf[servoindex].bytes, sizeof(MemoryStruct));
+  res->memorymap.readmemoryresult = retval; // 0 for failure, number of bytes read on success
 
-  res->memorymap.firmwaremajor = b.mBuf[(servo - 1)].memory.firmwareMajor;
-  res->memorymap.firmwaresub = b.mBuf[(servo - 1)].memory.firmwareSub;
-  //res->memorymap.unassigned0 = retval; // to indicate if read was successful or not
-  res->memorymap.servomajor = b.mBuf[(servo - 1)].memory.servoMajor;
-  res->memorymap.servosub = b.mBuf[(servo - 1)].memory.servoSub;
-  res->memorymap.servoid = b.mBuf[(servo - 1)].memory.servoID;
-  res->memorymap.baudrate = b.mBuf[(servo - 1)].memory.baudRate;
-  res->memorymap.returndelay = b.mBuf[(servo - 1)].memory.returnDelay;
-  res->memorymap.responsestatuslevel = b.mBuf[(servo - 1)].memory.responseStatusLevel;
-  res->memorymap.minanglelimit = b.mBuf[(servo - 1)].memory.minAngleLimit;
-  res->memorymap.maxanglelimit = b.mBuf[(servo - 1)].memory.maxAngleLimit;
-  res->memorymap.maxtemplimit = b.mBuf[(servo - 1)].memory.maxTempLimit;
-  res->memorymap.maxinputvoltage = b.mBuf[(servo - 1)].memory.maxInputVoltage;
-  res->memorymap.mininputvoltage = b.mBuf[(servo - 1)].memory.minInputVoltage;
-  res->memorymap.maxtorque = b.mBuf[(servo - 1)].memory.maxTorque;
-  res->memorymap.phase = b.mBuf[(servo - 1)].memory.phase;
-  res->memorymap.unloadingcondition = b.mBuf[(servo - 1)].memory.unloadingCondition;
-  res->memorymap.ledalarmcondition = b.mBuf[(servo - 1)].memory.LEDAlarmCondition;
-  res->memorymap.pcoefficient = b.mBuf[(servo - 1)].memory.Pcoefficient;
-  res->memorymap.dcoefficient = b.mBuf[(servo - 1)].memory.Dcoefficient;
-  res->memorymap.icoefficient = b.mBuf[(servo - 1)].memory.Icoefficient;
-  res->memorymap.minstartupforce = b.mBuf[(servo - 1)].memory.minStartupForce;
-  res->memorymap.clockwiseinsensitivearea = b.mBuf[(servo - 1)].memory.clockwiseInsensitiveArea;
-  res->memorymap.counterclockwiseinsensitiveregion = b.mBuf[(servo - 1)].memory.counterclockwiseInsensitiveRegion;
-  res->memorymap.protectioncurrent = b.mBuf[(servo - 1)].memory.protectionCurrent;
-  res->memorymap.angularresolution = b.mBuf[(servo - 1)].memory.angularResolution;
-  res->memorymap.positioncorrection = convertfrom12bitservo(b.mBuf[(servo - 1)].memory.positionCorrection);
-  res->memorymap.operationmode = b.mBuf[(servo - 1)].memory.operationMode;
-  res->memorymap.protectivetorque = b.mBuf[(servo - 1)].memory.protectiveTorque;
-  res->memorymap.protectiontime = b.mBuf[(servo - 1)].memory.protectionTime;
-  res->memorymap.overloadtorque = b.mBuf[(servo - 1)].memory.overloadTorque;
-  res->memorymap.speedclosedlooppcoefficient = b.mBuf[(servo - 1)].memory.speedClosedLoopPcoefficient;
-  res->memorymap.overcurrentprotectiontime = b.mBuf[(servo - 1)].memory.OvercurrentProtectionTime;
-  res->memorymap.velocityclosedloopicoefficient = b.mBuf[(servo - 1)].memory.velocityClosedLoopIcoefficient;
-  res->memorymap.torqueswitch = b.mBuf[(servo - 1)].memory.torqueSwitch;
-  res->memorymap.acceleration = b.mBuf[(servo - 1)].memory.acceleration;
-  res->memorymap.targetlocation = convertfrom12bitservo(b.mBuf[(servo - 1)].memory.targetLocation);
-  res->memorymap.runningtime = b.mBuf[(servo - 1)].memory.runningTime;
-  res->memorymap.runningspeed = b.mBuf[(servo - 1)].memory.runningSpeed;
-  res->memorymap.torquelimit = b.mBuf[(servo - 1)].memory.torqueLimit;
-  //res->memorymap.unassigned1 = b.mBuf[(servo - 1)].memory.unassigned1;
-  //res->memorymap.unassigned2 = b.mBuf[(servo - 1)].memory.unassigned2;
-  //res->memorymap.unassigned3 = b.mBuf[(servo - 1)].memory.unassigned3;
-  //res->memorymap.unassigned4 = b.mBuf[(servo - 1)].memory.unassigned4;
-  //res->memorymap.unassigned5 = b.mBuf[(servo - 1)].memory.unassigned5;
-  res->memorymap.lockmark = b.mBuf[(servo - 1)].memory.lockMark;
-  res->memorymap.currentlocation = convertfrom12bitservo(b.mBuf[(servo - 1)].memory.currentLocation);
-  res->memorymap.currentspeed = b.mBuf[(servo - 1)].memory.currentSpeed;
-  res->memorymap.currentload = b.mBuf[(servo - 1)].memory.currentLoad;
-  res->memorymap.currentvoltage = b.mBuf[(servo - 1)].memory.currentVoltage;
-  res->memorymap.currenttemperature = b.mBuf[(servo - 1)].memory.currentTemperature;
-  res->memorymap.asyncwriteflag = b.mBuf[(servo - 1)].memory.asyncWriteFlag;
-  res->memorymap.servostatus = b.mBuf[(servo - 1)].memory.servoStatus;
-  res->memorymap.mobilesign = b.mBuf[(servo - 1)].memory.mobileSign;
-  //res->memorymap.unassigned6 = b.mBuf[(servo - 1)].memory.unassigned6;
-  //res->memorymap.unassigned7 = b.mBuf[(servo - 1)].memory.unassigned7;
-  res->memorymap.currentcurrent = b.mBuf[(servo - 1)].memory.currentCurrent;
-
+  res->memorymap.firmwaremajor = b.mBuf[(servoindex)].memory.firmwareMajor;
+  res->memorymap.firmwaresub = b.mBuf[(servoindex)].memory.firmwareSub;
+  // res->memorymap.unassigned0 = retval; // to indicate if read was successful or not
+  res->memorymap.servomajor = b.mBuf[(servoindex)].memory.servoMajor;
+  res->memorymap.servosub = b.mBuf[(servoindex)].memory.servoSub;
+  res->memorymap.servoid = b.mBuf[(servoindex)].memory.servoID;
+  res->memorymap.baudrate = b.mBuf[(servoindex)].memory.baudRate;
+  res->memorymap.returndelay = b.mBuf[(servoindex)].memory.returnDelay;
+  res->memorymap.responsestatuslevel = b.mBuf[(servoindex)].memory.responseStatusLevel;
+  res->memorymap.minanglelimit = b.mBuf[(servoindex)].memory.minAngleLimit;
+  res->memorymap.maxanglelimit = b.mBuf[(servoindex)].memory.maxAngleLimit;
+  res->memorymap.maxtemplimit = b.mBuf[(servoindex)].memory.maxTempLimit;
+  res->memorymap.maxinputvoltage = b.mBuf[(servoindex)].memory.maxInputVoltage;
+  res->memorymap.mininputvoltage = b.mBuf[(servoindex)].memory.minInputVoltage;
+  res->memorymap.maxtorque = b.mBuf[(servoindex)].memory.maxTorque;
+  res->memorymap.phase = b.mBuf[(servoindex)].memory.phase;
+  res->memorymap.unloadingcondition = b.mBuf[(servoindex)].memory.unloadingCondition;
+  res->memorymap.ledalarmcondition = b.mBuf[(servoindex)].memory.LEDAlarmCondition;
+  res->memorymap.pcoefficient = b.mBuf[(servoindex)].memory.Pcoefficient;
+  res->memorymap.dcoefficient = b.mBuf[(servoindex)].memory.Dcoefficient;
+  res->memorymap.icoefficient = b.mBuf[(servoindex)].memory.Icoefficient;
+  res->memorymap.minstartupforce = b.mBuf[(servoindex)].memory.minStartupForce;
+  res->memorymap.clockwiseinsensitivearea = b.mBuf[(servoindex)].memory.clockwiseInsensitiveArea;
+  res->memorymap.counterclockwiseinsensitiveregion = b.mBuf[(servoindex)].memory.counterclockwiseInsensitiveRegion;
+  res->memorymap.protectioncurrent = b.mBuf[(servoindex)].memory.protectionCurrent;
+  res->memorymap.angularresolution = b.mBuf[(servoindex)].memory.angularResolution;
+  res->memorymap.positioncorrection = positioncorrectionfrom12bitservo(b.mBuf[(servoindex)].memory.positionCorrection);
+  res->memorymap.operationmode = b.mBuf[(servoindex)].memory.operationMode;
+  res->memorymap.protectivetorque = b.mBuf[(servoindex)].memory.protectiveTorque;
+  res->memorymap.protectiontime = b.mBuf[(servoindex)].memory.protectionTime;
+  res->memorymap.overloadtorque = b.mBuf[(servoindex)].memory.overloadTorque;
+  res->memorymap.speedclosedlooppcoefficient = b.mBuf[(servoindex)].memory.speedClosedLoopPcoefficient;
+  res->memorymap.overcurrentprotectiontime = b.mBuf[(servoindex)].memory.OvercurrentProtectionTime;
+  res->memorymap.velocityclosedloopicoefficient = b.mBuf[(servoindex)].memory.velocityClosedLoopIcoefficient;
+  res->memorymap.torqueswitch = b.mBuf[(servoindex)].memory.torqueSwitch;
+  res->memorymap.acceleration = b.mBuf[(servoindex)].memory.acceleration;
+  res->memorymap.targetlocation = b.mBuf[(servoindex)].memory.targetLocation;
+  res->memorymap.runningtime = b.mBuf[(servoindex)].memory.runningTime;
+  res->memorymap.runningspeed = b.mBuf[(servoindex)].memory.runningSpeed;
+  res->memorymap.torquelimit = b.mBuf[(servoindex)].memory.torqueLimit;
+  // res->memorymap.unassigned1 = b.mBuf[(servoindex)].memory.unassigned1;
+  // res->memorymap.unassigned2 = b.mBuf[(servoindex)].memory.unassigned2;
+  // res->memorymap.unassigned3 = b.mBuf[(servoindex)].memory.unassigned3;
+  // res->memorymap.unassigned4 = b.mBuf[(servoindex)].memory.unassigned4;
+  // res->memorymap.unassigned5 = b.mBuf[(servoindex)].memory.unassigned5;
+  res->memorymap.lockmark = b.mBuf[(servoindex)].memory.lockMark;
+  res->memorymap.currentlocation = b.mBuf[(servoindex)].memory.currentLocation;
+  res->memorymap.currentspeed = b.mBuf[(servoindex)].memory.currentSpeed;
+  res->memorymap.currentload = b.mBuf[(servoindex)].memory.currentLoad;
+  res->memorymap.currentvoltage = b.mBuf[(servoindex)].memory.currentVoltage;
+  res->memorymap.currenttemperature = b.mBuf[(servoindex)].memory.currentTemperature;
+  res->memorymap.asyncwriteflag = b.mBuf[(servoindex)].memory.asyncWriteFlag;
+  res->memorymap.servostatus = b.mBuf[(servoindex)].memory.servoStatus;
+  res->memorymap.mobilesign = b.mBuf[(servoindex)].memory.mobileSign;
+  // res->memorymap.unassigned6 = b.mBuf[(servoindex)].memory.unassigned6;
+  // res->memorymap.unassigned7 = b.mBuf[(servoindex)].memory.unassigned7;
+  res->memorymap.currentcurrent = b.mBuf[(servoindex)].memory.currentCurrent;
 }
-
 
 void generateLowStatus()
 {
@@ -194,8 +195,6 @@ void generateLowStatus()
   b.driverState.magnetic_field.magnetic_field_y = b.stMagnRawData.Y;
   b.driverState.magnetic_field.magnetic_field_z = b.stMagnRawData.Z;
 
-
-
   for (int i = 0; i < NUMSERVOS; i++)
   {
     // Direct access - no memcpy needed!
@@ -203,18 +202,16 @@ void generateLowStatus()
     b.driverState.servo_state[i].currentvoltage = b.mBuf[i].memory.currentVoltage;
     b.driverState.servo_state[i].currentcurrent = b.mBuf[i].memory.currentCurrent;
     b.driverState.servo_state[i].currentload = b.mBuf[i].memory.currentLoad;
-    b.driverState.servo_state[i].currentlocation = convertfrom12bitservo(b.mBuf[i].memory.currentLocation);
+    b.driverState.servo_state[i].currentlocation = b.mBuf[i].memory.currentLocation;
     b.driverState.servo_state[i].currenttemperature = b.mBuf[i].memory.currentTemperature;
     b.driverState.servo_state[i].mobilesign = b.mBuf[i].memory.mobileSign;
     b.driverState.servo_state[i].servostatus = b.mBuf[i].memory.servoStatus;
-    b.driverState.servo_state[i].targetlocation = convertfrom12bitservo(b.mBuf[i].memory.targetLocation);
+    b.driverState.servo_state[i].targetlocation = b.mBuf[i].memory.targetLocation;
     b.driverState.servo_state[i].torqueswitch = b.mBuf[i].memory.torqueSwitch;
   }
 
-  //RCSOFTCHECK(rcl_publish(&b.publisher, &b.driverState, NULL));
-
+  // RCSOFTCHECK(rcl_publish(&b.publisher, &b.driverState, NULL));
 }
-
 
 bool create_ros_entities()
 {
@@ -270,20 +267,20 @@ bool destroy_ros_entities()
   return true;
 }
 
-
 /*
   these are the serial bus servo addresses
   that hold 16 bit values
 
   location 31 the sign bit is bit11
 */
-bool isWord(uint8_t a) {
-  if (a == 9 || a == 11 || a == 16 || a == 24 || a == 28 || a == 31 || a == 42 || a == 44 || a == 46 || a == 48) {
+bool isWord(uint8_t a)
+{
+  if (a == 9 || a == 11 || a == 16 || a == 24 || a == 28 || a == 31 || a == 42 || a == 44 || a == 46 || a == 48)
+  {
     return true;
   }
   return false;
 }
-
 
 // Error handle loop
 void error_loop()

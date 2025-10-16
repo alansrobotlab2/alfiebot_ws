@@ -1,6 +1,5 @@
 uint8 firmwaremajor     
 uint8 firmwaresub  
-uint8 unassigned0     
 uint8 servomajor    
 uint8 servosub       
 uint8 servoid       
@@ -37,12 +36,7 @@ uint8 acceleration
 int16 targetlocation    
 uint16 runningtime       
 uint16 runningspeed      
-uint16 torquelimit       
-uint8 unassigned1       
-uint8 unassigned2       
-uint8 unassigned3        
-uint8 unassigned4        
-uint8 unassigned5         
+uint16 torquelimit        
 uint8 lockmark
 int16 currentlocation
 int16 currentspeed    
@@ -52,6 +46,8 @@ uint8 currenttemperature
 uint8 asyncwriteflag     
 uint8 servostatus        
 uint8 mobilesign         
-uint8 unassigned6        
-uint8 unassigned7  
 uint16 currentcurrent  
+
+uint8 writebyteresult
+uint8 writewordresult
+uint8 readmemoryresult

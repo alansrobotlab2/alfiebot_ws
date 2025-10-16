@@ -48,6 +48,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DriverDiagnostics.msg"
   "msg/RobotLowState.msg"
   "msg/RobotLowCmd.msg"
+  "msg/JetsonState.msg"
   "srv/ServoService.srv"
   DEPENDENCIES std_msgs
  )

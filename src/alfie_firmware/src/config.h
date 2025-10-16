@@ -9,7 +9,7 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 /dev/ttyUSB0 = driverboard 0
 /dev/ttyUSB1 = driverboard 1
 */
-#define DRIVERBOARD 1
+#define DRIVERBOARD 0
 
 
 

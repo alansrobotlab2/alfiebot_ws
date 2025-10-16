@@ -39,8 +39,16 @@ then reboot.
 
 To Do:
  - finish servotool so we can calibrate the servos
-    - fix the off by one servo id reference between servotool and the service
-    - all comms should assume using actual servoid
+    - fix zero servo calculations
+    - add set minangle button
+    - add set maxangle button
+    
+ - calibrate all 17 servos
+    - raw position is 0 - 4096, 180 degrees is 2048
+
+ - figure out elegant way to handle dual shoulder servos
+
+ - update robotlowstatus and robotlowcmd to convert to/from standard units
  - create alfie_bringup service
  - create simplified onshape model of alfie
  - export model to urdf for foxglove

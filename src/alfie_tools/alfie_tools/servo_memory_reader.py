@@ -79,14 +79,15 @@ def print_memory_map(memory_map):
     print(f"Firmware Version: {memory_map.firmwaremajor}.{memory_map.firmwaresub}")
     print(f"Servo Version: {memory_map.servomajor}.{memory_map.servosub}")
     print(f"Servo ID: {memory_map.servoid}")  
+    print(f"Max Torque: {memory_map.maxtorque}")
 
 def main():
     """
     Main function - parse command line arguments and call service
     """
     # Default values
-    servo_id = 1
-    operation = 'r'  # read operation
+    servo_id = 8
+    operation = 'R'  # write operation
     address = 0
     value = 0
     
