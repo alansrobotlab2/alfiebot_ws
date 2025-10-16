@@ -39,17 +39,19 @@ then reboot.
 
 To Do:
 
- - there's something goofy with setting status of marklock toggle
+ - update robotlowstatus and robotlowcmd to convert to/from standard units
+     - figure out elegant way to handle dual shoulder servos
 
- - calibrate all 17 servos
+ - servotool incorporate the raw/degrees/radians selector to all inputs and outputs
+
+ - servotool rate limit the slider to 20hz?
+
+ - servotool calibrate all 17 servos
     - raw position is 0 - 4096, 180 degrees is 2048
     - set sane min max positions
 
- - update servotool slider to take min and max values into account
+ - servotool update servotool slider to take min and max values into account
 
- - figure out elegant way to handle dual shoulder servos
-
- - update robotlowstatus and robotlowcmd to convert to/from standard units
  - create alfie_bringup service
  - create simplified onshape model of alfie
  - export model to urdf for foxglove

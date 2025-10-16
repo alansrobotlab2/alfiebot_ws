@@ -10,19 +10,20 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('lib/python3.10/site-packages/' + package_name, ['alfie_tools/servotool.ui']),
+        # Install UI file to lib directory for runtime access
+        ('lib/python3.10/site-packages/' + package_name + '/servotool', ['alfie_tools/servotool/servotool.ui']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='alfie',
     maintainer_email='alansrobotlab@gmail.com',
-    description='TODO: Package description',
+    description='Tools for Alfie robot servo configuration and monitoring',
     license='Apache-2.0',
     # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'servo_memory_reader = alfie_tools.servo_memory_reader:main',
-            'servotool = alfie_tools.servotool:main',
+            'servotool = alfie_tools.servotool.servotool_node:main',
         ],
     },
 )
