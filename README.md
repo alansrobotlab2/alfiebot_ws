@@ -38,13 +38,14 @@ then reboot.
 
 
 To Do:
- - finish servotool so we can calibrate the servos
-    - fix zero servo calculations
-    - add set minangle button
-    - add set maxangle button
-    
+
+ - there's something goofy with setting status of marklock toggle
+
  - calibrate all 17 servos
     - raw position is 0 - 4096, 180 degrees is 2048
+    - set sane min max positions
+
+ - update servotool slider to take min and max values into account
 
  - figure out elegant way to handle dual shoulder servos
 

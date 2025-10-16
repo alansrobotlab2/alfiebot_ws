@@ -115,7 +115,7 @@ class ServoTool(QtWidgets.QMainWindow):
         ui_file = script_dir / "servotool.ui"
         
         uic.loadUi(str(ui_file), self)
-        self.setFixedSize(QSize(770, 700))
+        self.setFixedSize(QSize(770, 760))
         
         # Configure slider range for target location (0 to 4096)
         self.sliderTargetLocation.setMinimum(0)
@@ -212,10 +212,10 @@ class ServoTool(QtWidgets.QMainWindow):
             if not self.toggleTorqueSwitch.isChecked():
                 self.sliderTargetLocation.setValue(msg.servo_state[servo_index].currentlocation)
 
-            if (self.toggleTorqueSwitch.isChecked() and int(self.txtStatusTargetLocation.text()) != int(self.sliderTargetLocation.value())):
-                print("Bus ", self.bus, " New Slider Value: ", self.sliderTargetLocation.value(), ": TargetLocation Value: ", self.txtStatusTargetLocation.text())
-                # service update position
-                # results in ~ 100hz update rate
+            # if (self.toggleTorqueSwitch.isChecked() and int(self.txtStatusTargetLocation.text()) != int(self.sliderTargetLocation.value())):
+            #     print("Bus ", self.bus, " New Slider Value: ", self.sliderTargetLocation.value(), ": TargetLocation Value: ", self.txtStatusTargetLocation.text())
+            #     # service update position
+            #     # results in ~ 100hz update rate
 
 
     def print_memory_map(self, memory_map):
@@ -352,11 +352,11 @@ class ServoTool(QtWidgets.QMainWindow):
         # lockmark == 0 means EEPROM is locked (button should be checked)
         # lockmark == 1 means EEPROM is unlocked (button should be unchecked)
         if memorymap.lockmark == 0:
-            self.toggleLock.setChecked(True)
-            self.toggleLock.setText("EEPROM UNLocked")
+            self.toggleLockMark.setChecked(True)
+            self.toggleLockMark.setText("EEPROM UNLocked")
         else:
-            self.toggleLock.setChecked(False)
-            self.toggleLock.setText("EEPROM Locked")
+            self.toggleLockMark.setChecked(False)
+            self.toggleLockMark.setText("EEPROM Locked")
         
         # Set toggleTorqueSwitch button based on torqueswitch value
         # torqueswitch == 1 means torque is enabled (button should be checked)
@@ -483,12 +483,12 @@ class ServoTool(QtWidgets.QMainWindow):
             return
         
         # Determine the value based on checked state
-        # Checked = locked = 0, Unchecked = unlocked = 1
-        if self.toggleLock.isChecked():
-            lockmark_value = 0
+        # Checked = locked = 1, Unchecked = unlocked = 0
+        if self.toggleLockMark.isChecked():
+            lockmark_value = 1
             button_text = "EEPROM Locked"
         else:
-            lockmark_value = 1
+            lockmark_value = 0
             button_text = "EEPROM Unlocked"
         
         print(f"Toggle Lock clicked: setting lockmark to {lockmark_value}")
@@ -497,12 +497,12 @@ class ServoTool(QtWidgets.QMainWindow):
         success = self.writeValueToServo(self.bus, self.id, 55, lockmark_value)
         
         if success:
-            self.toggleLock.setText(button_text)
+            self.toggleLockMark.setText(button_text)
             print(f"Successfully set lockmark to {lockmark_value}")
         else:
             print(f"Failed to set lockmark to {lockmark_value}")
             # Revert the button state if write failed
-            self.toggleLock.setChecked(not self.toggleLock.isChecked())
+            self.toggleLockMark.setChecked(not self.toggleLockMark.isChecked())
 
 
     def onToggleTorqueSwitchClicked(self):
@@ -607,9 +607,10 @@ class ServoTool(QtWidgets.QMainWindow):
             current_offset = int(current_offset_text) if current_offset_text else 0
             
             # Calculate the position correction needed to zero the servo
-            # Center position is 2048, so correction = 2048 - current_location
+            # If current position is 2056 with offset 700, and we want 2048,
+            # we need to add 8 to the offset: new_offset = 700 + (2056 - 2048) = 708
             target_center = 2048
-            position_correction = (target_center - (current_location - current_offset))
+            position_correction = current_offset + (current_location - target_center)
             
             # Validate the correction is within range (-2047 to 2047)
             if position_correction < -2047 or position_correction > 2047:
@@ -633,6 +634,114 @@ class ServoTool(QtWidgets.QMainWindow):
             print(f"Error: Invalid current location value - {e}")
         except Exception as e:
             print(f"Error in onBtnZeroServoClicked: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+    def onBtnSetMinAngleClicked(self):
+        """
+        Handle Set Min Angle button click event.
+        
+        Called when user clicks the Set Min Angle button. This function:
+        1. Reads the current location from txtStatusCurrentLocation
+        2. Verifies that the current location is less than 2048 (center position)
+        3. If valid, writes the current location to the min angle address (9)
+        
+        This allows the user to set the minimum angle limit by moving the servo
+        to the desired minimum position and clicking the button.
+        
+        Only processes if UI has finished loading (self.loaded == True).
+        """
+        if not self.loaded:
+            return
+        
+        try:
+            # Get the current location from the status field
+            current_location_text = self.txtStatusCurrentLocation.text()
+            if not current_location_text:
+                print("Error: Current location is empty")
+                return
+            
+            current_location = int(current_location_text)
+            
+            # Verify that current location is less than 2048 (center position)
+            if current_location >= 2048:
+                print(f"WARNING: Current position ({current_location}) is not less than 2048!")
+                print(f"WARNING: Min angle should be set to a position less than center (2048)")
+                print(f"WARNING: Not setting min angle - move servo to a lower position first")
+                return
+            
+            print(f"Set Min Angle clicked: setting min angle to {current_location}")
+            
+            # Write the current location to min angle address (9)
+            success = self.writeValueToServo(self.bus, self.id, 9, current_location)
+            
+            if success:
+                # Update the min angle field to show the new value
+                self.txtMinAngle.setText(str(current_location))
+                self.field_original_values['txtMinAngle'] = str(current_location)
+                print(f"Successfully set min angle to {current_location}")
+            else:
+                print(f"Failed to set min angle to {current_location}")
+                
+        except ValueError as e:
+            print(f"Error: Invalid current location value - {e}")
+        except Exception as e:
+            print(f"Error in onBtnSetMinAngleClicked: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+    def onBtnSetMaxAngleClicked(self):
+        """
+        Handle Set Max Angle button click event.
+        
+        Called when user clicks the Set Max Angle button. This function:
+        1. Reads the current location from txtStatusCurrentLocation
+        2. Verifies that the current location is greater than 2048 (center position)
+        3. If valid, writes the current location to the max angle address (11)
+        
+        This allows the user to set the maximum angle limit by moving the servo
+        to the desired maximum position and clicking the button.
+        
+        Only processes if UI has finished loading (self.loaded == True).
+        """
+        if not self.loaded:
+            return
+        
+        try:
+            # Get the current location from the status field
+            current_location_text = self.txtStatusCurrentLocation.text()
+            if not current_location_text:
+                print("Error: Current location is empty")
+                return
+            
+            current_location = int(current_location_text)
+            
+            # Verify that current location is greater than 2048 (center position)
+            if current_location <= 2048:
+                print(f"WARNING: Current position ({current_location}) is not greater than 2048!")
+                print(f"WARNING: Max angle should be set to a position greater than center (2048)")
+                print(f"WARNING: Not setting max angle - move servo to a higher position first")
+                return
+            
+            print(f"Set Max Angle clicked: setting max angle to {current_location}")
+            
+            # Write the current location to max angle address (11)
+            success = self.writeValueToServo(self.bus, self.id, 11, current_location)
+            
+            if success:
+                # Update the max angle field to show the new value
+                self.txtMaxAngle.setText(str(current_location))
+                self.field_original_values['txtMaxAngle'] = str(current_location)
+                print(f"Successfully set max angle to {current_location}")
+            else:
+                print(f"Failed to set max angle to {current_location}")
+                
+        except ValueError as e:
+            print(f"Error: Invalid current location value - {e}")
+        except Exception as e:
+            print(f"Error in onBtnSetMaxAngleClicked: {e}")
             import traceback
             traceback.print_exc()
 
@@ -849,9 +958,11 @@ class ServoTool(QtWidgets.QMainWindow):
         """
         self.cmbServos.currentIndexChanged.connect(self.onServoSelected)
         self.sliderTargetLocation.valueChanged.connect(self.onSliderValueChanged)
-        self.toggleLock.clicked.connect(self.onToggleLockClicked)
+        self.toggleLockMark.clicked.connect(self.onToggleLockClicked)
         self.toggleTorqueSwitch.clicked.connect(self.onToggleTorqueSwitchClicked)
         self.btnZeroServo.clicked.connect(self.onBtnZeroServoClicked)
+        self.btnSetMinAngle.clicked.connect(self.onBtnSetMinAngleClicked)
+        self.btnSetMaxAngle.clicked.connect(self.onBtnSetMaxAngleClicked)
         
         # Connect all editable text fields to returnPressed and focus events
         # returnPressed: Submit value when Enter is pressed
@@ -908,7 +1019,7 @@ class ServoTool(QtWidgets.QMainWindow):
             user input. Typically called when switching servos or during initialization.
             """
             self.toggleTorqueSwitch.setDisabled(True)
-            self.toggleLock.setDisabled(True)
+            self.toggleLockMark.setDisabled(True)
             self.sliderTargetLocation.setDisabled(True)
             self.txtPositionCorrection.setDisabled(True)
             self.txtMinAngle.setDisabled(True)
@@ -993,7 +1104,7 @@ class ServoTool(QtWidgets.QMainWindow):
         user input. Typically called after loading servo parameters.
         """
         self.toggleTorqueSwitch.setDisabled(False)
-        self.toggleLock.setDisabled(False)
+        self.toggleLockMark.setDisabled(False)
         self.sliderTargetLocation.setDisabled(False)
         self.txtPositionCorrection.setDisabled(False)
         self.txtMinAngle.setDisabled(False)
