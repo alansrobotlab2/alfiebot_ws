@@ -42,6 +42,8 @@ To Do:
  - update robotlowstatus and robotlowcmd to convert to/from standard units
      - figure out elegant way to handle dual shoulder servos
 
+ - alfie_mic crashes after a time; result of reset process?
+
  - servotool incorporate the raw/degrees/radians selector to all inputs and outputs
 
  - servotool rate limit the slider to 20hz?

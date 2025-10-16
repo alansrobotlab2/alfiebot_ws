@@ -23,6 +23,7 @@ def launch_setup(context, *args, **kwargs):
             ),
             launch_arguments={
                 "name": name,
+                "namespace": "alfie",
                 "params_file": params_file,
                 "parent_frame": LaunchConfiguration("parent_frame"),
                 "cam_pos_x": LaunchConfiguration("cam_pos_x"),

@@ -219,8 +219,8 @@ bool create_ros_entities()
   b.allocator = rcl_get_default_allocator();
   RCCHECK(rclc_support_init(&b.support, 0, NULL, &b.allocator));
 
-  // create node
-  RCCHECK(rclc_node_init_default(&b.node, NODENAME, "", &b.support));
+  // create node with namespace
+  RCCHECK(rclc_node_init_default(&b.node, NODENAME, NAMESPACE, &b.support));
 
   // create publisher
   RCCHECK(rclc_publisher_init_best_effort(

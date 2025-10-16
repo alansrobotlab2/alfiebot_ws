@@ -70,7 +70,7 @@ class ServoToolWindow(QtWidgets.QMainWindow):
         
         self.robot_low_state_sub = self.node.create_subscription(
             RobotLowState,
-            "/robotlowstate",
+            "/alfie/robotlowstate",
             self.robotLowStateCallback,
             qos
         )

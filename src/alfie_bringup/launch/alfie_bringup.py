@@ -11,7 +11,7 @@ def generate_launch_description():
 
         Node(
             package='micro_ros_agent',
-            namespace='',
+            namespace='alfie',
             executable='micro_ros_agent',
             arguments=['serial', '--dev', '/dev/ttyUSB0', '--baudrate', '921600', '-v4'],
             name='microros_agent_0',
@@ -24,7 +24,7 @@ def generate_launch_description():
 
         Node(
             package='micro_ros_agent',
-            namespace='',
+            namespace='alfie',
             executable='micro_ros_agent',
             arguments=['serial', '--dev', '/dev/ttyUSB1', '--baudrate', '921600', '-v4'],
             name='microros_agent_1',
@@ -37,7 +37,7 @@ def generate_launch_description():
 
         Node(
             package='alfie_bringup',
-            namespace='',
+            namespace='alfie',
             executable='master_topics',
             name='master_topics_node',
             output='screen',
@@ -49,7 +49,7 @@ def generate_launch_description():
 
         Node(
             package='alfie_tts',
-            namespace='',
+            namespace='alfie',
             executable='alfietts',
             name='tts_node',
             output='screen',
@@ -61,7 +61,7 @@ def generate_launch_description():
 
         Node(
             package='alfie_mic',
-            namespace='',
+            namespace='alfie',
             executable='audio_publisher',
             name='audio_publisher_node',
             output='screen',
@@ -73,7 +73,7 @@ def generate_launch_description():
 
         Node(
             package='alfie_asr',
-            namespace='',
+            namespace='alfie',
             executable='parakeet_asr_node',
             name='asr_node',
             output='screen',
@@ -85,7 +85,7 @@ def generate_launch_description():
 
         Node(
             package='alfie_llm',
-            namespace='',
+            namespace='alfie',
             executable='mlc_llm_serve_node',
             name='mlc_llm_node',
             output='screen',
@@ -97,7 +97,7 @@ def generate_launch_description():
 
         Node(
             package='foxglove_bridge',
-            namespace='',
+            namespace='alfie',
             executable='foxglove_bridge',
             name='foxglove_bridge',
             parameters=[{

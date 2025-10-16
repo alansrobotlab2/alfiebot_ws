@@ -22,7 +22,7 @@ def call_servo_service(servo_id=0, operation='r', address=0, value=0):
     node = rclpy.create_node('servo_memory_reader')
     
     # Wait for the service to be available
-    service_name = '/driver0servoservice'
+    service_name = '/alfie/driver0servoservice'
     print(f"Waiting for service {service_name}...")
     
     client = node.create_client(ServoService, service_name)
