@@ -6,7 +6,7 @@ from PyQt5.QtCore import QSize, QTimer
 
 import rclpy
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from alfie_msgs.msg import RobotLowState
+from alfie_msgs.msg import GDBState
 
 from alfie_tools.servotool.gui.field_config import EDITABLE_FIELDS, SERVO_CONFIG, FIELD_RANGE_MAP, FIELD_ADDRESS_MAP
 from alfie_tools.servotool.ros.servo_client import ServoServiceClient
@@ -39,6 +39,10 @@ class ServoToolWindow(QtWidgets.QMainWindow):
         self.bus = 0
         self.id = 1
         
+        # Store latest driver states
+        self.driver0_state = None
+        self.driver1_state = None
+        
         self._load_ui()
         self._setup_subscriber()
         self._setup_connections()
@@ -64,14 +68,21 @@ class ServoToolWindow(QtWidgets.QMainWindow):
         self.sliderTargetLocation.setMaximum(4096)
     
     def _setup_subscriber(self):
-        """Create subscription to robot low state topic."""
+        """Create subscriptions to driver state topics."""
         qos = QoSProfile(depth=10)
         qos.reliability = ReliabilityPolicy.BEST_EFFORT
         
-        self.robot_low_state_sub = self.node.create_subscription(
-            RobotLowState,
-            "/alfie/robotlowstate",
-            self.robotLowStateCallback,
+        self.driver0_state_sub = self.node.create_subscription(
+            GDBState,
+            "/alfie/gdb0state",
+            self.GDB0StateCallback,
+            qos
+        )
+        
+        self.driver1_state_sub = self.node.create_subscription(
+            GDBState,
+            "/alfie/gdb1state",
+            self.GDB1StateCallback,
             qos
         )
     
@@ -99,35 +110,59 @@ class ServoToolWindow(QtWidgets.QMainWindow):
         """Populate the servo selection dropdown with available servos."""
         for display_name, bus, servo_id in SERVO_CONFIG:
             self.cmbServos.addItem(display_name, [bus, servo_id])
-    
-    def robotLowStateCallback(self, msg):
-        """Callback for real-time robot low state updates.
-        
+
+    def GDB0StateCallback(self, msg):
+        """Callback for GDB0 state updates.
+
         Args:
-            msg (RobotLowState): Message containing current state of all servos
+            msg (GDBState): Message containing current state of GDB0 servos
         """
-        # Calculate servo index based on bus and ID
-        if self.bus == 1:  # left arm, first in combined array
-            servo_index = self.id - 1
-        else:
-            servo_index = (7 + (self.id - 1))
+        self.driver0_state = msg
+        # Update UI if currently viewing a servo on this bus
+        if self.bus == 0:
+            self._update_servo_status_display()
+
+    def GDB1StateCallback(self, msg):
+        """Callback for GDB1 state updates.
+
+        Args:
+            msg (GDBState): Message containing current state of GDB1 servos
+        """
+        self.driver1_state = msg
+        # Update UI if currently viewing a servo on this bus
+        if self.bus == 1:
+            self._update_servo_status_display()
+    
+    def _update_servo_status_display(self):
+        """Update the UI with current servo status from appropriate driver state."""
+        # Get the appropriate driver state based on current bus
+        driver_state = self.driver0_state if self.bus == 0 else self.driver1_state
         
-        if servo_index < len(msg.servo_state):
+        # Check if we have data
+        if driver_state is None:
+            return
+        
+        # Servo ID is 1-indexed, array is 0-indexed
+        servo_index = self.id - 1
+        
+        if servo_index < len(driver_state.servo_state):
+            servo = driver_state.servo_state[servo_index]
+            
             # Update status fields
-            self.txtStatusTorqueSwitch.setText(str(msg.servo_state[servo_index].torqueswitch))
-            self.txtStatusTargetLocation.setText(str(msg.servo_state[servo_index].targetlocation))
-            self.txtStatusAcceleration.setText(str(msg.servo_state[servo_index].acceleration))
-            self.txtStatusCurrentLocation.setText(str(msg.servo_state[servo_index].currentlocation))
-            self.txtStatusCurrentSpeed.setText(str(msg.servo_state[servo_index].currentspeed))
-            self.txtStatusCurrentVoltage.setText(str((msg.servo_state[servo_index].currentvoltage / 10.0)))
-            self.txtStatusCurrentCurrent.setText(str(msg.servo_state[servo_index].currentcurrent * 6.5))
-            self.txtStatusCurrentTemperature.setText(str(msg.servo_state[servo_index].currenttemperature))
-            self.txtStatusServoStatus.setText(str(msg.servo_state[servo_index].servostatus))
-            self.txtStatusMobileSign.setText(str(msg.servo_state[servo_index].mobilesign))
+            self.txtStatusTorqueSwitch.setText(str(servo.torqueswitch))
+            self.txtStatusTargetLocation.setText(str(servo.targetlocation))
+            self.txtStatusAcceleration.setText(str(servo.acceleration))
+            self.txtStatusCurrentLocation.setText(str(servo.currentlocation))
+            self.txtStatusCurrentSpeed.setText(str(servo.currentspeed))
+            self.txtStatusCurrentVoltage.setText(str(servo.currentvoltage / 10.0))
+            self.txtStatusCurrentCurrent.setText(str(servo.currentcurrent * 6.5))
+            self.txtStatusCurrentTemperature.setText(str(servo.currenttemperature))
+            self.txtStatusServoStatus.setText(str(servo.servostatus))
+            self.txtStatusMobileSign.setText(str(servo.mobilesign))
             
             # Update slider position from current location only when torque is disabled
             if not self.toggleTorqueSwitch.isChecked():
-                self.sliderTargetLocation.setValue(msg.servo_state[servo_index].currentlocation)
+                self.sliderTargetLocation.setValue(servo.currentlocation)
     
     def onServoSelected(self):
         """Handle servo selection change event."""
@@ -465,14 +500,14 @@ class ServoToolWindow(QtWidgets.QMainWindow):
                 print(f"Failed to update {field_name}")
                 field_widget.setStyleSheet("background-color: #ffcccc;")
                 field_widget.setToolTip("Failed to send to servo")
-                QTimer.singleShot(2000, lambda: (field_widget.setStyleSheet(""), field_widget.setToolTip("")))
+                QTimer.singleShot(2000, lambda: (field_widget.setStyleSheet("") or field_widget.setToolTip("")))
                 return False
             
         except ValueError:
             print(f"Invalid value in {field_name}: {text}")
             field_widget.setStyleSheet("background-color: #ffcccc;")
             field_widget.setToolTip("Invalid number format")
-            QTimer.singleShot(2000, lambda: (field_widget.setStyleSheet(""), field_widget.setToolTip("")))
+            QTimer.singleShot(2000, lambda: (field_widget.setStyleSheet("") or field_widget.setToolTip("")))
             return False
         except Exception as e:
             print(f"Error updating {field_name}: {e}")

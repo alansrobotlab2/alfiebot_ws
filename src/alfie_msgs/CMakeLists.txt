@@ -18,6 +18,8 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -33,24 +35,26 @@ endif()
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/ServoMemoryMap.msg"
-  "msg/ServoCmd.msg"
-  "msg/ServoState.msg"
-  "msg/Imu.msg"
-  "msg/MagneticField.msg"
-  "msg/MotorState.msg"
-  "msg/DriverState.msg"
-  "msg/DriverCmd.msg"
+  "msg/GDBServoMemoryMap.msg"
+  "msg/GDBServoCmd.msg"
+  "msg/GDBServoState.msg"
+  "msg/GDBImu.msg"
+  "msg/GDBMagneticField.msg"
+  "msg/GDBMotorState.msg"
+  "msg/GDBState.msg"
+  "msg/GDBCmd.msg"
   "msg/SpeechRequest.msg"
   "msg/Speaking.msg"
   "msg/AudioFrame.msg"
   "msg/ASRResult.msg"
-  "msg/DriverDiagnostics.msg"
+  "msg/GDBDiagnostics.msg"
   "msg/RobotLowState.msg"
   "msg/RobotLowCmd.msg"
   "msg/JetsonState.msg"
-  "srv/ServoService.srv"
-  DEPENDENCIES std_msgs
+  "msg/MotorState.msg"
+  "msg/ServoState.msg"
+  "srv/GDBServoService.srv"
+  DEPENDENCIES std_msgs sensor_msgs geometry_msgs
  )
 
 ament_package()

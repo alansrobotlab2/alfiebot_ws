@@ -112,7 +112,7 @@ void vROSTask(void *pvParameters)
       // Process ROS callbacks (commands) - give it 1ms to process queued messages
       rclc_executor_spin_some(&b.executor, RCL_MS_TO_NS(1));
 
-      // Watchdog: Check if DriverCmd timeout occurred
+      // Watchdog: Check if GDBCmd timeout occurred
       if (b.last_drivercmd_time > 0 && (millis() - b.last_drivercmd_time) > WATCHDOG_TIMEOUT_MS)
       {
         b.drivercmd_timeout = true;

@@ -2,8 +2,8 @@
 
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.srv import ServoService
-from alfie_msgs.msg import ServoMemoryMap
+from alfie_msgs.srv import GDBServoService
+from alfie_msgs.msg import GDBServoMemoryMap
 import sys
 
 def call_servo_service(servo_id=0, operation='r', address=0, value=0):
@@ -25,7 +25,7 @@ def call_servo_service(servo_id=0, operation='r', address=0, value=0):
     service_name = '/alfie/driver0servoservice'
     print(f"Waiting for service {service_name}...")
     
-    client = node.create_client(ServoService, service_name)
+    client = node.create_client(GDBServoService, service_name)
     
     while not client.wait_for_service(timeout_sec=1.0):
         node.get_logger().info(f'Service {service_name} not available, waiting again...')
@@ -33,7 +33,7 @@ def call_servo_service(servo_id=0, operation='r', address=0, value=0):
     
     try:
         # Create request
-        request = ServoService.Request()
+        request = GDBServoService.Request()
         request.servo = servo_id
         request.operation = ord(operation)  # Convert char to int
         request.address = address
@@ -48,13 +48,18 @@ def call_servo_service(servo_id=0, operation='r', address=0, value=0):
         if future.done():
             response = future.result()
             # Print the memory map
-            print_memory_map(response.memorymap)
-            
-            # Cleanup
-            node.destroy_node()
-            rclpy.shutdown()
-            
-            return response.memorymap
+            if response is not None:
+                print_memory_map(response.memorymap)
+                # Cleanup
+                node.destroy_node()
+                rclpy.shutdown()
+                return response.memorymap
+            else:
+                print("Failed to get memory map - response is None")
+                # Cleanup
+                node.destroy_node()
+                rclpy.shutdown()
+                return None
         else:
             print("Service call timed out")
             node.destroy_node()

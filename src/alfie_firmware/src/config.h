@@ -9,7 +9,7 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 /dev/ttyUSB0 = driverboard 0
 /dev/ttyUSB1 = driverboard 1
 */
-#define DRIVERBOARD 1
+#define DRIVERBOARD 0
 
 
 
@@ -19,10 +19,10 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 // right arm 
 // head
 // drive wheels
-#define NODENAME "driver0"
-#define STATEPUBLISHER "driver0state"
-#define CMDSUBSCRIBER "driver0cmd"
-#define SERVOSERVICE "driver0servoservice"
+#define NODENAME "gdb0"
+#define STATEPUBLISHER "gdb0state"
+#define CMDSUBSCRIBER "gdb0cmd"
+#define SERVOSERVICE "gdb0servoservice"
 #define PWMFREQUENCY 512
 #define NUMSERVOS 10
 
@@ -32,10 +32,10 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 // left arm
 // eye lights
 // shoulder limit switch
-#define NODENAME "driver1"
-#define STATEPUBLISHER "driver1state"
-#define CMDSUBSCRIBER "driver1cmd"
-#define SERVOSERVICE "driver1servoservice"
+#define NODENAME "gdb1"
+#define STATEPUBLISHER "gdb1state"
+#define CMDSUBSCRIBER "gdb1cmd"
+#define SERVOSERVICE "gdb1servoservice"
 #define PWMFREQUENCY 8268
 #define NUMSERVOS 7
 #endif 
@@ -61,9 +61,9 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 #include "commandstruct.h"
 
 // #include <alfie_msgs/msg/servo_memory_map.h>
-#include <alfie_msgs/msg/driver_state.h>
-#include <alfie_msgs/msg/driver_cmd.h>
-#include <alfie_msgs/srv/servo_service.h>
+#include <alfie_msgs/msg/gdb_state.h>
+#include <alfie_msgs/msg/gdb_cmd.h>
+#include <alfie_msgs/srv/gdb_servo_service.h>
 
 // baudrate for serial communication with micro-ROS agent
 //#define BAUDRATE 115200

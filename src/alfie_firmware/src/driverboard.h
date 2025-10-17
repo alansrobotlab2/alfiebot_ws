@@ -23,8 +23,8 @@ public:
         }
     }
 
-    alfie_msgs__msg__DriverState driverState;
-    alfie_msgs__msg__DriverCmd driverCmd;
+    alfie_msgs__msg__GDBState driverState;
+    alfie_msgs__msg__GDBCmd driverCmd;
 
     rcl_publisher_t publisher;
     rcl_subscription_t subscriber;
@@ -35,8 +35,8 @@ public:
     rcl_allocator_t allocator;
     rcl_node_t node;
 
-    alfie_msgs__srv__ServoService_Request req;
-    alfie_msgs__srv__ServoService_Response res;
+    alfie_msgs__srv__GDBServoService_Request req;
+    alfie_msgs__srv__GDBServoService_Response res;
 
     SMS_STS st;
 

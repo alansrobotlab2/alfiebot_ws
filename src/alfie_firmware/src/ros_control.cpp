@@ -8,7 +8,7 @@ extern DriverBoard b;
 
 void subscription_callback(const void *msgin)
 {
-  const alfie_msgs__msg__DriverCmd *msg = (const alfie_msgs__msg__DriverCmd *)msgin;
+  const alfie_msgs__msg__GDBCmd *msg = (const alfie_msgs__msg__GDBCmd *)msgin;
 
   // Update watchdog timestamp
   b.last_drivercmd_time = millis();
@@ -28,8 +28,8 @@ void subscription_callback(const void *msgin)
 
 void service_callback(const void *request, void *response)
 {
-  const alfie_msgs__srv__ServoService_Request *req = (const alfie_msgs__srv__ServoService_Request *)request;
-  alfie_msgs__srv__ServoService_Response *res = (alfie_msgs__srv__ServoService_Response *)response;
+  const alfie_msgs__srv__GDBServoService_Request *req = (const alfie_msgs__srv__GDBServoService_Request *)request;
+  alfie_msgs__srv__GDBServoService_Response *res = (alfie_msgs__srv__GDBServoService_Response *)response;
 
   int16_t value = req->value;
 
@@ -83,7 +83,7 @@ void service_callback(const void *request, void *response)
   b.servoLoopState = b.RUNNING;
 }
 
-void populate_service_response(int servoid, alfie_msgs__srv__ServoService_Response *res)
+void populate_service_response(int servoid, alfie_msgs__srv__GDBServoService_Response *res)
 {
   //requests are always 1-10 but our mbuf array is 0-9
   uint8_t servoindex = servoid - 1;
@@ -226,21 +226,21 @@ bool create_ros_entities()
   RCCHECK(rclc_publisher_init_best_effort(
       &b.publisher,
       &b.node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, DriverState),
+      ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, GDBState),
       STATEPUBLISHER));
 
   // create subscriber
   RCCHECK(rclc_subscription_init_default(
       &b.subscriber,
       &b.node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, DriverCmd),
+      ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, GDBCmd),
       CMDSUBSCRIBER));
 
   // create service
   RCCHECK(rclc_service_init_default(
       &b.service,
       &b.node,
-      ROSIDL_GET_SRV_TYPE_SUPPORT(alfie_msgs, srv, ServoService),
+      ROSIDL_GET_SRV_TYPE_SUPPORT(alfie_msgs, srv, GDBServoService),
       SERVOSERVICE));
 
   // create executor

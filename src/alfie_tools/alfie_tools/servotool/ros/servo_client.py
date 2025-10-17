@@ -2,7 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.srv import ServoService
+from alfie_msgs.srv import GDBServoService
 
 
 class ServoServiceClient:
@@ -17,18 +17,18 @@ class ServoServiceClient:
         self.node = node
         
         # Create service clients for both driver buses
-        self.driver0 = node.create_client(ServoService, "/alfie/driver0servoservice")
-        self.driver1 = node.create_client(ServoService, "/alfie/driver1servoservice")
-        
+        self.gdb0 = node.create_client(GDBServoService, "/alfie/gdb0servoservice")
+        self.gdb1 = node.create_client(GDBServoService, "/alfie/gdb1servoservice")
+
         self._wait_for_services()
         
     def _wait_for_services(self):
         """Wait for both servo services to become available."""
-        while not self.driver0.wait_for_service(timeout_sec=1.0):
-            self.node.get_logger().info("Driver0 Service not available, waiting...")
+        while not self.gdb0.wait_for_service(timeout_sec=1.0):
+            self.node.get_logger().info("GDB0 Service not available, waiting...")
             
-        while not self.driver1.wait_for_service(timeout_sec=1.0):
-            self.node.get_logger().info("Driver1 Service not available, waiting...")
+        while not self.gdb1.wait_for_service(timeout_sec=1.0):
+            self.node.get_logger().info("GDB1 Service not available, waiting...")
     
     def read_memory_map(self, bus: int, servo_id: int):
         """Read complete memory map from servo.
@@ -38,20 +38,27 @@ class ServoServiceClient:
             servo_id: Servo ID (1-10)
             
         Returns:
-            ServoMemoryMap object or None on timeout
+            GDBServoMemoryMap object or None on timeout
         """
-        request = ServoService.Request()
+        request = GDBServoService.Request()
         request.servo = servo_id
         request.operation = ord('r')
         request.address = 0
         request.value = 0
-        
-        client = self.driver0 if bus == 0 else self.driver1
+
+        client = self.gdb0 if bus == 0 else self.gdb1
         future = client.call_async(request)
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=5.0)
         
         if future.done():
-            return future.result().memorymap
+            result = future.result()
+            if result is not None:
+                return result.memorymap
+            else:
+                self.node.get_logger().error(
+                    f"No result from bus {bus}, servo {servo_id}"
+                )
+                return None
         else:
             self.node.get_logger().error(
                 f"Timeout reading from bus {bus}, servo {servo_id}"
@@ -70,13 +77,13 @@ class ServoServiceClient:
         Returns:
             True if write succeeded, False otherwise
         """
-        request = ServoService.Request()
+        request = GDBServoService.Request()
         request.servo = servo_id
         request.operation = ord('W')
         request.address = address
         request.value = value
-        
-        client = self.driver0 if bus == 0 else self.driver1
+
+        client = self.gdb0 if bus == 0 else self.gdb1
         future = client.call_async(request)
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=1.0)
         

@@ -2,7 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.msg import RobotLowCmd, ServoCmd
+from alfie_msgs.msg import RobotLowCmd, GDBServoCmd
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 
@@ -40,7 +40,7 @@ class RobotLowCmdPublisher(Node):
         
         # Create 17 servo commands with all zeros
         for i in range(17):
-            servo_cmd = ServoCmd()
+            servo_cmd = GDBServoCmd()
             servo_cmd.torqueswitch = 0
             servo_cmd.acceleration = 0
             servo_cmd.targetlocation = 0

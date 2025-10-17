@@ -9,9 +9,9 @@
  * Establishes the complete micro-ROS infrastructure including:
  * - ROS 2 support system and allocator
  * - Node with configured name (NODENAME)
- * - Publisher for DriverState messages (best-effort QoS)
- * - Subscriber for DriverCmd messages (default QoS)
- * - Service for ServoService requests/responses
+ * - Publisher for GDBState messages (best-effort QoS)
+ * - Subscriber for GDBCmd messages (default QoS)
+ * - Service for GDBServoService requests/responses
  * - Executor with 2 handles (subscriber + service)
  * 
  * The executor is configured to handle incoming subscription messages and
@@ -46,7 +46,7 @@ bool destroy_ros_entities();
 
 
 /**
- * @brief Callback for processing incoming DriverCmd messages from ROS subscription
+ * @brief Callback for processing incoming GDBCmd messages from ROS subscription
  * 
  * Handles incoming command messages by:
  * 1. Updating watchdog timestamp to prevent timeout
@@ -55,10 +55,10 @@ bool destroy_ros_entities();
  * 4. Extracting servo commands (torque, acceleration, position) for all servos
  * 5. Updating local command buffers and servo memory structures
  * 
- * This callback is invoked automatically by the executor when new DriverCmd
+ * This callback is invoked automatically by the executor when new GDBCmd
  * messages arrive on the subscribed topic.
  * 
- * @param msgin Pointer to incoming alfie_msgs__msg__DriverCmd message
+ * @param msgin Pointer to incoming alfie_msgs__msg__GDBCmd message
  * @note Called by executor in response to new subscription data
  * @note Updates global DriverBoard members: last_drivercmd_time, drivercmd_timeout, drivercmdbuf, mBuf
  * @see create_ros_entities() for callback registration
@@ -67,7 +67,7 @@ void subscription_callback(const void *msgin);
 
 
 /**
- * @brief Callback for processing ServoService requests from ROS clients
+ * @brief Callback for processing GDBServoService requests from ROS clients
  * 
  * Handles servo memory read/write service requests:
  * - Operation 'R' (Read): Populates response with servo memory map data
@@ -78,8 +78,8 @@ void subscription_callback(const void *msgin);
  * The service allows direct access to servo control registers for configuration
  * and monitoring purposes.
  * 
- * @param request Pointer to incoming alfie_msgs__srv__ServoService_Request
- * @param response Pointer to outgoing alfie_msgs__srv__ServoService_Response
+ * @param request Pointer to incoming alfie_msgs__srv__GDBServoService_Request
+ * @param response Pointer to outgoing alfie_msgs__srv__GDBServoService_Response
  * @note Called by executor when service is invoked
  * @note Updates mBuf for write operations
  * @see populate_service_response() for response formatting
@@ -97,12 +97,12 @@ void service_callback(const void *request, void *response);
  * covering the complete servo memory map (approximately 47+ registers).
  * 
  * @param servo Servo ID (1-based index, e.g., 1 for first servo)
- * @param res Pointer to alfie_msgs__srv__ServoService_Response to populate
+ * @param res Pointer to alfie_msgs__srv__GDBServoService_Response to populate
  * @note Servo parameter is 1-based but internally converted to 0-based array index
  * @note Reads from global mBuf array
  * @see service_callback() for usage context
  */
-void populate_service_response(int servo, alfie_msgs__srv__ServoService_Response *res);
+void populate_service_response(int servo, alfie_msgs__srv__GDBServoService_Response *res);
 
 
 /**
@@ -125,7 +125,7 @@ bool isWord(uint8_t a);
 
 
 /**
- * @brief Generates and populates the DriverState message with current system status
+ * @brief Generates and populates the GDBState message with current system status
  * 
  * Aggregates data from all subsystems into a comprehensive state message including:
  * - Motor state (PWM commands, encoder counts, velocity, acceleration, movement flags)
@@ -142,7 +142,7 @@ bool isWord(uint8_t a);
  * @note Called periodically from main loop to prepare state updates
  * @note Does not publish - publishing should be done separately
  * @note Updates global b.driverState structure
- * @see DriverState message definition in alfie_msgs
+ * @see GDBState message definition in alfie_msgs
  */
 void generateLowStatus();
 

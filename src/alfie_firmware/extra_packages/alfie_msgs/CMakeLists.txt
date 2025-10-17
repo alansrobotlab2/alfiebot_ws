@@ -35,16 +35,16 @@ endif()
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/ServoMemoryMap.msg"
-  "msg/ServoCmd.msg"
-  "msg/ServoState.msg"
-  "msg/MotorState.msg"
-  "msg/Imu.msg"
-  "msg/MagneticField.msg"
-  "msg/DriverState.msg"
-  "msg/DriverCmd.msg"
-  "msg/DriverDiagnostics.msg"
-  "srv/ServoService.srv"
+  "msg/GDBServoMemoryMap.msg"
+  "msg/GDBServoCmd.msg"
+  "msg/GDBServoState.msg"
+  "msg/GDBMotorState.msg"
+  "msg/GDBImu.msg"
+  "msg/GDBMagneticField.msg"
+  "msg/GDBState.msg"
+  "msg/GDBCmd.msg"
+  "msg/GDBDiagnostics.msg"
+  "srv/GDBServoService.srv"
  )
 
 ament_package()
