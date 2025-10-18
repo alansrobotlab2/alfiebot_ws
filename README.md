@@ -41,16 +41,20 @@ To Do:
 
  - alfie_mic crashes after a time; result of reset step?
 
+ - quick teleop drive with joystick
+
  - evaluate impact of running foxglove bridge on device vs off
 
  - create alfie_bringup service
 
-
-
- 
  - create simplified onshape model of alfie
  - export model to urdf for foxglove
  - export model to omniverse
+
+ - create teleoperation rig with teensy 4.2
+
+ - operation high five?
+
 
  - fix servotool2, memory offsets result in writing wrong values on write eeprom  oopsie!
 

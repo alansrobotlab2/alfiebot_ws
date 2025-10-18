@@ -122,24 +122,24 @@ def launch_setup(context, *args, **kwargs):
                 "i_synced": True,
                 "i_width": int(color_profile[0]),
                 "i_height": int(color_profile[1]),
-                "i_fps": 10.0,
+                 "i_fps": 5.0,
             },
             "depth": {
                 "i_publish_topic": is_launch_config_true(context, "enable_depth"),
                 "i_synced": True,
                 "i_width": int(depth_profile[0]),
                 "i_height": int(depth_profile[1]),
-                "i_fps": 10.0,
+                 "i_fps": 5.0,
             },
             "infra1": {
                 "i_width": int(infra_profile[0]),
                 "i_height": int(infra_profile[1]),
-                "i_fps": 10.0,
+                 "i_fps": 5.0,
             },
             "infra2": {
                 "i_width": int(infra_profile[0]),
                 "i_height": int(infra_profile[1]),
-                "i_fps": 10.0,
+                 "i_fps": 5.0,
             },
         }
         parameter_overrides["depth"] = {
