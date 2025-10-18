@@ -38,8 +38,20 @@ def generate_launch_description():
         Node(
             package='alfie_bringup',
             namespace='alfie',
-            executable='master_topics',
-            name='master_topics_node',
+            executable='master_status',
+            name='master_status_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
+            respawn=True
+        ),
+
+        Node(
+            package='alfie_bringup',
+            namespace='alfie',
+            executable='master_cmd',
+            name='master_cmd_node',
             output='screen',
             emulate_tty=True,
             sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown

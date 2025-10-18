@@ -24,6 +24,7 @@ setup(
         'console_scripts': [
             'servo_memory_reader = alfie_tools.servo_memory_reader:main',
             'servotool = alfie_tools.servotool.servotool_node:main',
+            'servotool2 = alfie_tools.servotool2.servotool2_node:main',
         ],
     },
 )

@@ -81,6 +81,14 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Minimum angle limit for motion range.
+Must be less than max angle.
+Unit: Steps
+Range: -32766 to 32767
+Default: 0
+Note: Set to 0 for multi-turn control.</string>
+     </property>
     </widget>
     <widget class="QLabel" name="label_2">
      <property name="geometry">
@@ -103,6 +111,14 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Maximum angle limit for motion range.
+Must be greater than min angle.
+Unit: Steps
+Range: -32766 to 32767
+Default: 4095
+Note: Set to 0 for multi-turn control.</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_3">
@@ -127,6 +143,13 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Position correction offset.
+BIT11 is direction bit, other bits indicate 0-2047 steps.
+Unit: Steps
+Range: -2047 to 2047
+Default: 0</string>
+     </property>
     </widget>
     <widget class="QLabel" name="label_4">
      <property name="geometry">
@@ -149,6 +172,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Maximum operating temperature limit with 1°C precision.
+Unit: °C
+Range: 0 to 100
+Default: 70</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_5">
@@ -173,6 +202,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Maximum input voltage limit.
+Unit: 0.1V (e.g., 80 = 8.0V)
+Range: 0 to 254
+Default: 80 (8.0V)</string>
+     </property>
     </widget>
     <widget class="QLabel" name="label_6">
      <property name="geometry">
@@ -195,6 +230,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Minimum input voltage limit.
+Unit: 0.1V (e.g., 40 = 4.0V)
+Range: 0 to 254
+Default: 40 (4.0V)</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_7">
@@ -219,6 +260,13 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Maximum output torque limit (1000 = 100% locked-rotor torque).
+Assigned to torque limit (addr 48) on power-up.
+Unit: 0.1%
+Range: 0 to 1000
+Default: 1000</string>
+     </property>
     </widget>
     <widget class="QLabel" name="label_9">
      <property name="geometry">
@@ -241,6 +289,13 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Amplification factor of minimum resolution angle.
+Expands control range.
+Range: 1 to 3
+Default: 1
+Note: For multi-turn control, set addr 0x12 BIT4=1.</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_10">
@@ -265,6 +320,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Overcurrent protection threshold.
+Unit: 6.5mA (max = 500 × 6.5mA = 3250mA)
+Range: 0 to 511
+Default: 500</string>
+     </property>
     </widget>
     <widget class="QLabel" name="label_11">
      <property name="geometry">
@@ -287,6 +348,13 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Anti-clockwise deadband zone.
+1 unit = 1 minimum resolution angle.
+Unit: Steps
+Range: 0 to 32
+Default: 1</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_12">
@@ -311,6 +379,13 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Clockwise deadband zone.
+1 unit = 1 minimum resolution angle.
+Unit: Steps
+Range: 0 to 32
+Default: 1</string>
+     </property>
     </widget>
     <widget class="QLabel" name="label_13">
      <property name="geometry">
@@ -333,6 +408,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Minimum startup torque (1000 = 100% locked-rotor torque).
+Unit: 0.1%
+Range: 0 to 1000
+Default: 16</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_14">
@@ -357,6 +438,11 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Position loop Proportional (P) coefficient for control motor.
+Range: 0 to 254
+Default: 32</string>
+     </property>
     </widget>
     <widget class="QLabel" name="label_15">
      <property name="geometry">
@@ -379,6 +465,11 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Position loop Integral (I) coefficient for control motor.
+Range: 0 to 254
+Default: 0</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_16">
@@ -403,6 +494,11 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Position loop Derivative (D) coefficient for control motor.
+Range: 0 to 254
+Default: 32</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtResponseStatusLevel">
      <property name="geometry">
@@ -412,6 +508,9 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Response behavior: 0=only READ/PING respond, 1=all commands respond. Range: 0-1. Default: 1 (read-only)</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_17">
@@ -436,6 +535,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Maximum torque threshold for starting overload protection countdown.
+Unit: 1.0% of max torque
+Range: 0 to 100
+Default: 80 (80%)</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtLEDAlarm">
      <property name="geometry">
@@ -445,6 +550,9 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>LED alarm conditions: Bit0-5 = Voltage/Sensor/Temp/Current/Angle/Overload. 1=flash LED. Default: 47 (read-only)</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_19">
@@ -468,6 +576,11 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Speed loop Proportional (P) coefficient for motor constant speed mode (mode 1).
+Range: 0 to 100
+Default: 10</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_20">
@@ -531,6 +644,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Output torque after entering overload protection.
+Unit: 1.0% of max torque
+Range: 0 to 100
+Default: 20 (20%)</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtPhase">
      <property name="geometry">
@@ -540,6 +659,9 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Special function byte. Do not modify unless required. See special byte bit analysis. Default: 12 (read-only)</string>
      </property>
     </widget>
     <widget class="QLineEdit" name="txtProtectionTime">
@@ -551,6 +673,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Duration for current load to exceed overload torque before protection triggers.
+Unit: 10ms
+Range: 0 to 254 (max 2.54s)
+Default: 200 (2.0s)</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtOperationMode">
      <property name="geometry">
@@ -561,6 +689,15 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Operation mode:
+  0 = position servo
+  1 = motor constant speed
+  2 = PWM open-loop
+  3 = step servo
+Range: 0 to 3
+Default: 0</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtUnloadCondition">
      <property name="geometry">
@@ -570,6 +707,9 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Unload conditions: Bit0-5 = Voltage/Sensor/Temp/Current/Angle/Overload. 1=enable protection. Default: 44 (read-only)</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_25">
@@ -607,6 +747,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Response delay after receiving command.
+Unit: 2μs per step
+Range: 0-254 (max 508μs)
+Default: 0</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtVelocityICoefficient">
      <property name="geometry">
@@ -616,6 +762,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Speed loop Integral (I) coefficient for motor constant speed mode (mode 1).
+Unit: 1/10
+Range: 0 to 254
+Default: 10</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_29">
@@ -665,6 +817,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Overcurrent protection time.
+Unit: 10ms
+Range: 0 to 254 (max 2540ms)
+Default: 200 (2.0s)</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_32">
@@ -731,6 +889,11 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Communication baud rate.
+Values: 0-7 = 1M, 500k, 250k, 128k, 115.2k, 76.8k, 57.6k, 38.4k bps
+Read-only</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtServoID">
      <property name="enabled">
@@ -743,6 +906,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Unique servo ID on bus.
+Range: 0-253
+Note: ID 254 is broadcast (no response)
+Read-only</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_39">
@@ -796,6 +965,10 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Servo firmware major version number.
+Read-only</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtFirmwareMinor">
      <property name="enabled">
@@ -808,6 +981,10 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Servo firmware minor version number.
+Read-only</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_48">
@@ -835,6 +1012,10 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Servo main version number.
+Read-only</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtServoSubVersion">
      <property name="enabled">
@@ -847,6 +1028,10 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Servo sub version number.
+Read-only</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_44">
@@ -873,6 +1058,11 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Servo lock status indicator.
+Values: 0 = unlocked (can write), 48 = locked
+Read-only</string>
      </property>
     </widget>
    </widget>
@@ -948,6 +1138,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Current motor rotation speed feedback.
+Unit: step/s
+Range: -3400 to 3400
+Read-only status</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtStatusServoStatus">
      <property name="enabled">
@@ -961,6 +1157,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Servo error status.
+Bits 0-5: Voltage/Sensor/Temp/Current/Angle/Overload
+Value 1 = error occurred
+Read-only status</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtStatusAcceleration">
      <property name="enabled">
@@ -973,6 +1175,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Voltage duty cycle of current control output driving motor.
+Unit: 0.1%
+Range: 0 to 254
+Read-only status</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_42">
@@ -1013,6 +1221,13 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Current position feedback.
+Each step = min resolution angle.
+Unit: Steps
+Range: -32766 to 32767
+Read-only status</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtStatusCurrentTemperature">
      <property name="enabled">
@@ -1026,6 +1241,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Current internal operating temperature.
+Unit: °C
+Range: -128 to 127
+Read-only status</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtStatusMobileSign">
      <property name="enabled">
@@ -1038,6 +1259,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Movement flag:
+  0 = servo stopped
+  1 = servo moving
+Read-only status</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_43">
@@ -1077,6 +1304,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Current draw measurement.
+Unit: 6.5mA
+Range: -2048 to 2048 (max = 500 × 6.5mA = 3250mA)
+Read-only status</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_34">
@@ -1130,6 +1363,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Current servo operating voltage.
+Unit: 0.1V (e.g., 120 = 12.0V)
+Range: 0 to 254
+Read-only status</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtStatusTorqueSwitch">
      <property name="enabled">
@@ -1145,6 +1384,12 @@
      </property>
      <property name="readOnly">
       <bool>true</bool>
+     </property>
+     <property name="toolTip">
+      <string>Torque enable status:
+  0 = off (free-running)
+  1 = on (holding)
+Read-only status</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_8">
@@ -1171,6 +1416,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Target position being commanded.
+Unit: Steps
+Range: -32766 to 32767
+Read-only status</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_49">
@@ -1310,6 +1561,12 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Number of steps per second (50 step/s = 0.732 RPM).
+Unit: step/s
+Range: 0 to 3400
+Default: 0</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtRunningTime">
      <property name="geometry">
@@ -1319,6 +1576,13 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Operation time for PWM open-loop speed control mode.
+BIT10 is direction bit.
+Unit: 0.1%
+Range: 50 to 1000
+Default: 0</string>
      </property>
     </widget>
     <widget class="QLabel" name="label_21">
@@ -1369,6 +1633,13 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Current torque limit.
+Power-on default assigned from max torque (addr 0x10).
+Unit: 1.0%
+Range: 0 to 1000
+Default: 1000</string>
+     </property>
     </widget>
     <widget class="QLabel" name="label_27">
      <property name="geometry">
@@ -1405,6 +1676,13 @@
        <height>25</height>
       </rect>
      </property>
+     <property name="toolTip">
+      <string>Target position for absolute position control.
+Each step = min resolution angle.
+Unit: Steps
+Range: -30719 to 30719
+Default: 0</string>
+     </property>
     </widget>
     <widget class="QLineEdit" name="txtAcceleration">
      <property name="geometry">
@@ -1414,6 +1692,12 @@
        <width>91</width>
        <height>25</height>
       </rect>
+     </property>
+     <property name="toolTip">
+      <string>Acceleration rate.
+Unit: 100 step/s² (e.g., 10 = 1000 step/s²)
+Range: 0 to 254
+Default: 0</string>
      </property>
     </widget>
    </widget>

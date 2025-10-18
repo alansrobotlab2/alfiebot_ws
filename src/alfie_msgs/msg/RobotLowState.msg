@@ -17,6 +17,6 @@ uint8[2] eye_state
 # state for each of the driver motors in base
 MotorState[2] motor_state
 
-# state for all 17 servos on robot 
-# 0-6 left arm, 7-13 right arm, 14-17 head
-ServoState[17] servo_state
+# state for all 15 servos on robot 
+# 0-5 left arm, 6-11 right arm, 12-14 head
+ServoState[15] servo_state

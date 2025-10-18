@@ -23,7 +23,8 @@ setup(
     # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'master_topics = alfie_bringup.master_topics:main',
+            'master_status = alfie_bringup.master_status:main',
+            'master_cmd = alfie_bringup.master_cmd:main',
         ],
     },
 )

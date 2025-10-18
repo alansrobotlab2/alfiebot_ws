@@ -53,6 +53,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/JetsonState.msg"
   "msg/MotorState.msg"
   "msg/ServoState.msg"
+  "msg/ServoCmd.msg"
   "srv/GDBServoService.srv"
   DEPENDENCIES std_msgs sensor_msgs geometry_msgs
  )

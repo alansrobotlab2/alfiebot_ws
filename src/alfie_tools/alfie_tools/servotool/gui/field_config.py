@@ -37,7 +37,7 @@ EDITABLE_FIELDS = [
     FieldConfig('txtSpeedPCoefficient', 37, (0, 100)),
     FieldConfig('txtOvercurrentProtection', 38, (0, 254)),
     FieldConfig('txtVelocityICoefficient', 39, (0, 254)),
-    FieldConfig('txtAcceleration', 41, (0, 100)),
+    FieldConfig('txtAcceleration', 41, (0, 254)),
     FieldConfig('txtTargetLocation', 42, (-30719, 30719)),
     FieldConfig('txtRunningTime', 44, (0, 1000)),
     FieldConfig('txtRunningSpeed', 46, (0, 3400)),

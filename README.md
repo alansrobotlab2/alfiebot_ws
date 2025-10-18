@@ -39,25 +39,25 @@ then reboot.
 
 To Do:
 
- - update robotlowstatus and robotlowcmd to convert to/from standard units
-     - figure out elegant way to handle dual shoulder servos
+ - alfie_mic crashes after a time; result of reset step?
 
- - alfie_mic crashes after a time; result of reset process?
-
- - servotool incorporate the raw/degrees/radians selector to all inputs and outputs
-
- - servotool rate limit the slider to 20hz?
-
- - servotool calibrate all 17 servos
-    - raw position is 0 - 4096, 180 degrees is 2048
-    - set sane min max positions
-
- - servotool update servotool slider to take min and max values into account
+ - evaluate impact of running foxglove bridge on device vs off
 
  - create alfie_bringup service
+
+
+
+ 
  - create simplified onshape model of alfie
  - export model to urdf for foxglove
  - export model to omniverse
 
+ - fix servotool2, memory offsets result in writing wrong values on write eeprom  oopsie!
+
+ - servotool incorporate the raw/degrees/radians selector to all inputs and outputs
+
+  - servotool rate limit the slider to 20hz?
+
+ - servotool update servotool slider to take min and max values into account
 
 
