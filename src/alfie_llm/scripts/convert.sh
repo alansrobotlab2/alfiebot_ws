@@ -6,6 +6,8 @@ authormodel="$1"
 # quantization
 quantization="$2"
 
+cd /data
+
 # and the exact download link, for example "https://huggingface.co/Qwen/Qwen3-0.6B"
 gitclone="https://huggingface.co/${authormodel}"
 

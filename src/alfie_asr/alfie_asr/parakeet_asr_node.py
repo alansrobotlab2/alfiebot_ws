@@ -1,3 +1,10 @@
+import os
+import sys
+
+# Set ONNX Runtime options BEFORE importing any ONNX-related libraries
+os.environ['ORT_DISABLE_AFFINITY'] = '1'  # Disable thread affinity
+os.environ['OMP_NUM_THREADS'] = '4'  # Set number of OpenMP threads
+
 import threading
 import time
 import rclpy
@@ -5,10 +12,10 @@ from rclpy.node import Node
 from alfie_msgs.msg import AudioFrame, ASRResult
 from alfie_msgs.msg import Speaking
 import numpy as np
+import onnxruntime as ort
 import onnx_asr
 from silero_vad import load_silero_vad, VADIterator
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-import os
 from ament_index_python.packages import get_package_share_directory
 import shutil
 
@@ -21,11 +28,18 @@ FRAMES_PER_VAD = VAD_BLOCK // BLOCKSIZE  # 2 frames needed for VAD
 class ASRNode(Node):
     def __init__(self):
         super().__init__('asr_node')
+        
+        # Configure ONNX Runtime for GPU usage
+        ort.set_default_logger_severity(3)  # Reduce logging verbosity
+        
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.speaking = False
         self.audio_buffer = bytearray()
         self.prev_samples = np.zeros(BLOCKSIZE, dtype=np.int16)
         self.micstate = 'IDLE'
+        
+        # Load VAD model
+        self.get_logger().info('Loading Silero VAD model...')
         self.silero_model = load_silero_vad(onnx=True)
         self.vad_iterator = VADIterator(
             self.silero_model,
@@ -35,7 +49,24 @@ class ASRNode(Node):
             threshold=0.35,
         )
 
-        self.asr_model = onnx_asr.load_model("istupakov/parakeet-tdt-0.6b-v2-onnx", quantization="int8")
+        # Configure ONNX Runtime session options for GPU
+        sess_options = ort.SessionOptions()
+        sess_options.intra_op_num_threads = 4
+        sess_options.inter_op_num_threads = 4
+        sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        
+        # Explicitly set providers to use CUDA (GPU) first, then CPU as fallback
+        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        
+        self.get_logger().info('Loading Parakeet ASR model with GPU acceleration...')
+        self.asr_model = onnx_asr.load_model(
+            "istupakov/parakeet-tdt-0.6b-v2-onnx", 
+            quantization="int8",
+            sess_options=sess_options,
+            providers=providers
+        )
+        self.get_logger().info('ASR model loaded successfully')
         
         self.publisher_ = self.create_publisher(ASRResult, 'asrresult', qos)
 

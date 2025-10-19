@@ -1,0 +1,47 @@
+[Unit]
+Description=Alfie Robot ROS2 Bringup Service
+Documentation=https://github.com/alansrobotlab2/alfiebot_ws
+After=network-online.target multi-user.target
+Wants=network-online.target
+StartLimitIntervalSec=200
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=alfie
+Group=alfie
+WorkingDirectory=/home/alfie/alfiebot_ws
+
+# Wait 10 seconds after boot before starting
+ExecStartPre=/bin/sleep 10
+
+# Source ROS2 and workspace, then launch
+ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /home/alfie/alfiebot_ws/install/setup.bash && ros2 launch alfie_bringup alfie_bringup.py'
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Environment variables
+Environment="HOME=/home/alfie"
+Environment="USER=alfie"
+Environment="ROS_DOMAIN_ID=0"
+Environment="ROS_LOCALHOST_ONLY=0"
+
+# Resource limits
+LimitNOFILE=65535
+Nice=-10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alfie-robot
+
+# Security settings
+NoNewPrivileges=true
+
+# Allow access to devices (cameras, serial ports, etc.)
+SupplementaryGroups=video dialout i2c gpio
+
+[Install]
+WantedBy=multi-user.target

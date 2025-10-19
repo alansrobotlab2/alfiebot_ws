@@ -40,7 +40,7 @@ class MLCLLMServeNode(Node):
                 '--volume', '/var/run/dbus:/var/run/dbus',
                 '--volume', '/var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket',
                 '--volume', '/var/run/docker.sock:/var/run/docker.sock',
-                '--volume', '/home/alfie/repos/jetson-containers/data:/data',
+                '--volume', '/home/alfie/jetson-containers/data:/data',
                 '-v', '/etc/localtime:/etc/localtime:ro',
                 '-v', '/etc/timezone:/etc/timezone:ro',
                 '--device', '/dev/snd',
