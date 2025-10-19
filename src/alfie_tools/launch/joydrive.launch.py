@@ -24,7 +24,7 @@ def generate_launch_description():
             output='screen',
         ),
         
-        # Joydrive node to convert joy to robot commands (arcade-style control + head servos + eyes)
+        # Joydrive node to convert joy to robot commands (arcade-style control + head servos + eyes + roll)
         Node(
             package='alfie_tools',
             executable='joydrive',
@@ -34,6 +34,7 @@ def generate_launch_description():
                 'steering_axis': 0,   # Left stick X-axis (left/right turning)
                 'head_yaw_axis': 3,   # Right stick X-axis (head left/right)
                 'head_pitch_axis': 4, # Right stick Y-axis (head up/down)
+                'head_roll_axis': 2,  # Left trigger (head roll, axis 2 = LT)
                 'eye_trigger_axis': 5, # Right trigger (eye brightness, axis 5 = RT)
                 'max_pwm': 255,
                 'deadzone': 0.05,

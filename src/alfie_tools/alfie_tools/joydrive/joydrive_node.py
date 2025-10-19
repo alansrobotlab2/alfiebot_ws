@@ -6,13 +6,15 @@ This node subscribes to /joy topic and publishes RobotLowCmd messages
 to control the robot using arcade-style controls.
 - Left stick Y-axis: throttle (forward/backward)
 - Left stick X-axis: steering (left/right turning)
-- Right stick X-axis: head yaw (servo 14, left/right)
-- Right stick Y-axis: head pitch (servo 15, up/down)
+- Right stick X-axis: head yaw (servo 13, left/right)
+- Right stick Y-axis: head pitch (servo 14, up/down)
 - Right trigger: eye brightness (1-255 based on trigger depression)
+- Left trigger: head roll (servo 15, -π/4 to π/4 radians)
 
 PWM values range from -255 to 255, where 0 is stop, positive is forward, negative is reverse.
 Head servos range from -90 to 90 degrees (converted to radians).
 Eye PWM ranges from 1 (idle) to 255 (full brightness when trigger pressed).
+Head roll ranges from -π/4 to π/4 radians (0 when trigger not pressed).
 """
 
 import rclpy
@@ -31,6 +33,7 @@ class JoyDriveNode(Node):
         self.declare_parameter('steering_axis', 0)  # X-axis for left/right turning (axis 0 = left stick X)
         self.declare_parameter('head_yaw_axis', 3)  # Right stick X-axis for head yaw
         self.declare_parameter('head_pitch_axis', 4)  # Right stick Y-axis for head pitch
+        self.declare_parameter('head_roll_axis', 2)  # Left trigger for head roll (typical axis 2 = LT)
         self.declare_parameter('eye_trigger_axis', 5)  # Right trigger for eye brightness (typical axis 5 = RT)
         self.declare_parameter('max_pwm', 255)
         self.declare_parameter('deadzone', 0.1)  # Deadzone to ignore small stick movements
@@ -44,6 +47,7 @@ class JoyDriveNode(Node):
         self.steering_axis = self.get_parameter('steering_axis').value
         self.head_yaw_axis = self.get_parameter('head_yaw_axis').value
         self.head_pitch_axis = self.get_parameter('head_pitch_axis').value
+        self.head_roll_axis = self.get_parameter('head_roll_axis').value
         self.eye_trigger_axis = self.get_parameter('eye_trigger_axis').value
         self.max_pwm = self.get_parameter('max_pwm').value
         self.deadzone = self.get_parameter('deadzone').value
@@ -67,9 +71,9 @@ class JoyDriveNode(Node):
             10
         )
         
-        self.get_logger().info('Joydrive node started (Arcade-style control + Head servos + Eye brightness)')
+        self.get_logger().info('Joydrive node started (Arcade-style control + Head servos + Eye brightness + Head roll)')
         self.get_logger().info(f'Drive - Throttle axis: {self.throttle_axis}, Steering axis: {self.steering_axis}')
-        self.get_logger().info(f'Head - Yaw axis: {self.head_yaw_axis}, Pitch axis: {self.head_pitch_axis}')
+        self.get_logger().info(f'Head - Yaw axis: {self.head_yaw_axis}, Pitch axis: {self.head_pitch_axis}, Roll axis: {self.head_roll_axis}')
         self.get_logger().info(f'Eye - Trigger axis: {self.eye_trigger_axis}')
         self.get_logger().info(f'Max PWM: {self.max_pwm}, Deadzone: {self.deadzone}')
     
@@ -167,6 +171,26 @@ class JoyDriveNode(Node):
         head_yaw_rad = math.radians(head_yaw_deg)
         head_pitch_rad = math.radians(head_pitch_deg)
         
+        # Get head roll trigger value (left trigger)
+        # Trigger default value is 1.0 (not pressed)
+        # When trigger is pressed, value goes from 1.0 to -1.0 (or 0.0 depending on controller)
+        head_roll_trigger = msg.axes[self.head_roll_axis] if len(msg.axes) > self.head_roll_axis else 1.0
+        
+        # Map head roll: when trigger = 1.0 (not pressed) -> 0.0 radians
+        # When trigger is pressed (1.0 to -1.0), map to -π/4 to π/4
+        if abs(head_roll_trigger - 1.0) < 0.01:  # Trigger not pressed (at default value 1.0)
+            head_roll_rad = 0.0
+        else:
+            # Map trigger value from [1.0, -1.0] to [-π/4, π/4]
+            # When trigger = 1.0 -> 0 radians
+            # When trigger = -1.0 -> π/4 radians (or -π/4, depending on desired direction)
+            # Normalize from [1.0, -1.0] to [0.0, 1.0]
+            roll_normalized = (1.0 - head_roll_trigger) / 2.0
+            roll_normalized = max(0.0, min(1.0, roll_normalized))
+            # Map to [-π/4, π/4] range, centered at 0
+            # 0 -> -π/4, 0.5 -> 0, 1 -> π/4
+            head_roll_rad = (roll_normalized - 0.5) * math.pi / 2.0
+        
         # Get eye trigger value
         # Triggers typically range from -1.0 (not pressed) to 1.0 (fully pressed)
         # or sometimes 1.0 (not pressed) to -1.0 (fully pressed) depending on the controller
@@ -199,15 +223,21 @@ class JoyDriveNode(Node):
             servo.acceleration = 0.0
             servo.target_location = 0.0
         
-        # Configure head yaw servo (servo 14, index 13)
+        # Configure head yaw servo (servo 13, index 12)
         cmd.servo_cmd[12].enabled = True
         cmd.servo_cmd[12].target_location = head_yaw_rad
         cmd.servo_cmd[12].acceleration = 0.0  # Set to desired acceleration if needed
-        
-        # Configure head pitch servo (servo 15, index 14)
+
+        # Configure head pitch servo (servo 14, index 13)
         cmd.servo_cmd[13].enabled = True
         cmd.servo_cmd[13].target_location = head_pitch_rad
         cmd.servo_cmd[13].acceleration = 0.0  # Set to desired acceleration if needed
+
+        # Configure head roll servo (servo 15, index 14)
+        cmd.servo_cmd[14].enabled = True
+        cmd.servo_cmd[14].target_location = head_roll_rad
+        cmd.servo_cmd[14].acceleration = 0.0  # Set to desired acceleration if needed
+
 
         # Publish the command
         self.cmd_pub.publish(cmd)
@@ -215,7 +245,7 @@ class JoyDriveNode(Node):
         # Log at debug level (only shown with --ros-args --log-level debug)
         self.get_logger().debug(
             f'Drive: Throttle={throttle:.2f} Steering={steering:.2f} -> PWM: L={left_pwm} R={right_pwm} | '
-            f'Head: Yaw={head_yaw_deg:.1f}° Pitch={head_pitch_deg:.1f}° | Eye: {eye_pwm}'
+            f'Head: Yaw={head_yaw_deg:.1f}° Pitch={head_pitch_deg:.1f}° Roll={math.degrees(head_roll_rad):.1f}° | Eye: {eye_pwm}'
         )
 
 
