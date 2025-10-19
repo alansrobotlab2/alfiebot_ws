@@ -8,6 +8,8 @@ See SETUP.md for detailed instructions on the environment setup to support all o
 
 To Do:
 
+ - evaluate use of BESTEFFORT vs RELIABILITY for core messages and topics
+
  - alfie_mic crashes after a time; result of reset step?
 
  - evaluate impact of running foxglove bridge on device vs off

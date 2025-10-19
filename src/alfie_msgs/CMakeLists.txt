@@ -54,7 +54,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotorState.msg"
   "msg/ServoState.msg"
   "msg/ServoCmd.msg"
+  "msg/BackCmd.msg"
+  "msg/BackState.msg"
   "srv/GDBServoService.srv"
+  "srv/BackRequestCalibration.srv"
   DEPENDENCIES std_msgs sensor_msgs geometry_msgs
  )
 

@@ -189,7 +189,7 @@ source ~/.zshrc
 # some more installs
 sudo apt-get install portaudio19-dev python3-pyaudio python3-venv ros-humble-foxglove-bridge ros-humble-depthai-ros tmux
  
-pip3 install pyusb spidev piper-tts pyalsaaudio onnx onnx-asr silero-vad pyqtdarktheme
+pip3 install pyusb spidev piper-tts pyalsaaudio onnx onnx-asr silero-vad pyqtdarktheme pyserial
 
 sudo rosdep init
 rosdep update

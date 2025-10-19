@@ -4,7 +4,7 @@ This directory contains the systemd service configuration for automatically star
 
 ## Overview
 
-The `alfie.service` systemd unit will:
+The `alfiebot.service` systemd unit will:
 - Wait for network connectivity to be established
 - Wait an additional 10 seconds after boot for system stabilization
 - Source the ROS2 Humble environment
@@ -53,54 +53,54 @@ The script will:
 
 **Start the service:**
 ```bash
-sudo systemctl start alfie.service
+sudo systemctl start alfiebot.service
 ```
 
 **Stop the service:**
 ```bash
-sudo systemctl stop alfie.service
+sudo systemctl stop alfiebot.service
 ```
 
 **Restart the service:**
 ```bash
-sudo systemctl restart alfie.service
+sudo systemctl restart alfiebot.service
 ```
 
 **Check service status:**
 ```bash
-sudo systemctl status alfie.service
+sudo systemctl status alfiebot.service
 ```
 
 **Enable autostart on boot:**
 ```bash
-sudo systemctl enable alfie.service
+sudo systemctl enable alfiebot.service
 ```
 
 **Disable autostart on boot:**
 ```bash
-sudo systemctl disable alfie.service
+sudo systemctl disable alfiebot.service
 ```
 
 ### Viewing Logs
 
 **View live logs:**
 ```bash
-sudo journalctl -u alfie.service -f
+sudo journalctl -u alfiebot.service -f
 ```
 
 **View recent logs:**
 ```bash
-sudo journalctl -u alfie.service -n 100
+sudo journalctl -u alfiebot.service -n 100
 ```
 
 **View logs since last boot:**
 ```bash
-sudo journalctl -u alfie.service -b
+sudo journalctl -u alfiebot.service -b
 ```
 
 **View logs for a specific time range:**
 ```bash
-sudo journalctl -u alfie.service --since "2025-01-01 00:00:00" --until "2025-01-01 23:59:59"
+sudo journalctl -u alfiebot.service --since "2025-01-01 00:00:00" --until "2025-01-01 23:59:59"
 ```
 
 ## Uninstallation
@@ -119,12 +119,12 @@ chmod +x uninstall.sh
 
 1. **Check the status:**
    ```bash
-   sudo systemctl status alfie.service
+   sudo systemctl status alfiebot.service
    ```
 
 2. **View detailed logs:**
    ```bash
-   sudo journalctl -u alfie.service -n 200
+   sudo journalctl -u alfiebot.service -n 200
    ```
 
 3. **Common issues:**
@@ -144,7 +144,7 @@ chmod +x uninstall.sh
 If devices aren't ready after 10 seconds, edit the service file:
 
 ```bash
-sudo nano /etc/systemd/system/alfie.service
+sudo nano /etc/systemd/system/alfiebot.service
 ```
 
 Change the `ExecStartPre` line:
@@ -155,7 +155,7 @@ ExecStartPre=/bin/sleep 20  # Increase to 20 seconds
 Then reload and restart:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart alfie.service
+sudo systemctl restart alfiebot.service
 ```
 
 ### Disable autostart temporarily
@@ -163,12 +163,12 @@ sudo systemctl restart alfie.service
 If you need to prevent autostart without uninstalling:
 
 ```bash
-sudo systemctl disable alfie.service
+sudo systemctl disable alfiebot.service
 ```
 
 Re-enable later with:
 ```bash
-sudo systemctl enable alfie.service
+sudo systemctl enable alfiebot.service
 ```
 
 ## Service Configuration
@@ -189,7 +189,7 @@ If you need to customize the service:
 
 1. Edit the service file:
    ```bash
-   sudo nano /etc/systemd/system/alfie.service
+   sudo nano /etc/systemd/system/alfiebot.service
    ```
 
 2. Reload systemd:
@@ -199,7 +199,7 @@ If you need to customize the service:
 
 3. Restart the service:
    ```bash
-   sudo systemctl restart alfie.service
+   sudo systemctl restart alfiebot.service
    ```
 
 ## Environment Variables
@@ -222,9 +222,9 @@ Environment="CUSTOM_VAR=value"
 
 If you encounter issues:
 
-1. Check the logs: `sudo journalctl -u alfie.service -n 200`
+1. Check the logs: `sudo journalctl -u alfiebot.service -n 200`
 2. Test manually: `ros2 launch alfie_bringup alfie_bringup.py`
 3. Verify permissions: `groups $USER`
-4. Check systemd status: `systemctl status alfie.service`
+4. Check systemd status: `systemctl status alfiebot.service`
 
 For additional help, refer to the main project documentation.

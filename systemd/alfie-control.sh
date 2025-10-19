@@ -1,7 +1,7 @@
 #!/bin/bash
 # Quick status and control script for Alfie service
 
-SERVICE_NAME="alfie.service"
+SERVICE_NAME="alfiebot.service"
 
 # Colors
 GREEN='\033[0;32m'

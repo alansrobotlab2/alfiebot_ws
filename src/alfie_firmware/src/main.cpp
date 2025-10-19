@@ -12,8 +12,6 @@ DriverBoard b;
 void vHardwareInterfaceTask(void *pvParameters)
 {
 
-  
-  
   int retval = 0;
 
   for (int i = 0; i < NUMSERVOS; i++)
@@ -38,6 +36,10 @@ void vHardwareInterfaceTask(void *pvParameters)
   attachInterrupt(digitalPinToInterrupt(AENCB), A_wheel_pulse, RISING);
 #endif
 
+#if DRIVERBOARD == 1
+  setupShoulderLimitSwitch();
+#endif
+
   TickType_t xLastWakeTime;
   const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms = 100Hz
 
@@ -58,6 +60,9 @@ void vHardwareInterfaceTask(void *pvParameters)
       TIME_FUNCTION_MS(updateServoStatus(), b.pollservostatusduration);
       TIME_FUNCTION_MS(updateServoIdle(), b.updateservoidleduration);
       TIME_FUNCTION_MS(updateServoActive(), b.updateservoactiveduration);
+#if DRIVERBOARD == 1
+      b.shoulder_limit_switch = readShoulderLimitSwitch();
+#endif
       break;
     case b.REQUEST_STOP:
       b.servoLoopState = b.STOPPED;

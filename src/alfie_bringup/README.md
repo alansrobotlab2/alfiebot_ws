@@ -74,19 +74,19 @@ Standard systemd commands:
 
 ```bash
 # Check status
-sudo systemctl status alfie.service
+sudo systemctl status alfiebot.service
 
 # Start/stop/restart
-sudo systemctl start alfie.service
-sudo systemctl stop alfie.service
-sudo systemctl restart alfie.service
+sudo systemctl start alfiebot.service
+sudo systemctl stop alfiebot.service
+sudo systemctl restart alfiebot.service
 
 # Enable/disable autostart
-sudo systemctl enable alfie.service
-sudo systemctl disable alfie.service
+sudo systemctl enable alfiebot.service
+sudo systemctl disable alfiebot.service
 
 # View logs
-sudo journalctl -u alfie.service -f
+sudo journalctl -u alfiebot.service -f
 ```
 
 ### Uninstallation
@@ -112,7 +112,7 @@ See: [systemd/README.md](systemd/README.md)
 
 - `launch/alfie_bringup.py` - Main launch file
 - `systemd/` - Autostart service files
-  - `alfie.service` - Systemd service unit file
+  - `alfiebot.service` - Systemd service unit file
   - `install.sh` - Installation script
   - `uninstall.sh` - Uninstallation script
   - `alfie-control.sh` - Quick control script
@@ -129,7 +129,7 @@ See: [systemd/README.md](systemd/README.md)
 
 ### Service won't start
 
-1. Check logs: `sudo journalctl -u alfie.service -n 200`
+1. Check logs: `sudo journalctl -u alfiebot.service -n 200`
 2. Test manually: `ros2 launch alfie_bringup alfie_bringup.py`
 3. Verify build: `cd ~/alfiebot_ws && colcon build`
 
@@ -145,16 +145,16 @@ sudo usermod -a -G video,dialout,i2c,gpio $USER
 
 If USB devices aren't ready at startup, increase the delay in the service file:
 ```bash
-sudo nano /etc/systemd/system/alfie.service
+sudo nano /etc/systemd/system/alfiebot.service
 # Change: ExecStartPre=/bin/sleep 10
 # To:     ExecStartPre=/bin/sleep 20
 sudo systemctl daemon-reload
-sudo systemctl restart alfie.service
+sudo systemctl restart alfiebot.service
 ```
 
 ## Support
 
 For issues or questions, check:
-1. Service logs: `sudo journalctl -u alfie.service -f`
+1. Service logs: `sudo journalctl -u alfiebot.service -f`
 2. Individual node logs in the journal
 3. Manual launch to identify specific problems

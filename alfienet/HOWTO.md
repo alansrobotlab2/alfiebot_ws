@@ -416,7 +416,7 @@ tmux attach -t alfienet
 
 **Note:** This is typically NOT recommended for this script since it's meant for temporary debugging access. But if you need it:
 
-Create a systemd service (similar to the alfie.service):
+Create a systemd service (similar to the alfiebot.service):
 
 ```bash
 sudo nano /etc/systemd/system/alfienet.service

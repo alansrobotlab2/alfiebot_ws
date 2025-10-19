@@ -20,6 +20,7 @@ setup(
     # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'back_node = alfie_back.back_node:main',
         ],
     },
 )

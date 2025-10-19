@@ -1,6 +1,6 @@
 #!/bin/bash
 # Alfie Robot Systemd Service Installer
-# This script installs the alfie.service systemd unit
+# This script installs the alfiebot.service systemd unit
 
 set -e
 
@@ -12,8 +12,8 @@ NC='\033[0m' # No Color
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-SERVICE_FILE="$SCRIPT_DIR/alfie.service"
-SERVICE_NAME="alfie.service"
+SERVICE_FILE="$SCRIPT_DIR/alfiebot.service"
+SERVICE_NAME="alfiebot.service"
 SYSTEMD_DIR="/etc/systemd/system"
 
 echo -e "${GREEN}========================================${NC}"
@@ -65,7 +65,7 @@ fi
 
 # Update service file with current user
 echo -e "${YELLOW}Updating service file with current user ($CURRENT_USER)...${NC}"
-TEMP_SERVICE="/tmp/alfie.service.tmp"
+TEMP_SERVICE="/tmp/alfiebot.service.tmp"
 sed "s/User=alfie/User=$CURRENT_USER/g; s/Group=alfie/Group=$CURRENT_USER/g; s|/home/alfie|$HOME|g" "$SERVICE_FILE" > "$TEMP_SERVICE"
 
 # Stop the service if it's already running

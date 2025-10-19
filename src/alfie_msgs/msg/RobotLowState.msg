@@ -6,10 +6,8 @@ sensor_msgs/Imu[3] imu
 # 2 magnetic field sensor total, upper gdb board in base, lower gdb board in base
 sensor_msgs/MagneticField[2] magnetic_field
 
-# shoulder limit switch trigger eye_state
-# value of true indicates lowest position of shoulders 
-# (max height is 400 mm from there)
-bool shoulder_limit_state
+# back state
+BackState back_state
 
 # pwm value from 0 to 255, lowest on state is 1
 uint8[2] eye_state

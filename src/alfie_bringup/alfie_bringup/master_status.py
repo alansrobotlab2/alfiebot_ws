@@ -2,7 +2,7 @@ import time
 from typing import List, Optional
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.msg import RobotLowState, GDBState
+from alfie_msgs.msg import RobotLowState, GDBState, BackState
 from alfie_msgs.msg import ServoState, MotorState
 from sensor_msgs.msg import Imu, MagneticField
 import numpy as np
@@ -74,6 +74,7 @@ class MasterStatusNode(Node):
         self.gdb0_state: Optional[GDBState] = None
         self.gdb1_state: Optional[GDBState] = None
         self.oak_imu: Optional[Imu] = None
+        self.back_state: Optional[BackState] = None
         
         # Subscribe to gdb states (use BEST_EFFORT to match gdb publishers)
         self.gdb0_sub = self.create_subscription(
@@ -96,6 +97,14 @@ class MasterStatusNode(Node):
             'oak/imu/data',
             self.oak_imu_callback,
             qos_best_effort
+        )
+        
+        # Subscribe to back state (use RELIABLE QoS)
+        self.back_state_sub = self.create_subscription(
+            BackState,
+            'backstate',
+            self.back_state_callback,
+            qos_reliable
         )
         
         # Publisher for robot low state (use RELIABLE for subscribers)
@@ -126,6 +135,10 @@ class MasterStatusNode(Node):
         """Callback for Oak IMU data"""
         self.oak_imu = msg
     
+    def back_state_callback(self, msg: BackState) -> None:
+        """Callback for back state"""
+        self.back_state = msg
+    
     # ========================================================================
     # Publishing Methods
     # ========================================================================
@@ -147,8 +160,12 @@ class MasterStatusNode(Node):
         robot_state.imu = self._build_imu_list()
         robot_state.magnetic_field = self._build_magnetic_field_list()
         
-        # Shoulder limit state (from gdb1)
-        robot_state.shoulder_limit_state = self.gdb1_state.shoulder_limit_state
+        # Back state (from back controller)
+        if self.back_state is not None:
+            robot_state.back_state = self.back_state
+        else:
+            # Create placeholder if back state not available
+            robot_state.back_state = BackState()
         
         # Eye state (2 PWM values from gdb1 motor states)
         robot_state.eye_state = self._build_eye_state()

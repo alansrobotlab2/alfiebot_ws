@@ -1,6 +1,6 @@
 #!/bin/bash
 # Alfie Robot Systemd Service Uninstaller
-# This script removes the alfie.service systemd unit
+# This script removes the alfiebot.service systemd unit
 
 set -e
 
@@ -10,7 +10,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-SERVICE_NAME="alfie.service"
+SERVICE_NAME="alfiebot.service"
 SYSTEMD_DIR="/etc/systemd/system"
 
 echo -e "${GREEN}========================================${NC}"

@@ -25,7 +25,7 @@ QUICK SETUP:
      ./install.sh
 
   3. The service will start on next boot, or start now with:
-     sudo systemctl start alfie.service
+     sudo systemctl start alfiebot.service
 
 MANAGEMENT:
   Use the control script for easy management:
@@ -35,9 +35,9 @@ MANAGEMENT:
     ./alfie-control.sh restart   # Restart service
 
   Or use standard systemd commands:
-    sudo systemctl status alfie.service
-    sudo systemctl restart alfie.service
-    sudo journalctl -u alfie.service -f
+    sudo systemctl status alfiebot.service
+    sudo systemctl restart alfiebot.service
+    sudo journalctl -u alfiebot.service -f
 
 REMOVAL:
   To uninstall the service:
