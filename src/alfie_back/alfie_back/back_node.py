@@ -322,21 +322,21 @@ class AlfieBackNode(Node):
         # Perform test movements: 380mm -> 400mm -> 380mm
         self.get_logger().info('Starting calibration test movements...')
         
-        # Move to 380mm
-        self.get_logger().info('Moving to 380mm')
-        self.moveto_height(380, self.MAX_UP_SPEED)
+        # Move to 390mm
+        self.get_logger().info('Moving to 390mm')
+        self.moveto_height(390, self.MAX_UP_SPEED)
         time.sleep(0.5)
         
-        # Move to 390 (max height)
-        self.get_logger().info('Moving to 390 (max)')
-        self.moveto_height(390, self.MAX_DOWN_SPEED)
+        # Move to 395 (shrug)
+        self.get_logger().info('Moving to 395 (max)')
+        self.moveto_height(395, self.MAX_DOWN_SPEED)
         current_height = self.get_height()
         self.get_logger().info(f'At max height: {current_height:.1f}mm')
-        #time.sleep(0.5)
-        
-        # Move back to 380mm
-        self.get_logger().info('Moving back to 380mm')
-        self.moveto_height(380, self.MAX_DOWN_SPEED)
+        time.sleep(0.25)
+
+        # Move back to 390mm
+        self.get_logger().info('Moving back to 390mm')
+        self.moveto_height(390, self.MAX_DOWN_SPEED)
         final_height = self.get_height()
         self.get_logger().info(f'Final height: {final_height:.1f}mm')
         

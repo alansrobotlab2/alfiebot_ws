@@ -1,41 +1,561 @@
-https://wiki.seeedstudio.com/recomputer_jetson_mini_getting_started
+# 🛠️ Alfiebot Setup Guide
 
-#### let's get everything updated
-```
+<div align="center">
+
+**Complete installation and configuration guide for Alfiebot on NVIDIA Jetson**
+
+[![Jetson](https://img.shields.io/badge/Platform-Jetson%20Orin-76B900.svg)](https://developer.nvidia.com/embedded/jetson-orin)
+[![JetPack](https://img.shields.io/badge/JetPack-6.2-76B900.svg)](https://developer.nvidia.com/embedded/jetpack)
+[![ROS2](https://img.shields.io/badge/ROS2-Humble-blue.svg)](https://docs.ros.org/en/humble/)
+[![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04-orange.svg)](https://ubuntu.com/)
+
+</div>
+
+---
+
+## 📋 Table of Contents
+
+1. [Prerequisites](#-prerequisites)
+2. [Initial System Configuration](#-initial-system-configuration)
+3. [Development Tools](#-development-tools)
+4. [JetPack Upgrade](#-jetpack-upgrade)
+5. [ROS2 Installation](#-ros2-installation)
+6. [Alfiebot Workspace Setup](#-alfiebot-workspace-setup)
+7. [Hardware Configuration](#-hardware-configuration)
+8. [AI/ML Models](#-aiml-models)
+9. [Optional Components](#-optional-components)
+
+---
+
+## 🎯 Prerequisites
+
+- **Hardware**: NVIDIA Jetson Orin device ([Seeed Studio reComputer](https://wiki.seeedstudio.com/recomputer_jetson_mini_getting_started) recommended)
+- **OS**: Ubuntu 22.04 (pre-installed on Jetson)
+- **Network**: Internet connection for downloads
+- **Storage**: At least 64GB free space (128GB+ recommended)
+
+---
+
+## 🚀 Initial System Configuration
+
+### 1. System Update
+
+Update all packages to the latest versions:
+
+```bash
 sudo apt update
-sudo apt install -y git git-lfs nano net-tools curl btop cmake
+sudo apt install -y git git-lfs nano net-tools curl btop cmake htop stress-ng
 sudo apt dist-upgrade -y
 ```
 
-#### set to 2.4ghz wifi by default?
-```
-sudo nmcli connection modify "ShoppingCart" 802-11-wireless.band bg  
+### 2. WiFi Configuration
+
+Set WiFi to 2.4GHz band for better compatibility (optional):
+
+```bash
+sudo nmcli connection modify "ShoppingCart" 802-11-wireless.band bg
 ```
 
-#### disable gdm desktop
-```
+### 3. Disable Desktop Environment
+
+For headless operation and better performance:
+
+```bash
 sudo systemctl disable gdm
 sudo systemctl stop gdm
 ```
 
+### 4. Increase Swap Space
 
-#### increase swap to 60gb
-```
-# needed to compile tensorrt_llm
-# updates swap to ~ 61Gb
+Required for compiling TensorRT-LLM and other memory-intensive operations:
+
+```bash
+# Increases swap to ~61GB
 sudo sed -i 's|/ 2 /|* 4 /|g' /etc/systemd/nvzramconfig.sh
+sudo reboot
 ```
 
+### 5. Disable Suspend
 
-#### Install jtop
-https://github.com/rbonghi/jetson_stats
+Prevent system from sleeping during operation:
+
+```bash
+sudo systemctl mask suspend.target
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 0
 ```
+
+---
+
+## 🔧 Development Tools
+
+### Jetson Stats (jtop)
+
+Monitor Jetson performance and status ([GitHub](https://github.com/rbonghi/jetson_stats)):
+
+```bash
 sudo apt install python3-pip
 sudo pip3 install -U jetson-stats
+sudo reboot
 ```
 
+After reboot, run `jtop` to monitor CPU, GPU, memory, and power usage.
 
-#### Disable suspend
+### Modern Shell Tools
+
+#### eza (Modern ls replacement)
+
+```bash
+sudo apt update
+sudo apt install -y gpg
+sudo mkdir -p /etc/apt/keyrings
+wget -qO- https://raw.githubusercontent.com/eza-community/eza/main/deb.asc | sudo gpg --dearmor -o /etc/apt/keyrings/gierens.gpg
+echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" | sudo tee /etc/apt/sources.list.d/gierens.list
+sudo chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list
+sudo apt update
+sudo apt install -y eza
+```
+
+#### fastfetch (System information tool)
+
+```bash
+sudo add-apt-repository ppa:zhangsongcui3371/fastfetch
+sudo apt update
+sudo apt install fastfetch
+```
+
+### Oh My Zsh Configuration
+
+Enhanced shell experience with autocompletion and syntax highlighting:
+
+- [Oh My Zsh](https://ohmyz.sh/#install)
+- [zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions)
+- [zsh-syntax-highlighting](https://github.com/zsh-users/zsh-syntax-highlighting)
+- [fast-syntax-highlighting](https://github.com/zdharma-continuum/fast-syntax-highlighting)
+
+```bash
+# Install and set Zsh as default shell
+sudo apt install zsh
+chsh -s /bin/zsh
+exec zsh
+
+# Install Oh My Zsh
+rm -f ~/.zshrc
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+
+# Install plugins
+git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions
+git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
+git clone https://github.com/zdharma-continuum/fast-syntax-highlighting.git \
+  ${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/fast-syntax-highlighting
+
+# Configure theme and plugins
+sed -i 's|robbyrussell|gnzh|g' ~/.zshrc
+sed -i '/^plugins=(git)$/c\plugins=(\n    git\n    zsh-autosuggestions\n    zsh-syntax-highlighting\n    fast-syntax-highlighting\n)' ~/.zshrc
+
+# Add aliases and autocomplete
+echo "alias ls='eza -a --icons=always'" >> ~/.zshrc
+echo 'eval "$(register-python-argcomplete3 ros2)"' >> ~/.zshrc
+echo 'eval "$(register-python-argcomplete3 colcon)"' >> ~/.zshrc
+
+source ~/.zshrc
+```
+
+---
+
+## 🚀 JetPack Upgrade
+
+Upgrade to JetPack 6.2 for latest CUDA and compute capabilities ([Docs](https://docs.nvidia.com/jetson/jetpack/install-setup/index.html#upgradable-compute-stack)):
+
+```bash
+# Remove old CUDA dev packages
+sudo apt remove -y nvidia-cuda-dev
+
+# Clean apt cache
+sudo apt clean
+sudo rm -rf /var/lib/apt/lists/*
+
+# Add JetPack 6.2 (r36.4) repositories
+echo "deb https://repo.download.nvidia.com/jetson/common r36.4 main" | sudo tee -a /etc/apt/sources.list.d/nvidia-l4t-apt-source.list
+echo "deb https://repo.download.nvidia.com/jetson/t234 r36.4 main" | sudo tee -a /etc/apt/sources.list.d/nvidia-l4t-apt-source.list
+
+# Install JetPack 6.2
+sudo apt update
+sudo apt install -y nvidia-jetpack nvidia-cuda-dev nvidia-cudnn
+
+# Remove temporary repositories
+sudo sed -i '/deb https:\/\/repo.download.nvidia.com\/jetson\/common r36.4 main/d' /etc/apt/sources.list.d/nvidia-l4t-apt-source.list
+sudo sed -i '/deb https:\/\/repo.download.nvidia.com\/jetson\/t234 r36.4 main/d' /etc/apt/sources.list.d/nvidia-l4t-apt-source.list
+
+# Clean apt cache again
+sudo apt clean
+sudo rm -rf /var/lib/apt/lists/*
+
+# Pin packages to prevent downgrades
+sudo apt-mark hold nvidia-cuda-dev nvidia-cudnn
+
+# Verify held packages
+apt-mark showhold
+
+# Verify repository configuration
+cat /etc/apt/sources.list.d/nvidia-l4t-apt-source.list
+
+sudo reboot
+```
+
+---
+
+## 🤖 ROS2 Installation
+
+Install ROS2 Humble ([Official Docs](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html)):
+
+### 1. Configure Locale
+
+```bash
+locale  # Check for UTF-8
+
+sudo apt update && sudo apt install locales
+sudo locale-gen en_US en_US.UTF-8
+sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+export LANG=en_US.UTF-8
+
+locale  # Verify settings
+```
+
+### 2. Add ROS2 Repository
+
+```bash
+sudo apt install software-properties-common
+sudo add-apt-repository universe
+
+sudo apt update && sudo apt install curl -y
+
+# Get latest ROS apt source
+export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F\" '{print $4}')
+curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo ${UBUNTU_CODENAME:-${VERSION_CODENAME}})_all.deb"
+sudo dpkg -i /tmp/ros2-apt-source.deb
+```
+
+### 3. Install ROS2 Humble
+
+```bash
+sudo apt update
+sudo apt upgrade -y
+
+# Install ROS2 Desktop (includes RViz, demos, tutorials)
+sudo apt install ros-humble-desktop
+
+# Install development tools
+sudo apt install ros-dev-tools
+```
+
+### 4. Install Jetson Containers
+
+Useful for containerized ML workloads ([GitHub](https://github.com/dusty-nv/jetson-containers)):
+
+```bash
+cd ~
+git clone https://github.com/dusty-nv/jetson-containers
+bash jetson-containers/install.sh
+```
+
+---
+
+## 📦 Alfiebot Workspace Setup
+
+### 1. Clone and Configure Workspace
+
+```bash
+cd ~
+git clone https://github.com/alansrobotlab2/alfiebot_ws.git
+
+# Add ROS2 and workspace sourcing to shell
+echo '' >> ~/.zshrc
+echo '# Sourcing for ROS2 Humble and Alfiebot workspace' >> ~/.zshrc
+echo 'source /opt/ros/humble/setup.zsh' >> ~/.zshrc
+echo 'source ~/alfiebot_ws/install/setup.zsh' >> ~/.zshrc
+
+source ~/.zshrc
+```
+
+### 2. Install Dependencies
+
+```bash
+cd ~/alfiebot_ws
+
+# Install system dependencies
+sudo apt-get install -y \
+  portaudio19-dev \
+  python3-pyaudio \
+  python3-venv \
+  hostapd \
+  ros-humble-foxglove-bridge \
+  ros-humble-depthai-ros \
+  tmux
+
+# Install Python packages
+pip3 install \
+  pyusb \
+  spidev \
+  piper-tts \
+  pyalsaaudio \
+  onnx \
+  onnx-asr \
+  silero-vad \
+  pyqtdarktheme \
+  pyserial
+
+# Initialize rosdep
+sudo rosdep init
+rosdep update
+```
+
+### 3. Build Workspace
+
+```bash
+cd ~/alfiebot_ws
+
+# Install ROS dependencies
+rosdep install --from-paths src --ignore-src -y
+
+# Build all packages
+colcon build
+
+source ~/.zshrc
+```
+
+### 4. Install micro-ROS
+
+```bash
+cd ~/alfiebot_ws
+
+# Remove old micro-ROS if present
+rm -rf ~/alfiebot_ws/src/micro_ros_setup
+rm -rf ~/alfiebot_ws/src/uros
+
+# Clone micro-ROS setup
+git clone -b $ROS_DISTRO https://github.com/micro-ROS/micro_ros_setup.git src/micro_ros_setup
+
+# Update dependencies
+sudo apt update && rosdep update
+rosdep install --from-paths src --ignore-src -y
+
+# Install pip (if not already installed)
+sudo apt-get install python3-pip
+
+# Build micro-ROS tools
+colcon build
+source install/setup.zsh
+
+# Create and build micro-ROS agent
+ros2 run micro_ros_setup create_agent_ws.sh
+ros2 run micro_ros_setup build_agent.sh
+```
+
+---
+
+## 🔌 Hardware Configuration
+
+### Seeed Studio ReSpeaker USB
+
+Configure USB permissions for the ReSpeaker microphone array:
+
+```bash
+echo 'SUBSYSTEM=="usb", MODE="0666"' | sudo tee /etc/udev/rules.d/99-usb-all.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+### Waveshare General Driver Board
+
+Add user to dialout group for serial access to servo controllers:
+
+```bash
+sudo usermod -aG dialout $USER
+# Log out and back in for changes to take effect
+```
+
+---
+
+## 🧠 AI/ML Models
+
+### LLM Model Conversion (MLC-LLM)
+
+Convert language models for efficient inference on Jetson:
+
+```bash
+# Copy conversion script
+cp ~/alfiebot_ws/src/alfie_llm/scripts/convert.sh ~/jetson-containers/data/
+
+# Run MLC-LLM container
+jetson-containers run dustynv/mlc:0.20.0-r36.4.0
+```
+
+Inside the container:
+
+```bash
+cd /data
+# Convert your model (example: Qwen3-1.7B)
+./convert.sh "Qwen/Qwen3-1.7B" "q4f16_1-MLC"
+```
+
+### Parakeet ASR Setup
+
+Install ONNX Runtime with TensorRT support for speech recognition:
+
+```bash
+# Downgrade NumPy for compatibility
+pip3 install "numpy<2" huggingface_hub
+
+# Remove incompatible versions
+pip3 uninstall onnxruntime onnxruntime-gpu -y
+
+# Download and install JetPack 6 wheel
+wget https://nvidia.box.com/shared/static/48dtuob7meiw6ebgfsfqakc9vse62sg4.whl \
+  -O onnxruntime_gpu-1.18.0-cp310-cp310-linux_aarch64.whl
+pip3 install onnxruntime_gpu-1.18.0-cp310-cp310-linux_aarch64.whl
+
+# Test installation
+python3 -c "import onnxruntime as ort; print(ort.get_available_providers())"
+```
+
+**Expected output:**
+```
+['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
+```
+
+---
+
+## 🔧 Optional Components
+
+> **Note**: The following components are not currently required for Alfiebot operation but may be useful for advanced development.
+
+### Docker
+
+Install Docker for containerized development ([Guide](https://www.digitalocean.com/community/tutorials/how-to-install-and-use-docker-on-ubuntu-22-04)):
+
+```bash
+sudo apt update
+sudo apt install apt-transport-https ca-certificates curl software-properties-common
+
+# Add Docker's official GPG key
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+# Add Docker repository
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker
+sudo apt update
+apt-cache policy docker-ce
+sudo apt-get install -y docker-ce=5:27.5\* docker-ce-cli=5:27.5\* --allow-downgrades
+
+# Enable and start Docker
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo systemctl status docker
+
+# Add user to docker group
+sudo usermod -aG docker $USER
+```
+
+### uv (Python Package Manager)
+
+Fast Python package installer ([Docs](https://docs.astral.sh/uv/)):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### Distrobox
+
+Run different Linux distributions in containers ([Guide](https://nathanaelgandhi.com/computing/linux/2023/03/16/Setting-Up-Distrobox-on-Ubuntu-22.04.html)):
+
+```bash
+sudo add-apt-repository ppa:michel-slm/distrobox
+sudo apt update
+sudo apt install distrobox -y
+```
+
+Configure container registries:
+
+```bash
+sudo nano /etc/containers/registries.conf
+```
+
+Add:
+
+```toml
+unqualified-search-registries = ["docker.io", "quay.io", "ghcr.io", "nvcr.io"]
+```
+
+---
+
+## ✅ Verification
+
+After completing the setup, verify your installation:
+
+```bash
+# Check ROS2 installation
+ros2 doctor
+
+# Check Jetson status
+jtop
+
+# Check CUDA
+nvcc --version
+
+# List Alfiebot packages
+ros2 pkg list | grep alfie
+
+# Test workspace build
+cd ~/alfiebot_ws
+colcon build
+```
+
+---
+
+## 🆘 Troubleshooting
+
+### Common Issues
+
+**Issue**: `colcon build` fails with missing dependencies
+- **Solution**: Run `rosdep install --from-paths src --ignore-src -y` again
+
+**Issue**: micro-ROS agent not building
+- **Solution**: Ensure all ROS2 tools are installed: `sudo apt install ros-dev-tools`
+
+**Issue**: ONNX Runtime not finding TensorRT
+- **Solution**: Verify JetPack 6.2 installation and reboot
+
+**Issue**: USB devices not accessible
+- **Solution**: Check udev rules and ensure user is in correct groups (dialout, audio)
+
+---
+
+## 📚 Additional Resources
+
+- [ROS2 Humble Documentation](https://docs.ros.org/en/humble/)
+- [NVIDIA Jetson Documentation](https://developer.nvidia.com/embedded/learn/get-started-jetson-orin-nano-devkit)
+- [micro-ROS Documentation](https://micro.ros.org/)
+- [Dusty-NV Jetson Containers](https://github.com/dusty-nv/jetson-containers)
+
+---
+
+## 🔄 Next Steps
+
+After completing this setup:
+
+1. **Test Hardware**: Verify all sensors and actuators
+2. **Run Launch Files**: `ros2 launch alfie_bringup alfiebot.launch.py`
+3. **Configure Models**: Download and convert your preferred LLM
+4. **Calibrate Servos**: Use ServoTool to configure motor ranges
+5. **Test Voice Pipeline**: Verify microphone → ASR → LLM → TTS flow
+
+---
+
+<div align="center">
+  <sub>Setup guide last updated: October 2025</sub>
+</div>
 ```
 sudo systemctl mask suspend.target
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0  
@@ -187,7 +707,7 @@ colcon build
 source ~/.zshrc
 
 # some more installs
-sudo apt-get install portaudio19-dev python3-pyaudio python3-venv ros-humble-foxglove-bridge ros-humble-depthai-ros tmux
+sudo apt-get install portaudio19-dev python3-pyaudio python3-venv hostapd ros-humble-foxglove-bridge ros-humble-depthai-ros tmux
  
 pip3 install pyusb spidev piper-tts pyalsaaudio onnx onnx-asr silero-vad pyqtdarktheme pyserial
 
