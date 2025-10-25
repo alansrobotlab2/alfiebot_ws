@@ -92,6 +92,7 @@ ros2 run alfie_tts tts_node
 
 ### Active Tasks
 
+- [ ] Troubleshoot micro ros agent locking out usb when quitting launchfile
 - [ ] Evaluate BEST_EFFORT vs RELIABLE QoS for core topics
 - [ ] Debug message/video lag after overnight operation
 - [ ] Investigate `alfie_mic` crash issue (related to reset step?)
