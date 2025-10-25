@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scservo/INST.h"
+#include "INST.h"
 
 // luckily the esp32 and the serial bus servos use the same endian format, 
 // so no byte swapping is needed for the structs.

@@ -2,7 +2,7 @@
 
 #include "config.h"
 #include "driverboard.h"
-#include "scservo/INST.h"
+#include "INST.h"
 
 extern DriverBoard b;
 

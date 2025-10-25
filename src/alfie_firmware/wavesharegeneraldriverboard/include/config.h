@@ -52,9 +52,9 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 
-#include "scservo/SCServo.h"
+#include "SCServo.h"
 
-#include "imu/IMU.h"
+#include "IMU.h"
 
 #include "memorystruct.h"
 #include "commandstruct.h"

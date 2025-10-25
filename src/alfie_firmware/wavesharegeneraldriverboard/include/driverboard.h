@@ -1,6 +1,6 @@
 #pragma once
 
-#include "imu/IMU.h"
+#include "IMU.h"
 
 class DriverBoard
 {
