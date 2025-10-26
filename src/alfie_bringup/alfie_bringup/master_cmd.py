@@ -17,6 +17,12 @@ PUBLISH_PERIOD_SEC = 1.0 / PUBLISH_RATE_HZ  # 0.01 seconds
 CMD_TIMEOUT_SEC = 0.1
 WARNING_THROTTLE_SEC = 1.0
 
+# Mecanum drive kinematics configuration
+WHEELBASE_LENGTH_MM = 170.5  # Distance between front and rear axles (mm)
+WHEELBASE_WIDTH_MM = 183.0   # Distance between left and right wheels (mm)
+WHEEL_SEPARATION_X = WHEELBASE_LENGTH_MM / 2000.0  # Convert to meters
+WHEEL_SEPARATION_Y = WHEELBASE_WIDTH_MM / 2000.0   # Convert to meters
+
 # Servo mapping
 NUM_SERVOS_GDB1 = 7  # Left arm servos (0-6), but 3rd is derived from 2nd
 NUM_SERVOS_GDB0 = 10  # Right arm + head servos (7-16), but 3rd is derived from 2nd
@@ -101,16 +107,27 @@ class MasterCmdNode(Node):
     def robot_cmd_callback(self, msg: RobotLowCmd) -> None:
         """Decompose RobotLowCmd into GDBCmd messages with unit conversions
         
-        RobotLowCmd has 15 servo commands. We derive the 3rd servo (index 2) for each
-        GDB board from the 2nd servo (index 1) by copying enable/acceleration and
-        flipping the sign of the target location.
+        RobotLowCmd has 15 servo commands and a Twist message for velocity control.
+        We derive the 3rd servo (index 2) for each GDB board from the 2nd servo (index 1)
+        by copying enable/acceleration and flipping the sign of the target location.
+        
+        The Twist cmd_vel is decomposed into individual wheel velocities using mecanum
+        drive inverse kinematics.
         """
         # Update timestamp
         self.last_robot_cmd_time = self.get_clock().now()
         
-        # Create GDBCmd for gdb0 (motors are on gdb0)
+        # Decompose Twist message into wheel velocities using mecanum kinematics
+        wheel_velocities = self.mecanum_drive_kinematics(
+            msg.cmd_vel.linear.x,
+            msg.cmd_vel.linear.y,
+            msg.cmd_vel.angular.z
+        )
+        
+        # Create GDBCmd for gdb0 
+        # gdb0 gets rear wheels: RL (wheel_velocities[2]) and RR (wheel_velocities[3])
         gdb0_cmd = GDBCmd()
-        gdb0_cmd.driver_pwm = msg.driver_pwm  # 2 motors on gdb0
+        gdb0_cmd.velocities = [float(wheel_velocities[2]), float(wheel_velocities[3])]  # Rear Left, Rear Right
         
         # gdb0 gets servos from RobotLowCmd indices 6-14 (9 servos)
         # We need to create 10 servos for GDB, deriving index 2 from index 1
@@ -132,9 +149,10 @@ class MasterCmdNode(Node):
         # GDBCmd expects exactly 10 servos
         gdb0_cmd.servo_cmd = gdb0_servo_list
         
-        # Create GDBCmd for gdb1 (eye_lights are on gdb1)
+        # Create GDBCmd for gdb1
+        # gdb1 gets front wheels: FL (wheel_velocities[0]) and FR (wheel_velocities[1])
         gdb1_cmd = GDBCmd()
-        gdb1_cmd.driver_pwm = msg.eye_pwm  # 2 eye lights on gdb1
+        gdb1_cmd.velocities = [float(wheel_velocities[0]), float(wheel_velocities[1])]  # Front Left, Front Right
         
         # gdb1 gets servos from RobotLowCmd indices 0-5 (6 servos)
         # We need to create 7 servos for GDB, deriving index 2 from index 1
@@ -181,6 +199,34 @@ class MasterCmdNode(Node):
     # ========================================================================
     # Helper Methods
     # ========================================================================
+    
+    def mecanum_drive_kinematics(self, linear_x: float, linear_y: float, 
+                                  angular_z: float) -> list:
+        """Calculate wheel velocities from robot velocities using mecanum kinematics
+        
+        Uses inverse kinematics to convert desired robot motion (linear_x, linear_y, 
+        angular_z) into individual wheel velocities for a mecanum drive system.
+        
+        Args:
+            linear_x: Forward/backward velocity in m/s (positive = forward)
+            linear_y: Left/right strafe velocity in m/s (positive = left)
+            angular_z: Rotational velocity in rad/s (positive = counter-clockwise)
+            
+        Returns:
+            List of 4 wheel velocities [FL, FR, RL, RR] in m/s
+        """
+        # Mecanum wheel kinematics equations
+        # Based on robot geometry and wheel arrangement
+        wheel_separation_sum = WHEEL_SEPARATION_X + WHEEL_SEPARATION_Y
+        
+        # Calculate wheel velocities
+        # FL = Front Left, FR = Front Right, RL = Rear Left, RR = Rear Right
+        fl = linear_x - linear_y - angular_z * wheel_separation_sum  # Front Left
+        fr = linear_x + linear_y + angular_z * wheel_separation_sum  # Front Right
+        rl = linear_x + linear_y - angular_z * wheel_separation_sum  # Rear Left
+        rr = linear_x - linear_y + angular_z * wheel_separation_sum  # Rear Right
+        
+        return [fl, fr, rl, rr]
     
     def convert_servo_cmd_to_gdb(self, servo_cmd: ServoCmd, servo_index: int) -> GDBServoCmd:
         """Convert ServoCmd (standard units) to GDBServoCmd (servo units)

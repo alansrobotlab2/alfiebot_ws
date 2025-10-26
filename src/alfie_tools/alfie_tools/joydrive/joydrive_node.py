@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Joydrive Node - Arcade-style drive control using a USB joystick
+Joydrive Node - Mecanum drive control using a USB joystick
 
 This node subscribes to /joy topic and publishes RobotLowCmd messages
-to control the robot using arcade-style controls.
-- Left stick Y-axis: throttle (forward/backward)
-- Left stick X-axis: steering (left/right turning)
-- Right stick X-axis: head yaw (servo 13, left/right)
+to control the robot using mecanum drive controls.
+- Left stick Y-axis: forward/backward (linear.x)
+- Left stick X-axis: strafe left/right (linear.y)
+- Right stick X-axis: rotation (angular.z)
 - Right stick Y-axis: head pitch (servo 14, up/down)
 - Right trigger: eye brightness (1-255 based on trigger depression)
 - Left trigger: head roll (servo 15, -π/4 to π/4 radians)
 
-PWM values range from -255 to 255, where 0 is stop, positive is forward, negative is reverse.
+Twist velocities: linear.x, linear.y, angular.z (in m/s and rad/s)
 Head servos range from -90 to 90 degrees (converted to radians).
 Eye PWM ranges from 1 (idle) to 255 (full brightness when trigger pressed).
 Head roll ranges from -π/4 to π/4 radians (0 when trigger not pressed).
@@ -20,6 +20,7 @@ Head roll ranges from -π/4 to π/4 radians (0 when trigger not pressed).
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
+from geometry_msgs.msg import Twist
 from alfie_msgs.msg import RobotLowCmd, ServoCmd
 import math
 
@@ -28,32 +29,34 @@ class JoyDriveNode(Node):
     def __init__(self):
         super().__init__('joydrive_node')
         
-        # Declare parameters for arcade-style control
-        self.declare_parameter('throttle_axis', 1)  # Y-axis for forward/backward (axis 1 = left stick Y)
-        self.declare_parameter('steering_axis', 0)  # X-axis for left/right turning (axis 0 = left stick X)
-        self.declare_parameter('head_yaw_axis', 3)  # Right stick X-axis for head yaw
+        # Declare parameters for mecanum drive control
+        self.declare_parameter('linear_x_axis', 1)  # Y-axis for forward/backward (axis 1 = left stick Y)
+        self.declare_parameter('linear_y_axis', 0)  # X-axis for strafe left/right (axis 0 = left stick X)
+        self.declare_parameter('angular_z_axis', 3)  # Right stick X-axis for rotation
         self.declare_parameter('head_pitch_axis', 4)  # Right stick Y-axis for head pitch
         self.declare_parameter('head_roll_axis', 2)  # Left trigger for head roll (typical axis 2 = LT)
         self.declare_parameter('eye_trigger_axis', 5)  # Right trigger for eye brightness (typical axis 5 = RT)
-        self.declare_parameter('max_pwm', 255)
+        self.declare_parameter('max_linear_velocity', 1.0)  # Max linear velocity in m/s
+        self.declare_parameter('max_angular_velocity', 3.14)  # Max angular velocity in rad/s
         self.declare_parameter('deadzone', 0.1)  # Deadzone to ignore small stick movements
-        self.declare_parameter('invert_throttle', False)
-        self.declare_parameter('invert_steering', False)
-        self.declare_parameter('invert_head_yaw', False)
+        self.declare_parameter('invert_linear_x', False)
+        self.declare_parameter('invert_linear_y', False)
+        self.declare_parameter('invert_angular_z', False)
         self.declare_parameter('invert_head_pitch', False)
         
         # Get parameters
-        self.throttle_axis = self.get_parameter('throttle_axis').value
-        self.steering_axis = self.get_parameter('steering_axis').value
-        self.head_yaw_axis = self.get_parameter('head_yaw_axis').value
+        self.linear_x_axis = self.get_parameter('linear_x_axis').value
+        self.linear_y_axis = self.get_parameter('linear_y_axis').value
+        self.angular_z_axis = self.get_parameter('angular_z_axis').value
         self.head_pitch_axis = self.get_parameter('head_pitch_axis').value
         self.head_roll_axis = self.get_parameter('head_roll_axis').value
         self.eye_trigger_axis = self.get_parameter('eye_trigger_axis').value
-        self.max_pwm = self.get_parameter('max_pwm').value
+        self.max_linear_velocity = self.get_parameter('max_linear_velocity').value
+        self.max_angular_velocity = self.get_parameter('max_angular_velocity').value
         self.deadzone = self.get_parameter('deadzone').value
-        self.invert_throttle = self.get_parameter('invert_throttle').value
-        self.invert_steering = self.get_parameter('invert_steering').value
-        self.invert_head_yaw = self.get_parameter('invert_head_yaw').value
+        self.invert_linear_x = self.get_parameter('invert_linear_x').value
+        self.invert_linear_y = self.get_parameter('invert_linear_y').value
+        self.invert_angular_z = self.get_parameter('invert_angular_z').value
         self.invert_head_pitch = self.get_parameter('invert_head_pitch').value
         
         # Create subscriber for joystick input
@@ -71,11 +74,12 @@ class JoyDriveNode(Node):
             10
         )
         
-        self.get_logger().info('Joydrive node started (Arcade-style control + Head servos + Eye brightness + Head roll)')
-        self.get_logger().info(f'Drive - Throttle axis: {self.throttle_axis}, Steering axis: {self.steering_axis}')
-        self.get_logger().info(f'Head - Yaw axis: {self.head_yaw_axis}, Pitch axis: {self.head_pitch_axis}, Roll axis: {self.head_roll_axis}')
+        self.get_logger().info('Joydrive node started (Mecanum drive control + Head servos + Eye brightness + Head roll)')
+        self.get_logger().info(f'Drive - Linear X axis: {self.linear_x_axis}, Linear Y axis: {self.linear_y_axis}, Angular Z axis: {self.angular_z_axis}')
+        self.get_logger().info(f'Head - Pitch axis: {self.head_pitch_axis}, Roll axis: {self.head_roll_axis}')
         self.get_logger().info(f'Eye - Trigger axis: {self.eye_trigger_axis}')
-        self.get_logger().info(f'Max PWM: {self.max_pwm}, Deadzone: {self.deadzone}')
+        self.get_logger().info(f'Max linear velocity: {self.max_linear_velocity} m/s, Max angular velocity: {self.max_angular_velocity} rad/s')
+        self.get_logger().info(f'Deadzone: {self.deadzone}')
     
     def apply_deadzone(self, value):
         """Apply deadzone to joystick input"""
@@ -83,38 +87,33 @@ class JoyDriveNode(Node):
             return 0.0
         return value
     
-    def map_axis_to_pwm(self, axis_value):
+    def map_axis_to_velocity(self, axis_value, max_velocity):
         """
-        Map joystick axis value (-1.0 to 1.0) to PWM value (-255 to 255)
+        Map joystick axis value (-1.0 to 1.0) to velocity value
         
-        Joystick convention:
-        - Forward (up): positive value (+1.0)
-        - Backward (down): negative value (-1.0)
+        Args:
+            axis_value: Joystick axis value from -1.0 to 1.0
+            max_velocity: Maximum velocity (linear or angular)
         
-        PWM convention:
-        - 255: full forward
-        - 0: stop
-        - -255: full backward
+        Returns:
+            Velocity value scaled by max_velocity
         """
         # Apply deadzone
         axis_value = self.apply_deadzone(axis_value)
         
-        # Map from [-1, 1] to [-255, 255]
-        # 1.0 (forward) -> 255
-        # 0.0 (neutral) -> 0
-        # -1.0 (backward) -> -255
-        pwm = int(axis_value * 255)
+        # Map from [-1, 1] to [-max_velocity, max_velocity]
+        velocity = axis_value * max_velocity
         
         # Clamp to valid range
-        pwm = max(-255, min(255, pwm))
+        velocity = max(-max_velocity, min(max_velocity, velocity))
         
-        return pwm
+        return velocity
     
     def joy_callback(self, msg):
-        """Process joystick input and publish drive commands using arcade-style control"""
+        """Process joystick input and publish drive commands using mecanum drive control"""
         # Check if we have enough axes
-        required_axes = max(self.throttle_axis, self.steering_axis, 
-                          self.head_yaw_axis, self.head_pitch_axis) + 1
+        required_axes = max(self.linear_x_axis, self.linear_y_axis, 
+                          self.angular_z_axis, self.head_pitch_axis) + 1
         if len(msg.axes) < required_axes:
             self.get_logger().warn(
                 f'Not enough axes in Joy message. Got {len(msg.axes)}, '
@@ -123,52 +122,35 @@ class JoyDriveNode(Node):
             return
         
         # Get drive axis values
-        throttle = msg.axes[self.throttle_axis]  # Forward/backward
-        steering = msg.axes[self.steering_axis]   # Left/right turn
+        linear_x = msg.axes[self.linear_x_axis]  # Forward/backward
+        linear_y = msg.axes[self.linear_y_axis]  # Strafe left/right
+        angular_z = msg.axes[self.angular_z_axis]  # Rotation
         
         # Apply inversions if configured
-        if self.invert_throttle:
-            throttle = -throttle
-        if self.invert_steering:
-            steering = -steering
+        if self.invert_linear_x:
+            linear_x = -linear_x
+        if self.invert_linear_y:
+            linear_y = -linear_y
+        if self.invert_angular_z:
+            angular_z = -angular_z
         
-        # Apply deadzone
-        throttle = self.apply_deadzone(throttle)
-        steering = self.apply_deadzone(steering)
+        # Map axis values to velocities
+        linear_x_vel = self.map_axis_to_velocity(linear_x, self.max_linear_velocity)
+        linear_y_vel = self.map_axis_to_velocity(linear_y, self.max_linear_velocity)
+        angular_z_vel = self.map_axis_to_velocity(angular_z, self.max_angular_velocity)
         
-        # Arcade drive: mix throttle and steering to get left and right motor values
-        # throttle: positive = forward, negative = backward
-        # steering: positive = turn right, negative = turn left
-        left_value = throttle + steering
-        right_value = throttle - steering
-        
-        # Clamp to [-1.0, 1.0] range
-        left_value = max(-1.0, min(1.0, left_value))
-        right_value = max(-1.0, min(1.0, right_value))
-        
-        # Convert to PWM values
-        left_pwm = int(left_value * self.max_pwm)
-        right_pwm = int(right_value * self.max_pwm)
-        
-        # Get head servo axis values
-        head_yaw = msg.axes[self.head_yaw_axis]    # Left/right head movement
+        # Get head pitch axis value
         head_pitch = msg.axes[self.head_pitch_axis]  # Up/down head movement
         
-        # Apply inversions if configured
-        if self.invert_head_yaw:
-            head_yaw = -head_yaw
+        # Apply inversion if configured
         if self.invert_head_pitch:
             head_pitch = -head_pitch
         
         # Apply deadzone
-        head_yaw = self.apply_deadzone(head_yaw)
         head_pitch = self.apply_deadzone(head_pitch)
         
-        # Map joystick values (-1 to 1) to angles (-90 to 90 degrees), then to radians
-        head_yaw_deg = head_yaw * 90.0  # -90 to 90 degrees
+        # Map joystick value (-1 to 1) to angle (-90 to 90 degrees), then to radians
         head_pitch_deg = head_pitch * 90.0  # -90 to 90 degrees
-        
-        head_yaw_rad = math.radians(head_yaw_deg)
         head_pitch_rad = math.radians(head_pitch_deg)
         
         # Get head roll trigger value (left trigger)
@@ -213,8 +195,11 @@ class JoyDriveNode(Node):
         # Set eye PWM based on trigger (both eyes controlled together)
         cmd.eye_pwm = [eye_pwm, eye_pwm]
         
-        # Set driver PWM values [left, right]
-        cmd.driver_pwm = [left_pwm, right_pwm]
+        # Create and set Twist message for mecanum drive
+        cmd.cmd_vel = Twist()
+        cmd.cmd_vel.linear.x = linear_x_vel
+        cmd.cmd_vel.linear.y = linear_y_vel
+        cmd.cmd_vel.angular.z = angular_z_vel
         
         # Initialize servo commands (15 servos, all disabled by default)
         cmd.servo_cmd = [ServoCmd() for _ in range(15)]
@@ -223,11 +208,6 @@ class JoyDriveNode(Node):
             servo.acceleration = 0.0
             servo.target_location = 0.0
         
-        # Configure head yaw servo (servo 13, index 12)
-        cmd.servo_cmd[12].enabled = True
-        cmd.servo_cmd[12].target_location = head_yaw_rad
-        cmd.servo_cmd[12].acceleration = 0.0  # Set to desired acceleration if needed
-
         # Configure head pitch servo (servo 14, index 13)
         cmd.servo_cmd[13].enabled = True
         cmd.servo_cmd[13].target_location = head_pitch_rad
@@ -244,8 +224,8 @@ class JoyDriveNode(Node):
         
         # Log at debug level (only shown with --ros-args --log-level debug)
         self.get_logger().debug(
-            f'Drive: Throttle={throttle:.2f} Steering={steering:.2f} -> PWM: L={left_pwm} R={right_pwm} | '
-            f'Head: Yaw={head_yaw_deg:.1f}° Pitch={head_pitch_deg:.1f}° Roll={math.degrees(head_roll_rad):.1f}° | Eye: {eye_pwm}'
+            f'Drive: X={linear_x_vel:.2f} Y={linear_y_vel:.2f} AngZ={angular_z_vel:.2f} | '
+            f'Head: Pitch={head_pitch_deg:.1f}° Roll={math.degrees(head_roll_rad):.1f}° | Eye: {eye_pwm}'
         )
 
 

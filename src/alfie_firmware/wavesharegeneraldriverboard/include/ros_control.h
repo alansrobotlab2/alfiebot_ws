@@ -50,17 +50,22 @@ bool destroy_ros_entities();
  * Handles incoming command messages by:
  * 1. Updating watchdog timestamp to prevent timeout
  * 2. Clearing timeout flag
- * 3. Extracting motor PWM commands for both motors
+ * 3. Extracting target wheel velocities (m/s) for closed-loop control
  * 4. Extracting servo commands (torque, acceleration, position) for all servos
- * 5. Updating local command buffers and servo memory structures
+ * 5. Updating velocity targets and servo memory structures
+ * 
+ * The velocities array format is [left_wheel, right_wheel] in meters per second.
+ * These are used by the PID velocity controller to achieve accurate speed control
+ * using encoder feedback.
  * 
  * This callback is invoked automatically by the executor when new GDBCmd
  * messages arrive on the subscribed topic.
  * 
  * @param msgin Pointer to incoming alfie_msgs__msg__GDBCmd message
  * @note Called by executor in response to new subscription data
- * @note Updates global DriverBoard members: last_drivercmd_time, drivercmd_timeout, drivercmdbuf, mBuf
+ * @note Updates global DriverBoard members: last_drivercmd_time, drivercmd_timeout, A_target_velocity, B_target_velocity, mBuf
  * @see create_ros_entities() for callback registration
+ * @see setMotorATargetVelocity() and setMotorBTargetVelocity() for velocity control
  */
 void subscription_callback(const void *msgin);
 

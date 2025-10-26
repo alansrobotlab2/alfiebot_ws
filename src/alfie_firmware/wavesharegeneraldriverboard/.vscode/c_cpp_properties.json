@@ -10,6 +10,10 @@
             "includePath": [
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/include",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/src",
+                "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/lib/scservo",
+                "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/lib/imu",
+                "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
+                "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/platform_code/arduino",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/.pio/libdeps/esp-wrover-kit/micro_ros_platformio",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/libmicroros/include",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/platform_code",
@@ -210,7 +214,6 @@
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/dio_qspi/include",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/cores/esp32",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/variants/esp32",
-                "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/lib/imu",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/ArduinoOTA/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/AsyncUDP/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/BLE/src",
@@ -243,7 +246,6 @@
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
-                "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
                 ""
             ],
             "browse": {
@@ -251,6 +253,10 @@
                 "path": [
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/include",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/src",
+                    "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/lib/scservo",
+                    "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/lib/imu",
+                    "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
+                    "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/platform_code/arduino",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/.pio/libdeps/esp-wrover-kit/micro_ros_platformio",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/libmicroros/include",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/.pio/libdeps/esp-wrover-kit/micro_ros_platformio/platform_code",
@@ -451,7 +457,6 @@
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/dio_qspi/include",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/cores/esp32",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/variants/esp32",
-                    "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/lib/imu",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/ArduinoOTA/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/AsyncUDP/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/BLE/src",
@@ -484,7 +489,6 @@
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
-                    "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
                     ""
                 ]
             },
