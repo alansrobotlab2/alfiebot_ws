@@ -29,7 +29,7 @@ typedef struct {
     float current_acceleration; ///< Current wheel acceleration (m/s²)
     volatile int32_t encoder_count;    ///< Current encoder count (volatile for ISR access)
     volatile uint32_t last_pulse_time; ///< Last encoder pulse timestamp (microseconds)
-    float pwm_output;           ///< PWM output value (0-255)
+    int16_t pwm_output;         ///< PWM output value (-255 to 255, sign indicates direction)
     bool fault_detected;        ///< Motor fault flag
     bool is_moving;             ///< True if motor is currently moving
     bool encoder_a_state;       ///< Current state of encoder A pin

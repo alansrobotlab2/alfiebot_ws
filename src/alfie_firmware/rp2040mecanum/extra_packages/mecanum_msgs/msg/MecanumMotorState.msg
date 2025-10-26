@@ -14,7 +14,7 @@ int32 encoder_count          # Current encoder count
 uint32 last_pulse_time       # Last encoder pulse timestamp (microseconds)
 
 # Motor control
-float32 pwm_output           # PWM output value (0-255)
+int16 pwm_output             # PWM output value (-255 to 255, sign indicates direction)
 
 # Status flags
 bool fault_detected          # Motor fault flag

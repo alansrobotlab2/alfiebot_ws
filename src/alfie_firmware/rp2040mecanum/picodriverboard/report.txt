@@ -1,0 +1,6 @@
+Front (top side) placement file: '/home/alansrobotlab/alfiebot_ws/src/alfie_firmware/rp2040mecanum/picodriverboard/gerbers/picodriverboard-top.pos'.
+Info: Component count: 9.
+Back (bottom side) placement file: '/home/alansrobotlab/alfiebot_ws/src/alfie_firmware/rp2040mecanum/picodriverboard/gerbers/picodriverboard-bottom.pos'.
+Info: Component count: 0.
+Info: Full component count: 9.
+Info: Done.

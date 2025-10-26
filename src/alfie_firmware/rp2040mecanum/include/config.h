@@ -25,11 +25,12 @@
 
 /**
  * @brief Status LED Configuration
- * WS2812B LED connected to GP16 for status indication
+ * Built-in LED for status indication
  */
-#define STATUS_LED_PIN          16      ///< WS2812B LED pin (GP16)
-#define STATUS_LED_COUNT        1       ///< Number of WS2812B LEDs
-#define STATUS_LED_BRIGHTNESS   50      ///< LED brightness (0-255)
+#define STATUS_LED_PIN          LED_BUILTIN  ///< Built-in LED pin
+#define LED_BLINK_PERIOD_MS     125          ///< LED blink timing unit (125ms = 8 steps per second)
+
+
 
 // =============================================================================
 // MOTOR DRIVER PIN ASSIGNMENTS
@@ -76,6 +77,8 @@
 #define PWM_MIN_DUTY            0       ///< Minimum PWM duty cycle
 #define PWM_MAX_DUTY            255     ///< Maximum PWM duty cycle
 
+
+
 // =============================================================================
 // ROBOT PHYSICAL DIMENSIONS
 // =============================================================================
@@ -83,24 +86,26 @@
 /**
  * @brief Wheel Configuration
  */
-#define WHEEL_DIAMETER_MM       100.0   ///< Wheel diameter in millimeters
+#define WHEEL_DIAMETER_MM       80.0   ///< Wheel diameter in millimeters
 #define WHEEL_RADIUS_MM         (WHEEL_DIAMETER_MM / 2.0)  ///< Wheel radius in mm
 #define WHEEL_CIRCUMFERENCE_MM  (PI * WHEEL_DIAMETER_MM)   ///< Wheel circumference in mm
 
 /**
  * @brief Robot Base Dimensions
  */
-#define WHEELBASE_LENGTH_MM     300.0   ///< Distance between front and rear axles (mm)
-#define WHEELBASE_WIDTH_MM      250.0   ///< Distance between left and right wheels (mm)
+#define WHEELBASE_LENGTH_MM     170.5   ///< Distance between front and rear axles (mm)
+#define WHEELBASE_WIDTH_MM      183.0   ///< Distance between left and right wheels (mm)
 #define ROBOT_CENTER_TO_WHEEL_X (WHEELBASE_LENGTH_MM / 2.0)  ///< X distance from center to wheel
 #define ROBOT_CENTER_TO_WHEEL_Y (WHEELBASE_WIDTH_MM / 2.0)   ///< Y distance from center to wheel
 
 /**
  * @brief Robot Weight and Load Capacity
  */
-#define ROBOT_WEIGHT_KG         5.0     ///< Robot weight in kilograms
-#define MAX_PAYLOAD_KG          2.0     ///< Maximum payload capacity in kg
+#define ROBOT_WEIGHT_KG         10.0     ///< Robot weight in kilograms
+#define MAX_PAYLOAD_KG          1.0     ///< Maximum payload capacity in kg
 #define TOTAL_WEIGHT_KG         (ROBOT_WEIGHT_KG + MAX_PAYLOAD_KG)
+
+
 
 // =============================================================================
 // MOTOR AND GEARING SPECIFICATIONS
@@ -112,20 +117,22 @@
 #define MOTOR_VOLTAGE           12.0    ///< Motor operating voltage (V)
 #define MOTOR_MAX_CURRENT_MA    2000    ///< Maximum motor current (mA)
 #define MOTOR_STALL_TORQUE_NM   0.5     ///< Motor stall torque (N·m)
-#define MOTOR_FREE_SPEED_RPM    200     ///< Motor free speed (RPM)
+#define MOTOR_FREE_SPEED_RPM    60     ///< Motor free speed (RPM)
 
 /**
  * @brief Gear Ratio Configuration
  */
-#define GEAR_RATIO              30.0    ///< Gear reduction ratio (motor:wheel)
+#define GEAR_RATIO              169.0    ///< Gear reduction ratio (motor:wheel)
 #define WHEEL_MAX_RPM           (MOTOR_FREE_SPEED_RPM / GEAR_RATIO)  ///< Max wheel RPM
 
 /**
  * @brief Encoder Configuration
  */
-#define ENCODER_PPR             360     ///< Encoder pulses per revolution
+#define ENCODER_PPR             11     ///< Encoder pulses per revolution
 #define ENCODER_COUNTS_PER_REV  (ENCODER_PPR * 4)  ///< Quadrature encoding (4x)
 #define GEARED_COUNTS_PER_REV   (ENCODER_COUNTS_PER_REV * GEAR_RATIO)  ///< Counts per wheel revolution
+
+
 
 // =============================================================================
 // MOTION CONTROL PARAMETERS
@@ -151,34 +158,10 @@
 /**
  * @brief Control Loop Timing
  */
-#define CONTROL_LOOP_PERIOD_MS  10      ///< Control loop period in milliseconds
+#define CONTROL_LOOP_PERIOD_MS  2       ///< Control loop period in milliseconds (500 Hz)
 #define CONTROL_LOOP_FREQ_HZ    (1000 / CONTROL_LOOP_PERIOD_MS)  ///< Control frequency
 
-// =============================================================================
-// SERIAL COMMUNICATION PROTOCOL
-// =============================================================================
 
-/**
- * @brief Serial Command Definitions
- * Commands sent via USB/Serial for ROS2 communication
- */
-#define CMD_SET_VELOCITY        "SET_VEL"       ///< Set robot velocity command
-#define CMD_GET_ODOMETRY        "GET_ODOM"      ///< Get odometry data command
-#define CMD_SET_PID_PARAMS      "SET_PID"       ///< Set PID parameters command
-#define CMD_GET_MOTOR_STATUS    "GET_MOTORS"    ///< Get motor status command
-#define CMD_EMERGENCY_STOP      "ESTOP"         ///< Emergency stop command
-#define CMD_RESET_ENCODERS      "RESET_ENC"     ///< Reset encoder counts command
-#define CMD_SET_LED_COLOR       "SET_LED"       ///< Set status LED color command
-#define CMD_GET_BATTERY_VOLTAGE "GET_BATT"      ///< Get battery voltage command
-
-/**
- * @brief Data Packet Sizes for Serial Communication
- */
-#define MAX_SERIAL_BUFFER       256     ///< Maximum serial receive buffer size
-#define VELOCITY_PACKET_SIZE    12      ///< Size of velocity command packet (3 floats)
-#define ODOMETRY_PACKET_SIZE    24      ///< Size of odometry data packet (6 floats)
-#define PID_PACKET_SIZE         12      ///< Size of PID parameters packet (3 floats)
-#define MOTOR_STATUS_SIZE       16      ///< Size of motor status packet (4 floats)
 
 // =============================================================================
 // SAFETY AND LIMITS
@@ -203,21 +186,7 @@
 #define ERROR_OVERTEMPERATURE   0x05    ///< Motor overtemperature
 #define ERROR_COMMUNICATION     0x06    ///< Communication timeout
 
-// =============================================================================
-// STATUS LED COLORS
-// =============================================================================
 
-/**
- * @brief Predefined LED Colors for Status Indication
- */
-#define LED_COLOR_OFF           0x000000    ///< LED off
-#define LED_COLOR_RED           0xFF0000    ///< Red - Error/Emergency
-#define LED_COLOR_GREEN         0x00FF00    ///< Green - Normal operation
-#define LED_COLOR_BLUE          0x0000FF    ///< Blue - Initialization
-#define LED_COLOR_YELLOW        0xFFFF00    ///< Yellow - Warning
-#define LED_COLOR_PURPLE        0xFF00FF    ///< Purple - Configuration mode
-#define LED_COLOR_CYAN          0x00FFFF    ///< Cyan - Calibration mode
-#define LED_COLOR_WHITE         0xFFFFFF    ///< White - Test mode
 
 // =============================================================================
 // MATHEMATICAL CONSTANTS
@@ -238,6 +207,8 @@
 #define MM_TO_M                 0.001                   ///< Millimeters to meters conversion
 #define M_TO_MM                 1000.0                  ///< Meters to millimeters conversion
 
+
+
 // =============================================================================
 // DEBUG AND DEVELOPMENT
 // =============================================================================
@@ -256,6 +227,8 @@
 #define SIMULATE_ENCODERS       0       ///< Simulate encoder input for testing (0=off, 1=on)
 #define ENABLE_MOTOR_SAFETY     1       ///< Enable motor safety checks (0=off, 1=on)
 #define ENABLE_BATTERY_MONITOR  1       ///< Enable battery monitoring (0=off, 1=on)
+
+
 
 // =============================================================================
 // ROS STATE MACHINE CONFIGURATION

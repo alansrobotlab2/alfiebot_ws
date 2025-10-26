@@ -24,7 +24,7 @@ DriverBoard::DriverBoard() {
         motors[i].current_acceleration = 0.0;
         motors[i].encoder_count = 0;
         motors[i].last_pulse_time = 0;
-        motors[i].pwm_output = 0.0;
+        motors[i].pwm_output = 0;
         motors[i].fault_detected = false;
         motors[i].is_moving = false;
         motors[i].encoder_a_state = false;
@@ -76,10 +76,9 @@ DriverBoard::DriverBoard() {
  * Sets up motors, encoders, and status LED
  */
 void DriverBoard::initializePeripherals(void) {
-    // TODO: Initialize status LED when library is available
-    // status_led.begin();
-    // status_led.setPixelColor(0, LED_COLOR_BLUE);
-    // status_led.show();
+    // Initialize built-in LED for status indication
+    pinMode(STATUS_LED_PIN, OUTPUT);
+    digitalWrite(STATUS_LED_PIN, LOW);
     
     // Initialize motor control pins
     // Front Left Motor
@@ -168,7 +167,7 @@ void DriverBoard::updateMotorControl(void) {
     for (int i = 0; i < 4; i++) {
         // Simple proportional control (placeholder)
         float error = motors[i].target_velocity - motors[i].current_velocity;
-        motors[i].pwm_output = constrain(error * 100.0, -255, 255);
+        motors[i].pwm_output = (int16_t)constrain(error * 100.0, -255, 255);
         
         // Apply PWM to motors (placeholder - needs proper direction control)
         switch (i) {
@@ -205,7 +204,7 @@ void DriverBoard::readEncoders(void) {
     uint32_t current_time = millis();
     float dt = (current_time - last_encoder_time) / 1000.0; // Convert to seconds
     
-    if (dt > 0.01) { // Update at 100Hz max
+    if (dt >= 0.002) { // Update at 500Hz (2ms period)
         // Process encoder data from interrupt handlers
         for (int i = 0; i < 4; i++) {
             // Copy encoder count from volatile interrupt data (atomic read)
@@ -270,7 +269,7 @@ void DriverBoard::updateOdometry(void) {
     uint32_t current_time = millis();
     float dt = (current_time - last_odom_time) / 1000.0;
     
-    if (dt > 0.01) { // Update at 100Hz max
+    if (dt >= 0.002) { // Update at 500Hz (2ms period)
         // Update velocities
         odometry.linear_velocity_x = linear_x;
         odometry.linear_velocity_y = linear_y;
@@ -312,21 +311,7 @@ void DriverBoard::handleMotorSafety(void) {
  * Provides visual feedback of robot status
  */
 void DriverBoard::updateStatusLED(void) {
-    // TODO: Implement LED status updates when library is available
-    
-    // Set LED color based on robot status
-    // switch (g_robot_status) {
-    //     case ERROR_NONE:
-    //         status_led.setPixelColor(0, LED_COLOR_GREEN);
-    //         break;
-    //     case ERROR_MOTOR_FAULT:
-    //         status_led.setPixelColor(0, LED_COLOR_RED);
-    //         break;
-    //     default:
-    //         status_led.setPixelColor(0, LED_COLOR_YELLOW);
-    //         break;
-    // }
-    // status_led.show();
+    // LED status is now handled in main.cpp Core 0 loop
 }
 
 /**
