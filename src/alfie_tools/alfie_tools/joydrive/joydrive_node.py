@@ -36,8 +36,8 @@ class JoyDriveNode(Node):
         self.declare_parameter('head_pitch_axis', 4)  # Right stick Y-axis for head pitch
         self.declare_parameter('head_roll_axis', 2)  # Left trigger for head roll (typical axis 2 = LT)
         self.declare_parameter('eye_trigger_axis', 5)  # Right trigger for eye brightness (typical axis 5 = RT)
-        self.declare_parameter('max_linear_velocity', 1.0)  # Max linear velocity in m/s
-        self.declare_parameter('max_angular_velocity', 3.14)  # Max angular velocity in rad/s
+        self.declare_parameter('max_linear_velocity', 0.24)  # Max linear velocity in m/s (mecanum wheel limit)
+        self.declare_parameter('max_angular_velocity', 1.5)  # Max angular velocity in rad/s
         self.declare_parameter('deadzone', 0.1)  # Deadzone to ignore small stick movements
         self.declare_parameter('invert_linear_x', False)
         self.declare_parameter('invert_linear_y', False)
