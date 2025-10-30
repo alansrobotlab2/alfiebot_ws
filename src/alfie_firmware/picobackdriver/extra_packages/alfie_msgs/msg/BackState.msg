@@ -1,3 +1,6 @@
+uint8 board_temp
+bool limit_switch_triggered
+
 # Linear actuator state feedback
 # in meters
 float32 command_position
