@@ -15,8 +15,10 @@ void subscription_callback(const void *msgin)
 
   b.drivercmd_timeout = false;
 
-  b.drivercmdbuf[0] = msg->driver_pwm[0];
-  b.drivercmdbuf[1] = msg->driver_pwm[1];
+  // Set target velocities for closed-loop control (m/s)
+  // velocities[0] = left wheel, velocities[1] = right wheel
+  setMotorATargetVelocity(msg->velocities[0]);
+  setMotorBTargetVelocity(msg->velocities[1]);
 
   for (int i = 0; i < NUMSERVOS; i++)
   {

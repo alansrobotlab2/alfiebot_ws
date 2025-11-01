@@ -18,8 +18,8 @@ def generate_launch_description():
             name='joy_node',
             parameters=[{
                 'device_id': 0,  # Usually /dev/input/js0
-                'deadzone': 0.05,
-                'autorepeat_rate': 20.0,  # 20 Hz
+                'deadzone': 0.01,
+                'autorepeat_rate': 100.0,  # 100 Hz
             }],
             output='screen',
         ),

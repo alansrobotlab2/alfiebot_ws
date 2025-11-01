@@ -89,6 +89,20 @@ public:
 
     int16_t drivercmdbuf[2] = {};  // Zero-initialize
 
+    // Velocity control targets (m/s) - commanded from ROS
+    float A_target_velocity = 0.0f;
+    float B_target_velocity = 0.0f;
+
+    // PID control state - Motor A
+    float A_velocity_error_integral = 0.0f;
+    float A_velocity_error_previous = 0.0f;
+    unsigned long A_pid_last_update_time = 0;
+
+    // PID control state - Motor B
+    float B_velocity_error_integral = 0.0f;
+    float B_velocity_error_previous = 0.0f;
+    unsigned long B_pid_last_update_time = 0;
+
     // IMU related variables
     // Set the values for the Roll, Pitch, and Yaw corners, as well as the Temp temperature.
     // Roll represents the roll angle of rotation around the X-axis, Pitch represents the pitch angle of rotation around the Y-axis, and Yaw represents the yaw angle of rotation around the Z-axis.
