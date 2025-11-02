@@ -24,21 +24,18 @@
 
 /**
  * @brief Status LED Configuration
- * Built-in LED for status indication
+ * Built-in rgb LED for status indication
  */
-#define STATUS_LED_PIN          LED_BUILTIN  ///< Built-in LED pin
+
+#define WS2812B_PIN             16      ///< WS2812B RGB LED data pin
 #define LED_BLINK_PERIOD_MS     125          ///< LED blink timing unit (125ms = 8 steps per second)
 
 
 // ==========================================================================
 // LIMIT SWITCH PIN ASSIGNMENT
 // ==========================================================================
-#define LIMIT_SWITCH_PIN    10       ///< Minimum position limit switch pin
+#define LIMIT_SWITCH_PIN    28      ///< Minimum position limit switch pin
 
-// ============================================================================
-// TEMPERATURE SENSOR CONFIGURATION
-// ============================================================================
-#define TEMP_SENSOR_PIN        26      ///< Temperature sensor pin (ADC)
 
 // =============================================================================
 // MOTOR DRIVER PIN ASSIGNMENTS
@@ -50,18 +47,15 @@
  */
 
 // Linear Actuator Motor - TB6612FNG Control Pins
-#define MOTOR_PWM_PIN           2       ///< Linear actuator motor PWM pin (PWMA)
-#define MOTOR_DIR1_PIN          3       ///< Linear actuator motor direction pin 1 (AIN1)
-#define MOTOR_DIR2_PIN          4       ///< Linear actuator motor direction pin 2 (AIN2)
+#define MOTOR_PWM_PIN           8       ///< Linear actuator motor PWM pin (PWMA)
+#define MOTOR_DIR1_PIN          6       ///< Linear actuator motor direction pin 1 (AIN1)
+#define MOTOR_DIR2_PIN          7       ///< Linear actuator motor direction pin 2 (AIN2)
 #define MOTOR_STANDBY_PIN       5       ///< Motor driver standby pin (STBY - HIGH=active, LOW=standby)
 #define MOTOR_VCC_PIN           15      ///< Motor driver VCC power pin (logic power supply)
 
 // Linear Actuator Encoder Pins
-#define MOTOR_ENCODER_A         28      ///< Linear actuator motor encoder A pin
-#define MOTOR_ENCODER_B         29      ///< Linear actuator motor encoder B pin
-
-// Status LED
-#define WS2812B_PIN             16      ///< WS2812B RGB LED data pin
+#define MOTOR_ENCODER_A         26      ///< Linear actuator motor encoder A pin
+#define MOTOR_ENCODER_B         27      ///< Linear actuator motor encoder B pin
 
 /**
  * @brief PWM Configuration for Motors
@@ -79,7 +73,7 @@
  * @brief Linear Actuator Configuration
  */
 #define ACTUATOR_MIN_POSITION    0.0     ///< Minimum actuator position (meters)
-#define ACTUATOR_MAX_POSITION    0.380     ///< Maximum actuator position (meters)
+#define ACTUATOR_MAX_POSITION    0.390     ///< Maximum actuator position (meters)
 #define ACTUATOR_HOME_POSITION   0.0     ///< Home/zero position (meters)
 
 // =============================================================================
@@ -97,7 +91,7 @@
 /**
  * @brief Gear Ratio Configuration
  */
-#define GEAR_RATIO              169.0    ///< Gear reduction ratio (motor:output shaft)
+#define GEAR_RATIO              88.0    ///< Gear reduction ratio (motor:output shaft) - 111 RPM motor
 #define OUTPUT_SHAFT_MAX_RPM    (MOTOR_FREE_SPEED_RPM / GEAR_RATIO)  ///< Max output shaft RPM
 
 /**
@@ -125,17 +119,23 @@
 /**
  * @brief Maximum Velocities and Accelerations for Linear Actuator
  */
-#define MAX_ACTUATOR_VELOCITY       0.1     ///< Maximum linear actuator velocity (m/s)
-#define MAX_ACTUATOR_ACCELERATION   0.5     ///< Maximum linear actuator acceleration (m/s²)
+#define MAX_ACTUATOR_VELOCITY       0.074     ///< Maximum linear actuator velocity (m/s) hypothetical with 111 rpm motor, no load
+#define MAX_ACTUATOR_ACCELERATION   0.75      ///< Maximum linear actuator acceleration (m/s²)
 
 /**
  * @brief PID Controller Parameters for Velocity Control
  */
-#define VELOCITY_PID_KP         100.0   ///< Velocity proportional gain
-#define VELOCITY_PID_KI         10.0    ///< Velocity integral gain
-#define VELOCITY_PID_KD         1.0     ///< Velocity derivative gain
+#define VELOCITY_PID_KP         7000.0  ///< Velocity proportional gain - responsiveness to error (reduced from 9000 to reduce overshoot)
+#define VELOCITY_PID_KI         600.0   ///< Velocity integral gain - eliminates steady-state error (reduced from 700)
+#define VELOCITY_PID_KD         0.0     ///< Velocity derivative gain - reduces overshoot and oscillation (disabled due to noisy velocity)
 #define VELOCITY_PID_OUTPUT_LIMIT   255     ///< PID output limit (matches PWM range)
-#define VELOCITY_PID_INTEGRAL_LIMIT 100     ///< Integral windup limit
+#define VELOCITY_PID_INTEGRAL_LIMIT 100     ///< Integral windup limit (reduced from 180 to prevent wind-up)
+
+/**
+ * @brief PWM Limits and Deadband
+ */
+#define MIN_PWM_UPWARD          75      ///< Minimum PWM for upward motion (overcome friction + gravity)
+#define MIN_PWM_DOWNWARD        40      ///< Minimum PWM for downward motion (overcome friction, gravity assists)
 
 /**
  * @brief Control Loop Timing

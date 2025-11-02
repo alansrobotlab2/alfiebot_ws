@@ -16,3 +16,16 @@ float32 current_position
 float32 current_velocity
 float32 current_acceleration
 int64 pulse_count
+uint8 pwm_output
+
+bool is_calibrated
+
+# Calibration state constants
+# CALIBRATION_IDLE = 0
+# CALIBRATION_LOWERING = 1
+# CALIBRATION_RAISING = 2
+# CALIBRATION_COMPLETE = 3
+# CALIBRATION_ERROR = 4
+
+# Current calibration state (see constants above)
+uint8 calibration_status

@@ -21,6 +21,7 @@
 #include <rclc/executor.h>
 #include <alfie_msgs/msg/back_cmd.h>
 #include <alfie_msgs/msg/back_state.h>
+#include <alfie_msgs/srv/back_request_calibration.h>
 #include "../../include/config.h"
 
 // =============================================================================
@@ -65,6 +66,9 @@ extern rclc_executor_t executor;
 extern rcl_subscription_t back_subscriber;
 extern rcl_publisher_t odom_publisher;
 
+// Services
+extern rcl_service_t calibration_service;
+
 // ROS state
 extern bool micro_ros_initialized;
 extern uint32_t last_command_time;
@@ -97,12 +101,25 @@ void initializeRosInterface(void);
 void updateRosInterface(void);
 
 /**
- * @brief Callback function for /backdrive topic subscriber
- * Receives geometry_msgs/Twist messages and updates velocity command
+ * @brief Callback function for /backcmd topic subscriber
+ * Receives alfie_msgs/BackCmd messages and updates actuator command
  * 
- * @param msgin Pointer to incoming Twist message
+ * @param msgin Pointer to incoming BackCmd message
  */
 void backDriveCallback(const void *msgin);
+
+/**
+ * @brief Callback function for calibration service
+ * Receives alfie_msgs/BackRequestCalibration requests and initiates calibration
+ * 
+ * This service returns immediately after initiating the calibration process.
+ * It does NOT block waiting for completion. The caller should monitor the
+ * calibration_status field in BackState messages to track calibration progress.
+ * 
+ * @param req_msg Pointer to incoming service request
+ * @param res_msg Pointer to outgoing service response (success=true if accepted)
+ */
+void calibrationServiceCallback(const void *req_msg, void *res_msg);
 
 /**
  * @brief Process velocity commands

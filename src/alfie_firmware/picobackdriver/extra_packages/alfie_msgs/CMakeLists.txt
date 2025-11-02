@@ -14,6 +14,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BackCmd.msg"
   "msg/BackState.msg"
+  "srv/BackRequestCalibration.srv"
   DEPENDENCIES std_msgs
 )
 

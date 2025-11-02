@@ -80,15 +80,6 @@ DriverBoard::DriverBoard()
     encoder.pin_a = MOTOR_ENCODER_A;
     encoder.pin_b = MOTOR_ENCODER_B;
     
-    // Initialize ROS state machine variables
-    agent_state = WAITING_AGENT;
-    last_state_time = 0;
-    ros_entities_created = false;
-    
-    // Initialize ROS communication state
-    micro_ros_initialized = false;
-    last_command_time = 0;
-    
     // Initialize inter-core communication
     actuator_cmd.position = 0.0;
     actuator_cmd.velocity = 0.0;
@@ -105,10 +96,15 @@ DriverBoard::DriverBoard()
     actuator_state.current_velocity = 0.0;
     actuator_state.current_acceleration = 0.0;
     actuator_state.pulses = 0;
+    actuator_state.is_calibrated = false;
     actuator_state.timestamp = 0;
     
     new_actuator_command = false;
     new_actuator_state = false;
+    
+    // Initialize calibration state
+    calibration_in_progress = false;
+    
 }
 
 // =============================================================================
@@ -120,10 +116,7 @@ DriverBoard::DriverBoard()
  * Sets up motor, encoder, and status LED
  */
 void DriverBoard::initializePeripherals(void) {
-    // Initialize built-in LED for status indication
-    pinMode(STATUS_LED_PIN, OUTPUT);
-    digitalWrite(STATUS_LED_PIN, LOW);
-    
+
     // Initialize WS2812B RGB LED
     if (statusLED.begin()) {
         // Set initial color to dim blue (initializing)
@@ -183,28 +176,73 @@ void DriverBoard::updatePeripherals(void) {
 /**
  * @brief Update motor control (PID control, PWM output)
  * Processes actuator commands and applies motor control with velocity PID and acceleration limiting
+ * 
+ * CONTROL STRATEGY:
+ * - Position is the primary control target (actuator_cmd.position)
+ * - Velocity is a CONSTRAINT specifying maximum speed to reach position (actuator_cmd.velocity)
+ * - Acceleration is a CONSTRAINT specifying maximum acceleration (actuator_cmd.acceleration)
+ * - The controller generates velocity setpoints from position error, clamped by velocity/accel limits
+ * 
+ * NOTE: Motor control is suspended during calibration to prevent interference
  */
 void DriverBoard::updateMotorControl(void) {
+    // Skip motor control during calibration
+    if (calibration_in_progress) {
+        return;
+    }
+    
     static uint32_t last_control_time = 0;
     uint32_t current_time = millis();
     float dt = (current_time - last_control_time) / 1000.0; // Convert to seconds
+    
+    // Initialize timing on first call
+    if (last_control_time == 0) {
+        last_control_time = current_time;
+        return;
+    }
     
     if (dt >= (CONTROL_LOOP_PERIOD_MS / 1000.0)) {
         last_control_time = current_time;
         
         // Get current actuator command
-        motor.target_velocity = actuator_cmd.velocity;
+        motor.target_position = actuator_cmd.position;
         motor.max_acceleration = actuator_cmd.acceleration;
         
-        // Clamp target velocity to maximum
-        motor.target_velocity = constrain(motor.target_velocity, 
-                                         -MAX_ACTUATOR_VELOCITY, 
-                                         MAX_ACTUATOR_VELOCITY);
+        // Clamp target position to limits
+        motor.target_position = constrain(motor.target_position,
+                                         ACTUATOR_MIN_POSITION,
+                                         ACTUATOR_MAX_POSITION);
         
         // Clamp acceleration to maximum
         motor.max_acceleration = constrain(motor.max_acceleration, 
                                           0.0, 
                                           MAX_ACTUATOR_ACCELERATION);
+        
+        // Position control: Calculate velocity needed to reach target position
+        // Velocity and acceleration from command are constraints, not direct control inputs
+        float position_error = motor.target_position - motor.current_position;
+        const float POSITION_TOLERANCE = 0.002; // 2mm tolerance
+        
+        // Simple proportional position control to generate velocity setpoint
+        const float POSITION_KP = 5.0; // Position gain - increased from 3.0 for faster settling
+        float desired_velocity = POSITION_KP * position_error;
+        
+        // Limit velocity based on commanded max velocity (if non-zero) or system max
+        // actuator_cmd.velocity specifies the MAXIMUM velocity to use, not a direct velocity command
+        float max_vel = (actuator_cmd.velocity != 0.0) ? fabs(actuator_cmd.velocity) : MAX_ACTUATOR_VELOCITY;
+        desired_velocity = constrain(desired_velocity, -max_vel, max_vel);
+        
+        // Stop if within tolerance
+        if (fabs(position_error) < POSITION_TOLERANCE) {
+            desired_velocity = 0.0;
+        }
+        
+        motor.target_velocity = desired_velocity;
+        
+        // Clamp target velocity to maximum
+        motor.target_velocity = constrain(motor.target_velocity, 
+                                         -MAX_ACTUATOR_VELOCITY, 
+                                         MAX_ACTUATOR_VELOCITY);
         
         // Apply acceleration limiting to get ramped velocity
         motor.ramped_velocity = applyAccelerationLimit(motor.target_velocity, 
@@ -217,13 +255,6 @@ void DriverBoard::updateMotorControl(void) {
                                            motor.current_velocity, 
                                            dt);
         
-        // Check position limits and stop if exceeded
-        if (motor.current_position <= ACTUATOR_MIN_POSITION && motor.pwm_output < 0) {
-            motor.pwm_output = 0; // Stop if at minimum and trying to go lower
-        }
-        if (motor.current_position >= ACTUATOR_MAX_POSITION && motor.pwm_output > 0) {
-            motor.pwm_output = 0; // Stop if at maximum and trying to go higher
-        }
         
         // Apply PWM to motor
         analogWrite(MOTOR_PWM_PIN, abs((int)motor.pwm_output));
@@ -257,6 +288,13 @@ void DriverBoard::updateActuatorState(void) {
     uint32_t current_time = millis();
     float dt = (current_time - last_update_time) / 1000.0; // Convert to seconds
     
+    // Initialize timing on first call
+    if (last_update_time == 0) {
+        last_update_time = current_time;
+        last_temp_update = current_time;
+        return;
+    }
+    
     if (dt >= 0.002) { // Update at 500Hz (2ms period)
         // Calculate position from encoder counts
         motor.current_position = (float)motor.encoder_count / ENCODER_COUNTS_PER_METER;
@@ -269,8 +307,15 @@ void DriverBoard::updateActuatorState(void) {
         float previous_velocity = motor.current_velocity;
         
         // Convert encoder counts to velocity (m/s)
+        float raw_velocity = 0.0;
         if (dt > 0) {
-            motor.current_velocity = ((float)count_diff / ENCODER_COUNTS_PER_METER) / dt;
+            raw_velocity = ((float)count_diff / ENCODER_COUNTS_PER_METER) / dt;
+            
+            // Apply low-pass filter to smooth velocity (reduce encoder quantization noise)
+            // Exponential moving average: filtered = alpha * new + (1-alpha) * old
+            const float VELOCITY_FILTER_ALPHA = 0.3; // 0.3 = moderate filtering
+            motor.current_velocity = VELOCITY_FILTER_ALPHA * raw_velocity + 
+                                    (1.0 - VELOCITY_FILTER_ALPHA) * motor.current_velocity;
             
             // Calculate acceleration (change in velocity over time)
             motor.current_acceleration = (motor.current_velocity - previous_velocity) / dt;
@@ -288,7 +333,7 @@ void DriverBoard::updateActuatorState(void) {
         
         // Read limit switch state (active high, goes LOW when triggered)
         // Reading inverted: LOW (triggered) = true, HIGH (not triggered) = false
-        actuator_state.limit_switch_triggered = (digitalRead(LIMIT_SWITCH_PIN) == LOW);
+        actuator_state.limit_switch_triggered = (digitalRead(LIMIT_SWITCH_PIN) == HIGH);
         
         // Populate actuator state for ROS publishing
         actuator_state.command_position = actuator_cmd.position;
@@ -299,6 +344,7 @@ void DriverBoard::updateActuatorState(void) {
         actuator_state.current_velocity = motor.current_velocity;
         actuator_state.current_acceleration = motor.current_acceleration;
         actuator_state.pulses = motor.encoder_count;
+        actuator_state.pwm_output = (uint8_t)abs(motor.pwm_output);
         actuator_state.timestamp = current_time;
         new_actuator_state = true;
         
@@ -356,6 +402,12 @@ void DriverBoard::emergencyStop(void) {
  * @brief Reset encoder counter to zero
  */
 void DriverBoard::resetEncoders(void) {
+    // Reset volatile encoder count (with interrupts disabled for atomic access)
+    noInterrupts();
+    encoder.count = 0;
+    interrupts();
+    
+    // Reset motor encoder count and position
     motor.encoder_count = 0;
     motor.current_position = 0.0;
 }
@@ -440,11 +492,17 @@ int16_t applyVelocityPID(float target_velocity, float current_velocity, float dt
     // Proportional term
     float p_term = VELOCITY_PID_KP * error;
     
-    // Integral term with anti-windup
-    rp.motor.velocity_error_integral += error * dt;
-    rp.motor.velocity_error_integral = constrain(rp.motor.velocity_error_integral, 
-                                                  -VELOCITY_PID_INTEGRAL_LIMIT, 
-                                                  VELOCITY_PID_INTEGRAL_LIMIT);
+    // Integral term with anti-windup and reset when target velocity is zero
+    // Reset integral when stopped to prevent wind-up during settling
+    if (target_velocity == 0.0 && fabs(current_velocity) < 0.003) {
+        // Reset integral when we want to be stopped and we're nearly stopped
+        rp.motor.velocity_error_integral = 0.0;
+    } else {
+        rp.motor.velocity_error_integral += error * dt;
+        rp.motor.velocity_error_integral = constrain(rp.motor.velocity_error_integral, 
+                                                      -VELOCITY_PID_INTEGRAL_LIMIT, 
+                                                      VELOCITY_PID_INTEGRAL_LIMIT);
+    }
     float i_term = VELOCITY_PID_KI * rp.motor.velocity_error_integral;
     
     // Derivative term
@@ -458,10 +516,39 @@ int16_t applyVelocityPID(float target_velocity, float current_velocity, float dt
     // Calculate total PID output
     float pid_output = p_term + i_term + d_term;
     
+    // Smoother deadband compensation to overcome static friction
+    // Only add compensation when starting from zero velocity, not continuously
+    // This prevents oscillation while still helping overcome initial stiction
+    const float MIN_PWM_OFFSET_UP = 30.0;   // Offset for upward motion (against gravity)
+    const float MIN_PWM_OFFSET_DOWN = 15.0; // Offset for downward motion (with gravity)
+    const float VELOCITY_DEADZONE = 0.005;  // Velocity threshold for deadband application (m/s)
+    
+    // Only apply deadband compensation when:
+    // 1. Target velocity is non-zero (we want to move)
+    // 2. Current velocity is near zero (we're starting or stopped)
+    // 3. PID output is small (might not overcome friction)
+    if (target_velocity != 0.0 && fabs(current_velocity) < VELOCITY_DEADZONE) {
+        if (pid_output > 0 && pid_output < MIN_PWM_OFFSET_UP) {
+            // Add offset to help overcome friction when starting upward motion
+            pid_output += MIN_PWM_OFFSET_UP;
+        } else if (pid_output < 0 && pid_output > -MIN_PWM_OFFSET_DOWN) {
+            // Add offset to help overcome friction when starting downward motion
+            pid_output -= MIN_PWM_OFFSET_DOWN;
+        }
+    }
+    
     // Clamp output to PWM range
     int16_t pwm_output = (int16_t)constrain(pid_output, 
                                             -VELOCITY_PID_OUTPUT_LIMIT, 
                                             VELOCITY_PID_OUTPUT_LIMIT);
+    
+    // Apply minimum PWM thresholds when any non-zero PWM is commanded
+    // This ensures motor always has enough power to overcome friction and gravity
+    if (pwm_output > 0 && pwm_output < MIN_PWM_UPWARD) {
+        pwm_output = MIN_PWM_UPWARD;
+    } else if (pwm_output < 0 && pwm_output > -MIN_PWM_DOWNWARD) {
+        pwm_output = -MIN_PWM_DOWNWARD;
+    }
     
     return pwm_output;
 }
@@ -508,59 +595,76 @@ float applyAccelerationLimit(float target_velocity, float current_velocity,
  */
 void DriverBoard::updateRgbLED(void) {
     static uint32_t last_update_time = 0;
-    static uint8_t breathing_phase = 0;
+    static uint8_t led_step = 0;
     uint32_t current_time = millis();
     
-    // Update LED color every 50ms for smooth breathing effect
-    if (current_time - last_update_time < 50) {
-        return;
-    }
-    last_update_time = current_time;
+    // Use the global agent_state from ros_interface.cpp (managed by Core 1)
+    // This is declared as extern in ros_interface.h
+    extern RosAgentState_t agent_state;
+    extern bool ros_entities_created;
     
     // Check for fault conditions first
     if (motor.fault_detected || robot_status != ERROR_NONE) {
-        // Pulsing red for errors
-        uint8_t brightness = 50 + (abs(128 - breathing_phase) >> 1);
-        statusLED.setColor(brightness, 0, 0);
-        breathing_phase = (breathing_phase + 10) % 256;
+        // Solid red for errors
+        statusLED.setColor(100, 0, 0);
         return;
     }
     
-    // Show state based on ROS connection and activity
-    switch (agent_state) {
-        case WAITING_AGENT:
-            // Dim blue - waiting for ROS agent connection
-            statusLED.setColor(0, 0, 50);
-            break;
-            
-        case AGENT_AVAILABLE:
-        case AGENT_CONNECTED:
-            if (!ros_entities_created) {
+    // Update LED pattern every LED_BLINK_PERIOD_MS (125ms) to match main.cpp pattern timing
+    if (current_time - last_update_time >= LED_BLINK_PERIOD_MS) {
+        last_update_time = current_time;
+        
+        // Define blink patterns (same as in main.cpp)
+        // Normal pattern: 1,0,1,0,1,0,1,0 (when system loaded but ROS not connected)
+        // Heartbeat pattern: 1,0,1,0,0,0,0,0 (when ROS is connected)
+        const uint8_t normal_pattern[] = {1, 0, 1, 0, 1, 0, 1, 0};
+        const uint8_t heartbeat_pattern[] = {1, 0, 1, 0, 0, 0, 0, 0};
+        
+        // Show state based on ROS connection and activity
+        switch (agent_state) {
+            case WAITING_AGENT:
+                // Dim blue - waiting for ROS agent connection
+                statusLED.setColor(0, 0, 50);
+                break;
+                
+            case AGENT_AVAILABLE:
                 // Yellow - agent connected, creating entities
                 statusLED.setColor(100, 80, 0);
-            } else {
-                // Check if motor is moving
-                if (motor.is_moving) {
-                    // Cyan - actively moving
-                    statusLED.setColor(0, 100, 100);
+                break;
+                
+            case AGENT_CONNECTED:
+                if (!ros_entities_created) {
+                    // Yellow - agent connected, creating entities
+                    statusLED.setColor(100, 80, 0);
                 } else {
-                    // Green - fully operational and idle
-                    // Gentle breathing effect
-                    uint8_t brightness = 30 + (abs(128 - breathing_phase) >> 2);
-                    statusLED.setColor(0, brightness, 0);
-                    breathing_phase = (breathing_phase + 5) % 256;
+                    // Check if motor is moving
+                    if (motor.is_moving) {
+                        // Cyan - actively moving
+                        statusLED.setColor(0, 100, 100);
+                    } else {
+                        // Green heartbeat - fully operational and idle
+                        // Use heartbeat pattern: 1,0,1,0,0,0,0,0
+                        if (heartbeat_pattern[led_step]) {
+                            statusLED.setColor(0, 100, 0);  // Green ON
+                        } else {
+                            statusLED.setColor(0, 0, 0);    // OFF
+                        }
+                    }
                 }
-            }
-            break;
-            
-        case AGENT_DISCONNECTED:
-            // Orange - agent disconnected
-            statusLED.setColor(100, 30, 0);
-            break;
-            
-        default:
-            // Dim white - unknown state
-            statusLED.setColor(20, 20, 20);
-            break;
+                break;
+                
+            case AGENT_DISCONNECTED:
+                // Orange - agent disconnected
+                statusLED.setColor(100, 30, 0);
+                break;
+                
+            default:
+                // Dim white - unknown state
+                statusLED.setColor(20, 20, 20);
+                break;
+        }
+        
+        // Advance to next step (8 steps total, wraps around)
+        led_step = (led_step + 1) % 8;
     }
 }

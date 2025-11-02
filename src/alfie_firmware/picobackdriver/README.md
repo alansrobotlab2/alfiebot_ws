@@ -23,11 +23,11 @@ This project implements a Raspberry Pi Pico-based driver board for a linear actu
 - `GPIO 15`: VCC Power (logic power supply - must be HIGH)
 
 #### Encoder Feedback
-- `GPIO 28`: Encoder A
-- `GPIO 29`: Encoder B
+- `GPIO 26`: Encoder A
+- `GPIO 27`: Encoder B
 
 #### Limit Switches
-- `GPIO 10`: Lower Limit Switch (active high, goes LOW when triggered at base position)
+- `GPIO 28`: Lower Limit Switch (active high - reads HIGH when triggered at base position)
 
 #### Status LEDs
 - `GPIO 25`: Built-in LED (status blink pattern)
@@ -112,10 +112,51 @@ This firmware uses micro-ROS to communicate with ROS2. The following custom mess
 
 - `alfie_msgs/BackCmd`: Actuator command message (position, velocity, acceleration)
 - `alfie_msgs/BackState`: Actuator state message (current position, velocity, pulses, etc.)
+- `alfie_msgs/srv/BackRequestCalibration`: Calibration service (request: empty, response: bool success)
 
 ### Topics
-- Subscriber: `/back_cmd` - Receives actuator commands
-- Publisher: `/back_state` - Publishes actuator state at 100Hz
+- Subscriber: `/backcmd` - Receives actuator commands
+- Publisher: `/backstate` - Publishes actuator state at 100Hz
+
+### Services
+- Service: `/calibrate_back` - Calibration service (type: `alfie_msgs/srv/BackRequestCalibration`)
+
+### Calibration Procedure
+
+The calibration service homes the linear actuator system to the lower limit switch and resets the position to 0 meters:
+
+**Process:**
+1. Service is called via `/calibrate_back`
+2. System checks if calibration is already in progress (rejects if so)
+3. All incoming BackCmd messages are temporarily blocked
+4. Limit switch state is checked (GPIO 28, active HIGH)
+5. **If limit switch is NOT triggered**: 
+   - Actuator moves downward at fixed PWM (74) toward the limit switch
+   - System continuously polls limit switch state
+   - When limit switch triggers, immediate stop is executed
+6. **If timeout occurs** (20 seconds): Service returns failure
+7. Position and encoder counts are reset to 0
+8. `is_calibrated` flag is set to true
+9. BackCmd processing is re-enabled
+10. Response is sent: `success: true` if calibrated, `success: false` if timeout or already calibrating
+
+**Important Notes:**
+- The limit switch (GPIO 28) represents the lower limit of travel at 0 meters (active high - reads HIGH when triggered)
+- Calibration is synchronous and blocks the service callback until complete or timeout
+- Maximum calibration time is 20 seconds (adjustable via timeout parameter)
+- The actuator will automatically move downward if not already at the limit switch
+- An immediate stop is executed the moment the limit switch is triggered
+- The `is_calibrated` flag in `/backstate` indicates calibration status
+
+**Usage:**
+```bash
+# Call calibration service (can be called from any position)
+ros2 service call /calibrate_back alfie_msgs/srv/BackRequestCalibration
+
+# Response:
+# success: true  -> Calibration successful, position reset to 0
+# success: false -> Timeout (limit switch not reached) or already calibrating
+```
 
 ## Configuration
 

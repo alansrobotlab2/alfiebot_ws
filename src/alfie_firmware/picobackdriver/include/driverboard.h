@@ -90,8 +90,11 @@ typedef struct {
     float current_velocity;     ///< Current velocity (m/s)
     float current_acceleration; ///< Current acceleration (m/s²)
     int64_t pulses;             ///< Encoder pulse count
+    uint8_t pwm_output;         ///< Current PWM output magnitude (0-255)
+    bool is_calibrated;         ///< True if system has been successfully calibrated
     uint32_t timestamp;         ///< State timestamp
 } ActuatorState_t;
+
 
 // =============================================================================
 // DRIVERBOARD CLASS
@@ -115,21 +118,16 @@ public:
     // WS2812B RGB LED
     WS2812 statusLED;
     
-    // ROS state machine variables
-    RosAgentState_t agent_state;
-    uint32_t last_state_time;
-    bool ros_entities_created;
-    
-    // ROS communication state
-    bool micro_ros_initialized;
-    uint32_t last_command_time;
-    
     // Inter-core communication
     volatile ActuatorCommand_t actuator_cmd;
     volatile ActuatorState_t actuator_state;
     volatile bool new_actuator_command;
     volatile bool new_actuator_state;
     
+    // Calibration state
+    volatile bool calibration_in_progress;  ///< True when calibration is in progress (blocks BackCmd processing)
+    
+
     /**
      * @brief Constructor - initializes all state variables
      */
@@ -206,6 +204,7 @@ public:
      * @brief Reset encoder counter to zero
      */
     void resetEncoders(void);
+    
 };
 
 // =============================================================================

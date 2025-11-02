@@ -78,8 +78,6 @@ void loop() {
             led_state = normal_pattern[led_step];
         }
         
-        digitalWrite(STATUS_LED_PIN, led_state ? HIGH : LOW);
-        
         // Advance to next step (8 steps total, wraps around)
         led_step = (led_step + 1) % 8;
     }
