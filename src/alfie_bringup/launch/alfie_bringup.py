@@ -14,7 +14,7 @@ def generate_launch_description():
             namespace='alfie',
             executable='micro_ros_agent',
             arguments=['serial', '--dev', '/dev/ttyUSB0', '--baudrate', '1500000', '-v4'],
-            name='microros_agent_0',
+            name='microros_agent_gdb0',
             output='screen',
             emulate_tty=True,
             sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
@@ -27,7 +27,20 @@ def generate_launch_description():
             namespace='alfie',
             executable='micro_ros_agent',
             arguments=['serial', '--dev', '/dev/ttyUSB1', '--baudrate', '1500000', '-v4'],
-            name='microros_agent_1',
+            name='microros_agent_gdb1',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
+            respawn=True
+        ),
+
+        Node(
+            package='micro_ros_agent',
+            namespace='alfie',
+            executable='micro_ros_agent',
+            arguments=['serial', '--dev', '/dev/ttyACM0', '--baudrate', '1500000', '-v4'],
+            name='microros_agent_backdriver',
             output='screen',
             emulate_tty=True,
             sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown

@@ -39,6 +39,7 @@ public:
 
     SMS_STS st;
 
+    TaskHandle_t xTaskServoInterface = NULL;
     TaskHandle_t xTaskHardwareInterface = NULL;
     TaskHandle_t xTaskROS = NULL;
     TaskHandle_t xTask100Hz = NULL;
