@@ -30,6 +30,7 @@ setup(
             'servotool = alfie_tools.servotool.servotool_node:main',
             'servotool2 = alfie_tools.servotool2.servotool2_node:main',
             'joydrive = alfie_tools.joydrive.joydrive_node:main',
+            'rightarmecho = alfie_tools.rightarmecho:main',
         ],
     },
 )

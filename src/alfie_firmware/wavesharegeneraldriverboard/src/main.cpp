@@ -44,8 +44,9 @@ void vServoInterfaceTask(void *pvParameters)
     {
     case b.RUNNING:
       TIME_FUNCTION_MS(updateServoStatus(), b.pollservostatusduration);
-      TIME_FUNCTION_MS(updateServoIdle(), b.updateservoidleduration);
       TIME_FUNCTION_MS(updateServoActive(), b.updateservoactiveduration);
+      TIME_FUNCTION_MS(updateServoIdle(), b.updateservoidleduration);
+
 
       break;
     case b.REQUEST_STOP:

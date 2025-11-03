@@ -72,6 +72,28 @@ void updateServoActive()
   {
     if (b.mBuf[i].memory.torqueSwitch == 1)
     {
+      b.servocommandbuf[(2 * index) + 0] = (b.mBuf[i].memory.targetLocation) & 0xFF;
+      b.servocommandbuf[(2 * index) + 1] = (b.mBuf[i].memory.targetLocation >> 8) & 0xFF;
+      b.servoCMDIDS[index] = (i + 1);
+      index++;
+    }
+  }
+
+  if (index > 0)
+  {
+    b.st.syncWrite(b.servoCMDIDS, index, SBS_TARGETLOCATION, b.servocommandbuf, 2);
+  }
+}
+
+void updateServoActive_BAD()
+{
+  int index = 0;
+
+  // selectively update position based on the torque switch == 1
+  for (int i = 0; i < NUMSERVOS; i++)
+  {
+    if (b.mBuf[i].memory.torqueSwitch == 1)
+    {
       b.servocommandbuf[(3 * index) + 0] = b.mBuf[i].bytes[SBS_ACCELERATION];
       b.servocommandbuf[(3 * index) + 1] = b.mBuf[i].bytes[SBS_TARGETLOCATION + 0];
       b.servocommandbuf[(3 * index) + 2] = b.mBuf[i].bytes[SBS_TARGETLOCATION + 1];

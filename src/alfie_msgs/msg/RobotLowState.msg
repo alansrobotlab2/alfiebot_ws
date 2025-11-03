@@ -16,5 +16,7 @@ uint8[2] eye_state
 MotorState[2] motor_state
 
 # state for all 15 servos on robot 
-# 0-5 left arm, 6-11 right arm, 12-14 head
+# 0-5 left arm, 
+# 6-11 right arm, 
+# 12-14 head
 ServoState[15] servo_state
