@@ -85,8 +85,8 @@ public:
     MemoryReplyBuf buf = {};   // Zero-initialize
     MemoryReplyBuf rbuf = {};  // Zero-initialize
 
-    u8 torquecommandbuf[MAX_SERVOS] = {};    // Zero-initialize
-    u8 servocommandbuf[3 * MAX_SERVOS] = {}; // Zero-initialize
+    uint8_t torquecommandbuf[MAX_SERVOS] = {};    // Zero-initialize
+    uint8_t servocommandbuf[SERVOCOMMANDPACKETSIZE * MAX_SERVOS] = {}; // Zero-initialize
 
     int16_t drivercmdbuf[2] = {};  // Zero-initialize
 

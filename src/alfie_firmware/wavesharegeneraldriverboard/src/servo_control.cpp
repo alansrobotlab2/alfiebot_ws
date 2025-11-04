@@ -63,7 +63,59 @@ void updateServoIdle()
 }
 
 
+// one 16-digit number split into two 8-digit numbers
+// DataL is low, DataH is high
+void Host2SCS(u8 *DataL, u8* DataH, u16 Data)
+{
+		*DataH = (Data>>8);
+		*DataL = (Data&0xff);
+
+}
+
+uint16_t Host2SCSPosition(int16_t position)
+{
+  uint16_t servo_position = 0;
+
+		if(position < 0){
+			servo_position = -position;
+			servo_position |= (1<<15);
+		}
+    else {
+      servo_position = position & 0x7FFF;
+    }
+
+  return servo_position;
+}
+
+
+
 void updateServoActive()
+{
+  int index = 0;
+
+  // selectively update position based on the torque switch == 1
+  for (int i = 0; i < NUMSERVOS; i++)
+  {
+    if (b.mBuf[i].memory.torqueSwitch == 1)
+    {
+      b.servocommandbuf[(SERVOCOMMANDPACKETSIZE * index) + 0] = (b.mBuf[i].memory.acceleration) & 0xFF;
+      Host2SCS(&b.servocommandbuf[(SERVOCOMMANDPACKETSIZE * index) + 1], &b.servocommandbuf[(SERVOCOMMANDPACKETSIZE * index) + 2], Host2SCSPosition(b.mBuf[i].memory.targetLocation));
+      Host2SCS(&b.servocommandbuf[(SERVOCOMMANDPACKETSIZE * index) + 3], &b.servocommandbuf[(SERVOCOMMANDPACKETSIZE * index) + 4], 0);
+      Host2SCS(&b.servocommandbuf[(SERVOCOMMANDPACKETSIZE * index) + 5], &b.servocommandbuf[(SERVOCOMMANDPACKETSIZE * index) + 6], b.mBuf[i].memory.runningSpeed);
+      Host2SCS(&b.servocommandbuf[(SERVOCOMMANDPACKETSIZE * index) + 7], &b.servocommandbuf[(SERVOCOMMANDPACKETSIZE * index) + 8], b.mBuf[i].memory.torqueLimit);
+
+      b.servoCMDIDS[index] = (i + 1);
+      index++;
+    }
+  }
+
+  if (index > 0)
+  {
+    b.st.syncWrite(b.servoCMDIDS, index, SBS_TARGETLOCATION, b.servocommandbuf, SERVOCOMMANDPACKETSIZE);
+  }
+}
+
+void updateServoActive_SIMPLE()
 {
   int index = 0;
 

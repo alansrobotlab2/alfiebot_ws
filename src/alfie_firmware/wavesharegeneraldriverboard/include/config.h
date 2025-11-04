@@ -8,7 +8,7 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 /dev/ttyUSB0 = driverboard 0
 /dev/ttyUSB1 = driverboard 1
 */
-#define DRIVERBOARD 1
+#define DRIVERBOARD 0
 
 
 
@@ -68,6 +68,9 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 //#define BAUDRATE 115200
 //#define BAUDRATE 921600
 #define BAUDRATE 1500000
+
+#define SERVOCOMMANDPACKETSIZE 9  // bytes per servo command packet
+
 
 // for motor drivers
 // lower frequency allows for lower pwm values to work better

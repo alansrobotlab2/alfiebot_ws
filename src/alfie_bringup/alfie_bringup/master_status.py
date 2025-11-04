@@ -392,47 +392,68 @@ class MasterStatusNode(Node):
         # Get the polarity for this servo
         polarity = self.servo_polarity[servo_index]
         
-        # Acceleration: convert from units to radians per second squared (rad/s²)
+        # Enabled state (torque switch)
+        servo.enabled = (gdb_servo.torque_switch == 1)
+        
+        # Target location: convert from -2048 to +2048 to -π to +π radians and apply polarity
+        servo.target_location = polarity * self.convert_servo_position_to_radians(gdb_servo.target_location)
+        
+        # Target speed: convert from steps/s to rad/s
+        # Speed is 0-3400 steps/s in GDB units
+        # Convert steps/s to rad/s: speed_steps_s * (2π rad / 4096 steps)
+        servo.target_speed = gdb_servo.target_speed * STEPS_TO_RADIANS
+        
+        # Target acceleration: convert from servo units to rad/s²
         # Each unit = 100 steps/s², and 4096 steps = 2π radians
-        # Apply polarity to acceleration
         accel_conversion = SERVO_ACCEL_UNITS_TO_STEPS_PER_SEC2 * STEPS_TO_RADIANS
-        servo.acceleration = polarity * gdb_servo.acceleration * accel_conversion
+        servo.target_acceleration = gdb_servo.target_acceleration * accel_conversion
         
-        # Position: convert from 0-4096 to -π to +π radians and apply polarity
-        servo.target_location = polarity * self.convert_servo_position_to_radians(gdb_servo.targetlocation)
-        servo.current_location = polarity * self.convert_servo_position_to_radians(gdb_servo.currentlocation)
+        # Target torque: convert from 0-1000 to 0.0-1.0
+        servo.target_torque = gdb_servo.target_torque / 1000.0
         
-        # Velocity: convert from steps per second to radians per second and apply polarity
-        servo.current_speed = polarity * gdb_servo.currentspeed * STEPS_TO_RADIANS
+        # Current location: convert from -2048 to +2048 to -π to +π radians and apply polarity
+        servo.current_location = polarity * self.convert_servo_position_to_radians(gdb_servo.current_location)
         
-        # Load: convert from 0.1% units to percentage
-        servo.current_load = gdb_servo.currentload * SERVO_LOAD_SCALE
+        # Current speed: convert from steps/s to rad/s and apply polarity
+        # current_speed is int16 (can be negative)
+        servo.current_speed = polarity * gdb_servo.current_speed * STEPS_TO_RADIANS
         
-        servo.current_temperature = gdb_servo.currenttemperature
-        servo.servo_status = gdb_servo.servostatus
-        servo.is_moving = (gdb_servo.mobilesign != 0)
+        # Current load: convert from raw units to percentage
+        # Note: Check if SERVO_LOAD_SCALE is still correct for the new msg format
+        servo.current_load = gdb_servo.current_load / 10.0  # Assuming still 0.1% units
         
-        # Voltage: convert from 0.1V units to volts
-        servo.current_voltage = gdb_servo.currentvoltage / SERVO_VOLTAGE_SCALE
+        # Temperature (direct copy)
+        servo.current_temperature = gdb_servo.current_temperature
         
-        # Current: convert from 6.5mA units to milliamps
-        servo.current_current = gdb_servo.currentcurrent * SERVO_CURRENT_SCALE
+        # Servo status (direct copy)
+        servo.servo_status = gdb_servo.servo_status
+        
+        # Is moving flag
+        servo.is_moving = (gdb_servo.mobile_sign != 0)
+        
+        # Voltage: convert from raw units to volts
+        # Assuming still 0.1V units
+        servo.current_voltage = gdb_servo.current_voltage / 10.0
+        
+        # Current: convert from raw units to milliamps
+        # Assuming still 6.5mA units
+        servo.current_current = gdb_servo.current_current * 6.5
         
         return servo
     
     def convert_servo_position_to_radians(self, raw_position: int) -> float:
-        """Convert servo position from 0-4096 range to -π to +π radians
+        """Convert servo position from -2048 to +2048 range to -π to +π radians
         
         Args:
-            raw_position: Raw servo position (0-4096 steps)
+            raw_position: Raw servo position (-2048 to +2048 steps)
             
         Returns:
             Position in radians (-π to +π)
         """
-        # Map 0-4096 to -π to +π
-        # First normalize to 0-1, then scale to -π to +π
-        normalized = raw_position / SERVO_STEPS_PER_REVOLUTION
-        radians = (normalized * 2.0 * np.pi) - np.pi
+        # Map -2048 to +2048 to -π to +π
+        # -2048 steps = -π radians, +2048 steps = +π radians
+        # radians = raw_position * (2π / 4096) = raw_position * π / 2048
+        radians = raw_position * np.pi / 2048.0
         return radians
 
 

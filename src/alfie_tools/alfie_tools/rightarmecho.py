@@ -104,7 +104,7 @@ class RightArmEchoNode(Node):
             cmd.servo_cmd.append(servo_cmd)
 
         cmd.servo_cmd[6].enabled = True
-        cmd.servo_cmd[6].target_location = self.latest_state.servo_state[0].current_location
+        cmd.servo_cmd[6].target_location = -self.latest_state.servo_state[0].current_location
 
         cmd.servo_cmd[7].enabled = True
         cmd.servo_cmd[7].target_location = self.latest_state.servo_state[1].current_location

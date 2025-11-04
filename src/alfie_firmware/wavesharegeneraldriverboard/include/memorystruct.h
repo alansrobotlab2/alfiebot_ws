@@ -17,8 +17,8 @@ typedef struct {
     uint8_t baudRate;
     uint8_t returnDelay; 
     uint8_t responseStatusLevel;
-    uint16_t minAngleLimit;
-    uint16_t maxAngleLimit;
+    int16_t minAngleLimit;
+    int16_t maxAngleLimit;
     uint8_t maxTempLimit;
     uint8_t minInputVoltage;
     uint8_t maxInputVoltage;

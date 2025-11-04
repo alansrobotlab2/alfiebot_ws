@@ -254,20 +254,31 @@ class MasterCmdNode(Node):
         polarity = self.servo_polarity[polarity_index]
         
         # Torque switch (enabled state)
-        gdb_servo.torqueswitch = 1 if servo_cmd.enabled else 0
+        gdb_servo.torque_switch = 1 if servo_cmd.enabled else 0
+        
+        # Target location: convert from radians (-π to +π) to steps (-2048 to +2048)
+        # Apply polarity inversion
+        target_radians = polarity * servo_cmd.target_location
+        gdb_servo.target_location = self.convert_radians_to_servo_position(target_radians)
+        
+        # Target speed: convert from rad/s to steps/s
+        # Speed is 0-3400 steps/s in GDB units
+        # Convert rad/s to steps/s: speed_rad_s * (4096 steps / 2π rad)
+        speed_steps_per_sec = abs(servo_cmd.target_speed) * RADIANS_TO_STEPS
+        gdb_servo.target_speed = int(np.clip(speed_steps_per_sec, 0, 3400))
         
         # Acceleration: convert from rad/s² to servo units
         # Each unit = 100 steps/s², and 4096 steps = 2π radians
         # accel_units = accel_rad_s2 / (100 steps/s² * 2π/4096 rad/step)
         accel_conversion = SERVO_ACCEL_UNITS_TO_STEPS_PER_SEC2 * (2.0 * np.pi / SERVO_STEPS_PER_REVOLUTION)
-        accel_servo_units = abs(servo_cmd.acceleration / accel_conversion)
+        accel_servo_units = abs(servo_cmd.target_acceleration / accel_conversion)
         # Clamp to 0-254 range and convert to uint8
-        gdb_servo.acceleration = int(np.clip(accel_servo_units, 0, 254))
+        gdb_servo.target_acceleration = int(np.clip(accel_servo_units, 0, 254))
         
-        # Target location: convert from radians (-π to +π) to steps (0-4096)
-        # Apply polarity inversion
-        target_radians = polarity * servo_cmd.target_location
-        gdb_servo.targetlocation = self.convert_radians_to_servo_position(target_radians)
+        # Target torque: 0-1000 range (0-100% of locked-rotor torque)
+        # Input is 0.0-1.0, output is 0-1000
+        torque_value = servo_cmd.target_torque * 1000.0
+        gdb_servo.target_torque = int(np.clip(torque_value, 0, 1000))
         
         return gdb_servo
     
@@ -275,8 +286,8 @@ class MasterCmdNode(Node):
         """Derive a GDBServoCmd from another ServoCmd by flipping the target location sign
         
         This is used to create the 3rd servo command (index 2) from the 2nd servo (index 1)
-        for each GDB board. We copy the enable and acceleration, but flip the sign of the
-        target location before conversion.
+        for each GDB board. We copy the enable, speed, acceleration, and torque, but flip 
+        the sign of the target location before conversion.
         
         Args:
             servo_cmd: Source ServoCmd message with radians and rad/s² units
@@ -292,12 +303,7 @@ class MasterCmdNode(Node):
         polarity = self.servo_polarity[gdb_servo_index]
         
         # Torque switch (enabled state) - copied from source
-        gdb_servo.torqueswitch = 1 if servo_cmd.enabled else 0
-        
-        # Acceleration - copied from source
-        accel_conversion = SERVO_ACCEL_UNITS_TO_STEPS_PER_SEC2 * (2.0 * np.pi / SERVO_STEPS_PER_REVOLUTION)
-        accel_servo_units = abs(servo_cmd.acceleration / accel_conversion)
-        gdb_servo.acceleration = int(np.clip(accel_servo_units, 0, 254))
+        gdb_servo.torque_switch = 1 if servo_cmd.enabled else 0
         
         # Target location: flip the sign before conversion
         target_radians = servo_cmd.target_location
@@ -306,28 +312,38 @@ class MasterCmdNode(Node):
         
         # Apply polarity inversion
         target_radians = polarity * target_radians
-        gdb_servo.targetlocation = self.convert_radians_to_servo_position(target_radians)
+        gdb_servo.target_location = self.convert_radians_to_servo_position(target_radians)
+        
+        # Target speed - copied from source
+        speed_steps_per_sec = abs(servo_cmd.target_speed) * RADIANS_TO_STEPS
+        gdb_servo.target_speed = int(np.clip(speed_steps_per_sec, 0, 3400))
+        
+        # Acceleration - copied from source
+        accel_conversion = SERVO_ACCEL_UNITS_TO_STEPS_PER_SEC2 * (2.0 * np.pi / SERVO_STEPS_PER_REVOLUTION)
+        accel_servo_units = abs(servo_cmd.target_acceleration / accel_conversion)
+        gdb_servo.target_acceleration = int(np.clip(accel_servo_units, 0, 254))
+        
+        # Target torque - copied from source
+        torque_value = servo_cmd.target_torque * 1000.0
+        gdb_servo.target_torque = int(np.clip(torque_value, 0, 1000))
         
         return gdb_servo
     
     def convert_radians_to_servo_position(self, radians: float) -> int:
-        """Convert radians (-π to +π) to servo position (0-4096)
+        """Convert radians (-π to +π) to servo position (-2048 to +2048)
         
         Args:
             radians: Angle in radians from -π to +π
             
         Returns:
-            Servo position as integer from 0 to 4096
+            Servo position as integer from -2048 to +2048
         """
-        # Normalize to 0-2π range
-        # -π to +π becomes 0 to 2π by adding π
-        normalized_radians = radians + np.pi
-        
-        # Convert to steps (0-4096)
-        steps = normalized_radians * RADIANS_TO_STEPS
+        # Convert radians to steps
+        # -π to +π maps to -2048 to +2048
+        steps = radians * RADIANS_TO_STEPS / 2.0
         
         # Clamp to valid range and convert to int16
-        return int(np.clip(steps, 0, 4095))
+        return int(np.clip(steps, -2048, 2048))
     
     def _is_command_fresh(self) -> bool:
         """Check if robot command is recent enough to be published

@@ -22,9 +22,12 @@ void subscription_callback(const void *msgin)
 
   for (int i = 0; i < NUMSERVOS; i++)
   {
-    b.mBuf[i].memory.torqueSwitch = msg->servo_cmd[i].torqueswitch;
-    b.mBuf[i].memory.acceleration = msg->servo_cmd[i].acceleration;
-    b.mBuf[i].memory.targetLocation = msg->servo_cmd[i].targetlocation;
+    b.mBuf[i].memory.torqueSwitch = msg->servo_cmd[i].torque_switch;
+    b.mBuf[i].memory.targetLocation = msg->servo_cmd[i].target_location;
+    b.mBuf[i].memory.acceleration = msg->servo_cmd[i].target_acceleration;
+    b.mBuf[i].memory.runningSpeed = msg->servo_cmd[i].target_speed;
+    b.mBuf[i].memory.torqueLimit = msg->servo_cmd[i].target_torque;
+
   }
 }
 
@@ -200,16 +203,19 @@ void generateLowStatus()
   for (int i = 0; i < NUMSERVOS; i++)
   {
     // Direct access - no memcpy needed!
-    b.driverState.servo_state[i].acceleration = b.mBuf[i].memory.acceleration;
-    b.driverState.servo_state[i].currentvoltage = b.mBuf[i].memory.currentVoltage;
-    b.driverState.servo_state[i].currentcurrent = b.mBuf[i].memory.currentCurrent;
-    b.driverState.servo_state[i].currentload = b.mBuf[i].memory.currentLoad;
-    b.driverState.servo_state[i].currentlocation = b.mBuf[i].memory.currentLocation;
-    b.driverState.servo_state[i].currenttemperature = b.mBuf[i].memory.currentTemperature;
-    b.driverState.servo_state[i].mobilesign = b.mBuf[i].memory.mobileSign;
-    b.driverState.servo_state[i].servostatus = b.mBuf[i].memory.servoStatus;
-    b.driverState.servo_state[i].targetlocation = b.mBuf[i].memory.targetLocation;
-    b.driverState.servo_state[i].torqueswitch = b.mBuf[i].memory.torqueSwitch;
+    b.driverState.servo_state[i].torque_switch = b.mBuf[i].memory.torqueSwitch;
+    b.driverState.servo_state[i].target_location = b.mBuf[i].memory.targetLocation;
+    b.driverState.servo_state[i].target_acceleration = b.mBuf[i].memory.acceleration;
+    b.driverState.servo_state[i].target_speed = b.mBuf[i].memory.runningSpeed;
+    b.driverState.servo_state[i].target_torque = b.mBuf[i].memory.torqueLimit;
+    b.driverState.servo_state[i].current_voltage = b.mBuf[i].memory.currentVoltage;
+    b.driverState.servo_state[i].current_current = b.mBuf[i].memory.currentCurrent;
+    b.driverState.servo_state[i].current_load = b.mBuf[i].memory.currentLoad;
+    b.driverState.servo_state[i].current_location = b.mBuf[i].memory.currentLocation;
+    b.driverState.servo_state[i].current_temperature = b.mBuf[i].memory.currentTemperature;
+    b.driverState.servo_state[i].mobile_sign = b.mBuf[i].memory.mobileSign;
+    b.driverState.servo_state[i].servo_status = b.mBuf[i].memory.servoStatus;
+    
   }
 
   // RCSOFTCHECK(rcl_publish(&b.publisher, &b.driverState, NULL));
