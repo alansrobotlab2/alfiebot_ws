@@ -1,41 +1,12 @@
 #pragma once
 
-
 /*
-Same sourcecode for both boards with #if DRIVERBOARD defines for specifics
-Set DRIVERBOARD to [0,1] and make sure it matches the usb port
+Board-specific configuration is now loaded at runtime from EEPROM.
+Use the programmer to set the board ID (0 or 1) in EEPROM.
 
-/dev/ttyUSB0 = driverboard 0
-/dev/ttyUSB1 = driverboard 1
+Board 0: /dev/ttyUSB0 - right arm, head, drive wheels
+Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 */
-#define DRIVERBOARD 0
-
-
-
-#if DRIVERBOARD == 0
-// driver board 0
-// /dev/ttyUSB0
-// right arm 
-// head
-// drive wheels
-#define NODENAME "gdb0"
-#define STATEPUBLISHER "gdb0state"
-#define CMDSUBSCRIBER "gdb0cmd"
-#define SERVOSERVICE "gdb0servoservice"
-#define NUMSERVOS 10
-
-#else 
-// driver board 1
-// /dev/ttyUSB1
-// left arm
-// eye lights
-// shoulder limit switch
-#define NODENAME "gdb1"
-#define STATEPUBLISHER "gdb1state"
-#define CMDSUBSCRIBER "gdb1cmd"
-#define SERVOSERVICE "gdb1servoservice"
-#define NUMSERVOS 7
-#endif 
 
 #define NAMESPACE "alfie"
 

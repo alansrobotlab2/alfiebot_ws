@@ -10,6 +10,7 @@
             "includePath": [
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/include",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/src",
+                "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/lib/scservo",
                 "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/lib/imu",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
@@ -232,7 +233,6 @@
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Insights/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/LittleFS/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/NetBIOS/src",
-                "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/RainMaker/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/SD/src",
                 "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/SD_MMC/src",
@@ -253,6 +253,7 @@
                 "path": [
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/include",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/src",
+                    "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/lib/scservo",
                     "/home/alfie/alfiebot_ws/src/alfie_firmware/wavesharegeneraldriverboard/lib/imu",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
@@ -475,7 +476,6 @@
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Insights/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/LittleFS/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/NetBIOS/src",
-                    "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/RainMaker/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/SD/src",
                     "/home/alfie/.platformio/packages/framework-arduinoespressif32/libraries/SD_MMC/src",

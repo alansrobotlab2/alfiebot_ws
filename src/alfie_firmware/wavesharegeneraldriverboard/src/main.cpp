@@ -14,7 +14,9 @@ void vServoInterfaceTask(void *pvParameters)
 
   int retval = 0;
 
-  for (int i = 0; i < NUMSERVOS; i++)
+  uint8_t numServos = b.getNumServos();
+  
+  for (int i = 0; i < numServos; i++)
   {
     b.st.EnableTorque((i + 1), 0);
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -151,6 +153,12 @@ void vHardwareInterfaceTask(void *pvParameters)
   {
     // Configure serial transport
     Serial.begin(BAUDRATE);
+
+    // Load board ID from EEPROM
+    b.loadBoardId();
+    
+    Serial.print("Board ID loaded: ");
+    Serial.println(b.getBoardId());
 
     Serial1.begin(
         1000000,

@@ -9,12 +9,13 @@ extern DriverBoard b;
 
 void updateServoStatus()
 {
+  uint8_t numServos = b.getNumServos();
 
-  b.st.syncReadPacketTx(b.IDS, NUMSERVOS, SBS_CURRENTLOCATION, 13);
+  b.st.syncReadPacketTx(b.IDS, numServos, SBS_CURRENTLOCATION, 13);
 
   int RxResult = 0;
 
-  for (int i = 0; i < NUMSERVOS; i++)
+  for (int i = 0; i < numServos; i++)
   {
     RxResult = b.st.syncReadPacketRx((i + 1), b.buf.bytes + SBS_CURRENTLOCATION);
     if (RxResult > 0)
@@ -48,9 +49,10 @@ void updateServoStatus()
 void updateServoIdle()
 {
   int index = 0;
+  uint8_t numServos = b.getNumServos();
 
   // update torque switch for disabled servos
-  for (int i = 0; i < NUMSERVOS; i++)
+  for (int i = 0; i < numServos; i++)
   {
     if (b.mBuf[i].memory.torqueSwitch == 0)
     {
@@ -92,9 +94,10 @@ uint16_t Host2SCSPosition(int16_t position)
 void updateServoActive()
 {
   int index = 0;
+  uint8_t numServos = b.getNumServos();
 
   // selectively update position based on the torque switch == 1
-  for (int i = 0; i < NUMSERVOS; i++)
+  for (int i = 0; i < numServos; i++)
   {
     if (b.mBuf[i].memory.torqueSwitch == 1)
     {
@@ -118,9 +121,10 @@ void updateServoActive()
 void updateServoActive_SIMPLE()
 {
   int index = 0;
+  uint8_t numServos = b.getNumServos();
 
   // selectively update position based on the torque switch == 1
-  for (int i = 0; i < NUMSERVOS; i++)
+  for (int i = 0; i < numServos; i++)
   {
     if (b.mBuf[i].memory.torqueSwitch == 1)
     {
@@ -140,9 +144,10 @@ void updateServoActive_SIMPLE()
 void updateServoActive_BAD()
 {
   int index = 0;
+  uint8_t numServos = b.getNumServos();
 
   // selectively update position based on the torque switch == 1
-  for (int i = 0; i < NUMSERVOS; i++)
+  for (int i = 0; i < numServos; i++)
   {
     if (b.mBuf[i].memory.torqueSwitch == 1)
     {
@@ -162,7 +167,8 @@ void updateServoActive_BAD()
 
 void disableAllServoTorques()
 {
-  for (int i = 0; i < NUMSERVOS; i++)
+  uint8_t numServos = b.getNumServos();
+  for (int i = 0; i < numServos; i++)
   {
     b.mBuf[i].memory.torqueSwitch = 0;
   }
@@ -212,7 +218,8 @@ int16_t positioncorrectionto12bitservo(int16_t controllervalue)
 */
 void flushSerialServoLine()
 {
-  for (int e = 0; e < NUMSERVOS; e++)
+  uint8_t numServos = b.getNumServos();
+  for (int e = 0; e < numServos; e++)
   {
     b.st.Ping(e + 1);
   }

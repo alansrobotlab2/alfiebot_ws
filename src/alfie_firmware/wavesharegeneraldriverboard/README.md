@@ -27,12 +27,13 @@ Alfiebot uses two modified Waveshare General Driver Boards (ESP32-WROVER-based) 
 - **Driver Board 0 (Top)**: Right arm servos, head servos, and wheel motor drivers
 - **Driver Board 1 (Bottom)**: Left arm servos, eye LED drivers, and shoulder limit switches
 
-Each board runs identical firmware with board-specific functionality determined by compile-time configuration. The firmware leverages FreeRTOS for dual-core task distribution and micro-ROS for seamless ROS2 communication.
+Each board runs **identical firmware** with board-specific functionality determined by a **board ID stored in EEPROM**. The firmware leverages FreeRTOS for dual-core task distribution and micro-ROS for seamless ROS2 communication.
 
 ### Key Features
 
 - ⚡ **100Hz Control Loop**: Precise real-time servo and motor control
 - 🔄 **Dual-Core Architecture**: Hardware tasks on Core 0, ROS2 on Core 1
+- 💾 **Runtime Configuration**: Board ID stored in EEPROM - same firmware for both boards
 - 🤖 **micro-ROS Integration**: Native ROS2 communication over serial
 - 📊 **IMU Support**: QMI8658 accelerometer/gyroscope + AK09918 magnetometer
 - 🔧 **Smart Servo Protocol**: Feetech SCS/SMS serial bus servos
@@ -228,15 +229,22 @@ When you first open the folder:
 
 Once initialization is complete, you're ready to build and flash the firmware!
 
-### Configure for Target Board
+### Program Board ID to EEPROM
 
-1. Open `src/config.h`
-2. Set the `DRIVERBOARD` define:
-   ```cpp
-   #define DRIVERBOARD 0  // For top board (/dev/ttyUSB0)
-   // or
-   #define DRIVERBOARD 1  // For bottom board (/dev/ttyUSB1)
+The firmware now uses runtime configuration stored in EEPROM instead of compile-time defines. Before first use, you must program each board's ID using the separate programmer:
+
+1. Navigate to the programmer project:
+   ```bash
+   cd ~/alfiebot_ws/src/alfie_firmware/wavesharedriverboardprogrammer
    ```
+
+2. Use the `wavesharedriverboardprogrammer` project to set the board ID:
+   - For Driver Board 0 (Top Board - /dev/ttyUSB0): Set `BOARDCONFIG 0`
+   - For Driver Board 1 (Bottom Board - /dev/ttyUSB1): Set `BOARDCONFIG 1`
+
+3. The board ID is permanently stored in EEPROM and automatically loaded at startup
+
+**Note:** Once programmed, the same firmware binary works on both boards - no recompilation needed!
 
 ### Build Firmware
 
@@ -263,16 +271,40 @@ pio run --target upload
 
 ### Complete Setup for Both Boards
 
+**One-time EEPROM Programming (using wavesharedriverboardprogrammer):**
 ```bash
-# Flash Driver Board 0
-# 1. Connect /dev/ttyUSB0
-# 2. Edit config.h: #define DRIVERBOARD 0
-pio run --target upload
+# Program Driver Board 0
+# 1. Open wavesharedriverboardprogrammer project
+# 2. Set BOARDCONFIG to 0 in main.cpp
+# 3. Connect /dev/ttyUSB0 and upload
 
-# Flash Driver Board 1
-# 1. Connect /dev/ttyUSB1
-# 2. Edit config.h: #define DRIVERBOARD 1
-pio run --target upload
+# Program Driver Board 1  
+# 1. Set BOARDCONFIG to 1 in main.cpp
+# 2. Connect /dev/ttyUSB1 and upload
+```
+
+**Flash Main Firmware (same binary for both boards):**
+```bash
+# Build once
+pio run
+
+# Flash to Driver Board 0
+# Connect /dev/ttyUSB0
+pio run --target upload --upload-port /dev/ttyUSB0
+
+# Flash to Driver Board 1
+# Connect /dev/ttyUSB1
+pio run --target upload --upload-port /dev/ttyUSB1
+```
+
+**Verify Board IDs:**
+```bash
+# Monitor serial output to confirm board ID was loaded
+pio device monitor -b 1500000 -p /dev/ttyUSB0
+# Should display: "Board ID loaded: 0"
+
+pio device monitor -b 1500000 -p /dev/ttyUSB1
+# Should display: "Board ID loaded: 1"
 ```
 
 ## 🌐 ROS2 Integration
@@ -334,6 +366,26 @@ ros2 service call /alfie/gdb0servoservice alfie_msgs/srv/GDBServoService "..."
 ```
 
 ## ⚙️ Configuration
+
+### Servo Position Range
+
+**Important:** Servo position values in ROS2 messages and firmware use a **centered coordinate system** that differs from the servo hardware's native range:
+
+- **Hardware Range (Native)**: 0 to 4096 (12-bit unsigned)
+- **Firmware/ROS2 Range (Offset)**: -2048 to +2048 (centered at 0)
+
+The firmware applies a **-2048 offset** to convert between these coordinate systems:
+- `targetLocation` in ROS2 messages: -2048 to +2048
+- `currentLocation` in status feedback: -2048 to +2048
+- Servo hardware internal values: 0 to 4096
+
+This centered range provides more intuitive zero-centered joint control, where 0 represents the mechanical center position of each servo. The conversion is handled automatically by the firmware.
+
+**Example:**
+- ROS2 command `targetLocation = 0` → Servo receives 2048
+- ROS2 command `targetLocation = 1000` → Servo receives 3048
+- ROS2 command `targetLocation = -1000` → Servo receives 1048
+- Servo reports 2048 → ROS2 feedback `currentLocation = 0`
 
 ### Adjusting Parameters
 
