@@ -18,7 +18,7 @@ public:
           start_time(0),
           duration(0),
           last_drivercmd_time(0),
-          boardid(999)  // Default uninitialized value
+          boardid(255)  // Default uninitialized value
     {
         for (uint8_t i = 0; i < MAX_SERVOS; ++i)
         {

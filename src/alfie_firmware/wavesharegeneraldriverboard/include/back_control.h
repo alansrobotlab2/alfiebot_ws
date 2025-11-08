@@ -12,7 +12,7 @@
  * @note Pin 34 is input-only on ESP32 and does not support pull-up/pull-down
  * @see SHOULDER_LIMIT_SWITCH_PIN for pin number definition
  */
-void setupShoulderLimitSwitch();
+void setupBackLimitSwitch();
 
 
 /**
@@ -29,12 +29,12 @@ void setupShoulderLimitSwitch();
  * @return true if limit switch is not triggered (pin reads HIGH)
  * @return false if limit switch is triggered (pin reads LOW)
  * @note Pin must be initialized with setupShoulderLimitSwitch() first
- * @see SHOULDER_LIMIT_SWITCH_PIN for pin number definition
+ * @see BACK_LIMIT_SWITCH_PIN for pin number definition
  */
-bool readShoulderLimitSwitch();
+bool readBackLimitSwitch();
 
 
-#define SHOULDER_LIMIT_SWITCH_PIN 34
+#define BACK_LIMIT_SWITCH_PIN 34
 
 
 
