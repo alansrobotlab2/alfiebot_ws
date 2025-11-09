@@ -149,20 +149,20 @@ class ServoToolWindow(QtWidgets.QMainWindow):
             servo = driver_state.servo_state[servo_index]
             
             # Update status fields
-            self.txtStatusTorqueSwitch.setText(str(servo.torqueswitch))
-            self.txtStatusTargetLocation.setText(str(servo.targetlocation))
-            self.txtStatusAcceleration.setText(str(servo.acceleration))
-            self.txtStatusCurrentLocation.setText(str(servo.currentlocation))
-            self.txtStatusCurrentSpeed.setText(str(servo.currentspeed))
-            self.txtStatusCurrentVoltage.setText(str(servo.currentvoltage / 10.0))
-            self.txtStatusCurrentCurrent.setText(str(servo.currentcurrent * 6.5))
-            self.txtStatusCurrentTemperature.setText(str(servo.currenttemperature))
-            self.txtStatusServoStatus.setText(str(servo.servostatus))
-            self.txtStatusMobileSign.setText(str(servo.mobilesign))
+            self.txtStatusTorqueSwitch.setText(str(servo.torque_switch))
+            self.txtStatusTargetLocation.setText(str(servo.target_location))
+            self.txtStatusAcceleration.setText(str(servo.target_acceleration))
+            self.txtStatusCurrentLocation.setText(str(servo.current_location))
+            self.txtStatusCurrentSpeed.setText(str(servo.current_speed))
+            self.txtStatusCurrentVoltage.setText(str(servo.current_voltage / 10.0))
+            self.txtStatusCurrentCurrent.setText(str(servo.current_current * 6.5))
+            self.txtStatusCurrentTemperature.setText(str(servo.current_temperature))
+            self.txtStatusServoStatus.setText(str(servo.servo_status))
+            self.txtStatusMobileSign.setText(str(servo.mobile_sign))
             
             # Update slider position from current location only when torque is disabled
             if not self.toggleTorqueSwitch.isChecked():
-                self.sliderTargetLocation.setValue(servo.currentlocation)
+                self.sliderTargetLocation.setValue(servo.current_location)
     
     def onServoSelected(self):
         """Handle servo selection change event."""

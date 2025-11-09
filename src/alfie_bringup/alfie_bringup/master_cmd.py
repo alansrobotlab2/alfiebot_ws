@@ -221,10 +221,11 @@ class MasterCmdNode(Node):
         
         # Calculate wheel velocities
         # FL = Front Left, FR = Front Right, RL = Rear Left, RR = Rear Right
+        # Note: Right wheels have inverted linear_y component due to firmware motor direction change
         fl = linear_x - linear_y - angular_z * wheel_separation_sum  # Front Left
-        fr = linear_x + linear_y + angular_z * wheel_separation_sum  # Front Right
+        fr = linear_x - linear_y + angular_z * wheel_separation_sum  # Front Right (inverted linear_y)
         rl = linear_x + linear_y - angular_z * wheel_separation_sum  # Rear Left
-        rr = linear_x - linear_y + angular_z * wheel_separation_sum  # Rear Right
+        rr = linear_x + linear_y + angular_z * wheel_separation_sum  # Rear Right (inverted linear_y)
         
         return [fl, fr, rl, rr]
     
