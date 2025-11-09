@@ -26,7 +26,6 @@ TOTAL_SERVOS = 15  # 6 from gdb1 + 9 from gdb0 (skipping 3rd servo from each)
 SERVO_STEPS_PER_REVOLUTION = 4096
 STEPS_TO_RADIANS = 2.0 * np.pi / SERVO_STEPS_PER_REVOLUTION
 SERVO_ACCEL_UNITS_TO_STEPS_PER_SEC2 = 100.0
-PWM_RANGE = 255
 
 # Servo unit conversions
 SERVO_LOAD_SCALE = 10.0  # 0.1% units to percentage
@@ -170,7 +169,7 @@ class MasterStatusNode(Node):
         # Eye state (2 PWM values from gdb1 motor states)
         robot_state.eye_state = self._build_eye_state()
         
-        # Motor states (2 driver motors from gdb0)
+        # Motor states (4 driver motors: FL, FR, RL, RR)
         robot_state.motor_state = self._build_motor_states()
         
         # Servo states (17 total: 0-6 left arm, 7-13 right arm, 14-16 head)
@@ -232,25 +231,28 @@ class MasterStatusNode(Node):
         ]
     
     def _build_eye_state(self) -> List[int]:
-        """Build eye state from gdb1 motor PWM commands
+        """Build eye state - currently unpopulated
         
         Returns:
             List of 2 uint8 values (0-255) representing eye PWM states
         """
-        return [
-            self.convert_pwm_to_uint8(self.gdb1_state.motor_state[0].pwm_cmd),
-            self.convert_pwm_to_uint8(self.gdb1_state.motor_state[1].pwm_cmd)
-        ]
+        return [0, 0]
     
     def _build_motor_states(self) -> List[MotorState]:
-        """Build motor state list from gdb0 motors
+        """Build motor state list from all 4 drive motors
         
         Returns:
-            List of 2 MotorState messages for the driver motors
+            List of 4 MotorState messages in order: FL, FR, RL, RR
+            - motor_state[0] = Front Left  (gdb1.motor_state[0])
+            - motor_state[1] = Front Right (gdb1.motor_state[1])
+            - motor_state[2] = Rear Left   (gdb0.motor_state[0])
+            - motor_state[3] = Rear Right  (gdb0.motor_state[1])
         """
         return [
-            self.convert_gdb_motor_to_motor(self.gdb0_state.motor_state[0]),
-            self.convert_gdb_motor_to_motor(self.gdb0_state.motor_state[1])
+            self.convert_gdb_motor_to_motor(self.gdb1_state.motor_state[0]),  # FL
+            self.convert_gdb_motor_to_motor(self.gdb1_state.motor_state[1]),  # FR
+            self.convert_gdb_motor_to_motor(self.gdb0_state.motor_state[0]),  # RL
+            self.convert_gdb_motor_to_motor(self.gdb0_state.motor_state[1])   # RR
         ]
     
     def _build_servo_states(self) -> List[ServoState]:
@@ -345,18 +347,6 @@ class MasterStatusNode(Node):
         mag.magnetic_field_covariance = [0.0] * 9
         
         return mag
-    
-    def convert_pwm_to_uint8(self, pwm_cmd: int) -> int:
-        """Convert PWM command (-255 to 255) to uint8 (0 to 255)
-        
-        Args:
-            pwm_cmd: PWM command value
-            
-        Returns:
-            Absolute value of PWM clamped to 0-255 range
-        """
-        # Take absolute value and clamp to 0-255
-        return min(PWM_RANGE, max(0, abs(pwm_cmd)))
     
     def convert_gdb_motor_to_motor(self, gdb_motor) -> MotorState:
         """Convert GDBMotorState to MotorState

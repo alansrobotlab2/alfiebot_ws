@@ -12,8 +12,14 @@ BackState back_state
 # pwm value from 0 to 255, lowest on state is 1
 uint8[2] eye_state
 
-# state for each of the driver motors in base
-MotorState[2] motor_state
+geometry_msgs/Twist cmd_vel
+
+# state for each of the 4 driver motors in base
+# 0: Front Left  (FL)
+# 1: Front Right (FR)
+# 2: Rear Left   (RL)
+# 3: Rear Right  (RR)
+MotorState[4] motor_state
 
 # state for all 15 servos on robot 
 # 0-5 left arm, 
