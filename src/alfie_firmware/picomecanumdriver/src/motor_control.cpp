@@ -362,10 +362,11 @@ void mecanumDriveKinematics(float linear_x, float linear_y, float angular_z,
     float wheel_separation_y = ROBOT_CENTER_TO_WHEEL_Y / 1000.0; // Convert mm to m
     
     // Calculate wheel velocities using mecanum kinematics equations
+    // For mecanum: FL and RR are on one diagonal, FR and RL on the other
     wheel_velocities[0] = linear_x - linear_y - angular_z * (wheel_separation_x + wheel_separation_y); // FL
     wheel_velocities[1] = linear_x + linear_y + angular_z * (wheel_separation_x + wheel_separation_y); // FR
-    wheel_velocities[2] = linear_x + linear_y - angular_z * (wheel_separation_x + wheel_separation_y); // RL
-    wheel_velocities[3] = linear_x - linear_y + angular_z * (wheel_separation_x + wheel_separation_y); // RR
+    wheel_velocities[2] = linear_x - linear_y + angular_z * (wheel_separation_x + wheel_separation_y); // RL
+    wheel_velocities[3] = linear_x + linear_y - angular_z * (wheel_separation_x + wheel_separation_y); // RR
 }
 
 /**
@@ -385,9 +386,10 @@ void mecanumDriveOdometry(float wheel_velocities[4], float *linear_x,
     float wheel_separation_y = ROBOT_CENTER_TO_WHEEL_Y / 1000.0; // Convert mm to m
     
     // Calculate robot velocities using forward kinematics equations
+    // Must match the inverse kinematics pattern
     *linear_x = (wheel_velocities[0] + wheel_velocities[1] + wheel_velocities[2] + wheel_velocities[3]) / 4.0;
-    *linear_y = (-wheel_velocities[0] + wheel_velocities[1] + wheel_velocities[2] - wheel_velocities[3]) / 4.0;
-    *angular_z = (-wheel_velocities[0] + wheel_velocities[1] - wheel_velocities[2] + wheel_velocities[3]) / 
+    *linear_y = (-wheel_velocities[0] + wheel_velocities[1] - wheel_velocities[2] + wheel_velocities[3]) / 4.0;
+    *angular_z = (-wheel_velocities[0] + wheel_velocities[1] + wheel_velocities[2] - wheel_velocities[3]) / 
                  (4.0 * (wheel_separation_x + wheel_separation_y));
 }
 

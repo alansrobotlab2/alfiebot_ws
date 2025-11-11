@@ -26,8 +26,8 @@ print(f"esptool.py --port {upload_port} {reset_flags} --no-stub run")
 
 def main(args=None):
     commands = [
-    "esptool --port /dev/ttyUSB0 --before default-reset --after hard-reset --no-stub run",
-    "esptool --port /dev/ttyUSB1 --before default-reset --after hard-reset --no-stub run"
+    "esptool --chip esp32 --port /dev/ttyUSB0 --before default_reset --after hard_reset run",
+    "esptool --chip esp32 --port /dev/ttyUSB1 --before default_reset --after hard_reset run"
     ]
 
     for command in commands:

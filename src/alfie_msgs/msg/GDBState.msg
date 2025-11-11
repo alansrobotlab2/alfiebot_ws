@@ -1,3 +1,4 @@
+uint8 board_id
 bool shoulder_limit_state
 uint8 board_temp
 GDBImu imu

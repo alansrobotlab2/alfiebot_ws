@@ -1,9 +1,13 @@
 #pragma once
-
+#include <Preferences.h>
 #include "IMU.h"
 
 class DriverBoard
 {
+private:
+    Preferences boardconfig;
+    uint8_t boardid;  // Board ID loaded from EEPROM (0 or 1)
+
 public:
     static constexpr uint8_t MAX_SERVOS = 10;
 
@@ -13,13 +17,46 @@ public:
           servoLoopState(RUNNING),
           start_time(0),
           duration(0),
-          last_drivercmd_time(0)
+          last_drivercmd_time(0),
+          boardid(255)  // Default uninitialized value
     {
         for (uint8_t i = 0; i < MAX_SERVOS; ++i)
         {
             IDS[i] = i + 1;
             servoCMDIDS[i] = i + 1;
         }
+    }
+
+    // Load board ID from EEPROM using Preferences library
+    void loadBoardId() {
+        boardconfig.begin("boardconfig", true);  // Open in read-only mode
+        boardid = boardconfig.getUInt("boardid", 255);  // Default 255 if not found
+        boardconfig.end();
+    }
+
+    // Get board-specific configuration based on boardid
+    const char* getNodeName() const {
+        return (boardid == 0) ? "gdb0" : "gdb1";
+    }
+
+    const char* getStatePublisher() const {
+        return (boardid == 0) ? "gdb0state" : "gdb1state";
+    }
+
+    const char* getCmdSubscriber() const {
+        return (boardid == 0) ? "gdb0cmd" : "gdb1cmd";
+    }
+
+    const char* getServoService() const {
+        return (boardid == 0) ? "gdb0servoservice" : "gdb1servoservice";
+    }
+
+    uint8_t getNumServos() const {
+        return (boardid == 0) ? 10 : 7;
+    }
+
+    uint8_t getBoardId() const {
+        return boardid;
     }
 
     alfie_msgs__msg__GDBState driverState;
@@ -85,8 +122,8 @@ public:
     MemoryReplyBuf buf = {};   // Zero-initialize
     MemoryReplyBuf rbuf = {};  // Zero-initialize
 
-    u8 torquecommandbuf[MAX_SERVOS] = {};    // Zero-initialize
-    u8 servocommandbuf[3 * MAX_SERVOS] = {}; // Zero-initialize
+    uint8_t torquecommandbuf[MAX_SERVOS] = {};    // Zero-initialize
+    uint8_t servocommandbuf[SERVOCOMMANDPACKETSIZE * MAX_SERVOS] = {}; // Zero-initialize
 
     int16_t drivercmdbuf[2] = {};  // Zero-initialize
 

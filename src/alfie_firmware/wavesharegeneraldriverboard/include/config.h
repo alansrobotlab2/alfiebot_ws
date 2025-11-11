@@ -1,44 +1,17 @@
 #pragma once
 
-
 /*
-Same sourcecode for both boards with #if DRIVERBOARD defines for specifics
-Set DRIVERBOARD to [0,1] and make sure it matches the usb port
+Board-specific configuration is now loaded at runtime from EEPROM.
+Use the programmer to set the board ID (0 or 1) in EEPROM.
 
-/dev/ttyUSB0 = driverboard 0
-/dev/ttyUSB1 = driverboard 1
+Board 0: /dev/ttyUSB0 - right arm, head, drive wheels
+Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 */
-#define DRIVERBOARD 1
-
-
-
-#if DRIVERBOARD == 0
-// driver board 0
-// /dev/ttyUSB0
-// right arm 
-// head
-// drive wheels
-#define NODENAME "gdb0"
-#define STATEPUBLISHER "gdb0state"
-#define CMDSUBSCRIBER "gdb0cmd"
-#define SERVOSERVICE "gdb0servoservice"
-#define NUMSERVOS 10
-
-#else 
-// driver board 1
-// /dev/ttyUSB1
-// left arm
-// eye lights
-// shoulder limit switch
-#define NODENAME "gdb1"
-#define STATEPUBLISHER "gdb1state"
-#define CMDSUBSCRIBER "gdb1cmd"
-#define SERVOSERVICE "gdb1servoservice"
-#define NUMSERVOS 7
-#endif 
 
 #define NAMESPACE "alfie"
 
+// PWM frequency - higher frequency = smoother motor control, especially important for faster motors
+// 512 Hz proven optimal in experimental testing with 110 RPM motors
 #define PWMFREQUENCY 512
 
 #include <cstdint>
@@ -68,6 +41,9 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 //#define BAUDRATE 115200
 //#define BAUDRATE 921600
 #define BAUDRATE 1500000
+
+#define SERVOCOMMANDPACKETSIZE 9  // bytes per servo command packet
+
 
 // for motor drivers
 // lower frequency allows for lower pwm values to work better
@@ -120,10 +96,14 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 // For example, in the case of the DCGM3865 motor, the reduction ratio is 1:42, which means that the motor makes 42 revolutions and the output shaft makes 1 revolution.
 // Corresponding to one revolution of the output shaft, the more revolutions the motor needs to make, the greater the reduction ratio and usually the greater the torque
 // The following takes the DCGM3865 motor as an example (the reduction ratio is 1:42)
-#define REDUCTION_RATIO 169
+#define REDUCTION_RATIO 90
+
+//
+#define RPM 110 
 
 // Number of encoder lines, one revolution of the motor, the number of level changes of one Hall sensor of the encoder
-#define PPR_NUM 11
+// Confirmed in experimental testing: 22 pulses per revolution
+#define PPR_NUM 22
 
 // Number of level changes of one Hall sensor of the encoder for one revolution of the output shaft
 #define SHAFT_PPR (REDUCTION_RATIO * PPR_NUM)
@@ -139,33 +119,31 @@ Set DRIVERBOARD to [0,1] and make sure it matches the usb port
 
 // === PID VELOCITY CONTROL PARAMETERS ===
 // PID gains for wheel velocity control (m/s)
-// Tuned for 100Hz update rate
-// History:
-//   - Original: Kp=400, Ki=150, Kd=8 (12s settling @ 0.1m/s - too slow)
-//   - Update 1: Kp=1200, Ki=400, Kd=20 (4.6s settling @ 0.1m/s - better, no overshoot)
-//   - Update 2: Kp=2400, Ki=800, Kd=30 (targeting 0.5s settling)
-//   - Update 3: Adding feedforward to compensate for non-linear motor response (2025-10-25)
-#define VELOCITY_KP 2400.0f   // Proportional gain - responsiveness to error
-#define VELOCITY_KI 800.0f    // Integral gain - eliminates steady-state error
-#define VELOCITY_KD 30.0f     // Derivative gain - reduces overshoot and oscillation
-
-// Feedforward term - provides baseline PWM proportional to target velocity
-// Compensates for non-linear motor characteristics (deadband, back-EMF, friction)
-// Value represents PWM per m/s of target velocity
-#define VELOCITY_FEEDFORWARD 600.0f   // FF gain - baseline PWM for target velocity
+// Tuned for 100Hz update rate with experimental testing
+// These values proven to work in standalone mecanum project testing
+// Kp=800, Ki=400, Kd=5 provides stable control without oscillation
+#define VELOCITY_KP 800.0f     // Proportional gain - primary control
+#define VELOCITY_KI 400.0f     // Integral gain - eliminates steady-state error
+#define VELOCITY_KD 5.0f       // Derivative gain - damping
 
 // Maximum integral windup limit (prevents integral term from growing too large)
-#define VELOCITY_INTEGRAL_MAX 300.0f   // Increased to match higher Ki
+#define VELOCITY_INTEGRAL_MAX 50.0f   // Anti-windup limit
+
+// Minimum PWM to overcome static friction
+// Experimental value: motors don't move below ~59 PWM
+#define MIN_PWM 59
 
 // Minimum velocity threshold (m/s) - below this, set PWM to 0 to avoid stall
 #define MIN_VELOCITY_THRESHOLD 0.005f
 
 // PID control loop update rate (Hz)
+// 100Hz proven optimal in experimental testing
 #define VELOCITY_CONTROL_HZ 100.0f
 #define VELOCITY_CONTROL_PERIOD_MS (1000.0f / VELOCITY_CONTROL_HZ)
 
 // Maximum velocity limit (m/s) - safety limit
-#define MAX_VELOCITY_MPS 1.0f
+// Experimental calculated: ~0.73 m/s with PWM saturated at 255
+#define MAX_VELOCITY_MPS 0.70f
 
 
 /*

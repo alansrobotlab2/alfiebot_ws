@@ -20,11 +20,15 @@ void subscription_callback(const void *msgin)
   setMotorATargetVelocity(msg->velocities[0]);
   setMotorBTargetVelocity(msg->velocities[1]);
 
-  for (int i = 0; i < NUMSERVOS; i++)
+  uint8_t numServos = b.getNumServos();
+  for (int i = 0; i < numServos; i++)
   {
-    b.mBuf[i].memory.torqueSwitch = msg->servo_cmd[i].torqueswitch;
-    b.mBuf[i].memory.acceleration = msg->servo_cmd[i].acceleration;
-    b.mBuf[i].memory.targetLocation = msg->servo_cmd[i].targetlocation;
+    b.mBuf[i].memory.torqueSwitch = msg->servo_cmd[i].torque_switch;
+    b.mBuf[i].memory.targetLocation = (msg->servo_cmd[i].target_location + 2048) & 0x0FFF; // Convert to servo range
+    b.mBuf[i].memory.acceleration = msg->servo_cmd[i].target_acceleration;
+    b.mBuf[i].memory.runningSpeed = msg->servo_cmd[i].target_speed;
+    b.mBuf[i].memory.torqueLimit = msg->servo_cmd[i].target_torque;
+
   }
 }
 
@@ -61,6 +65,10 @@ void service_callback(const void *request, void *response)
       if (address == SBS_POSITIONCORRECTION)
       {
         value = positioncorrectionto12bitservo(value);
+      }
+      if (address == SBS_TARGETLOCATION)
+      {
+        value = (value + 2048) & 0x0FFF; // Convert to servo range
       }
       retval = b.st.writeWord(servo, address, value);
       populate_service_response(servo, res);
@@ -182,6 +190,7 @@ void generateLowStatus()
   b.driverState.driver_diagnostics.updateservoactiveduration = b.updateservoactiveduration;
   b.driverState.driver_diagnostics.imuupdateduration = b.imuupdateduration;
 
+  b.driverState.board_id = b.getBoardId();
   b.driverState.board_temp = b.board_temp;
   b.driverState.imu.angular_velocity_x = b.stGyroRawData.X;
   b.driverState.imu.angular_velocity_y = b.stGyroRawData.Y;
@@ -197,19 +206,23 @@ void generateLowStatus()
   b.driverState.magnetic_field.magnetic_field_y = b.stMagnRawData.Y;
   b.driverState.magnetic_field.magnetic_field_z = b.stMagnRawData.Z;
 
-  for (int i = 0; i < NUMSERVOS; i++)
+  uint8_t numServos = b.getNumServos();
+  for (int i = 0; i < numServos; i++)
   {
     // Direct access - no memcpy needed!
-    b.driverState.servo_state[i].acceleration = b.mBuf[i].memory.acceleration;
-    b.driverState.servo_state[i].currentvoltage = b.mBuf[i].memory.currentVoltage;
-    b.driverState.servo_state[i].currentcurrent = b.mBuf[i].memory.currentCurrent;
-    b.driverState.servo_state[i].currentload = b.mBuf[i].memory.currentLoad;
-    b.driverState.servo_state[i].currentlocation = b.mBuf[i].memory.currentLocation;
-    b.driverState.servo_state[i].currenttemperature = b.mBuf[i].memory.currentTemperature;
-    b.driverState.servo_state[i].mobilesign = b.mBuf[i].memory.mobileSign;
-    b.driverState.servo_state[i].servostatus = b.mBuf[i].memory.servoStatus;
-    b.driverState.servo_state[i].targetlocation = b.mBuf[i].memory.targetLocation;
-    b.driverState.servo_state[i].torqueswitch = b.mBuf[i].memory.torqueSwitch;
+    b.driverState.servo_state[i].torque_switch = b.mBuf[i].memory.torqueSwitch;
+    b.driverState.servo_state[i].target_location = (b.mBuf[i].memory.targetLocation + 2048) & 0x0FFF; // Convert to servo range
+    b.driverState.servo_state[i].target_acceleration = b.mBuf[i].memory.acceleration;
+    b.driverState.servo_state[i].target_speed = b.mBuf[i].memory.runningSpeed;
+    b.driverState.servo_state[i].target_torque = b.mBuf[i].memory.torqueLimit;
+    b.driverState.servo_state[i].current_voltage = b.mBuf[i].memory.currentVoltage;
+    b.driverState.servo_state[i].current_current = b.mBuf[i].memory.currentCurrent;
+    b.driverState.servo_state[i].current_load = b.mBuf[i].memory.currentLoad;
+    b.driverState.servo_state[i].current_location = (b.mBuf[i].memory.currentLocation + 2048) & 0x0FFF; // Convert to servo range
+    b.driverState.servo_state[i].current_temperature = b.mBuf[i].memory.currentTemperature;
+    b.driverState.servo_state[i].mobile_sign = b.mBuf[i].memory.mobileSign;
+    b.driverState.servo_state[i].servo_status = b.mBuf[i].memory.servoStatus;
+    
   }
 
   // RCSOFTCHECK(rcl_publish(&b.publisher, &b.driverState, NULL));
@@ -222,28 +235,28 @@ bool create_ros_entities()
   RCCHECK(rclc_support_init(&b.support, 0, NULL, &b.allocator));
 
   // create node with namespace
-  RCCHECK(rclc_node_init_default(&b.node, NODENAME, NAMESPACE, &b.support));
+  RCCHECK(rclc_node_init_default(&b.node, b.getNodeName(), NAMESPACE, &b.support));
 
   // create publisher
   RCCHECK(rclc_publisher_init_best_effort(
       &b.publisher,
       &b.node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, GDBState),
-      STATEPUBLISHER));
+      b.getStatePublisher()));
 
   // create subscriber
   RCCHECK(rclc_subscription_init_default(
       &b.subscriber,
       &b.node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, GDBCmd),
-      CMDSUBSCRIBER));
+      b.getCmdSubscriber()));
 
   // create service
   RCCHECK(rclc_service_init_default(
       &b.service,
       &b.node,
       ROSIDL_GET_SRV_TYPE_SUPPORT(alfie_msgs, srv, GDBServoService),
-      SERVOSERVICE));
+      b.getServoService()));
 
   // create executor
   RCCHECK(rclc_executor_init(&b.executor, &b.support.context, 2, &b.allocator));

@@ -36,9 +36,9 @@ class JoyDriveNode(Node):
         self.declare_parameter('head_pitch_axis', 4)  # Right stick Y-axis for head pitch
         self.declare_parameter('head_roll_axis', 2)  # Left trigger for head roll (typical axis 2 = LT)
         self.declare_parameter('eye_trigger_axis', 5)  # Right trigger for eye brightness (typical axis 5 = RT)
-        self.declare_parameter('max_linear_velocity', 0.24)  # Max linear velocity in m/s (mecanum wheel limit)
+        self.declare_parameter('max_linear_velocity', 0.7)  # Max linear velocity in m/s (mecanum wheel limit)
         self.declare_parameter('max_angular_velocity', 1.5)  # Max angular velocity in rad/s
-        self.declare_parameter('deadzone', 0.1)  # Deadzone to ignore small stick movements
+        self.declare_parameter('deadzone', 0.25)  # Deadzone to ignore small stick movements
         self.declare_parameter('invert_linear_x', False)
         self.declare_parameter('invert_linear_y', False)
         self.declare_parameter('invert_angular_z', False)
@@ -205,18 +205,20 @@ class JoyDriveNode(Node):
         cmd.servo_cmd = [ServoCmd() for _ in range(15)]
         for servo in cmd.servo_cmd:
             servo.enabled = False
-            servo.acceleration = 0.0
             servo.target_location = 0.0
+            servo.target_acceleration = 0.0
+            servo.target_torque = 0.0
+            
         
-        # Configure head pitch servo (servo 14, index 13)
-        cmd.servo_cmd[13].enabled = True
-        cmd.servo_cmd[13].target_location = head_pitch_rad
-        cmd.servo_cmd[13].acceleration = 0.0  # Set to desired acceleration if needed
+        # # Configure head pitch servo (servo 14, index 13)
+        # cmd.servo_cmd[13].enabled = True
+        # cmd.servo_cmd[13].target_location = head_pitch_rad
+        # cmd.servo_cmd[13].acceleration = 0.0  # Set to desired acceleration if needed
 
-        # Configure head roll servo (servo 15, index 14)
-        cmd.servo_cmd[14].enabled = True
-        cmd.servo_cmd[14].target_location = head_roll_rad
-        cmd.servo_cmd[14].acceleration = 0.0  # Set to desired acceleration if needed
+        # # Configure head roll servo (servo 15, index 14)
+        # cmd.servo_cmd[14].enabled = True
+        # cmd.servo_cmd[14].target_location = head_roll_rad
+        # cmd.servo_cmd[14].acceleration = 0.0  # Set to desired acceleration if needed
 
 
         # Publish the command

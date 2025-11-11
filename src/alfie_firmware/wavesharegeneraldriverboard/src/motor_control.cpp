@@ -70,17 +70,27 @@ void DriveA(int16_t pwm){
 // expected values -255 to 255
 // positive values move forward, negative values move backward
   pwm = constrain(pwm, -255, 255);
+  
+  // Apply minimum PWM threshold to overcome static friction
+  int adjustedPWM = pwm;
+  if (pwm > 0 && pwm < MIN_PWM) {
+    adjustedPWM = MIN_PWM;
+  } else if (pwm < 0 && pwm > -MIN_PWM) {
+    adjustedPWM = -MIN_PWM;
+  } else if (pwm == 0) {
+    adjustedPWM = 0;
+  }
 
-  if (pwm > 0) {
+  if (adjustedPWM > 0) {
     //Setting the direction of rotation of the A motor
     digitalWrite(AIN1, LOW);
     digitalWrite(AIN2, HIGH);
     //Setting the PWM output duty cycle of channel A
-    ledcWrite(CHANNEL_A, pwm);
-  } else if (pwm < 0) {
+    ledcWrite(CHANNEL_A, adjustedPWM);
+  } else if (adjustedPWM < 0) {
     digitalWrite(AIN1, HIGH);
     digitalWrite(AIN2, LOW);
-    ledcWrite(CHANNEL_A, -pwm);
+    ledcWrite(CHANNEL_A, -adjustedPWM);
   } else {
     digitalWrite(AIN1, LOW);
     digitalWrite(AIN2, LOW);
@@ -93,17 +103,27 @@ void DriveB(int16_t pwm){
   // expected values -255 to 255
   // positive values move forward, negative values move backward
   pwm = constrain(pwm, -255, 255);
+  
+  // Apply minimum PWM threshold to overcome static friction
+  int adjustedPWM = pwm;
+  if (pwm > 0 && pwm < MIN_PWM) {
+    adjustedPWM = MIN_PWM;
+  } else if (pwm < 0 && pwm > -MIN_PWM) {
+    adjustedPWM = -MIN_PWM;
+  } else if (pwm == 0) {
+    adjustedPWM = 0;
+  }
 
-  if (pwm > 0) {
+  if (adjustedPWM > 0) {
     //Setting the direction of rotation of the B motor
     digitalWrite(BIN1, LOW);
     digitalWrite(BIN2, HIGH);
     //Setting the PWM output duty cycle of channel B
-    ledcWrite(CHANNEL_B, pwm);
-  } else if (pwm < 0) {
+    ledcWrite(CHANNEL_B, adjustedPWM);
+  } else if (adjustedPWM < 0) {
     digitalWrite(BIN1, HIGH);
     digitalWrite(BIN2, LOW);
-    ledcWrite(CHANNEL_B, -pwm);
+    ledcWrite(CHANNEL_B, -adjustedPWM);
   } else {
     digitalWrite(BIN1, LOW);
     digitalWrite(BIN2, LOW);
@@ -159,6 +179,7 @@ void calculateMotorDynamics() {
       
       // Convert to meters per second using wheel parameters
       // velocity (m/s) = pulses/sec * meters/pulse
+      // Direct calculation - no filtering (matches experimental code)
       b.A_velocity = pulses_per_second * METERS_PER_PULSE;
       
       // Calculate acceleration in m/s^2
@@ -190,6 +211,7 @@ void calculateMotorDynamics() {
       
       // Convert to meters per second using wheel parameters
       // velocity (m/s) = pulses/sec * meters/pulse
+      // Direct calculation - no filtering (matches experimental code)
       b.B_velocity = pulses_per_second * METERS_PER_PULSE;
       
       // Calculate acceleration in m/s^2
@@ -215,10 +237,6 @@ int16_t calculateVelocityPID(float target_velocity, float current_velocity,
   // Calculate velocity error
   float error = target_velocity - current_velocity;
   
-  // Feedforward term - provides baseline PWM proportional to target velocity
-  // Helps compensate for non-linear motor characteristics
-  float FF = VELOCITY_FEEDFORWARD * target_velocity;
-  
   // Proportional term - corrects based on current error
   float P = VELOCITY_KP * error;
   
@@ -228,14 +246,14 @@ int16_t calculateVelocityPID(float target_velocity, float current_velocity,
   float I = VELOCITY_KI * error_integral;
   
   // Derivative term - dampens oscillation
-  float error_derivative = (error - error_previous) / dt;
-  float D = VELOCITY_KD * error_derivative;
-  
-  // Update previous error
+  float D = 0.0f;
+  if (dt > 0) {
+    D = VELOCITY_KD * (error - error_previous) / dt;
+  }
   error_previous = error;
   
-  // Calculate total output: Feedforward + PID
-  float output = FF + P + I + D;
+  // Calculate total PID output
+  float output = P + I + D;
   
   // Dead zone for small target velocities
   if (abs(target_velocity) < MIN_VELOCITY_THRESHOLD) {
@@ -245,8 +263,6 @@ int16_t calculateVelocityPID(float target_velocity, float current_velocity,
   
   // Constrain output to PWM range [-255, 255]
   int16_t pwm = constrain((int16_t)output, -255, 255);
-  
-  return pwm;
   
   return pwm;
 }
