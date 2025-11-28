@@ -49,14 +49,14 @@ class MasterCmdNode(Node):
         # Index corresponds to GDB servo indices (0-6 for gdb1, 0-9 for gdb0)
         # Note: Index 2 for each GDB is derived from index 1, not from RobotLowCmd
         self.servo_polarity = [
-            1,   # Servo 0:  driver1/servo01 - left shoulder yaw
+            1,   # Servo 0:  GOOD driver1/servo01 - left shoulder yaw 
             1,   # Servo 1:  driver1/servo02 - left shoulder1 pitch
             1,   # Servo 2:  driver1/servo03 - left shoulder2 pitch (DERIVED from index 1)
             1,   # Servo 3:  driver1/servo04 - left elbow pitch
             1,   # Servo 4:  driver1/servo05 - left wrist pitch
             1,   # Servo 5:  driver1/servo06 - left wrist roll
             1,   # Servo 6:  driver1/servo07 - left hand
-            1,   # Servo 7:  driver0/servo01 - right shoulder yaw
+            1,   # Servo 7:  GOOD driver0/servo01 - right shoulder yaw
             1,   # Servo 8:  driver0/servo02 - right shoulder1 pitch
             1,   # Servo 9:  driver0/servo03 - right shoulder2 pitch (DERIVED from index 1)
             1,   # Servo 10: driver0/servo04 - right elbow pitch
@@ -341,7 +341,7 @@ class MasterCmdNode(Node):
         """
         # Convert radians to steps
         # -π to +π maps to -2048 to +2048
-        steps = radians * RADIANS_TO_STEPS / 2.0
+        steps = radians * RADIANS_TO_STEPS
         
         # Clamp to valid range and convert to int16
         return int(np.clip(steps, -2048, 2048))

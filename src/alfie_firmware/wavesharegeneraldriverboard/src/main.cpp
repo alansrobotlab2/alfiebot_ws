@@ -28,25 +28,24 @@ void vServoInterfaceTask(void *pvParameters)
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 
-  TickType_t xLastWakeTime;
+  TickType_t xSLastWakeTime;
   const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms = 100Hz
 
-  // Initialize the xLastWakeTime variable with the current time
-  xLastWakeTime = xTaskGetTickCount();
-
+  // Initialize the xSLastWakeTime variable with the current time
+  xSLastWakeTime = xTaskGetTickCount();
   b.servoLoopState = b.RUNNING;
 
   while (1)
   {
     // Wait for the next cycle (precise 100 Hz timing)
-    xTaskDelayUntil(&xLastWakeTime, xFrequency);
+    xTaskDelayUntil(&xSLastWakeTime, xFrequency);
 
     // we need to coordinate with service requests
     switch (b.servoLoopState)
     {
     case b.RUNNING:
       TIME_FUNCTION_MS(updateServoStatus(), b.pollservostatusduration);
-      TIME_FUNCTION_MS(updateServoActive(), b.updateservoactiveduration);
+      TIME_FUNCTION_MS(updateServoActive_SIMPLE(), b.updateservoactiveduration);
       TIME_FUNCTION_MS(updateServoIdle(), b.updateservoidleduration);
 
 
@@ -60,6 +59,9 @@ void vServoInterfaceTask(void *pvParameters)
     default:
       break;
     }
+
+    
+
   }
 }
 
@@ -76,35 +78,36 @@ void vHardwareInterfaceTask(void *pvParameters)
   // Set the interrupt and the corresponding callback function to call the A_wheel_pulse function when AEBCB changes from low to high (RISING).
   attachInterrupt(digitalPinToInterrupt(AENCB), A_wheel_pulse, RISING);
 
-  TickType_t xLastWakeTime;
+  TickType_t xHWLastWakeTime;
   const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms = 100Hz
 
-  // Initialize the xLastWakeTime variable with the current time
-  xLastWakeTime = xTaskGetTickCount();
-
+  // Initialize the xHWLastWakeTime variable with the current time
+  xHWLastWakeTime = xTaskGetTickCount();
   while (1)
   {
     // Wait for the next cycle (precise 100 Hz timing)
-    xTaskDelayUntil(&xLastWakeTime, xFrequency);
+    xTaskDelayUntil(&xHWLastWakeTime, xFrequency);
+
     calculateMotorDynamics();
     generateLowStatus();
     TIME_FUNCTION_MS(getIMUData(), b.imuupdateduration);
     driveMotors();
+
+    
   }
 }
 
   void vROSTask(void *pvParameters)
   {
-    TickType_t xLastWakeTime;
+    TickType_t xROSLastWakeTime;
     const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms = 100Hz
 
-    // Initialize the xLastWakeTime variable with the current time
-    xLastWakeTime = xTaskGetTickCount();
-
+    // Initialize the xROSLastWakeTime variable with the current time
+    xROSLastWakeTime = xTaskGetTickCount();
     while (1)
     {
       // Wait for the next cycle (precise 100 Hz timing)
-      xTaskDelayUntil(&xLastWakeTime, xFrequency);
+      xTaskDelayUntil(&xROSLastWakeTime, xFrequency);
 
       switch (b.agentState)
       {
@@ -146,6 +149,8 @@ void vHardwareInterfaceTask(void *pvParameters)
       default:
         break;
       }
+      
+      
     }
   }
 

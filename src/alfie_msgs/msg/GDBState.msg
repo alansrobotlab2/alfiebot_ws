@@ -3,6 +3,6 @@ bool shoulder_limit_state
 uint8 board_temp
 GDBImu imu
 GDBMagneticField magnetic_field
-GDBDiagnostics gdb_diagnostics
+GDBDiagnostics driver_diagnostics
 GDBMotorState[2] motor_state
 GDBServoState[10] servo_state

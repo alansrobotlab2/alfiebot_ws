@@ -50,4 +50,4 @@ uint16 currentcurrent
 
 uint8 writebyteresult
 uint8 writewordresult
-uint8 readmapresult
+uint8 readmemoryresult

@@ -111,6 +111,7 @@ void updateServoIdle();
  * @see mBuf global array for command data source
  */
 void updateServoActive();
+void updateServoActive_SIMPLE();
 
 
 /**

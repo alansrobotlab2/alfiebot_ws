@@ -1,3 +1,7 @@
+int16 current_location
+int16 transform_location
+int16 report_location
+
 bool drivercmd_timeout
 float32 pollservostatusduration
 float32 updateservoidleduration

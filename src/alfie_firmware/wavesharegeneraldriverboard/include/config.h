@@ -131,10 +131,10 @@ Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 
 // Minimum PWM to overcome static friction
 // Experimental value: motors don't move below ~59 PWM
-#define MIN_PWM 59
+#define MIN_PWM 32
 
 // Minimum velocity threshold (m/s) - below this, set PWM to 0 to avoid stall
-#define MIN_VELOCITY_THRESHOLD 0.005f
+#define MIN_VELOCITY_THRESHOLD 0.0025f
 
 // PID control loop update rate (Hz)
 // 100Hz proven optimal in experimental testing
@@ -145,17 +145,5 @@ Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 // Experimental calculated: ~0.73 m/s with PWM saturated at 255
 #define MAX_VELOCITY_MPS 0.70f
 
-
-/*
-struct DriverConfig0 {
-    
-    uint8_t heartbeatTimeout = 10;
-
-};
-
-struct DriverConfig1 : DriverConfig0 {
-
-};
-*/
 
 

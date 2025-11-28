@@ -24,7 +24,7 @@ void subscription_callback(const void *msgin)
   for (int i = 0; i < numServos; i++)
   {
     b.mBuf[i].memory.torqueSwitch = msg->servo_cmd[i].torque_switch;
-    b.mBuf[i].memory.targetLocation = (msg->servo_cmd[i].target_location + 2048) & 0x0FFF; // Convert to servo range
+    b.mBuf[i].memory.targetLocation = (msg->servo_cmd[i].target_location + 2048);// & 0x0FFF; // Convert to servo range
     b.mBuf[i].memory.acceleration = msg->servo_cmd[i].target_acceleration;
     b.mBuf[i].memory.runningSpeed = msg->servo_cmd[i].target_speed;
     b.mBuf[i].memory.torqueLimit = msg->servo_cmd[i].target_torque;
@@ -68,7 +68,7 @@ void service_callback(const void *request, void *response)
       }
       if (address == SBS_TARGETLOCATION)
       {
-        value = (value + 2048) & 0x0FFF; // Convert to servo range
+        value = (value + 2048);// & 0x0FFF; // Convert to servo range
       }
       retval = b.st.writeWord(servo, address, value);
       populate_service_response(servo, res);
@@ -185,6 +185,10 @@ void generateLowStatus()
   b.driverState.driver_diagnostics.a_wheel_pulse = b.A_wheel_pulse_count;
   b.driverState.driver_diagnostics.b_wheel_pulse = b.B_wheel_pulse_count;
 
+  b.driverState.driver_diagnostics.current_location = (b.mBuf[0].memory.currentLocation );// Convert to servo range
+  b.driverState.driver_diagnostics.transform_location = (1024 + 2048) & 0x0FFF; // Convert to servo range
+  b.driverState.driver_diagnostics.report_location = (b.mBuf[0].memory.currentLocation - 2048);// & 0x0FFF; // Convert to servo range
+ 
   b.driverState.driver_diagnostics.pollservostatusduration = b.pollservostatusduration;
   b.driverState.driver_diagnostics.updateservoidleduration = b.updateservoidleduration;
   b.driverState.driver_diagnostics.updateservoactiveduration = b.updateservoactiveduration;
@@ -211,14 +215,14 @@ void generateLowStatus()
   {
     // Direct access - no memcpy needed!
     b.driverState.servo_state[i].torque_switch = b.mBuf[i].memory.torqueSwitch;
-    b.driverState.servo_state[i].target_location = (b.mBuf[i].memory.targetLocation + 2048) & 0x0FFF; // Convert to servo range
+    b.driverState.servo_state[i].target_location = (b.mBuf[i].memory.targetLocation - 2048);// & 0x0FFF; // Convert to servo range
     b.driverState.servo_state[i].target_acceleration = b.mBuf[i].memory.acceleration;
     b.driverState.servo_state[i].target_speed = b.mBuf[i].memory.runningSpeed;
     b.driverState.servo_state[i].target_torque = b.mBuf[i].memory.torqueLimit;
     b.driverState.servo_state[i].current_voltage = b.mBuf[i].memory.currentVoltage;
     b.driverState.servo_state[i].current_current = b.mBuf[i].memory.currentCurrent;
     b.driverState.servo_state[i].current_load = b.mBuf[i].memory.currentLoad;
-    b.driverState.servo_state[i].current_location = (b.mBuf[i].memory.currentLocation + 2048) & 0x0FFF; // Convert to servo range
+    b.driverState.servo_state[i].current_location = (b.mBuf[i].memory.currentLocation - 2048);// & 0x0FFF; // Convert to servo range
     b.driverState.servo_state[i].current_temperature = b.mBuf[i].memory.currentTemperature;
     b.driverState.servo_state[i].mobile_sign = b.mBuf[i].memory.mobileSign;
     b.driverState.servo_state[i].servo_status = b.mBuf[i].memory.servoStatus;
