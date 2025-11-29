@@ -664,6 +664,7 @@ AFRAME.registerComponent('controller-updater', {
                     thumbstick: !!rightGamepad.buttons[3]?.pressed,  
                     a: !!rightGamepad.buttons[4]?.pressed,  // A button (right controller)
                     b: !!rightGamepad.buttons[5]?.pressed,  // B button (right controller)
+
                     menu: !!rightGamepad.buttons[6]?.pressed
                 };
             }
@@ -680,8 +681,15 @@ AFRAME.registerComponent('controller-updater', {
         const headsetRotY = THREE.MathUtils.radToDeg(headsetRotEuler.y);
         const headsetRotZ = THREE.MathUtils.radToDeg(headsetRotEuler.z);
 
+        // Format rotation values with leading zeros and space for positive numbers
+        const formatRotation = (val) => {
+            const rounded = Math.round(val);
+            const absValue = Math.abs(rounded).toString().padStart(3, '0');
+            return rounded >= 0 ? ' ' + absValue : '-' + absValue;
+        };
+        
         // Update headset info text
-        const headsetText = `Pos: ${headsetPos.x.toFixed(2)} ${headsetPos.y.toFixed(2)} ${headsetPos.z.toFixed(2)}\nRot: ${headsetRotX.toFixed(0)} ${headsetRotY.toFixed(0)} ${headsetRotZ.toFixed(0)}`;
+        const headsetText = `Rot: ${formatRotation(headsetRotX)} ${formatRotation(headsetRotY)} ${formatRotation(headsetRotZ)}`;
         if (this.headsetInfoText) {
             this.headsetInfoText.setAttribute('value', headsetText);
         }

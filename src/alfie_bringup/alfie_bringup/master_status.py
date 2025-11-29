@@ -7,6 +7,7 @@ from alfie_msgs.msg import ServoState, MotorState
 from sensor_msgs.msg import Imu, MagneticField
 import numpy as np
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from .servo_config import SERVO_POLARITY
 
 
 # ============================================================================
@@ -45,29 +46,8 @@ class MasterStatusNode(Node):
         # Use RELIABLE QoS for robot state topic
         qos_reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         
-        # Servo polarity array - converts between physical servo control and actual controls
-        # Positive (1) means no inversion, Negative (-1) means inverted
-        # Index corresponds to servo number in RobotLowState (0-14, skipping 3rd servo from each GDB board)
-        # Note: The array still has 17 entries to match original GDB indices, but indices 2 and 9 are skipped
-        self.servo_polarity = [
-            1,   # Servo 0:  GOOD driver1/servo01 - left shoulder yaw 
-            1,   # Servo 1:  driver1/servo02 - left shoulder1 pitch
-            1,   # Servo 2:  driver1/servo03 - left shoulder2 pitch (DERIVED from index 1)
-            1,   # Servo 3:  driver1/servo04 - left elbow pitch
-            1,   # Servo 4:  driver1/servo05 - left wrist pitch
-            1,   # Servo 5:  driver1/servo06 - left wrist roll
-            1,   # Servo 6:  driver1/servo07 - left hand
-            1,   # Servo 7:  GOOD driver0/servo01 - right shoulder yaw
-            1,   # Servo 8:  driver0/servo02 - right shoulder1 pitch
-            1,   # Servo 9:  driver0/servo03 - right shoulder2 pitch (DERIVED from index 1)
-            1,   # Servo 10: driver0/servo04 - right elbow pitch
-            1,   # Servo 11: driver0/servo05 - right wrist pitch
-            1,   # Servo 12: driver0/servo06 - right wrist roll
-            1,   # Servo 13: driver0/servo07 - right hand
-            -1,   # Servo 14: GOOD driver0/servo08 - head yaw
-            -1,   # Servo 15: GOOD driver0/servo09 - head pitch
-            -1,   # Servo 16: GOOD driver0/servo10 - head roll
-        ]
+        # Use shared servo polarity configuration
+        self.servo_polarity = SERVO_POLARITY
         
         # Initialize state variables
         self.gdb0_state: Optional[GDBState] = None
