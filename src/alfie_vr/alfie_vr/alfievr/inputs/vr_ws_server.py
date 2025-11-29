@@ -14,7 +14,7 @@ from typing import Dict, Optional, Set
 from scipy.spatial.transform import Rotation as R
 
 from .base import BaseInputProvider, ControlGoal, ControlMode
-from ..config import XLeVRConfig
+from ..config import AlfieVRConfig
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class VRControllerState:
 class VRWebSocketServer(BaseInputProvider):
     """WebSocket server for VR controller input."""
     
-    def __init__(self, command_queue: asyncio.Queue, config: XLeVRConfig, print_only: bool = False):
+    def __init__(self, command_queue: asyncio.Queue, config: AlfieVRConfig, print_only: bool = False):
         super().__init__(command_queue)
         self.config = config
         self.clients: Set = set()

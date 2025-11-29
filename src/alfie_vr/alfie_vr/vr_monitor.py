@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 VR Monitor - Independent VR control information monitoring script
-Can call XLeVR's VR functionality from other folders and read/print VR control information
+Can call AlfieVR's VR functionality from other folders and read/print VR control information
 """
 
 import os
@@ -16,12 +16,12 @@ import socket
 from pathlib import Path
 from typing import Optional
 
-# Set the absolute path to the xlevr folder
+# Set the absolute path to the alfievr folder
 XLEVR_PATH = "/home/alansrobotlab/Projects/alfiebot_ws/src/alfie_vr/alfie_vr"
 
-def setup_xlevr_environment():
-    """Setup xlevr environment"""
-    # Add xlevr path to Python path
+def setup_alfievr_environment():
+    """Setup alfievr environment"""
+    # Add alfievr path to Python path
     if XLEVR_PATH not in sys.path:
         sys.path.insert(0, XLEVR_PATH)
     
@@ -46,15 +46,15 @@ def get_local_ip():
             # Final fallback
             return "localhost"
 
-def import_xlevr_modules():
-    """Import xlevr modules"""
+def import_alfievr_modules():
+    """Import alfievr modules"""
     try:
-        from xlevr.config import XLeVRConfig
-        from xlevr.inputs.vr_ws_server import VRWebSocketServer
-        from xlevr.inputs.base import ControlGoal, ControlMode
-        return XLeVRConfig, VRWebSocketServer, ControlGoal, ControlMode
+        from alfievr.config import AlfieVRConfig
+        from alfievr.inputs.vr_ws_server import VRWebSocketServer
+        from alfievr.inputs.base import ControlGoal, ControlMode
+        return AlfieVRConfig, VRWebSocketServer, ControlGoal, ControlMode
     except ImportError as e:
-        print(f"Error importing xlevr modules: {e}")
+        print(f"Error importing alfievr modules: {e}")
         print(f"Make sure XLEVR_PATH is correct: {XLEVR_PATH}")
         return None, None, None, None
 
@@ -178,19 +178,19 @@ class VRMonitor:
     
     def initialize(self):
         """Initialize VR monitor"""
-        print("🔧 Initializing XLeVR Monitor...")
+        print("🔧 Initializing AlfieVR Monitor...")
         
         # Setup environment
-        setup_xlevr_environment()
+        setup_alfievr_environment()
         
         # Import modules
-        XLeVRConfig, VRWebSocketServer, ControlGoal, ControlMode = import_xlevr_modules()
-        if XLeVRConfig is None:
-            print("❌ Failed to import xlevr modules")
+        AlfieVRConfig, VRWebSocketServer, ControlGoal, ControlMode = import_alfievr_modules()
+        if AlfieVRConfig is None:
+            print("❌ Failed to import alfievr modules")
             return False
         
         # Create configuration
-        self.config = XLeVRConfig()
+        self.config = AlfieVRConfig()
         self.config.enable_vr = True
         self.config.enable_keyboard = False
         self.config.enable_https = True  # Enable HTTPS server, VR requires web interface
@@ -216,7 +216,7 @@ class VRMonitor:
             print(f"❌ Failed to create HTTPS server: {e}")
             return False
         
-        print("✅ XLeVR Monitor initialized successfully")
+        print("✅ AlfieVR Monitor initialized successfully")
         
         return True
     
@@ -363,12 +363,12 @@ class VRMonitor:
 
 def main():
     """Main function"""
-    print("🎮 XLeVR Monitor - XLeVR VR Control Information Monitor")
+    print("🎮 AlfieVR Monitor - AlfieVR VR Control Information Monitor")
     print("=" * 60)
     
-    # Check XLeVR path
+    # Check AlfieVR path
     if not os.path.exists(XLEVR_PATH):
-        print(f"❌ XLeVR path does not exist: {XLEVR_PATH}")
+        print(f"❌ AlfieVR path does not exist: {XLEVR_PATH}")
         print("Please update XLEVR_PATH in the script")
         return
     
@@ -379,7 +379,7 @@ def main():
     try:
         asyncio.run(monitor.start_monitoring())
     except KeyboardInterrupt:
-        print("\n👋 XLeVR Monitor stopped by user")
+        print("\n👋 AlfieVR Monitor stopped by user")
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
 

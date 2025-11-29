@@ -15,7 +15,7 @@ setup(
     ],
     package_data={
         package_name: [
-            'xlevr/**/*.py',
+            'alfievr/**/*.py',
             'web-ui/*.html',
             'web-ui/*.js',
             'web-ui/*.css',
