@@ -13,3 +13,8 @@ sphinx-subfigure
 sphinxcontrib-video
 sphinx-togglebutton
 sphinx_design
+
+# Video streaming dependencies
+python-socketio
+fastapi
+uvicorn

@@ -565,10 +565,10 @@ AFRAME.registerComponent('controller-updater', {
                 // 侧边按钮 - Meta Quest 3 uses different indices
                 // Button 4 = A, Button 5 = B for Quest controllers
                 leftController.buttons = {
-                    x: !!leftGamepad.buttons[4]?.pressed,  // X button (left controller)
-                    y: !!leftGamepad.buttons[5]?.pressed,  // Y button (left controller)
                     squeeze: !!leftGamepad.buttons[1]?.pressed,
                     thumbstick: !!leftGamepad.buttons[3]?.pressed,
+                    x: !!leftGamepad.buttons[4]?.pressed,  // X button (left controller)
+                    y: !!leftGamepad.buttons[5]?.pressed,  // Y button (left controller)
                     menu: !!leftGamepad.buttons[6]?.pressed
                 };
             }
@@ -660,10 +660,10 @@ AFRAME.registerComponent('controller-updater', {
                 // 侧边按钮 - Meta Quest 3 uses different indices
                 // Button 4 = A, Button 5 = B for Quest controllers
                 rightController.buttons = {
+                    squeeze: !!rightGamepad.buttons[1]?.pressed,
+                    thumbstick: !!rightGamepad.buttons[3]?.pressed,  
                     a: !!rightGamepad.buttons[4]?.pressed,  // A button (right controller)
                     b: !!rightGamepad.buttons[5]?.pressed,  // B button (right controller)
-                    squeeze: !!rightGamepad.buttons[1]?.pressed,
-                    thumbstick: !!rightGamepad.buttons[3]?.pressed,
                     menu: !!rightGamepad.buttons[6]?.pressed
                 };
             }

@@ -122,24 +122,24 @@ def launch_setup(context, *args, **kwargs):
                 "i_synced": True,
                 "i_width": int(color_profile[0]),
                 "i_height": int(color_profile[1]),
-                 "i_fps": 5.0,
+                 "i_fps": int(color_profile[2]),
             },
             "depth": {
                 "i_publish_topic": is_launch_config_true(context, "enable_depth"),
                 "i_synced": True,
                 "i_width": int(depth_profile[0]),
                 "i_height": int(depth_profile[1]),
-                 "i_fps": 5.0,
+                 "i_fps": 10.0,
             },
             "infra1": {
                 "i_width": int(infra_profile[0]),
                 "i_height": int(infra_profile[1]),
-                 "i_fps": 5.0,
+                 "i_fps": 10.0,
             },
             "infra2": {
                 "i_width": int(infra_profile[0]),
                 "i_height": int(infra_profile[1]),
-                 "i_fps": 5.0,
+                 "i_fps": 10.0,
             },
         }
         parameter_overrides["depth"] = {
@@ -332,9 +332,9 @@ def generate_launch_description():
         DeclareLaunchArgument("enable_depth", default_value="true"),
         DeclareLaunchArgument("enable_infra1", default_value="false"),
         DeclareLaunchArgument("enable_infra2", default_value="false"),
-        DeclareLaunchArgument("depth_module.depth_profile", default_value="1280,720,30"),
-        DeclareLaunchArgument("rgb_camera.color_profile", default_value="1280,720,30"),
-        DeclareLaunchArgument("depth_module.infra_profile", default_value="1280,720,30"),
+        DeclareLaunchArgument("depth_module.depth_profile", default_value="1280,720,15"),
+        DeclareLaunchArgument("rgb_camera.color_profile", default_value="640,360,15"),
+        DeclareLaunchArgument("depth_module.infra_profile", default_value="1280,720,15"),
     ]
 
     return LaunchDescription(

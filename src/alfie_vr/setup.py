@@ -30,6 +30,9 @@ setup(
         'websockets',
         'numpy',
         'scipy',
+        'python-socketio',
+        'fastapi',
+        'uvicorn',
     ],
     zip_safe=False,
     maintainer='alansrobotlab',
@@ -44,6 +47,7 @@ setup(
     entry_points={
         'console_scripts': [
             'head_tracker = alfie_vr.head_tracker:main',
+            'ros_video_streamer = alfie_vr.ros_video_streamer:main',
         ],
     },
 )
