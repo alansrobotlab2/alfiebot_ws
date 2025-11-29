@@ -20,7 +20,7 @@ from geometry_msgs.msg import Twist
 from alfie_vr.vr_monitor import VRMonitor
 
 
-class HeadTrackerNode(Node):
+class AlfieTeleopVRNode(Node):
     """ROS2 node that publishes head tracking data from VR headset"""
     
     def __init__(self):
@@ -142,8 +142,8 @@ class HeadTrackerNode(Node):
         
         # Process joystick input for cmd_vel
         # Velocity limits
-        MAX_LINEAR_VEL = 0.5  # m/s
-        MAX_ANGULAR_VEL = 0.5  # rad/s
+        MAX_LINEAR_VEL = 0.25  # m/s
+        MAX_ANGULAR_VEL = 1.0  # rad/s
         
         # Debug: Log controller goal availability
         # if left_controller_goal:
@@ -203,7 +203,7 @@ def main():
     rclpy.init()
     
     # Create node
-    node = HeadTrackerNode()
+    node = AlfieTeleopVRNode()
     
     try:
         # Spin the node

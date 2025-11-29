@@ -170,28 +170,28 @@ class VRWebSocketServer(BaseInputProvider):
     
     async def process_controller_data(self, data: Dict):
         """Process incoming VR controller data."""
-        # 检查是否有摇杆或按钮操作，只在有操作时打印
+        # Check for thumbstick or button activity, only print when there is activity
         has_thumbstick_or_button_activity = False
         thumbstick_info = []
         button_info = []
         
-        # 检查左右手柄的摇杆和按钮状态
+        # Check thumbstick and button status for left and right controllers
         for hand in ['leftController', 'rightController']:
             if hand in data:
                 controller_data = data[hand]
                 hand_name = hand.replace('Controller', '').upper()
                 
-                # 检查摇杆
+                # Check thumbstick
                 if 'thumbstick' in controller_data:
                     thumbstick = controller_data['thumbstick']
                     x = thumbstick.get('x', 0)
                     y = thumbstick.get('y', 0)
-                    # 只在摇杆有实际输入时打印（阈值0.1）
+                    # Only print when thumbstick has actual input (threshold 0.1)
                     if abs(x) > 0.1 or abs(y) > 0.1:
                         has_thumbstick_or_button_activity = True
                         thumbstick_info.append(f"[{hand_name}] Thumbstick: x={x:.2f}, y={y:.2f}")
                 
-                # 检查按钮
+                # Check buttons
                 if 'buttons' in controller_data:
                     buttons = controller_data['buttons']
                     pressed_buttons = []
@@ -203,7 +203,7 @@ class VRWebSocketServer(BaseInputProvider):
                     if pressed_buttons:
                         button_info.append(f"[{hand_name}] Buttons: {', '.join(pressed_buttons)}")
         
-        # 只在有操作时打印
+        # Only print when there is activity
         if has_thumbstick_or_button_activity:
             print(f"[VR_WS] Activity detected:")
             for info in thumbstick_info:
@@ -285,14 +285,14 @@ class VRWebSocketServer(BaseInputProvider):
             print(f"[VR_WS] 🤏 {hand.upper()} trigger: {trigger:.2f} - gripper {'OPENED' if trigger_active else 'CLOSED'}")
             logger.info(f"🤏 {hand.upper()} trigger: {trigger:.2f} - gripper {'OPENED' if trigger_active else 'CLOSED'}")
         
-        # 修改：直接响应控制器位置，不需要按squeeze键
-        # 检查是否有位置数据
+        # Modified: directly respond to controller position, no need to press squeeze button
+        # Check if there is position data
         if position and all(k in position for k in ['x', 'y', 'z']):
-            # 如果还没有设置原点，设置当前位置为原点
+            # If origin is not yet set, set current position as origin
             if controller.origin_position is None:
                 controller.origin_position = np.array([position.get('x', 0), position.get('y', 0), position.get('z', 0)])
                 
-                # 设置四元数原点
+                # Set quaternion origin
                 if quaternion and all(k in quaternion for k in ['x', 'y', 'z', 'w']):
                     controller.origin_quaternion = np.array([quaternion['x'], quaternion['y'], quaternion['z'], quaternion['w']])
                 else:
@@ -302,7 +302,7 @@ class VRWebSocketServer(BaseInputProvider):
                 controller.z_axis_rotation = 0.0
                 controller.x_axis_rotation = 0.0
                 
-                # 发送重置信号
+                # Send reset signal
                 reset_goal = ControlGoal(
                     arm=hand,
                     mode=ControlMode.POSITION_CONTROL,
@@ -318,13 +318,13 @@ class VRWebSocketServer(BaseInputProvider):
                 await self.send_goal(reset_goal)
                 logger.info(f"🎯 {hand.upper()} auto-activated - controlling {hand} arm")
             
-            # 计算目标位置 - 改为绝对位置控制
+            # Calculate target position - switch to absolute position control
             position_array = np.array([position.get('x', 0), position.get('y', 0), position.get('z', 0)])
             
-            # 直接使用VR控制器的绝对位置，应用缩放
+            # Use absolute position of VR controller directly, apply scaling
             absolute_position = position_array * self.config.vr_to_robot_scale
             
-            # 计算手腕旋转
+            # Calculate wrist rotation
             if controller.origin_quaternion is not None:
                 if quaternion and all(k in quaternion for k in ['x', 'y', 'z', 'w']):
                     current_quat = np.array([quaternion['x'], quaternion['y'], quaternion['z'], quaternion['w']])
@@ -335,16 +335,16 @@ class VRWebSocketServer(BaseInputProvider):
                 controller.z_axis_rotation = self.extract_roll_from_quaternion(controller.accumulated_rotation_quat, controller.origin_quaternion)
                 controller.x_axis_rotation = self.extract_pitch_from_quaternion(controller.accumulated_rotation_quat, controller.origin_quaternion)
             
-            # 创建绝对位置控制目标
+            # Create absolute position control goal
             goal = ControlGoal(
                 arm=hand,
                 mode=ControlMode.POSITION_CONTROL,
-                target_position=absolute_position,  # 绝对位置
+                target_position=absolute_position,  # Absolute position
                 wrist_roll_deg=-controller.z_axis_rotation,
                 wrist_flex_deg=-controller.x_axis_rotation,
                 metadata={
                     "source": "vr_absolute_position",
-                    "relative_position": False,  # 标记为绝对位置
+                    "relative_position": False,  # Mark as absolute position
                     "vr_position": position_array.tolist(),
                     "scaled_position": absolute_position.tolist(),
                     "trigger": trigger,
@@ -354,8 +354,8 @@ class VRWebSocketServer(BaseInputProvider):
             )
             await self.send_goal(goal)
         
-        # 保留原有的squeeze键逻辑作为备用（可选）
-        # 如果你想完全移除squeeze键控制，可以注释掉下面的代码
+        # Preserve original squeeze button logic as backup (optional)
+        # If you want to completely remove squeeze button control, you can comment out the code below
         """
         # Handle grip button for arm movement control (original logic)
         if grip_active:
