@@ -17,19 +17,19 @@ from pathlib import Path
 from typing import Optional
 
 # Set the absolute path to the alfievr folder
-XLEVR_PATH = "/home/alansrobotlab/Projects/alfiebot_ws/src/alfie_vr/alfie_vr"
+ALFIEVR_PATH = "/home/alansrobotlab/Projects/alfiebot_ws/src/alfie_vr/alfie_vr"
 
 def setup_alfievr_environment():
     """Setup alfievr environment"""
     # Add alfievr path to Python path
-    if XLEVR_PATH not in sys.path:
-        sys.path.insert(0, XLEVR_PATH)
+    if ALFIEVR_PATH not in sys.path:
+        sys.path.insert(0, ALFIEVR_PATH)
     
     # Set working directory
-    os.chdir(XLEVR_PATH)
+    os.chdir(ALFIEVR_PATH)
     
     # Set environment variables
-    os.environ['PYTHONPATH'] = f"{XLEVR_PATH}:{os.environ.get('PYTHONPATH', '')}"
+    os.environ['PYTHONPATH'] = f"{ALFIEVR_PATH}:{os.environ.get('PYTHONPATH', '')}"
 
 def get_local_ip():
     """Get the local IP address of this machine."""
@@ -55,7 +55,7 @@ def import_alfievr_modules():
         return AlfieVRConfig, VRWebSocketServer, ControlGoal, ControlMode
     except ImportError as e:
         print(f"Error importing alfievr modules: {e}")
-        print(f"Make sure XLEVR_PATH is correct: {XLEVR_PATH}")
+        print(f"Make sure ALFIEVR_PATH is correct: {ALFIEVR_PATH}")
         return None, None, None, None
 
 class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
@@ -104,7 +104,7 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
         """Serve a file with the given content type."""
         try:
             # Get the web root path from the server
-            web_root = getattr(self.server, 'web_root_path', XLEVR_PATH)
+            web_root = getattr(self.server, 'web_root_path', ALFIEVR_PATH)
             file_path = os.path.join(web_root, filename)
             
             if os.path.exists(file_path):
@@ -128,7 +128,7 @@ class SimpleHTTPSServer:
         self.config = config
         self.httpd = None
         self.server_thread = None
-        self.web_root_path = XLEVR_PATH
+        self.web_root_path = ALFIEVR_PATH
     
     async def start(self):
         """Start the HTTPS server."""
@@ -367,9 +367,9 @@ def main():
     print("=" * 60)
     
     # Check AlfieVR path
-    if not os.path.exists(XLEVR_PATH):
-        print(f"❌ AlfieVR path does not exist: {XLEVR_PATH}")
-        print("Please update XLEVR_PATH in the script")
+    if not os.path.exists(ALFIEVR_PATH):
+        print(f"❌ AlfieVR path does not exist: {ALFIEVR_PATH}")
+        print("Please update ALFIEVR_PATH in the script")
         return
     
     # Create monitor
