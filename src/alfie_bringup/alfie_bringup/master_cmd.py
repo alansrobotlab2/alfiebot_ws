@@ -63,9 +63,9 @@ class MasterCmdNode(Node):
             1,   # Servo 11: driver0/servo05 - right wrist pitch
             1,   # Servo 12: driver0/servo06 - right wrist roll
             1,   # Servo 13: driver0/servo07 - right hand
-            1,   # Servo 14: driver0/servo08 - head yaw
-            1,   # Servo 15: driver0/servo09 - head pitch
-            1,   # Servo 16: driver0/servo10 - head roll
+            -1,   # Servo 14: GOOD driver0/servo08 - head yaw
+            -1,   # Servo 15: GOOD driver0/servo09 - head pitch
+            -1,   # Servo 16: GOOD driver0/servo10 - head roll
         ]
         
         # Initialize command variables and timestamp
