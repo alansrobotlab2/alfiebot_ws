@@ -254,9 +254,8 @@ class AlfieTeleopVRNode(Node):
         
         for joint, local_idx in joint_to_local_idx.items():
             if joint in arm.target_positions:
-                # SimpleTeleopArm uses degrees, convert to radians for ROS2
-                target_deg = arm.target_positions[joint]
-                target_rad = math.radians(target_deg)
+                # SimpleTeleopArm now uses radians directly - no conversion needed
+                target_rad = arm.target_positions[joint]
                 self.robot_cmd_state.servo_cmd[offset + local_idx].target_location = target_rad
     
     def update_from_vr_data(self):
