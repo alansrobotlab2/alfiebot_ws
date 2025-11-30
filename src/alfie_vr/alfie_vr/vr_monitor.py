@@ -261,12 +261,17 @@ class VRMonitor:
         """Monitor commands from VR controllers"""
         print("📊 Monitoring VR control commands...")
         
+        # Rate limiting: 100Hz max (0.01 second between updates)
+        min_interval = 0.01
+        last_update_time = 0.0
+        
         while self.is_running:
             try:
                 # Wait for command with 1-second timeout
                 goal = await asyncio.wait_for(self.command_queue.get(), timeout=1.0)
                 
-                # Save goal by arm type
+                # Always save goal regardless of rate limiting
+                # (rate limiting should only affect logging/printing, not data storage)
                 with self._goal_lock:
                     if goal.arm == "left":
                         self.left_goal = goal
@@ -277,6 +282,16 @@ class VRMonitor:
                     
                     # Maintain backward compatibility, save latest goal
                     self.latest_goal = goal
+                
+                # Rate limit logging/printing to 100Hz
+                current_time = asyncio.get_event_loop().time()
+                time_since_last = current_time - last_update_time
+                
+                if time_since_last < min_interval:
+                    # Skip logging if too soon, but data is already saved above
+                    continue
+                
+                last_update_time = current_time
                 
             except asyncio.TimeoutError:
                 # Timeout, continue loop
