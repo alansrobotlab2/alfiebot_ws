@@ -49,7 +49,7 @@ AFRAME.registerComponent('controller-updater', {
     this.videoScreen = document.querySelector('#videoScreen');
     this.videoSocket = null;
 
-    const videoPort = 8080;
+    const videoPort = 8081;
 
     // Connect to Web Control Server
     // Use wss (secure) if the page is loaded via https, otherwise ws

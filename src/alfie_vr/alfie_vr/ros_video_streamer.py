@@ -19,7 +19,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-VIDEO_PORT = 8080
+VIDEO_PORT = 8081
 
 
 # Initialize FastAPI and Socket.IO
