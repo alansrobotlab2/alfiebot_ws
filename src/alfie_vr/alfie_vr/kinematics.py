@@ -184,7 +184,7 @@ class SimpleTeleopArm:
             delta_roll = max(-angle_limit, min(angle_limit, delta_roll))
             
             current_roll = self.target_positions.get("wrist_roll", 0.0)
-            new_roll = current_roll + delta_roll
+            new_roll = current_roll - delta_roll  # Negated to fix direction
             new_roll = max(-90, min(90, new_roll))  # Limit roll range
             self.target_positions["wrist_roll"] = new_roll
             
@@ -197,7 +197,7 @@ class SimpleTeleopArm:
             delta_pan = delta_x * x_scale
             delta_pan = max(-angle_limit, min(angle_limit, delta_pan))
             current_pan = self.target_positions.get("shoulder_pan", 0.0)
-            new_pan = current_pan + delta_pan
+            new_pan = current_pan - delta_pan  # Negated to fix direction
             new_pan = max(-180, min(180, new_pan))  # Limit pan range
             self.target_positions["shoulder_pan"] = new_pan
         

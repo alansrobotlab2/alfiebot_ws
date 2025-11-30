@@ -274,7 +274,8 @@ class VRWebSocketServer(BaseInputProvider):
                 "source": "vr_trigger",
                 "trigger": trigger,  # Raw analog value 0.0 to 1.0
                 "trigger_active": trigger_active,
-                "thumbstick": thumbstick
+                "thumbstick": thumbstick,
+                "grip_active": grip_active
             }
         )
         await self.send_goal(gripper_goal)
@@ -312,7 +313,8 @@ class VRWebSocketServer(BaseInputProvider):
                         "reset_target_to_current": True,
                         "trigger": trigger,
                         "trigger_active": trigger_active,
-                        "thumbstick": thumbstick
+                        "thumbstick": thumbstick,
+                        "grip_active": grip_active
                     }
                 )
                 await self.send_goal(reset_goal)
@@ -349,7 +351,8 @@ class VRWebSocketServer(BaseInputProvider):
                     "scaled_position": absolute_position.tolist(),
                     "trigger": trigger,
                     "trigger_active": trigger_active,
-                    "thumbstick": thumbstick
+                    "thumbstick": thumbstick,
+                    "grip_active": grip_active  # Grip button state for delta control
                 }
             )
             await self.send_goal(goal)

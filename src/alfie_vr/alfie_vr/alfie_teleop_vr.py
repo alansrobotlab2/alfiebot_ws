@@ -157,6 +157,17 @@ class AlfieTeleopVRNode(Node):
         # Create separate timer for async VR data processing at 90Hz
         self.vr_update_timer = self.create_timer(0.011, self.update_from_vr_data)  # 90Hz
         
+        # Arm and head controllers (initialized after first robot state)
+        self.left_arm = None
+        self.right_arm = None
+        self.head = None
+        self.kinematics_left = None
+        self.kinematics_right = None
+        
+        # Grip button state tracking for delta control
+        self.left_grip_active = False
+        self.right_grip_active = False
+        
         self.get_logger().info('Alfie Teleop VR Node initialized')
         
         # Start VR monitor in separate thread
@@ -191,6 +202,62 @@ class AlfieTeleopVRNode(Node):
         """Get the latest robot state (thread-safe)"""
         with self.robot_state_lock:
             return self.robot_state
+    
+    def initialize_arm_controllers(self):
+        """Initialize arm and head controllers after robot state is available"""
+        robot_state = self.get_robot_state()
+        if robot_state is None:
+            self.get_logger().error('Cannot initialize arm controllers: no robot state')
+            return False
+        
+        self.kinematics_left = AlfieArmKinematics()
+        self.kinematics_right = AlfieArmKinematics()
+        
+        self.left_arm = SimpleTeleopArm(
+            joint_map=LEFT_ARM_JOINT_MAP,
+            robotlowstate=robot_state,
+            kinematics=self.kinematics_left,
+            prefix='left',
+            kp=1
+        )
+        self.right_arm = SimpleTeleopArm(
+            joint_map=RIGHT_ARM_JOINT_MAP,
+            robotlowstate=robot_state,
+            kinematics=self.kinematics_right,
+            prefix='right',
+            kp=1
+        )
+        self.head = SimpleHeadControl(
+            joint_map=HEAD_JOINT_MAP,
+            robotlowstate=robot_state,
+            kp=1
+        )
+        
+        self.get_logger().info('Arm and head controllers initialized')
+        return True
+    
+    def _apply_arm_targets(self, arm, prefix):
+        """Apply arm target positions to robot command state"""
+        offset = 0 if prefix == "left" else 6
+        
+        # Map SimpleTeleopArm joint names to servo indices
+        # SimpleTeleopArm uses: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper
+        # Our servos are: shoulder_yaw(0), shoulder_pitch(1), elbow_pitch(2), wrist_pitch(3), wrist_roll(4), gripper(5)
+        joint_to_local_idx = {
+            "shoulder_pan": 0,    # maps to shoulder_yaw
+            "shoulder_lift": 1,   # maps to shoulder_pitch  
+            "elbow_flex": 2,      # maps to elbow_pitch
+            "wrist_flex": 3,      # maps to wrist_pitch
+            "wrist_roll": 4,      # maps to wrist_roll
+            "gripper": 5,         # maps to gripper
+        }
+        
+        for joint, local_idx in joint_to_local_idx.items():
+            if joint in arm.target_positions:
+                # SimpleTeleopArm uses degrees, convert to radians for ROS2
+                target_deg = arm.target_positions[joint]
+                target_rad = math.radians(target_deg)
+                self.robot_cmd_state.servo_cmd[offset + local_idx].target_location = target_rad
     
     def update_from_vr_data(self):
         """Update robot command state from VR data asynchronously (runs at 90Hz)"""
@@ -283,6 +350,76 @@ class AlfieTeleopVRNode(Node):
                 # Debug log
                 if abs(joy_x) > 0.1:
                     self.get_logger().info(f'Right thumbstick: x={joy_x:.2f} -> angular.z={self.robot_cmd_state.cmd_vel.angular.z:.2f}')
+        
+        # Process arm control using SimpleTeleopArm with VR controller input
+        # Only process when grip button is held (delta control relative to grip press)
+        if self.left_arm is not None and left_controller_goal is not None:
+            try:
+                # Check grip button state from metadata
+                left_grip_active = False
+                if hasattr(left_controller_goal, 'metadata') and left_controller_goal.metadata:
+                    left_grip_active = left_controller_goal.metadata.get('grip_active', False)
+                    # Also check for 'gripActive' key (alternative naming)
+                    if not left_grip_active:
+                        left_grip_active = left_controller_goal.metadata.get('gripActive', False)
+                
+                # Detect grip press (transition from not pressed to pressed)
+                if left_grip_active and not self.left_grip_active:
+                    self.get_logger().info('Left grip pressed - starting arm tracking')
+                    # Reset delta tracking by clearing previous position
+                    if hasattr(self.left_arm, 'prev_vr_pos'):
+                        delattr(self.left_arm, 'prev_vr_pos')
+                    if hasattr(self.left_arm, 'prev_wrist_flex'):
+                        delattr(self.left_arm, 'prev_wrist_flex')
+                    if hasattr(self.left_arm, 'prev_wrist_roll'):
+                        delattr(self.left_arm, 'prev_wrist_roll')
+                
+                # Detect grip release
+                if not left_grip_active and self.left_grip_active:
+                    self.get_logger().info('Left grip released - stopping arm tracking')
+                
+                self.left_grip_active = left_grip_active
+                
+                # Only process arm movement if grip is held
+                if left_grip_active:
+                    gripper_state = None
+                    self.left_arm.handle_vr_input(left_controller_goal, gripper_state)
+                    self._apply_arm_targets(self.left_arm, "left")
+            except Exception as e:
+                self.get_logger().warn(f'Left arm VR input error: {e}')
+        
+        if self.right_arm is not None and right_controller_goal is not None:
+            try:
+                # Check grip button state from metadata
+                right_grip_active = False
+                if hasattr(right_controller_goal, 'metadata') and right_controller_goal.metadata:
+                    right_grip_active = right_controller_goal.metadata.get('grip_active', False)
+                    if not right_grip_active:
+                        right_grip_active = right_controller_goal.metadata.get('gripActive', False)
+                
+                # Detect grip press
+                if right_grip_active and not self.right_grip_active:
+                    self.get_logger().info('Right grip pressed - starting arm tracking')
+                    if hasattr(self.right_arm, 'prev_vr_pos'):
+                        delattr(self.right_arm, 'prev_vr_pos')
+                    if hasattr(self.right_arm, 'prev_wrist_flex'):
+                        delattr(self.right_arm, 'prev_wrist_flex')
+                    if hasattr(self.right_arm, 'prev_wrist_roll'):
+                        delattr(self.right_arm, 'prev_wrist_roll')
+                
+                # Detect grip release
+                if not right_grip_active and self.right_grip_active:
+                    self.get_logger().info('Right grip released - stopping arm tracking')
+                
+                self.right_grip_active = right_grip_active
+                
+                # Only process arm movement if grip is held
+                if right_grip_active:
+                    gripper_state = None
+                    self.right_arm.handle_vr_input(right_controller_goal, gripper_state)
+                    self._apply_arm_targets(self.right_arm, "right")
+            except Exception as e:
+                self.get_logger().warn(f'Right arm VR input error: {e}')
     
     def publish_robotlowcmd(self):
         """Publish robot command at 100Hz - just publishes current state"""
@@ -344,11 +481,12 @@ def main():
             print("✅ Received first robot state message")
             break   
 
-    kin_left = AlfieArmKinematics()
-    kin_right = AlfieArmKinematics()
-    left_arm = SimpleTeleopArm(joint_map=LEFT_ARM_JOINT_MAP, robotlowstate=node.get_robot_state(), kinematics=kin_left, prefix='left', kp=1)
-    right_arm = SimpleTeleopArm(joint_map=RIGHT_ARM_JOINT_MAP, robotlowstate=node.get_robot_state(), kinematics=kin_right, prefix='right', kp=1)
-    head = SimpleHeadControl(joint_map=HEAD_JOINT_MAP, robotlowstate=node.get_robot_state(), kp=1)
+    # Initialize arm and head controllers now that we have robot state
+    if node.initialize_arm_controllers():
+        print("✅ Arm and head controllers initialized")
+    else:
+        print("❌ Failed to initialize arm controllers")
+    
     # Create multi-threaded executor for state subscription
     executor = MultiThreadedExecutor(num_threads=3)
     executor.add_node(node)
