@@ -141,9 +141,9 @@ class SimpleTeleopArm:
         
         # Calculate relative change (delta) from previous frame
         # Scale factors for converting VR movement to robot workspace
-        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * 20 # * 220  # Scale for the shoulder rotate
-        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * 20 # * 70   # Scale for arm reach (Y)
-        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * 20 # * 70   # Scale for arm reach (Z->X)
+        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * 80 # * 220  # Scale for the shoulder rotate
+        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * 40 # * 70   # Scale for arm reach (Y)
+        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * 40 # * 70   # Scale for arm reach (Z->X)
 
         # Update previous position for next frame
         self.prev_vr_pos = current_vr_pos
@@ -164,8 +164,11 @@ class SimpleTeleopArm:
         delta_z = max(-delta_limit, min(delta_limit, delta_z))
         
         # Update workspace position
-        self.current_x += -delta_z  # VR Z maps to robot x, change the direction
-        self.current_y += delta_y  # VR Y maps to robot y (same direction as controller)
+        # VR coordinate system (WebXR): X=left(-)/right(+), Y=down(-)/up(+), Z=forward(-)/back(+)
+        # Kinematics coordinate system: X=forward reach, Y=vertical (negative=down)
+        # Fix: swap X and Y mapping to match physical motion
+        self.current_y += delta_z  # VR Z (forward/back) -> robot y (vertical) - SWAPPED
+        self.current_x += -delta_y   # VR Y (up/down) -> robot x (reach) - SWAPPED
         
         # Debug: show position changes
         if abs(delta_y) > 0.001 or abs(delta_z) > 0.001:

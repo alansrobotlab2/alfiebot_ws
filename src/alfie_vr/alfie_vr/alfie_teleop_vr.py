@@ -16,6 +16,7 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from alfie_msgs.msg import RobotLowCmd, RobotLowState, ServoCmd
+from alfie_msgs.srv import BackRequestCalibration
 from geometry_msgs.msg import Twist
 
 # Local imports
@@ -232,6 +233,23 @@ class AlfieTeleopVRNode(Node):
             robotlowstate=robot_state,
             kp=1
         )
+
+        # Call back calibration service
+        # self.get_logger().info('Calling back calibration service...')
+        # calibrate_client = self.create_client(BackRequestCalibration, '/calibrate_back')
+        # if calibrate_client.wait_for_service(timeout_sec=5.0):
+        #     request = BackRequestCalibration.Request()
+        #     future = calibrate_client.call_async(request)
+        #     rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+        #     if future.result() is not None:
+        #         if future.result().success:
+        #             self.get_logger().info('Back calibration successful')
+        #         else:
+        #             self.get_logger().warn('Back calibration returned failure')
+        #     else:
+        #         self.get_logger().warn('Back calibration service call failed')
+        # else:
+        #     self.get_logger().warn('Back calibration service not available')
         
         self.get_logger().info('Arm and head controllers initialized')
         return True
