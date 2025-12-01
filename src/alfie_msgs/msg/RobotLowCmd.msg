@@ -1,5 +1,8 @@
 int16[2] eye_pwm
 float32 shoulder_height
+
+BackCmd back_cmd
+
 geometry_msgs/Twist cmd_vel
 
 # state for all 15 servos on robot 

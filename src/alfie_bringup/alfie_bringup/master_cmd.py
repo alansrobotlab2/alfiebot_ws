@@ -2,7 +2,7 @@ import time
 from typing import Optional
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.msg import RobotLowCmd, GDBCmd, GDBServoCmd, ServoCmd
+from alfie_msgs.msg import RobotLowCmd, GDBCmd, GDBServoCmd, ServoCmd, BackCmd
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 import numpy as np
 from .servo_config import SERVO_POLARITY
@@ -51,6 +51,7 @@ class MasterCmdNode(Node):
         # Initialize command variables and timestamp
         self.gdb0_cmd: Optional[GDBCmd] = None
         self.gdb1_cmd: Optional[GDBCmd] = None
+        self.back_cmd: Optional[BackCmd] = None
         self.last_robot_cmd_time = None
         self.last_warn_time = None  # For throttling warnings
         
@@ -65,13 +66,20 @@ class MasterCmdNode(Node):
         # Publishers for gdb commands (use RELIABLE)
         self.gdb0_cmd_pub = self.create_publisher(
             GDBCmd,
-            'gdb0cmd',
+            'low/gdb0cmd',
             qos_reliable
         )
         
         self.gdb1_cmd_pub = self.create_publisher(
             GDBCmd,
-            'gdb1cmd',
+            'low/gdb1cmd',
+            qos_reliable
+        )
+        
+        # Publisher for back command (use RELIABLE)
+        self.back_cmd_pub = self.create_publisher(
+            BackCmd,
+            'low/backcmd',
             qos_reliable
         )
         
@@ -159,6 +167,7 @@ class MasterCmdNode(Node):
         # Store the commands (they will be published by the timer)
         self.gdb0_cmd = gdb0_cmd
         self.gdb1_cmd = gdb1_cmd
+        self.back_cmd = msg.back_cmd
         self.get_logger().debug('Received robot command')
     
     # ========================================================================
@@ -174,6 +183,8 @@ class MasterCmdNode(Node):
         # Publish the commands
         self.gdb0_cmd_pub.publish(self.gdb0_cmd)
         self.gdb1_cmd_pub.publish(self.gdb1_cmd)
+        if self.back_cmd is not None:
+            self.back_cmd_pub.publish(self.back_cmd)
         self.get_logger().debug('Published gdb commands')
     
     # ========================================================================

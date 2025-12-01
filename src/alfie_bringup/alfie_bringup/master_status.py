@@ -58,14 +58,14 @@ class MasterStatusNode(Node):
         # Subscribe to gdb states (use BEST_EFFORT to match gdb publishers)
         self.gdb0_sub = self.create_subscription(
             GDBState,
-            'gdb0state',
+            'low/gdb0state',
             self.gdb0_callback,
             qos_best_effort
         )
         
         self.gdb1_sub = self.create_subscription(
             GDBState,
-            'gdb1state',
+            'low/gdb1state',
             self.gdb1_callback,
             qos_best_effort
         )
@@ -78,12 +78,12 @@ class MasterStatusNode(Node):
             qos_best_effort
         )
         
-        # Subscribe to back state (use RELIABLE QoS)
+        # Subscribe to back state (use BEST_EFFORT QoS to match micro-ROS publisher)
         self.back_state_sub = self.create_subscription(
             BackState,
-            'backstate',
+            'low/backstate',
             self.back_state_callback,
-            qos_reliable
+            qos_best_effort
         )
         
         # Publisher for robot low state (use RELIABLE for subscribers)

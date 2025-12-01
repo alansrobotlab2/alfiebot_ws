@@ -84,18 +84,18 @@ bool createRosEntities(void) {
     }
     
     // Create node
-    ret = rclc_node_init_default(&node, "back_drive_controller", "", &support);
+    ret = rclc_node_init_default(&node, "back_drive_controller", NAMESPACE, &support);
     if (ret != RCL_RET_OK) {
         rclc_support_fini(&support);
         return false;
     }
     
-    // Create subscriber for /backcmd topic
+    // Create subscriber for backcmd topic (uses node namespace)
     ret = rclc_subscription_init_default(
         &back_subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, BackCmd),
-        "/backcmd"
+        "backcmd"
     );
     if (ret != RCL_RET_OK) {
         (void)rcl_node_fini(&node);
@@ -103,12 +103,12 @@ bool createRosEntities(void) {
         return false;
     }
     
-    // Create publisher for back state
+    // Create publisher for back state (uses node namespace)
     ret = rclc_publisher_init_default(
         &state_publisher,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, BackState),
-        "/backstate"
+        "backstate"
     );
     if (ret != RCL_RET_OK) {
         (void)rcl_subscription_fini(&back_subscriber, &node);
@@ -117,12 +117,12 @@ bool createRosEntities(void) {
         return false;
     }
     
-    // Create calibration service
+    // Create calibration service (uses node namespace)
     ret = rclc_service_init_default(
         &calibration_service,
         &node,
         ROSIDL_GET_SRV_TYPE_SUPPORT(alfie_msgs, srv, BackRequestCalibration),
-        "/calibrate_back"
+        "calibrate_back"
     );
     if (ret != RCL_RET_OK) {
         (void)rcl_publisher_fini(&state_publisher, &node);
@@ -276,6 +276,11 @@ void updateRosInterface(void) {
 void backDriveCallback(const void *msgin) {
     const alfie_msgs__msg__BackCmd *msg = (const alfie_msgs__msg__BackCmd *)msgin;
     
+    // Ignore commands until calibrated
+    if (!rp.actuator_state.is_calibrated) {
+        return;
+    }
+    
     // Ignore commands during calibration
     if (rp.calibration_in_progress) {
         return;
@@ -334,7 +339,7 @@ void calibrationServiceCallback(const void *req_msg, void *res_msg) {
     delay(50);
     
     // Calibration parameters
-    const uint8_t CALIBRATION_PWM = 100;        // Fixed PWM for slow downward motion
+    const uint8_t CALIBRATION_PWM = 200;        // Fixed PWM for slow downward motion
     const uint32_t CALIBRATION_TIMEOUT_MS = 20000;  // 20 second timeout
     const uint32_t LED_UPDATE_INTERVAL_MS = 100;    // Update LED every 100ms during calibration
     

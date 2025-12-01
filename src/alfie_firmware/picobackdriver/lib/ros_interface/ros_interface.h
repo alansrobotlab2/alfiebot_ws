@@ -4,9 +4,13 @@
  * 
  * This module handles all ROS2 communication including:
  * - Micro-ROS initialization and management
- * - BackCmd command subscription (/backcmd)
- * - BackState publishing (/backstate)
+ * - BackCmd command subscription (backcmd - under node namespace)
+ * - BackState publishing (backstate - under node namespace)
+ * - Calibration service (calibrate_back - under node namespace)
  * - Inter-core communication with motor control
+ * 
+ * Node: back_drive_controller
+ * Namespace: Defined by NAMESPACE in config.h (e.g., "alfie/low")
  * 
  * @author Alfie Bot Project
  * @date 2025-10-27

@@ -8,7 +8,7 @@ Board 0: /dev/ttyUSB0 - right arm, head, drive wheels
 Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 */
 
-#define NAMESPACE "alfie"
+#define NAMESPACE "alfie/low"
 
 // PWM frequency - higher frequency = smoother motor control, especially important for faster motors
 // 512 Hz proven optimal in experimental testing with 110 RPM motors

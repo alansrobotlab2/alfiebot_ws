@@ -255,6 +255,7 @@ class VRWebSocketServer(BaseInputProvider):
         grip_active = data.get('gripActive', False)
         trigger = data.get('trigger', 0)
         thumbstick = data.get('thumbstick', {})
+        buttons = data.get('buttons', {})  # Get buttons dictionary
         
         controller = self.left_controller if hand == 'left' else self.right_controller
         
@@ -275,7 +276,8 @@ class VRWebSocketServer(BaseInputProvider):
                 "trigger": trigger,  # Raw analog value 0.0 to 1.0
                 "trigger_active": trigger_active,
                 "thumbstick": thumbstick,
-                "grip_active": grip_active
+                "grip_active": grip_active,
+                "buttons": buttons
             }
         )
         await self.send_goal(gripper_goal)
@@ -314,7 +316,8 @@ class VRWebSocketServer(BaseInputProvider):
                         "trigger": trigger,
                         "trigger_active": trigger_active,
                         "thumbstick": thumbstick,
-                        "grip_active": grip_active
+                        "grip_active": grip_active,
+                        "buttons": buttons
                     }
                 )
                 await self.send_goal(reset_goal)
@@ -352,7 +355,8 @@ class VRWebSocketServer(BaseInputProvider):
                     "trigger": trigger,
                     "trigger_active": trigger_active,
                     "thumbstick": thumbstick,
-                    "grip_active": grip_active  # Grip button state for delta control
+                    "grip_active": grip_active,  # Grip button state for delta control
+                    "buttons": buttons
                 }
             )
             await self.send_goal(goal)

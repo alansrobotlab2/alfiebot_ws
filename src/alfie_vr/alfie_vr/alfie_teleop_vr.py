@@ -15,7 +15,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from alfie_msgs.msg import RobotLowCmd, RobotLowState, ServoCmd
+from alfie_msgs.msg import RobotLowCmd, RobotLowState, ServoCmd, BackCmd
 from alfie_msgs.srv import BackRequestCalibration
 from geometry_msgs.msg import Twist
 
@@ -134,6 +134,10 @@ class AlfieTeleopVRNode(Node):
         # Initialize other command fields
         self.robot_cmd_state.eye_pwm = [0, 0]
         self.robot_cmd_state.shoulder_height = 0.0
+        self.robot_cmd_state.back_cmd = BackCmd()
+        self.robot_cmd_state.back_cmd.position = 0.390
+        self.robot_cmd_state.back_cmd.velocity = 0.2
+        self.robot_cmd_state.back_cmd.acceleration = 0.1
         self.robot_cmd_state.cmd_vel = Twist()
         
         # Create timer for 100Hz publishing
@@ -235,21 +239,21 @@ class AlfieTeleopVRNode(Node):
         )
 
         # Call back calibration service
-        # self.get_logger().info('Calling back calibration service...')
-        # calibrate_client = self.create_client(BackRequestCalibration, '/calibrate_back')
-        # if calibrate_client.wait_for_service(timeout_sec=5.0):
-        #     request = BackRequestCalibration.Request()
-        #     future = calibrate_client.call_async(request)
-        #     rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
-        #     if future.result() is not None:
-        #         if future.result().success:
-        #             self.get_logger().info('Back calibration successful')
-        #         else:
-        #             self.get_logger().warn('Back calibration returned failure')
-        #     else:
-        #         self.get_logger().warn('Back calibration service call failed')
-        # else:
-        #     self.get_logger().warn('Back calibration service not available')
+        self.get_logger().info('Calling back calibration service...')
+        calibrate_client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
+        if calibrate_client.wait_for_service(timeout_sec=5.0):
+            request = BackRequestCalibration.Request()
+            future = calibrate_client.call_async(request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+            if future.result() is not None:
+                if future.result().success:
+                    self.get_logger().info('Back calibration successful')
+                else:
+                    self.get_logger().warn('Back calibration returned failure')
+            else:
+                self.get_logger().warn('Back calibration service call failed')
+        else:
+            self.get_logger().warn('Back calibration service not available')
         
         self.get_logger().info('Arm and head controllers initialized')
         return True
@@ -355,6 +359,7 @@ class AlfieTeleopVRNode(Node):
                     self.get_logger().info(f'Left thumbstick: x={joy_x:.2f}, y={joy_y:.2f} -> linear.x={self.robot_cmd_state.cmd_vel.linear.x:.2f}, linear.y={self.robot_cmd_state.cmd_vel.linear.y:.2f}')
         
         # Right joystick X-axis controls angular velocity (rotate left/right)
+        # A/B buttons control back height
         if right_controller_goal and hasattr(right_controller_goal, 'metadata') and right_controller_goal.metadata:
             thumbstick = right_controller_goal.metadata.get('thumbstick', {})
             if thumbstick:
@@ -367,6 +372,39 @@ class AlfieTeleopVRNode(Node):
                 # Debug log
                 if abs(joy_x) > 0.1:
                     self.get_logger().info(f'Right thumbstick: x={joy_x:.2f} -> angular.z={self.robot_cmd_state.cmd_vel.angular.z:.2f}')
+            
+            # A/B buttons: back height control (range 0.000 to 0.390)
+            # B button increases height, A button decreases height
+            # Max rate: 0.1 m/s at 100Hz = 0.001 m per tick
+            buttons = right_controller_goal.metadata.get('buttons', {})
+            
+            # Debug: log buttons dictionary when it has content
+            # if buttons:
+            #     self.get_logger().info(f'Buttons received: {buttons}')
+            
+            button_a = buttons.get('a', False) or buttons.get('A', False)
+            button_b = buttons.get('b', False) or buttons.get('B', False)
+            
+            BACK_MAX_RATE = 0.02  # m/s
+            BACK_MIN = 0.000
+            BACK_MAX = 0.390
+            dt = 0.01  # 100Hz update rate
+            
+            # Calculate delta based on button presses
+            back_delta = 0.0
+            if button_b:
+                back_delta = BACK_MAX_RATE * dt  # B increases height
+            elif button_a:
+                back_delta = -BACK_MAX_RATE * dt  # A decreases height
+            
+            if back_delta != 0.0:
+                new_back_pos = self.robot_cmd_state.back_cmd.position + back_delta
+                # Clamp to valid range
+                new_back_pos = max(BACK_MIN, min(BACK_MAX, new_back_pos))
+                self.robot_cmd_state.back_cmd.position = new_back_pos
+                
+                # Debug log
+                self.get_logger().info(f'Back height: {new_back_pos:.3f} ({"B" if button_b else "A"} pressed)')
         
         # Process arm control using SimpleTeleopArm with VR controller input
         # Only process when grip button is held (delta control relative to grip press)
