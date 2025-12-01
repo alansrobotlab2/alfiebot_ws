@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 # Set the absolute path to the alfievr folder
-ALFIEVR_PATH = "/home/alansrobotlab/Projects/alfiebot_ws/src/alfie_vr/alfie_vr"
+ALFIEVR_PATH = "/home/alfie/alfiebot_ws/src/alfie_vr/alfie_vr"
 
 def setup_alfievr_environment():
     """Setup alfievr environment"""
