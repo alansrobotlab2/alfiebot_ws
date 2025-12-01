@@ -104,7 +104,7 @@ DEFAULT_FOLLOWER_PORTS = {
 }
 
 @dataclass
-class XLeVRConfig:
+class AlfieVRConfig:
     """Main configuration class for the teleoperation system (VR-only)."""
     # Network settings
     https_port: int = HTTPS_PORT
@@ -150,4 +150,4 @@ def update_config_data(new_config: dict):
     return save_config(_config_data)
 
 # Global configuration instance
-config = XLeVRConfig() 
+config = AlfieVRConfig() 

@@ -1,0 +1,20 @@
+/alfie/oak:
+  ros__parameters:
+    camera:
+      i_nn_type: none
+    stereo:
+      i_subpixel: true
+    rgb:
+      i_fps: 15.0
+    depth:
+      i_fps: 15.0
+    infra1:
+      i_fps: 15.0
+    infra2:
+      i_fps: 15.0
+    left:
+      i_fps: 15.0
+    right:
+      i_fps: 15.0
+    tof:
+      i_fps: 15.0

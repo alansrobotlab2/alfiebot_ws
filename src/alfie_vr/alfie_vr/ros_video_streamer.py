@@ -19,6 +19,9 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+VIDEO_PORT = 8081
+
+
 # Initialize FastAPI and Socket.IO
 app = FastAPI()
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
@@ -103,7 +106,7 @@ class VideoStreamerNode(Node):
         
         # Declare parameters
         self.declare_parameter('image_topic', '/alfie/oak/rgb/image_raw/compressed')
-        self.declare_parameter('port', 8000)
+        self.declare_parameter('port', VIDEO_PORT)
         
         # Get parameters
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
@@ -153,7 +156,7 @@ class VideoStreamerNode(Node):
 def run_uvicorn_server(port: int):
     """Run the uvicorn server in a separate thread"""
     print(f"Starting Video Server on port {port}...")
-    print("Ensure no other service is using port 8000")
+    print(f"Ensure no other service is using port {port}")
     
     # Check for SSL certs - first try current directory (like video.py), then module directory
     ssl_keyfile = "key.pem"

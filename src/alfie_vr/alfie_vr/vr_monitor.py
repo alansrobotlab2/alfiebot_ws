@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 VR Monitor - Independent VR control information monitoring script
-Can call XLeVR's VR functionality from other folders and read/print VR control information
+Can call AlfieVR's VR functionality from other folders and read/print VR control information
 """
 
 import os
@@ -16,20 +16,20 @@ import socket
 from pathlib import Path
 from typing import Optional
 
-# Set the absolute path to the xlevr folder
-XLEVR_PATH = "/home/alansrobotlab/Projects/alfiebot_ws/src/alfie_vr/alfie_vr"
+# Set the absolute path to the alfievr folder
+ALFIEVR_PATH = "/home/alfie/alfiebot_ws/src/alfie_vr/alfie_vr"
 
-def setup_xlevr_environment():
-    """Setup xlevr environment"""
-    # Add xlevr path to Python path
-    if XLEVR_PATH not in sys.path:
-        sys.path.insert(0, XLEVR_PATH)
+def setup_alfievr_environment():
+    """Setup alfievr environment"""
+    # Add alfievr path to Python path
+    if ALFIEVR_PATH not in sys.path:
+        sys.path.insert(0, ALFIEVR_PATH)
     
     # Set working directory
-    os.chdir(XLEVR_PATH)
+    os.chdir(ALFIEVR_PATH)
     
     # Set environment variables
-    os.environ['PYTHONPATH'] = f"{XLEVR_PATH}:{os.environ.get('PYTHONPATH', '')}"
+    os.environ['PYTHONPATH'] = f"{ALFIEVR_PATH}:{os.environ.get('PYTHONPATH', '')}"
 
 def get_local_ip():
     """Get the local IP address of this machine."""
@@ -46,16 +46,16 @@ def get_local_ip():
             # Final fallback
             return "localhost"
 
-def import_xlevr_modules():
-    """Import xlevr modules"""
+def import_alfievr_modules():
+    """Import alfievr modules"""
     try:
-        from xlevr.config import XLeVRConfig
-        from xlevr.inputs.vr_ws_server import VRWebSocketServer
-        from xlevr.inputs.base import ControlGoal, ControlMode
-        return XLeVRConfig, VRWebSocketServer, ControlGoal, ControlMode
+        from alfievr.config import AlfieVRConfig
+        from alfievr.inputs.vr_ws_server import VRWebSocketServer
+        from alfievr.inputs.base import ControlGoal, ControlMode
+        return AlfieVRConfig, VRWebSocketServer, ControlGoal, ControlMode
     except ImportError as e:
-        print(f"Error importing xlevr modules: {e}")
-        print(f"Make sure XLEVR_PATH is correct: {XLEVR_PATH}")
+        print(f"Error importing alfievr modules: {e}")
+        print(f"Make sure ALFIEVR_PATH is correct: {ALFIEVR_PATH}")
         return None, None, None, None
 
 class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
@@ -104,7 +104,7 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
         """Serve a file with the given content type."""
         try:
             # Get the web root path from the server
-            web_root = getattr(self.server, 'web_root_path', XLEVR_PATH)
+            web_root = getattr(self.server, 'web_root_path', ALFIEVR_PATH)
             file_path = os.path.join(web_root, filename)
             
             if os.path.exists(file_path):
@@ -128,7 +128,7 @@ class SimpleHTTPSServer:
         self.config = config
         self.httpd = None
         self.server_thread = None
-        self.web_root_path = XLEVR_PATH
+        self.web_root_path = ALFIEVR_PATH
     
     async def start(self):
         """Start the HTTPS server."""
@@ -178,19 +178,19 @@ class VRMonitor:
     
     def initialize(self):
         """Initialize VR monitor"""
-        print("🔧 Initializing XLeVR Monitor...")
+        print("🔧 Initializing AlfieVR Monitor...")
         
         # Setup environment
-        setup_xlevr_environment()
+        setup_alfievr_environment()
         
         # Import modules
-        XLeVRConfig, VRWebSocketServer, ControlGoal, ControlMode = import_xlevr_modules()
-        if XLeVRConfig is None:
-            print("❌ Failed to import xlevr modules")
+        AlfieVRConfig, VRWebSocketServer, ControlGoal, ControlMode = import_alfievr_modules()
+        if AlfieVRConfig is None:
+            print("❌ Failed to import alfievr modules")
             return False
         
         # Create configuration
-        self.config = XLeVRConfig()
+        self.config = AlfieVRConfig()
         self.config.enable_vr = True
         self.config.enable_keyboard = False
         self.config.enable_https = True  # Enable HTTPS server, VR requires web interface
@@ -216,7 +216,7 @@ class VRMonitor:
             print(f"❌ Failed to create HTTPS server: {e}")
             return False
         
-        print("✅ XLeVR Monitor initialized successfully")
+        print("✅ AlfieVR Monitor initialized successfully")
         
         return True
     
@@ -261,12 +261,17 @@ class VRMonitor:
         """Monitor commands from VR controllers"""
         print("📊 Monitoring VR control commands...")
         
+        # Rate limiting: 100Hz max (0.01 second between updates)
+        min_interval = 0.01
+        last_update_time = 0.0
+        
         while self.is_running:
             try:
                 # Wait for command with 1-second timeout
                 goal = await asyncio.wait_for(self.command_queue.get(), timeout=1.0)
                 
-                # Save goal by arm type
+                # Always save goal regardless of rate limiting
+                # (rate limiting should only affect logging/printing, not data storage)
                 with self._goal_lock:
                     if goal.arm == "left":
                         self.left_goal = goal
@@ -277,6 +282,16 @@ class VRMonitor:
                     
                     # Maintain backward compatibility, save latest goal
                     self.latest_goal = goal
+                
+                # Rate limit logging/printing to 100Hz
+                current_time = asyncio.get_event_loop().time()
+                time_since_last = current_time - last_update_time
+                
+                if time_since_last < min_interval:
+                    # Skip logging if too soon, but data is already saved above
+                    continue
+                
+                last_update_time = current_time
                 
             except asyncio.TimeoutError:
                 # Timeout, continue loop
@@ -363,13 +378,13 @@ class VRMonitor:
 
 def main():
     """Main function"""
-    print("🎮 XLeVR Monitor - XLeVR VR Control Information Monitor")
+    print("🎮 AlfieVR Monitor - AlfieVR VR Control Information Monitor")
     print("=" * 60)
     
-    # Check XLeVR path
-    if not os.path.exists(XLEVR_PATH):
-        print(f"❌ XLeVR path does not exist: {XLEVR_PATH}")
-        print("Please update XLEVR_PATH in the script")
+    # Check AlfieVR path
+    if not os.path.exists(ALFIEVR_PATH):
+        print(f"❌ AlfieVR path does not exist: {ALFIEVR_PATH}")
+        print("Please update ALFIEVR_PATH in the script")
         return
     
     # Create monitor
@@ -379,7 +394,7 @@ def main():
     try:
         asyncio.run(monitor.start_monitoring())
     except KeyboardInterrupt:
-        print("\n👋 XLeVR Monitor stopped by user")
+        print("\n👋 AlfieVR Monitor stopped by user")
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
 

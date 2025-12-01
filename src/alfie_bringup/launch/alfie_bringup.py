@@ -120,23 +120,6 @@ def generate_launch_description():
             respawn=True
         ),
 
-        Node(
-            package='foxglove_bridge',
-            namespace='alfie',
-            executable='foxglove_bridge',
-            name='foxglove_bridge',
-            parameters=[{
-                'send_buffer_limit': 200000000,  # 200MB (default is 10MB)
-                'max_qos_depth': 2,  # Limit queue depth
-                'capabilities': ['clientPublish', 'connectionGraph', 'assets'],
-            }],
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
-        ),
-
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource([
                 os.path.join(

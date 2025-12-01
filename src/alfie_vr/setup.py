@@ -15,7 +15,7 @@ setup(
     ],
     package_data={
         package_name: [
-            'xlevr/**/*.py',
+            'alfievr/**/*.py',
             'web-ui/*.html',
             'web-ui/*.js',
             'web-ui/*.css',
@@ -47,7 +47,6 @@ setup(
     entry_points={
         'console_scripts': [
             'alfie_teleop_vr = alfie_vr.alfie_teleop_vr:main',
-            'head_tracker = alfie_vr.head_tracker:main',
             'ros_video_streamer = alfie_vr.ros_video_streamer:main',
         ],
     },

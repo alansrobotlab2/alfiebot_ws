@@ -49,10 +49,12 @@ AFRAME.registerComponent('controller-updater', {
     this.videoScreen = document.querySelector('#videoScreen');
     this.videoSocket = null;
 
-    // Connect to Web Control Server (default port 8000)
+    const videoPort = 8081;
+
+    // Connect to Web Control Server
     // Use wss (secure) if the page is loaded via https, otherwise ws
     const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
-    const videoServerUrl = `${protocol}://${serverHostname}:8000`;
+    const videoServerUrl = `${protocol}://${serverHostname}:${videoPort}`;
     console.log(`Attempting Video Socket.IO connection to: ${videoServerUrl}`);
     
     try {
