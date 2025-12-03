@@ -77,15 +77,15 @@ class SimpleTeleopArm:
         )
 
 
-    def move_to_zero_position(self, robot):
+    def move_to_zero_position(self, robot=None):
         """
         Move the arm to its defined zero position.
 
         Resets internal state variables including current Cartesian coordinates,
-        pitch, and delta control timers. Sends the zero position action to the robot.
+        pitch, and delta control timers. Optionally sends the zero position action to the robot.
 
         Args:
-            robot (object): The robot instance to send actions to.
+            robot (object, optional): The robot instance to send actions to. If None, only resets internal state.
         """
         print(f"[{self.prefix}] Moving to Zero Position: {self.zero_pos} ......")
         self.target_positions = self.zero_pos.copy()
@@ -99,12 +99,17 @@ class SimpleTeleopArm:
         
         # Reset delta control state
         self.last_vr_time = 0.0
+        if hasattr(self, 'prev_vr_pos'):
+            delattr(self, 'prev_vr_pos')
+        if hasattr(self, 'prev_wrist_flex'):
+            delattr(self, 'prev_wrist_flex')
+        if hasattr(self, 'prev_wrist_roll'):
+            delattr(self, 'prev_wrist_roll')
         
-        # Explicitly set wrist_flex
-        # self.target_positions["wrist_flex"] = 0.0
-        
-        action = self.p_control_action(robot)
-        robot.send_action(action)
+        # Only send action if robot is provided
+        if robot is not None:
+            action = self.p_control_action(robot)
+            robot.send_action(action)
 
     def handle_vr_input(self, vr_goal, gripper_state):
         """

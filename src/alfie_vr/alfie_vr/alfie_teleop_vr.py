@@ -864,6 +864,21 @@ class AlfieTeleopVRNode(Node):
                 # Debug log
                 if abs(joy_x) > 0.1 or abs(joy_y) > 0.1:
                     self.get_logger().info(f'Left thumbstick: x={joy_x:.2f}, y={joy_y:.2f} -> linear.x={self.robot_cmd_state.cmd_vel.linear.x:.2f}, linear.y={self.robot_cmd_state.cmd_vel.linear.y:.2f}')
+            
+            # Y button: reset both arms to zero positions
+            buttons = left_controller_goal.metadata.get('buttons', {})
+            button_y = buttons.get('y', False) or buttons.get('Y', False)
+            
+            if button_y:
+                self.get_logger().info('Y button pressed - resetting both arms to zero positions')
+                
+                if self.left_arm is not None:
+                    self.left_arm.move_to_zero_position()
+                    self._apply_arm_targets(self.left_arm, "left")
+                
+                if self.right_arm is not None:
+                    self.right_arm.move_to_zero_position()
+                    self._apply_arm_targets(self.right_arm, "right")
         
         # Right joystick X-axis controls angular velocity (rotate left/right)
         # A/B buttons control back height
