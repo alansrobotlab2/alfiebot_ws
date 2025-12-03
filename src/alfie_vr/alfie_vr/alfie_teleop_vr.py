@@ -25,6 +25,406 @@ from alfie_vr.kinematics import AlfieArmKinematics
 from alfie_vr.kinematics import SimpleTeleopArm
 from alfie_vr.kinematics import SimpleHeadControl
 
+# Optional pygame import for debug visualization
+try:
+    import pygame
+    PYGAME_AVAILABLE = True
+except ImportError:
+    PYGAME_AVAILABLE = False
+
+
+class ArmDebugVisualizer:
+    """
+    Pygame-based debug visualizer for arm kinematics.
+    Runs in the same thread as the main control loop.
+    """
+    
+    # Colors
+    BLACK = (0, 0, 0)
+    WHITE = (255, 255, 255)
+    RED = (255, 0, 0)
+    GREEN = (0, 255, 0)
+    BLUE = (0, 100, 255)
+    YELLOW = (255, 255, 0)
+    GRAY = (128, 128, 128)
+    LIGHT_GRAY = (200, 200, 200)
+    DARK_GRAY = (50, 50, 50)
+    ORANGE = (255, 165, 0)
+    CYAN = (0, 255, 255)
+    MAGENTA = (255, 0, 255)
+    
+    def __init__(self, kinematics, prefix="left"):
+        self.kinematics = kinematics
+        self.prefix = prefix
+        self.running = False
+        self.screen = None
+        self.clock = None
+        self.font = None
+        self.small_font = None
+        
+        # Window settings
+        self.window_width = 900
+        self.window_height = 700
+        self.scale = 800  # pixels per meter
+        self.origin_x = self.window_width // 2
+        self.origin_y = 150  # Near top since arm hangs down
+        
+        # Latest data
+        self.latest_data = None
+        
+    def start(self):
+        """Initialize pygame display."""
+        if not PYGAME_AVAILABLE:
+            print("[DEBUG VIS] pygame not available, skipping visualization")
+            return False
+        
+        try:
+            # Initialize pygame (safe to call multiple times)
+            pygame.init()
+            
+            # Check if display module initialized correctly
+            if not pygame.display.get_init():
+                print("[DEBUG VIS] pygame display failed to initialize")
+                return False
+            
+            self.screen = pygame.display.set_mode((self.window_width, self.window_height))
+            pygame.display.set_caption(f"Alfie {self.prefix.title()} Arm Debug Visualizer")
+            self.clock = pygame.time.Clock()
+            self.font = pygame.font.Font(None, 22)
+            self.small_font = pygame.font.Font(None, 18)
+            self.running = True
+            print(f"[DEBUG VIS] Started {self.prefix} arm visualizer")
+            return True
+        except Exception as e:
+            print(f"[DEBUG VIS] Failed to start pygame: {e}")
+            self.running = False
+            return False
+        
+    def stop(self):
+        """Stop the visualizer."""
+        self.running = False
+        if PYGAME_AVAILABLE and self.screen is not None:
+            try:
+                pygame.display.quit()  # Only quit display, not all of pygame
+                self.screen = None
+            except Exception as e:
+                print(f"[DEBUG VIS] Error stopping display: {e}")
+        print(f"[DEBUG VIS] {self.prefix.title()} arm visualizer stopped")
+            
+    def update(self, arm_controller, vr_goal=None):
+        """
+        Update visualization - call this from main loop.
+        Returns False if user closed the window.
+        """
+        if not self.running or self.screen is None:
+            return True
+        
+        try:
+            # Handle pygame events - only process window close events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    print("[DEBUG VIS] Window close requested")
+                    self.running = False
+                    return False
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_q, pygame.K_ESCAPE):
+                        print("[DEBUG VIS] Quit key pressed")
+                        self.running = False
+                        return False
+            
+            # Update data from arm controller
+            self.latest_data = {
+                'current_x': getattr(arm_controller, 'current_x', 0.0),
+                'current_y': getattr(arm_controller, 'current_y', 0.0),
+                'target_positions': arm_controller.target_positions.copy(),
+                'pitch': getattr(arm_controller, 'pitch', 0.0),
+                'prev_vr_pos': getattr(arm_controller, 'prev_vr_pos', None),
+                'vr_goal': None,
+                'timestamp': time.time(),
+            }
+            
+            # Extract VR goal data if available
+            if vr_goal is not None:
+                target_pos = None
+                if hasattr(vr_goal, 'target_position') and vr_goal.target_position is not None:
+                    try:
+                        target_pos = list(vr_goal.target_position)
+                    except (TypeError, ValueError):
+                        target_pos = None
+                
+                meta = {}
+                if hasattr(vr_goal, 'metadata') and vr_goal.metadata is not None:
+                    try:
+                        meta = dict(vr_goal.metadata)
+                    except (TypeError, ValueError):
+                        meta = {}
+                
+                self.latest_data['vr_goal'] = {
+                    'target_position': target_pos,
+                    'wrist_flex_deg': getattr(vr_goal, 'wrist_flex_deg', None),
+                    'wrist_roll_deg': getattr(vr_goal, 'wrist_roll_deg', None),
+                    'metadata': meta,
+                }
+            
+            # Clear screen
+            self.screen.fill(self.BLACK)
+            
+            # Draw visualization
+            self._draw_grid(self.screen, self.small_font)
+            self._draw_workspace(self.screen)
+            self._draw_arm(self.screen)
+            self._draw_info_panel(self.screen, self.font, self.small_font)
+            self._draw_vr_input_panel(self.screen, self.font, self.small_font)
+            self._draw_controls_panel(self.screen, self.small_font)
+            
+            # Update display
+            pygame.display.flip()
+            
+        except pygame.error as e:
+            print(f"[DEBUG VIS] Pygame error: {e}")
+            # Don't stop on pygame errors, just skip this frame
+            pass
+        except Exception as e:
+            print(f"[DEBUG VIS] Update error: {e}")
+            # Don't stop on errors, just skip this frame
+            pass
+        
+        return True
+            
+    def _world_to_screen(self, x, y):
+        """Convert world coordinates (meters) to screen coordinates (pixels)."""
+        screen_x = self.origin_x + x * self.scale
+        screen_y = self.origin_y - y * self.scale  # Flip Y for screen
+        return int(screen_x), int(screen_y)
+    
+    def _draw_grid(self, screen, font):
+        """Draw reference grid."""
+        grid_spacing = 0.05 * self.scale  # 5cm grid
+        
+        # Vertical lines
+        for i in range(-10, 11):
+            x = self.origin_x + i * grid_spacing
+            color = self.GRAY if i != 0 else self.WHITE
+            pygame.draw.line(screen, color, (x, 0), (x, self.window_height), 1 if i != 0 else 2)
+        
+        # Horizontal lines
+        for i in range(-12, 5):
+            y = self.origin_y - i * grid_spacing
+            color = self.GRAY if i != 0 else self.WHITE
+            pygame.draw.line(screen, color, (0, y), (self.window_width, y), 1 if i != 0 else 2)
+        
+        # Axis labels
+        label_x = font.render("+X (forward)", True, self.WHITE)
+        label_y = font.render("+Y (up)", True, self.WHITE)
+        screen.blit(label_x, (self.window_width - 80, self.origin_y + 5))
+        screen.blit(label_y, (self.origin_x + 5, 10))
+    
+    def _draw_workspace(self, screen):
+        """Draw reachable workspace boundary."""
+        l1, l2 = self.kinematics.l1, self.kinematics.l2
+        r_max = (l1 + l2) * self.scale
+        r_min = abs(l1 - l2) * self.scale
+        
+        # Max reach circle
+        pygame.draw.circle(screen, self.DARK_GRAY, (self.origin_x, self.origin_y), int(r_max), 2)
+        # Min reach circle  
+        pygame.draw.circle(screen, self.DARK_GRAY, (self.origin_x, self.origin_y), int(r_min), 1)
+    
+    def _draw_arm(self, screen):
+        """Draw the 2-link arm."""
+        if self.latest_data is None:
+            return
+        
+        targets = self.latest_data['target_positions']
+        shoulder_lift = targets.get('shoulder_lift', 0.0)
+        elbow_flex = targets.get('elbow_flex', 0.0)
+        
+        # Get positions from kinematics
+        x_elbow, y_elbow = self.kinematics.get_elbow_position(shoulder_lift)
+        x_end, y_end = self.kinematics.forward_kinematics(shoulder_lift, elbow_flex)
+        
+        # Also show the target XY position
+        target_x = self.latest_data['current_x']
+        target_y = self.latest_data['current_y']
+        
+        # Convert to screen coordinates
+        origin_screen = (self.origin_x, self.origin_y)
+        elbow_screen = self._world_to_screen(x_elbow, y_elbow)
+        end_screen = self._world_to_screen(x_end, y_end)
+        target_screen = self._world_to_screen(target_x, target_y)
+        
+        # Draw target position (yellow crosshair)
+        pygame.draw.circle(screen, self.YELLOW, target_screen, 10, 2)
+        pygame.draw.line(screen, self.YELLOW, 
+                        (target_screen[0] - 15, target_screen[1]),
+                        (target_screen[0] + 15, target_screen[1]), 2)
+        pygame.draw.line(screen, self.YELLOW,
+                        (target_screen[0], target_screen[1] - 15),
+                        (target_screen[0], target_screen[1] + 15), 2)
+        
+        # Draw links
+        pygame.draw.line(screen, self.BLUE, origin_screen, elbow_screen, 8)  # L1
+        pygame.draw.line(screen, self.CYAN, elbow_screen, end_screen, 6)     # L2
+        
+        # Draw joints
+        pygame.draw.circle(screen, self.WHITE, origin_screen, 12)
+        pygame.draw.circle(screen, self.RED, origin_screen, 8)      # Shoulder
+        pygame.draw.circle(screen, self.WHITE, elbow_screen, 10)
+        pygame.draw.circle(screen, self.ORANGE, elbow_screen, 6)    # Elbow
+        pygame.draw.circle(screen, self.WHITE, end_screen, 10)
+        pygame.draw.circle(screen, self.GREEN, end_screen, 6)       # End effector
+        
+        # Draw wrist orientation indicator
+        wrist_flex = targets.get('wrist_flex', 0.0)
+        pitch = self.latest_data.get('pitch', 0.0)
+        wrist_angle = shoulder_lift + elbow_flex + wrist_flex
+        wrist_len = 0.05 * self.scale
+        wrist_end_x = end_screen[0] + wrist_len * math.cos(-wrist_angle + math.pi/2)
+        wrist_end_y = end_screen[1] + wrist_len * math.sin(-wrist_angle + math.pi/2)
+        pygame.draw.line(screen, self.MAGENTA, end_screen, (int(wrist_end_x), int(wrist_end_y)), 4)
+    
+    def _draw_info_panel(self, screen, font, small_font):
+        """Draw joint angles and position info."""
+        if self.latest_data is None:
+            return
+        
+        panel_x, panel_y = 10, 10
+        line_height = 20
+        
+        # Background
+        panel_rect = pygame.Rect(5, 5, 340, 300)
+        pygame.draw.rect(screen, (0, 0, 0, 200), panel_rect)
+        pygame.draw.rect(screen, self.WHITE, panel_rect, 1)
+        
+        targets = self.latest_data['target_positions']
+        current_x = self.latest_data['current_x']
+        current_y = self.latest_data['current_y']
+        pitch = self.latest_data.get('pitch', 0.0)
+        
+        # Compute FK position for comparison
+        shoulder_lift = targets.get('shoulder_lift', 0.0)
+        elbow_flex = targets.get('elbow_flex', 0.0)
+        fk_x, fk_y = self.kinematics.forward_kinematics(shoulder_lift, elbow_flex)
+        
+        # Compute elbow angle (interior angle at elbow joint)
+        # From IK: cos_angle = (l1^2 + l2^2 - r^2) / (2*l1*l2)
+        l1, l2 = self.kinematics.l1, self.kinematics.l2
+        r = math.sqrt(fk_x**2 + fk_y**2)
+        if r > 0:
+            cos_elbow = (l1**2 + l2**2 - r**2) / (2 * l1 * l2)
+            cos_elbow = max(-1.0, min(1.0, cos_elbow))
+            elbow_interior_angle = math.acos(cos_elbow)
+        else:
+            elbow_interior_angle = math.pi / 2
+        
+        lines = [
+            (f"=== {self.prefix.upper()} ARM KINEMATICS ===", self.YELLOW),
+            ("", self.WHITE),
+            ("Target XY (IK input):", self.CYAN),
+            (f"  X: {current_x:+.4f} m  ({current_x*100:+.2f} cm)", self.WHITE),
+            (f"  Y: {current_y:+.4f} m  ({current_y*100:+.2f} cm)", self.WHITE),
+            ("", self.WHITE),
+            ("FK Result (from joint angles):", self.GREEN),
+            (f"  X: {fk_x:+.4f} m  ({fk_x*100:+.2f} cm)", self.WHITE),
+            (f"  Y: {fk_y:+.4f} m  ({fk_y*100:+.2f} cm)", self.WHITE),
+            (f"  Reach: {r*100:.2f} cm  Elbow: {math.degrees(elbow_interior_angle):.1f}°", self.CYAN),
+            (f"  Error: {math.sqrt((fk_x-current_x)**2 + (fk_y-current_y)**2)*100:.3f} cm", self.RED if abs(fk_x-current_x) > 0.01 or abs(fk_y-current_y) > 0.01 else self.GREEN),
+            ("", self.WHITE),
+            ("Joint Angles (radians / degrees):", self.ORANGE),
+            (f"  shoulder_pan:  {targets.get('shoulder_pan', 0):+.4f} / {math.degrees(targets.get('shoulder_pan', 0)):+.1f}°", self.WHITE),
+            (f"  shoulder_lift: {shoulder_lift:+.4f} / {math.degrees(shoulder_lift):+.1f}°", self.WHITE),
+            (f"  elbow_flex:    {elbow_flex:+.4f} / {math.degrees(elbow_flex):+.1f}°", self.WHITE),
+            (f"  wrist_flex:    {targets.get('wrist_flex', 0):+.4f} / {math.degrees(targets.get('wrist_flex', 0)):+.1f}°", self.WHITE),
+            (f"  wrist_roll:    {targets.get('wrist_roll', 0):+.4f} / {math.degrees(targets.get('wrist_roll', 0)):+.1f}°", self.WHITE),
+            (f"  gripper:       {targets.get('gripper', 0):+.4f} / {math.degrees(targets.get('gripper', 0)):+.1f}°", self.WHITE),
+            ("", self.WHITE),
+            (f"  pitch (wrist target): {pitch:+.4f} / {math.degrees(pitch):+.1f}°", self.MAGENTA),
+        ]
+        
+        for i, (text, color) in enumerate(lines):
+            surface = small_font.render(text, True, color)
+            screen.blit(surface, (panel_x, panel_y + i * line_height))
+    
+    def _draw_vr_input_panel(self, screen, font, small_font):
+        """Draw VR controller input info."""
+        panel_x = 10
+        panel_y = 320
+        line_height = 18
+        
+        # Background
+        panel_rect = pygame.Rect(5, 315, 340, 200)
+        pygame.draw.rect(screen, (0, 0, 0, 200), panel_rect)
+        pygame.draw.rect(screen, self.WHITE, panel_rect, 1)
+        
+        lines = [("=== VR CONTROLLER INPUT ===", self.YELLOW)]
+        
+        if self.latest_data and self.latest_data.get('vr_goal'):
+            vr = self.latest_data['vr_goal']
+            pos = vr.get('target_position')
+            if pos is not None and len(pos) >= 3:
+                lines.append((f"VR Position (raw):", self.CYAN))
+                lines.append((f"  X: {pos[0]:+.4f} m", self.WHITE))
+                lines.append((f"  Y: {pos[1]:+.4f} m", self.WHITE))
+                lines.append((f"  Z: {pos[2]:+.4f} m", self.WHITE))
+            else:
+                lines.append(("VR Position: None", self.GRAY))
+            
+            lines.append(("", self.WHITE))
+            lines.append((f"wrist_flex_deg: {vr.get('wrist_flex_deg', 'N/A')}", self.WHITE))
+            lines.append((f"wrist_roll_deg: {vr.get('wrist_roll_deg', 'N/A')}", self.WHITE))
+            
+            meta = vr.get('metadata', {})
+            lines.append(("", self.WHITE))
+            lines.append((f"grip_active: {meta.get('grip_active', meta.get('gripActive', False))}", self.GREEN if meta.get('grip_active', meta.get('gripActive', False)) else self.RED))
+            lines.append((f"trigger: {meta.get('trigger', 0):.2f}", self.WHITE))
+            
+            prev = self.latest_data.get('prev_vr_pos')
+            if prev is not None:
+                try:
+                    lines.append(("", self.WHITE))
+                    lines.append((f"prev_vr_pos: [{prev[0]:.3f}, {prev[1]:.3f}, {prev[2]:.3f}]", self.GRAY))
+                except (TypeError, IndexError):
+                    lines.append((f"prev_vr_pos: {prev}", self.GRAY))
+        else:
+            lines.append(("No VR data", self.GRAY))
+        
+        for i, (text, color) in enumerate(lines):
+            surface = small_font.render(text, True, color)
+            screen.blit(surface, (panel_x, panel_y + i * line_height))
+    
+    def _draw_controls_panel(self, screen, font):
+        """Draw workspace bounds info."""
+        panel_x = self.window_width - 280
+        panel_y = 10
+        line_height = 18
+        
+        # Background
+        panel_rect = pygame.Rect(self.window_width - 285, 5, 280, 180)
+        pygame.draw.rect(screen, (0, 0, 0, 200), panel_rect)
+        pygame.draw.rect(screen, self.WHITE, panel_rect, 1)
+        
+        l1, l2 = self.kinematics.l1, self.kinematics.l2
+        
+        lines = [
+            ("=== ARM CONFIGURATION ===", self.YELLOW),
+            ("", self.WHITE),
+            (f"L1 (upper arm): {l1:.4f} m ({l1*100:.2f} cm)", self.BLUE),
+            (f"L2 (forearm):   {l2:.4f} m ({l2*100:.2f} cm)", self.CYAN),
+            ("", self.WHITE),
+            (f"Max reach: {l1+l2:.4f} m ({(l1+l2)*100:.2f} cm)", self.WHITE),
+            (f"Min reach: {abs(l1-l2):.4f} m ({abs(l1-l2)*100:.2f} cm)", self.WHITE),
+            ("", self.WHITE),
+            ("Legend:", self.WHITE),
+            ("  Yellow = Target XY (IK input)", self.YELLOW),
+            ("  Green = End effector (FK)", self.GREEN),
+            ("  Magenta = Wrist orientation", self.MAGENTA),
+        ]
+        
+        for i, (text, color) in enumerate(lines):
+            surface = font.render(text, True, color)
+            screen.blit(surface, (panel_x, panel_y + i * line_height))
+
+
 # Joint mapping configurations
 LEFT_ARM_JOINT_MAP = {
     "shoulder_yaw": "left_arm_shoulder_yaw",
@@ -173,6 +573,14 @@ class AlfieTeleopVRNode(Node):
         self.left_grip_active = False
         self.right_grip_active = False
         
+        # Debug visualizer (initialized after arm controllers)
+        self.debug_visualizer = None
+        self.enable_debug_viz = True  # Set to False to disable
+        self.latest_left_controller_goal = None  # Store for visualization
+        
+        # Create timer for visualization update at 15Hz (lower rate to reduce CPU load)
+        self.viz_timer = self.create_timer(0.066, self.update_visualization)  # ~15Hz
+        
         self.get_logger().info('Alfie Teleop VR Node initialized')
         
         # Start VR monitor in separate thread
@@ -239,23 +647,33 @@ class AlfieTeleopVRNode(Node):
         )
 
         # Call back calibration service
-        self.get_logger().info('Calling back calibration service...')
-        calibrate_client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
-        if calibrate_client.wait_for_service(timeout_sec=5.0):
-            request = BackRequestCalibration.Request()
-            future = calibrate_client.call_async(request)
-            rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
-            if future.result() is not None:
-                if future.result().success:
-                    self.get_logger().info('Back calibration successful')
-                else:
-                    self.get_logger().warn('Back calibration returned failure')
-            else:
-                self.get_logger().warn('Back calibration service call failed')
-        else:
-            self.get_logger().warn('Back calibration service not available')
+        # self.get_logger().info('Calling back calibration service...')
+        # calibrate_client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
+        # if calibrate_client.wait_for_service(timeout_sec=5.0):
+        #     request = BackRequestCalibration.Request()
+        #     future = calibrate_client.call_async(request)
+        #     rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+        #     if future.result() is not None:
+        #         if future.result().success:
+        #             self.get_logger().info('Back calibration successful')
+        #         else:
+        #             self.get_logger().warn('Back calibration returned failure')
+        #     else:
+        #         self.get_logger().warn('Back calibration service call failed')
+        # else:
+        #     self.get_logger().warn('Back calibration service not available')
         
         self.get_logger().info('Arm and head controllers initialized')
+        
+        # Start debug visualizer for left arm
+        if self.enable_debug_viz and PYGAME_AVAILABLE:
+            self.debug_visualizer = ArmDebugVisualizer(self.kinematics_left, prefix="left")
+            if self.debug_visualizer.start():
+                self.get_logger().info('Debug visualizer started successfully')
+            else:
+                self.get_logger().warn('Debug visualizer failed to start')
+                self.debug_visualizer = None
+        
         return True
     
     def _apply_arm_targets(self, arm, prefix):
@@ -440,6 +858,9 @@ class AlfieTeleopVRNode(Node):
                     gripper_state = None
                     self.left_arm.handle_vr_input(left_controller_goal, gripper_state)
                     self._apply_arm_targets(self.left_arm, "left")
+                
+                # Store VR goal for visualization
+                self.latest_left_controller_goal = left_controller_goal
             except Exception as e:
                 self.get_logger().warn(f'Left arm VR input error: {e}')
         
@@ -476,6 +897,18 @@ class AlfieTeleopVRNode(Node):
             except Exception as e:
                 self.get_logger().warn(f'Right arm VR input error: {e}')
     
+    def update_visualization(self):
+        """Update debug visualization at 30Hz"""
+        if self.debug_visualizer and self.left_arm is not None:
+            try:
+                if not self.debug_visualizer.update(self.left_arm, self.latest_left_controller_goal):
+                    # User explicitly closed visualizer window (pressed Q or closed window)
+                    self.get_logger().info('Debug visualizer closed by user')
+                    self.debug_visualizer.stop()
+                    self.debug_visualizer = None
+            except Exception as e:
+                self.get_logger().warn(f'Visualization update error: {e}')
+    
     def publish_robotlowcmd(self):
         """Publish robot command at 100Hz - just publishes current state"""
         start_time = time.time()
@@ -511,6 +944,20 @@ class AlfieTeleopVRNode(Node):
     def shutdown(self):
         """Shutdown the node and VR monitor"""
         self.get_logger().info('Shutting down head tracker...')
+        
+        # Stop debug visualizer
+        if self.debug_visualizer:
+            self.debug_visualizer.stop()
+            self.debug_visualizer = None
+            self.get_logger().info('Debug visualizer stopped')
+        
+        # Final pygame cleanup
+        if PYGAME_AVAILABLE:
+            try:
+                pygame.quit()
+            except Exception:
+                pass
+        
         if self.vr_loop:
             self.vr_loop.call_soon_threadsafe(self.vr_loop.stop)
         if self.vr_thread:

@@ -120,6 +120,13 @@ class SimpleTeleopArm:
         # VR goal contains: target_position [x, y, z], wrist_roll_deg, wrist_flex_deg, gripper_closed
         if not hasattr(vr_goal, 'target_position') or vr_goal.target_position is None:
             return
+        
+        # Check if target_position has valid length
+        try:
+            if len(vr_goal.target_position) < 3:
+                return
+        except TypeError:
+            return
             
         # Extract VR position data
         # Get current VR position
