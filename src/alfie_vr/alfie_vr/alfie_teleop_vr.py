@@ -36,7 +36,7 @@ except ImportError:
 class ArmDebugVisualizer:
     """
     Pygame-based debug visualizer for arm kinematics.
-    Runs in the same thread as the main control loop.
+    Runs in a separate thread to avoid interfering with robotlowcmd timing.
     """
     
     # Colors
@@ -69,71 +69,128 @@ class ArmDebugVisualizer:
         self.origin_x = self.window_width // 2
         self.origin_y = 150  # Near top since arm hangs down
         
-        # Latest data
+        # Latest data (thread-safe with lock)
         self.latest_data = None
+        self.data_lock = threading.Lock()
+        
+        # Thread management
+        self.viz_thread = None
+        self.stop_event = threading.Event()
         
     def start(self):
-        """Initialize pygame display."""
+        """Start pygame visualization in a separate thread."""
         if not PYGAME_AVAILABLE:
             print("[DEBUG VIS] pygame not available, skipping visualization")
             return False
         
+        self.stop_event.clear()
+        self.running = True
+        self.viz_thread = threading.Thread(target=self._viz_thread_loop, daemon=True)
+        self.viz_thread.start()
+        print(f"[DEBUG VIS] Started {self.prefix} arm visualizer thread")
+        return True
+    
+    def _viz_thread_loop(self):
+        """Main visualization loop running in separate thread."""
         try:
-            # Initialize pygame (safe to call multiple times)
+            # Initialize pygame in this thread
             pygame.init()
             
             # Check if display module initialized correctly
             if not pygame.display.get_init():
                 print("[DEBUG VIS] pygame display failed to initialize")
-                return False
+                self.running = False
+                return
             
             self.screen = pygame.display.set_mode((self.window_width, self.window_height))
             pygame.display.set_caption(f"Alfie {self.prefix.title()} Arm Debug Visualizer")
             self.clock = pygame.time.Clock()
             self.font = pygame.font.Font(None, 22)
             self.small_font = pygame.font.Font(None, 18)
-            self.running = True
-            print(f"[DEBUG VIS] Started {self.prefix} arm visualizer")
-            return True
+            
+            print(f"[DEBUG VIS] Pygame initialized in thread for {self.prefix} arm")
+            
+            # Main loop
+            while self.running and not self.stop_event.is_set():
+                try:
+                    # Handle pygame events
+                    for event in pygame.event.get():
+                        if event.type == pygame.QUIT:
+                            print("[DEBUG VIS] Window close requested")
+                            self.running = False
+                            break
+                        if event.type == pygame.KEYDOWN:
+                            if event.key in (pygame.K_q, pygame.K_ESCAPE):
+                                print("[DEBUG VIS] Quit key pressed")
+                                self.running = False
+                                break
+                    
+                    if not self.running:
+                        break
+                    
+                    # Get latest data with lock
+                    with self.data_lock:
+                        data = self.latest_data
+                    
+                    if data is not None:
+                        # Clear screen
+                        self.screen.fill(self.BLACK)
+                        
+                        # Draw visualization
+                        self._draw_grid(self.screen, self.small_font)
+                        self._draw_workspace(self.screen)
+                        self._draw_arm(self.screen, data)
+                        self._draw_info_panel(self.screen, self.font, self.small_font, data)
+                        self._draw_vr_input_panel(self.screen, self.font, self.small_font, data)
+                        self._draw_controls_panel(self.screen, self.small_font)
+                        
+                        # Update display
+                        pygame.display.flip()
+                    
+                    # Limit to ~30 FPS to reduce CPU usage
+                    self.clock.tick(30)
+                    
+                except pygame.error as e:
+                    print(f"[DEBUG VIS] Pygame error: {e}")
+                    # Don't stop on pygame errors, just skip this frame
+                    pass
+                except Exception as e:
+                    print(f"[DEBUG VIS] Update error: {e}")
+                    # Don't stop on errors, just skip this frame
+                    pass
+            
         except Exception as e:
-            print(f"[DEBUG VIS] Failed to start pygame: {e}")
-            self.running = False
-            return False
+            print(f"[DEBUG VIS] Thread initialization error: {e}")
+        finally:
+            # Cleanup pygame in this thread
+            try:
+                pygame.display.quit()
+                pygame.quit()
+            except Exception:
+                pass
+            self.screen = None
+            print(f"[DEBUG VIS] {self.prefix.title()} arm visualizer thread stopped")
         
     def stop(self):
-        """Stop the visualizer."""
+        """Stop the visualizer thread."""
         self.running = False
-        if PYGAME_AVAILABLE and self.screen is not None:
-            try:
-                pygame.display.quit()  # Only quit display, not all of pygame
-                self.screen = None
-            except Exception as e:
-                print(f"[DEBUG VIS] Error stopping display: {e}")
+        self.stop_event.set()
+        if self.viz_thread is not None:
+            self.viz_thread.join(timeout=2.0)
+            self.viz_thread = None
         print(f"[DEBUG VIS] {self.prefix.title()} arm visualizer stopped")
             
-    def update(self, arm_controller, vr_goal=None):
+    def update_data(self, arm_controller, vr_goal=None):
         """
-        Update visualization - call this from main loop.
-        Returns False if user closed the window.
+        Update visualization data - call this from main loop.
+        Thread-safe data update for the visualization thread.
         """
-        if not self.running or self.screen is None:
-            return True
+        if not self.running:
+            return self.running
         
         try:
-            # Handle pygame events - only process window close events
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    print("[DEBUG VIS] Window close requested")
-                    self.running = False
-                    return False
-                if event.type == pygame.KEYDOWN:
-                    if event.key in (pygame.K_q, pygame.K_ESCAPE):
-                        print("[DEBUG VIS] Quit key pressed")
-                        self.running = False
-                        return False
-            
-            # Update data from arm controller
-            self.latest_data = {
+            # Prepare data snapshot
+            data = {
                 'current_x': getattr(arm_controller, 'current_x', 0.0),
                 'current_y': getattr(arm_controller, 'current_y', 0.0),
                 'target_positions': arm_controller.target_positions.copy(),
@@ -159,37 +216,21 @@ class ArmDebugVisualizer:
                     except (TypeError, ValueError):
                         meta = {}
                 
-                self.latest_data['vr_goal'] = {
+                data['vr_goal'] = {
                     'target_position': target_pos,
                     'wrist_flex_deg': getattr(vr_goal, 'wrist_flex_deg', None),
                     'wrist_roll_deg': getattr(vr_goal, 'wrist_roll_deg', None),
                     'metadata': meta,
                 }
             
-            # Clear screen
-            self.screen.fill(self.BLACK)
-            
-            # Draw visualization
-            self._draw_grid(self.screen, self.small_font)
-            self._draw_workspace(self.screen)
-            self._draw_arm(self.screen)
-            self._draw_info_panel(self.screen, self.font, self.small_font)
-            self._draw_vr_input_panel(self.screen, self.font, self.small_font)
-            self._draw_controls_panel(self.screen, self.small_font)
-            
-            # Update display
-            pygame.display.flip()
-            
-        except pygame.error as e:
-            print(f"[DEBUG VIS] Pygame error: {e}")
-            # Don't stop on pygame errors, just skip this frame
-            pass
+            # Update data with lock
+            with self.data_lock:
+                self.latest_data = data
+                
         except Exception as e:
-            print(f"[DEBUG VIS] Update error: {e}")
-            # Don't stop on errors, just skip this frame
-            pass
+            print(f"[DEBUG VIS] Data update error: {e}")
         
-        return True
+        return self.running
             
     def _world_to_screen(self, x, y):
         """Convert world coordinates (meters) to screen coordinates (pixels)."""
@@ -230,12 +271,12 @@ class ArmDebugVisualizer:
         # Min reach circle  
         pygame.draw.circle(screen, self.DARK_GRAY, (self.origin_x, self.origin_y), int(r_min), 1)
     
-    def _draw_arm(self, screen):
+    def _draw_arm(self, screen, data):
         """Draw the 2-link arm."""
-        if self.latest_data is None:
+        if data is None:
             return
         
-        targets = self.latest_data['target_positions']
+        targets = data['target_positions']
         shoulder_lift = targets.get('shoulder_lift', 0.0)
         elbow_flex = targets.get('elbow_flex', 0.0)
         
@@ -244,8 +285,8 @@ class ArmDebugVisualizer:
         x_end, y_end = self.kinematics.forward_kinematics(shoulder_lift, elbow_flex)
         
         # Also show the target XY position
-        target_x = self.latest_data['current_x']
-        target_y = self.latest_data['current_y']
+        target_x = data['current_x']
+        target_y = data['current_y']
         
         # Convert to screen coordinates
         origin_screen = (self.origin_x, self.origin_y)
@@ -276,16 +317,16 @@ class ArmDebugVisualizer:
         
         # Draw wrist orientation indicator
         wrist_flex = targets.get('wrist_flex', 0.0)
-        pitch = self.latest_data.get('pitch', 0.0)
+        pitch = data.get('pitch', 0.0)
         wrist_angle = shoulder_lift + elbow_flex + wrist_flex
         wrist_len = 0.05 * self.scale
         wrist_end_x = end_screen[0] + wrist_len * math.cos(-wrist_angle + math.pi/2)
         wrist_end_y = end_screen[1] + wrist_len * math.sin(-wrist_angle + math.pi/2)
         pygame.draw.line(screen, self.MAGENTA, end_screen, (int(wrist_end_x), int(wrist_end_y)), 4)
     
-    def _draw_info_panel(self, screen, font, small_font):
+    def _draw_info_panel(self, screen, font, small_font, data):
         """Draw joint angles and position info."""
-        if self.latest_data is None:
+        if data is None:
             return
         
         panel_x, panel_y = 10, 10
@@ -296,10 +337,10 @@ class ArmDebugVisualizer:
         pygame.draw.rect(screen, (0, 0, 0, 200), panel_rect)
         pygame.draw.rect(screen, self.WHITE, panel_rect, 1)
         
-        targets = self.latest_data['target_positions']
-        current_x = self.latest_data['current_x']
-        current_y = self.latest_data['current_y']
-        pitch = self.latest_data.get('pitch', 0.0)
+        targets = data['target_positions']
+        current_x = data['current_x']
+        current_y = data['current_y']
+        pitch = data.get('pitch', 0.0)
         
         # Compute FK position for comparison
         shoulder_lift = targets.get('shoulder_lift', 0.0)
@@ -345,7 +386,7 @@ class ArmDebugVisualizer:
             surface = small_font.render(text, True, color)
             screen.blit(surface, (panel_x, panel_y + i * line_height))
     
-    def _draw_vr_input_panel(self, screen, font, small_font):
+    def _draw_vr_input_panel(self, screen, font, small_font, data):
         """Draw VR controller input info."""
         panel_x = 10
         panel_y = 320
@@ -358,8 +399,8 @@ class ArmDebugVisualizer:
         
         lines = [("=== VR CONTROLLER INPUT ===", self.YELLOW)]
         
-        if self.latest_data and self.latest_data.get('vr_goal'):
-            vr = self.latest_data['vr_goal']
+        if data and data.get('vr_goal'):
+            vr = data['vr_goal']
             pos = vr.get('target_position')
             if pos is not None and len(pos) >= 3:
                 lines.append((f"VR Position (raw):", self.CYAN))
@@ -378,7 +419,7 @@ class ArmDebugVisualizer:
             lines.append((f"grip_active: {meta.get('grip_active', meta.get('gripActive', False))}", self.GREEN if meta.get('grip_active', meta.get('gripActive', False)) else self.RED))
             lines.append((f"trigger: {meta.get('trigger', 0):.2f}", self.WHITE))
             
-            prev = self.latest_data.get('prev_vr_pos')
+            prev = data.get('prev_vr_pos')
             if prev is not None:
                 try:
                     lines.append(("", self.WHITE))
@@ -578,8 +619,8 @@ class AlfieTeleopVRNode(Node):
         self.enable_debug_viz = True  # Set to False to disable
         self.latest_left_controller_goal = None  # Store for visualization
         
-        # Create timer for visualization update at 15Hz (lower rate to reduce CPU load)
-        self.viz_timer = self.create_timer(0.066, self.update_visualization)  # ~15Hz
+        # Create timer for visualization data update at 30Hz (just pushes data to viz thread)
+        self.viz_timer = self.create_timer(0.033, self.update_visualization)  # ~30Hz
         
         self.get_logger().info('Alfie Teleop VR Node initialized')
         
@@ -898,10 +939,10 @@ class AlfieTeleopVRNode(Node):
                 self.get_logger().warn(f'Right arm VR input error: {e}')
     
     def update_visualization(self):
-        """Update debug visualization at 30Hz"""
+        """Update debug visualization data at 30Hz - just pushes data to viz thread"""
         if self.debug_visualizer and self.left_arm is not None:
             try:
-                if not self.debug_visualizer.update(self.left_arm, self.latest_left_controller_goal):
+                if not self.debug_visualizer.update_data(self.left_arm, self.latest_left_controller_goal):
                     # User explicitly closed visualizer window (pressed Q or closed window)
                     self.get_logger().info('Debug visualizer closed by user')
                     self.debug_visualizer.stop()
@@ -945,18 +986,11 @@ class AlfieTeleopVRNode(Node):
         """Shutdown the node and VR monitor"""
         self.get_logger().info('Shutting down head tracker...')
         
-        # Stop debug visualizer
+        # Stop debug visualizer (it handles its own pygame cleanup in its thread)
         if self.debug_visualizer:
             self.debug_visualizer.stop()
             self.debug_visualizer = None
             self.get_logger().info('Debug visualizer stopped')
-        
-        # Final pygame cleanup
-        if PYGAME_AVAILABLE:
-            try:
-                pygame.quit()
-            except Exception:
-                pass
         
         if self.vr_loop:
             self.vr_loop.call_soon_threadsafe(self.vr_loop.stop)

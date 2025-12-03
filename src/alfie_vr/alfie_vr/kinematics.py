@@ -166,9 +166,10 @@ class SimpleTeleopArm:
         # Update workspace position
         # VR coordinate system (WebXR): X=left(-)/right(+), Y=down(-)/up(+), Z=forward(-)/back(+)
         # Kinematics coordinate system: X=forward reach, Y=vertical (negative=down)
-        # Fix: swap X and Y mapping to match physical motion
-        self.current_y += delta_z  # VR Z (forward/back) -> robot y (vertical) - SWAPPED
-        self.current_x += -delta_y   # VR Y (up/down) -> robot x (reach) - SWAPPED
+        # VR forward (Z-) -> robot X (forward reach)
+        # VR up (Y+) -> robot Y (up)
+        self.current_x += -delta_z  # VR Z (forward/back) -> robot X (reach)
+        self.current_y += delta_y   # VR Y (up/down) -> robot Y (vertical)
         
         # Constrain x to be positive (arm can't reach behind shoulder)
         self.current_x = max(0.01, self.current_x)
@@ -487,7 +488,7 @@ class AlfieArmKinematics:
         
         # Convert theta1 to shoulder_lift
         # theta1 = -pi/2 + shoulder_lift, so shoulder_lift = theta1 + pi/2
-        shoulder_lift = theta1 + math.pi/2
+        shoulder_lift = -(theta1 + math.pi/2)
         
         return shoulder_lift, elbow_flex
 
