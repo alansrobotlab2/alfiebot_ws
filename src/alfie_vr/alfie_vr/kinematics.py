@@ -45,10 +45,7 @@ class SimpleTeleopArm:
             "gripper": robotlowstate.servo_state[offset + 5].current_location,
         }
         
-        # Set initial x/y to fixed values
-        # Note: Y is negative because arm is inverted (elbow below shoulder)
-        self.current_x = 0.1629
-        self.current_y = -0.1131  # Negative for inverted arm configuration
+        # Initialize pitch for wrist orientation
         self.pitch = 0.0
         
         # Delta control state variables for VR input
@@ -60,15 +57,7 @@ class SimpleTeleopArm:
         self.degree_step = 2
         self.xy_step = 0.005
         
-        # P control target positions, set to zero position
-        self.target_positions = {
-            "shoulder_pan":  0.0000,
-            "shoulder_lift": 0.1089,
-            "elbow_flex":   -1.4864,
-            "wrist_flex":   -0.1442,
-            "wrist_roll":    0.0000,
-            "gripper":       0.0000,
-        }
+        # Define zero position first
         self.zero_pos = {
             'shoulder_pan':  0.0000,
             'shoulder_lift': 0.1089,
@@ -77,6 +66,15 @@ class SimpleTeleopArm:
             'wrist_roll':    0.0000,
             'gripper':       0.0000
         }
+        
+        # P control target positions, set to zero position
+        self.target_positions = self.zero_pos.copy()
+        
+        # Derive current_x and current_y from zero_pos using forward kinematics
+        self.current_x, self.current_y = self.kinematics.forward_kinematics(
+            self.zero_pos["shoulder_lift"],
+            self.zero_pos["elbow_flex"]
+        )
 
 
     def move_to_zero_position(self, robot):
@@ -92,12 +90,7 @@ class SimpleTeleopArm:
         print(f"[{self.prefix}] Moving to Zero Position: {self.zero_pos} ......")
         self.target_positions = self.zero_pos.copy()
         
-        # Reset kinematics variables to initial state
-        # Note: Y is negative because arm is inverted (elbow below shoulder)
-        # l1=0.2387, l2=0.2160):
-        self.current_x = 0.2387
-        self.current_y = -0.2160  # Negative for inverted arm configuration
-
+        # Derive current_x and current_y from zero_pos using forward kinematics
         self.current_x, self.current_y = self.kinematics.forward_kinematics(
             self.zero_pos["shoulder_lift"],
             self.zero_pos["elbow_flex"]
@@ -108,7 +101,7 @@ class SimpleTeleopArm:
         self.last_vr_time = 0.0
         
         # Explicitly set wrist_flex
-        self.target_positions["wrist_flex"] = 0.0
+        # self.target_positions["wrist_flex"] = 0.0
         
         action = self.p_control_action(robot)
         robot.send_action(action)
@@ -170,6 +163,9 @@ class SimpleTeleopArm:
         self.current_y += delta_z  # VR Z (forward/back) -> robot y (vertical) - SWAPPED
         self.current_x += -delta_y   # VR Y (up/down) -> robot x (reach) - SWAPPED
         
+        # Constrain x to be positive (arm can't reach behind shoulder)
+        self.current_x = max(0.01, self.current_x)
+        
         # Debug: show position changes
         if abs(delta_y) > 0.001 or abs(delta_z) > 0.001:
             print(f"[{self.prefix}] delta_y={delta_y:.4f}, delta_z={delta_z:.4f} -> x={self.current_x:.4f}, y={self.current_y:.4f}")
@@ -215,7 +211,7 @@ class SimpleTeleopArm:
             delta_pan = max(-angle_limit, min(angle_limit, delta_pan))
             current_pan = self.target_positions.get("shoulder_pan", 0.0)
             new_pan = current_pan - delta_pan  # Negated to fix direction
-            new_pan = max(-math.pi, min(math.pi, new_pan))  # Limit pan range (±180°)
+            new_pan = max(-math.pi/4, min(math.pi/4, new_pan))  # Limit pan range (±45°)
             self.target_positions["shoulder_pan"] = new_pan
         
         try:

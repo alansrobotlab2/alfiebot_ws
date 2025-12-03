@@ -17,8 +17,8 @@ class ServoServiceClient:
         self.node = node
         
         # Create service clients for both driver buses
-        self.gdb0 = node.create_client(GDBServoService, "/alfie/gdb0servoservice")
-        self.gdb1 = node.create_client(GDBServoService, "/alfie/gdb1servoservice")
+        self.gdb0 = node.create_client(GDBServoService, "/alfie/low/gdb0servoservice")
+        self.gdb1 = node.create_client(GDBServoService, "/alfie/low/gdb1servoservice")
 
         self._wait_for_services()
         
