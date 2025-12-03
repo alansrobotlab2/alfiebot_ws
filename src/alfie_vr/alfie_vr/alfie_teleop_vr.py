@@ -53,8 +53,10 @@ class ArmDebugVisualizer:
     CYAN = (0, 255, 255)
     MAGENTA = (255, 0, 255)
     
-    def __init__(self, kinematics, prefix="left"):
-        self.kinematics = kinematics
+    def __init__(self, kinematics_left, kinematics_right, prefix="left"):
+        self.kinematics_left = kinematics_left
+        self.kinematics_right = kinematics_right
+        self.kinematics = kinematics_left if prefix == "left" else kinematics_right
         self.prefix = prefix
         self.running = False
         self.screen = None
@@ -76,6 +78,10 @@ class ArmDebugVisualizer:
         # Thread management
         self.viz_thread = None
         self.stop_event = threading.Event()
+        
+        # Arm switching (thread-safe)
+        self.target_prefix = prefix
+        self.prefix_lock = threading.Lock()
         
     def start(self):
         """Start pygame visualization in a separate thread."""
@@ -124,6 +130,15 @@ class ArmDebugVisualizer:
                                 print("[DEBUG VIS] Quit key pressed")
                                 self.running = False
                                 break
+                            # Arm switching keys
+                            elif event.key == pygame.K_l:
+                                self._switch_arm("left")
+                            elif event.key == pygame.K_r:
+                                self._switch_arm("right")
+                            elif event.key == pygame.K_TAB:
+                                # Toggle between left and right
+                                new_prefix = "right" if self.prefix == "left" else "left"
+                                self._switch_arm(new_prefix)
                     
                     if not self.running:
                         break
@@ -179,6 +194,28 @@ class ArmDebugVisualizer:
             self.viz_thread.join(timeout=2.0)
             self.viz_thread = None
         print(f"[DEBUG VIS] {self.prefix.title()} arm visualizer stopped")
+    
+    def _switch_arm(self, new_prefix):
+        """Switch which arm is being visualized."""
+        if new_prefix == self.prefix:
+            return
+        
+        with self.prefix_lock:
+            self.target_prefix = new_prefix
+        
+        self.prefix = new_prefix
+        self.kinematics = self.kinematics_left if new_prefix == "left" else self.kinematics_right
+        
+        # Update window title
+        if self.screen:
+            pygame.display.set_caption(f"Alfie {self.prefix.title()} Arm Debug Visualizer")
+        
+        print(f"[DEBUG VIS] Switched to {new_prefix.upper()} arm")
+    
+    def get_current_prefix(self):
+        """Get the currently targeted arm prefix (thread-safe)."""
+        with self.prefix_lock:
+            return self.target_prefix
             
     def update_data(self, arm_controller, vr_goal=None):
         """
@@ -440,7 +477,7 @@ class ArmDebugVisualizer:
         line_height = 18
         
         # Background
-        panel_rect = pygame.Rect(self.window_width - 285, 5, 280, 180)
+        panel_rect = pygame.Rect(self.window_width - 285, 5, 280, 230)
         pygame.draw.rect(screen, (0, 0, 0, 200), panel_rect)
         pygame.draw.rect(screen, self.WHITE, panel_rect, 1)
         
@@ -459,6 +496,10 @@ class ArmDebugVisualizer:
             ("  Yellow = Target XY (IK input)", self.YELLOW),
             ("  Green = End effector (FK)", self.GREEN),
             ("  Magenta = Wrist orientation", self.MAGENTA),
+            ("", self.WHITE),
+            ("Controls:", self.WHITE),
+            ("  L = Left arm, R = Right arm", self.CYAN),
+            ("  Tab = Toggle arm, Q/Esc = Quit", self.CYAN),
         ]
         
         for i, (text, color) in enumerate(lines):
@@ -706,14 +747,21 @@ class AlfieTeleopVRNode(Node):
         
         self.get_logger().info('Arm and head controllers initialized')
         
-        # Start debug visualizer for left arm
+        # Start debug visualizer (can switch between left/right arms)
         if self.enable_debug_viz and PYGAME_AVAILABLE:
-            self.debug_visualizer = ArmDebugVisualizer(self.kinematics_left, prefix="left")
+            self.debug_visualizer = ArmDebugVisualizer(
+                self.kinematics_left, 
+                self.kinematics_right, 
+                prefix="left"
+            )
             if self.debug_visualizer.start():
-                self.get_logger().info('Debug visualizer started successfully')
+                self.get_logger().info('Debug visualizer started successfully (press L/R/Tab to switch arms)')
             else:
                 self.get_logger().warn('Debug visualizer failed to start')
                 self.debug_visualizer = None
+        
+        # Store latest controller goals for visualization
+        self.latest_right_controller_goal = None
         
         return True
     
@@ -904,6 +952,9 @@ class AlfieTeleopVRNode(Node):
                 self.latest_left_controller_goal = left_controller_goal
             except Exception as e:
                 self.get_logger().warn(f'Left arm VR input error: {e}')
+        else:
+            # Still store goal even if arm not active (for visualization)
+            self.latest_left_controller_goal = left_controller_goal
         
         if self.right_arm is not None and right_controller_goal is not None:
             try:
@@ -935,20 +986,40 @@ class AlfieTeleopVRNode(Node):
                     gripper_state = None
                     self.right_arm.handle_vr_input(right_controller_goal, gripper_state)
                     self._apply_arm_targets(self.right_arm, "right")
+                
+                # Store VR goal for visualization
+                self.latest_right_controller_goal = right_controller_goal
             except Exception as e:
                 self.get_logger().warn(f'Right arm VR input error: {e}')
+        else:
+            # Still store goal even if arm not active (for visualization)
+            self.latest_right_controller_goal = right_controller_goal
     
     def update_visualization(self):
         """Update debug visualization data at 30Hz - just pushes data to viz thread"""
-        if self.debug_visualizer and self.left_arm is not None:
-            try:
-                if not self.debug_visualizer.update_data(self.left_arm, self.latest_left_controller_goal):
-                    # User explicitly closed visualizer window (pressed Q or closed window)
-                    self.get_logger().info('Debug visualizer closed by user')
-                    self.debug_visualizer.stop()
-                    self.debug_visualizer = None
-            except Exception as e:
-                self.get_logger().warn(f'Visualization update error: {e}')
+        if self.debug_visualizer is None:
+            return
+        
+        try:
+            # Determine which arm to visualize based on visualizer's current target
+            current_prefix = self.debug_visualizer.get_current_prefix()
+            
+            if current_prefix == "left" and self.left_arm is not None:
+                arm = self.left_arm
+                vr_goal = self.latest_left_controller_goal
+            elif current_prefix == "right" and self.right_arm is not None:
+                arm = self.right_arm
+                vr_goal = self.latest_right_controller_goal
+            else:
+                return
+            
+            if not self.debug_visualizer.update_data(arm, vr_goal):
+                # User explicitly closed visualizer window (pressed Q or closed window)
+                self.get_logger().info('Debug visualizer closed by user')
+                self.debug_visualizer.stop()
+                self.debug_visualizer = None
+        except Exception as e:
+            self.get_logger().warn(f'Visualization update error: {e}')
     
     def publish_robotlowcmd(self):
         """Publish robot command at 100Hz - just publishes current state"""
