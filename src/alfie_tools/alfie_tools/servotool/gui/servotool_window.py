@@ -74,14 +74,14 @@ class ServoToolWindow(QtWidgets.QMainWindow):
         
         self.driver0_state_sub = self.node.create_subscription(
             GDBState,
-            "/alfie/gdb0state",
+            "/alfie/low/gdb0state",
             self.GDB0StateCallback,
             qos
         )
         
         self.driver1_state_sub = self.node.create_subscription(
             GDBState,
-            "/alfie/gdb1state",
+            "/alfie/low/gdb1state",
             self.GDB1StateCallback,
             qos
         )

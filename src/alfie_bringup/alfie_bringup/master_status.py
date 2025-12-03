@@ -244,21 +244,28 @@ class MasterStatusNode(Node):
         servo_states = []
         
         # gdb1 has servos 0-6 (left arm - first 7 servos)
-        # Skip index 2 (3rd servo)
+        # Skip index 2 (3rd servo which is derived)
+        # Map gdb1 indices to polarity indices: 0->0, 1->1, 3->3, 4->4, 5->5, 6->6
         for i in range(NUM_SERVOS_GDB1):
-            if i == 2:  # Skip the 3rd servo (index 2)
+            if i == 2:  # Skip the 3rd servo (index 2) - it's derived
                 continue
+            # Polarity index matches gdb1 servo index for non-derived servos
+            polarity_index = i
             servo_states.append(
-                self.convert_gdb_servo_to_servo(self.gdb1_state.servo_state[i], len(servo_states))
+                self.convert_gdb_servo_to_servo(self.gdb1_state.servo_state[i], polarity_index)
             )
         
         # gdb0 has servos 7-16 (right arm 7-13, head 14-16 - 10 servos)
-        # Skip index 2 (3rd servo)
+        # Skip index 2 (3rd servo which is derived)
+        # Map gdb0 indices to polarity indices: 0->7, 1->8, 3->10, 4->11, 5->12, 6->13, 7->14, 8->15, 9->16
         for i in range(NUM_SERVOS_GDB0):
-            if i == 2:  # Skip the 3rd servo (index 2)
+            if i == 2:  # Skip the 3rd servo (index 2) - it's derived
                 continue
+            # gdb0 servo index i maps directly to polarity index 7+i
+            # (since we skip i=2 in the loop, which corresponds to derived polarity index 9)
+            polarity_index = 7 + i
             servo_states.append(
-                self.convert_gdb_servo_to_servo(self.gdb0_state.servo_state[i], len(servo_states))
+                self.convert_gdb_servo_to_servo(self.gdb0_state.servo_state[i], polarity_index)
             )
         
         return servo_states

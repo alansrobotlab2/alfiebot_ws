@@ -127,7 +127,7 @@ class MasterCmdNode(Node):
                 # Get the 2nd servo command (index 1) which is at robotlowcmd_index - 1
                 servo_cmd_source = msg.servo_cmd[robotlowcmd_index - 1]
                 # Create derived servo command with flipped target location
-                derived_servo = self.derive_servo_cmd(servo_cmd_source, gdb_servo_index, flip_sign=True)
+                derived_servo = self.derive_servo_cmd(servo_cmd_source, gdb_servo_index, is_gdb0=True, flip_sign=True)
                 gdb0_servo_list.append(derived_servo)
             else:
                 servo_cmd = self.convert_servo_cmd_to_gdb(msg.servo_cmd[robotlowcmd_index], robotlowcmd_index)
@@ -152,7 +152,7 @@ class MasterCmdNode(Node):
                 # Get the 2nd servo command (index 1) which is at robotlowcmd_index - 1
                 servo_cmd_source = msg.servo_cmd[robotlowcmd_index - 1]
                 # Create derived servo command with flipped target location
-                derived_servo = self.derive_servo_cmd(servo_cmd_source, gdb_servo_index, flip_sign=True)
+                derived_servo = self.derive_servo_cmd(servo_cmd_source, gdb_servo_index, is_gdb0=False, flip_sign=True)
                 gdb1_servo_list.append(derived_servo)
             else:
                 servo_cmd = self.convert_servo_cmd_to_gdb(msg.servo_cmd[robotlowcmd_index], robotlowcmd_index)
@@ -274,7 +274,7 @@ class MasterCmdNode(Node):
         
         return gdb_servo
     
-    def derive_servo_cmd(self, servo_cmd: ServoCmd, gdb_servo_index: int, flip_sign: bool = True) -> GDBServoCmd:
+    def derive_servo_cmd(self, servo_cmd: ServoCmd, gdb_servo_index: int, is_gdb0: bool = False, flip_sign: bool = True) -> GDBServoCmd:
         """Derive a GDBServoCmd from another ServoCmd by flipping the target location sign
         
         This is used to create the 3rd servo command (index 2) from the 2nd servo (index 1)
@@ -284,6 +284,7 @@ class MasterCmdNode(Node):
         Args:
             servo_cmd: Source ServoCmd message with radians and rad/s² units
             gdb_servo_index: Index (0-9 for gdb0, 0-6 for gdb1) in the GDB servo array
+            is_gdb0: True if this is for gdb0 board, False for gdb1
             flip_sign: Whether to flip the sign of the target location (default True)
             
         Returns:
@@ -291,8 +292,11 @@ class MasterCmdNode(Node):
         """
         gdb_servo = GDBServoCmd()
         
-        # Get the polarity for this servo (should be index 2 or 9 in polarity array)
-        polarity = self.servo_polarity[gdb_servo_index]
+        # Get the polarity for this servo
+        # gdb1 servo index 2 -> polarity index 2
+        # gdb0 servo index 2 -> polarity index 9 (7 + 2)
+        polarity_index = (7 + gdb_servo_index) if is_gdb0 else gdb_servo_index
+        polarity = self.servo_polarity[polarity_index]
         
         # Torque switch (enabled state) - copied from source
         gdb_servo.torque_switch = 1 if servo_cmd.enabled else 0
