@@ -21,6 +21,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 VIDEO_PORT = 8081
 
+FRAME_RATE = 15  # Target frame rate for streaming
+FRAME_INTERVAL = 1.0 / FRAME_RATE  # Interval between frames in seconds
+
 
 # Initialize FastAPI and Socket.IO
 app = FastAPI()
@@ -63,8 +66,8 @@ async def video_stream_loop():
                 # Frame is already base64 encoded
                 await sio.emit('video_frame', {'frame': frame_data})
             
-            # Control frame rate (~30 fps max)
-            await asyncio.sleep(0.033)
+            # Control frame rate
+            await asyncio.sleep(FRAME_INTERVAL)
             
     except Exception as e:
         print(f"Stream error: {e}")

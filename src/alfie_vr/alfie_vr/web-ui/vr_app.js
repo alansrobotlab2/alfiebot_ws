@@ -49,6 +49,12 @@ AFRAME.registerComponent('controller-updater', {
     this.videoScreen = document.querySelector('#videoScreen');
     this.videoSocket = null;
 
+    // --- Video FPS tracking ---
+    this.videoFrameCount = 0;
+    this.videoFps = 0;
+    this.lastFpsUpdate = Date.now();
+    this.fpsUpdateInterval = 1000; // Update FPS every second
+
     const videoPort = 8081;
 
     // Connect to Web Control Server
@@ -75,9 +81,29 @@ AFRAME.registerComponent('controller-updater', {
 
       this.videoSocket.on('video_frame', (data) => {
         if (data && data.frame) {
+          // Count frames for FPS calculation
+          this.videoFrameCount++;
+          const now = Date.now();
+          if (now - this.lastFpsUpdate >= this.fpsUpdateInterval) {
+            this.videoFps = this.videoFrameCount / ((now - this.lastFpsUpdate) / 1000);
+            this.videoFrameCount = 0;
+            this.lastFpsUpdate = now;
+            console.log(`Video FPS: ${this.videoFps.toFixed(1)}`);
+          }
+
           const img = new Image();
           img.onload = () => {
             this.videoContext.drawImage(img, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
+            
+            // Draw FPS overlay on the video canvas
+            this.videoContext.save();
+            this.videoContext.font = 'bold 20px Arial';
+            this.videoContext.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            this.videoContext.fillRect(5, 5, 90, 28);
+            this.videoContext.fillStyle = '#00FF00';
+            this.videoContext.fillText(`${this.videoFps.toFixed(1)} FPS`, 12, 25);
+            this.videoContext.restore();
+
             // Update A-Frame texture
             if (this.videoScreen) {
               const mesh = this.videoScreen.getObject3D('mesh');
