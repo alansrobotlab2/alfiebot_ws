@@ -5,6 +5,7 @@ Uses the VRMonitor class for VR communication.
 """
 
 # Standard library imports
+import argparse
 import asyncio
 import math
 import threading
@@ -62,7 +63,7 @@ HEAD_JOINT_MAP = {
 class AlfieTeleopVRNode(Node):
     """ROS2 node that publishes head tracking data from VR headset"""
     
-    def __init__(self):
+    def __init__(self, enable_debug_viz: bool = False):
         super().__init__('alfiebot_teleop_vr_node')
         
         # Create callback group for state subscription
@@ -152,7 +153,7 @@ class AlfieTeleopVRNode(Node):
         self.timer = self.create_timer(0.01, self.publish_robotlowcmd)  # 100Hz = 0.01s period
         
         # Create VR monitor
-        self.vr_monitor = VRMonitor(vr_debug=False)
+        self.vr_monitor = VRMonitor(vr_debug=True)
         
         # Thread for running VR monitor async loop
         self.vr_thread = None
@@ -183,7 +184,7 @@ class AlfieTeleopVRNode(Node):
         
         # Debug visualizer (initialized after arm controllers)
         self.debug_visualizer = None
-        self.enable_debug_viz = False  # Set to True to enable pygame visualization
+        self.enable_debug_viz = enable_debug_viz
         self.latest_left_controller_goal = None  # Store for visualization
         
         # Create timer for visualization data update at 30Hz (just pushes data to viz thread)
@@ -612,14 +613,22 @@ class AlfieTeleopVRNode(Node):
 
 def main():
     """Main function"""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Alfie Teleop VR Node')
+    parser.add_argument('--debug-viz', action='store_true', default=False,
+                        help='Enable debug visualization window (requires pygame)')
+    args, unknown = parser.parse_known_args()
+    
     print("🎮 Alfie Teleop- VR Headset to Robot Control")
     print("=" * 60)
+    if args.debug_viz:
+        print("🎨 Debug visualization enabled")
     
     # Initialize ROS2
     rclpy.init()
     
     # Create node
-    node = AlfieTeleopVRNode()
+    node = AlfieTeleopVRNode(enable_debug_viz=args.debug_viz)
 
     # wait for first robot state message
     print("⏳ Waiting for first robot state message...")

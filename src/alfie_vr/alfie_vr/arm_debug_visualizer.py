@@ -283,8 +283,13 @@ class ArmDebugVisualizer:
     def _draw_workspace(self, screen):
         """Draw reachable workspace boundary."""
         l1, l2 = self.kinematics.l1, self.kinematics.l2
-        r_max = (l1 + l2) * self.scale
-        r_min = abs(l1 - l2) * self.scale
+        elbow_offset = getattr(self.kinematics, 'elbow_offset', 0.0)
+        
+        # Effective first link length (L1 + offset form a right triangle)
+        l1_eff = math.sqrt(l1**2 + elbow_offset**2)
+        
+        r_max = (l1_eff + l2) * self.scale
+        r_min = abs(l1_eff - l2) * self.scale
         
         # Max reach circle
         pygame.draw.circle(screen, self.DARK_GRAY, (self.origin_x, self.origin_y), int(r_max), 2)
@@ -292,7 +297,7 @@ class ArmDebugVisualizer:
         pygame.draw.circle(screen, self.DARK_GRAY, (self.origin_x, self.origin_y), int(r_min), 1)
     
     def _draw_arm(self, screen, data):
-        """Draw the 2-link arm."""
+        """Draw the 2-link arm with elbow offset."""
         if data is None:
             return
         
@@ -300,9 +305,13 @@ class ArmDebugVisualizer:
         shoulder_lift = targets.get('shoulder_lift', 0.0)
         elbow_flex = targets.get('elbow_flex', 0.0)
         
+        # Flip sign of shoulder_lift for rendering (matches robot convention)
+        shoulder_lift_render = -shoulder_lift
+        
         # Get positions from kinematics
-        x_elbow, y_elbow = self.kinematics.get_elbow_position(shoulder_lift)
-        x_end, y_end = self.kinematics.forward_kinematics(shoulder_lift, elbow_flex)
+        x_elbow, y_elbow = self.kinematics.get_elbow_position(shoulder_lift_render)
+        x_pivot, y_pivot = self.kinematics.get_l2_pivot_position(shoulder_lift_render)
+        x_end, y_end = self.kinematics.forward_kinematics(shoulder_lift_render, elbow_flex)
         
         # Also show the target XY position
         target_x = data['current_x']
@@ -311,6 +320,7 @@ class ArmDebugVisualizer:
         # Convert to screen coordinates
         origin_screen = (self.origin_x, self.origin_y)
         elbow_screen = self._world_to_screen(x_elbow, y_elbow)
+        pivot_screen = self._world_to_screen(x_pivot, y_pivot)
         end_screen = self._world_to_screen(x_end, y_end)
         target_screen = self._world_to_screen(target_x, target_y)
         
@@ -325,20 +335,23 @@ class ArmDebugVisualizer:
         
         # Draw links
         pygame.draw.line(screen, self.BLUE, origin_screen, elbow_screen, 8)  # L1
-        pygame.draw.line(screen, self.CYAN, elbow_screen, end_screen, 6)     # L2
+        pygame.draw.line(screen, self.GRAY, elbow_screen, pivot_screen, 4)   # Elbow offset
+        pygame.draw.line(screen, self.CYAN, pivot_screen, end_screen, 6)     # L2
         
         # Draw joints
         pygame.draw.circle(screen, self.WHITE, origin_screen, 12)
         pygame.draw.circle(screen, self.RED, origin_screen, 8)      # Shoulder
         pygame.draw.circle(screen, self.WHITE, elbow_screen, 10)
         pygame.draw.circle(screen, self.ORANGE, elbow_screen, 6)    # Elbow
+        pygame.draw.circle(screen, self.LIGHT_GRAY, pivot_screen, 6) # L2 pivot
         pygame.draw.circle(screen, self.WHITE, end_screen, 10)
         pygame.draw.circle(screen, self.GREEN, end_screen, 6)       # End effector
         
         # Draw wrist orientation indicator
         wrist_flex = targets.get('wrist_flex', 0.0)
         pitch = data.get('pitch', 0.0)
-        wrist_angle = shoulder_lift + elbow_flex + wrist_flex
+        # Subtract 90 degrees and flip wrist_flex sign to match physical robot
+        wrist_angle = shoulder_lift_render + elbow_flex - wrist_flex - math.pi/2
         wrist_len = 0.05 * self.scale
         wrist_end_x = end_screen[0] + wrist_len * math.cos(-wrist_angle + math.pi/2)
         wrist_end_y = end_screen[1] + wrist_len * math.sin(-wrist_angle + math.pi/2)
@@ -353,7 +366,7 @@ class ArmDebugVisualizer:
         line_height = 20
         
         # Background
-        panel_rect = pygame.Rect(5, 5, 340, 300)
+        panel_rect = pygame.Rect(5, 5, 340, 440)
         pygame.draw.rect(screen, (0, 0, 0, 200), panel_rect)
         pygame.draw.rect(screen, self.WHITE, panel_rect, 1)
         
@@ -365,7 +378,9 @@ class ArmDebugVisualizer:
         # Compute FK position for comparison
         shoulder_lift = targets.get('shoulder_lift', 0.0)
         elbow_flex = targets.get('elbow_flex', 0.0)
-        fk_x, fk_y = self.kinematics.forward_kinematics(shoulder_lift, elbow_flex)
+        # Flip sign of shoulder_lift for rendering (matches robot convention)
+        shoulder_lift_render = -shoulder_lift
+        fk_x, fk_y = self.kinematics.forward_kinematics(shoulder_lift_render, elbow_flex)
         
         # Compute elbow angle (interior angle at elbow joint)
         # From IK: cos_angle = (l1^2 + l2^2 - r^2) / (2*l1*l2)
@@ -409,11 +424,11 @@ class ArmDebugVisualizer:
     def _draw_vr_input_panel(self, screen, font, small_font, data):
         """Draw VR controller input info."""
         panel_x = 10
-        panel_y = 320
+        panel_y = 460
         line_height = 18
         
         # Background
-        panel_rect = pygame.Rect(5, 315, 340, 200)
+        panel_rect = pygame.Rect(5, 455, 340, 200)
         pygame.draw.rect(screen, (0, 0, 0, 200), panel_rect)
         pygame.draw.rect(screen, self.WHITE, panel_rect, 1)
         
