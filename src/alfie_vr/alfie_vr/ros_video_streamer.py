@@ -70,7 +70,11 @@ async def video_stream_loop():
 
     frames_sent = 0
     frames_skipped = 0
+    frames_no_new = 0
     last_stats_time = time.time()
+    
+    # Debug: Log first few frames
+    debug_count = 0
 
     try:
         while is_streaming:
@@ -79,15 +83,23 @@ async def video_stream_loop():
             # Get the latest frame from the ROS node
             frame_data, frame_id, frame_timestamp = ros_node.get_latest_frame()
             
+            # Debug logging for first few iterations
+            if debug_count < 10:
+                print(f"Loop iter {debug_count}: frame_data={'present' if frame_data else 'None'}, "
+                      f"frame_id={frame_id}, last_sent={last_sent_frame_id}, "
+                      f"timestamp={frame_timestamp:.3f}")
+                debug_count += 1
+            
             if frame_data is not None and frame_id > last_sent_frame_id:
                 # Only send if this is a new frame we haven't sent yet
                 last_sent_frame_id = frame_id
                 
-                # Calculate frame age (how old is this frame)
+                # Calculate frame age (how old is this frame since we received it from ROS)
                 frame_age_ms = (time.time() - frame_timestamp) * 1000
                 
-                # Skip frames that are too old (more than 2 frame intervals old)
-                if frame_age_ms > (FRAME_INTERVAL * 2 * 1000):
+                # Skip frames that are too old (more than 500ms old - generous threshold)
+                # This only happens during severe backlog situations
+                if frame_age_ms > 500:
                     frames_skipped += 1
                     print(f"Skipping stale frame (age: {frame_age_ms:.0f}ms)")
                 else:
@@ -98,14 +110,17 @@ async def video_stream_loop():
                         'frame_id': frame_id
                     })
                     frames_sent += 1
+            elif frame_data is None:
+                frames_no_new += 1
             
             # Print stats every 5 seconds
             now = time.time()
             if now - last_stats_time >= 5.0:
                 effective_fps = frames_sent / (now - last_stats_time)
-                print(f"Video stats: sent={frames_sent} ({effective_fps:.1f} fps), skipped={frames_skipped}")
+                print(f"Video stats: sent={frames_sent} ({effective_fps:.1f} fps), skipped={frames_skipped}, no_new={frames_no_new}")
                 frames_sent = 0
                 frames_skipped = 0
+                frames_no_new = 0
                 last_stats_time = now
             
             # Control frame rate - account for processing time

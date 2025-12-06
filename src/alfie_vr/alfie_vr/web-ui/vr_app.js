@@ -57,7 +57,8 @@ AFRAME.registerComponent('controller-updater', {
     
     // --- Frame tracking for latency and stale frame detection ---
     this.lastReceivedFrameId = 0;
-    this.avgLatency = 0;
+    this.lastFrameTime = 0;  // Time we received the last frame
+    this.avgFrameInterval = 0;  // Average time between frames (ms)
     this.framesDropped = 0;
 
     const videoPort = 8081;
@@ -91,24 +92,20 @@ AFRAME.registerComponent('controller-updater', {
           // Check for out-of-order or duplicate frames
           if (data.frame_id && data.frame_id <= this.lastReceivedFrameId) {
             this.framesDropped++;
-            console.log(`Dropping out-of-order frame: ${data.frame_id} <= ${this.lastReceivedFrameId}`);
+            // Only log occasionally to avoid console spam
+            if (this.framesDropped % 10 === 1) {
+              console.log(`Dropping out-of-order frame: ${data.frame_id} <= ${this.lastReceivedFrameId}`);
+            }
             return;
           }
           
-          // Calculate network latency if timestamp provided
-          let latencyMs = 0;
-          if (data.timestamp) {
-            latencyMs = now - data.timestamp;
-            // Exponential moving average for latency
-            this.avgLatency = this.avgLatency * 0.9 + latencyMs * 0.1;
-            
-            // Drop frames with excessive latency (more than 500ms old)
-            if (latencyMs > 500) {
-              this.framesDropped++;
-              console.log(`Dropping stale frame, latency: ${latencyMs}ms`);
-              return;
-            }
+          // Track frame interval (time between frames) - this is reliable
+          // unlike clock-based latency which requires synchronized clocks
+          if (this.lastFrameTime > 0) {
+            const frameInterval = now - this.lastFrameTime;
+            this.avgFrameInterval = this.avgFrameInterval * 0.9 + frameInterval * 0.1;
           }
+          this.lastFrameTime = now;
           
           if (data.frame_id) {
             this.lastReceivedFrameId = data.frame_id;
@@ -120,7 +117,7 @@ AFRAME.registerComponent('controller-updater', {
             this.videoFps = this.videoFrameCount / ((now - this.lastFpsUpdate) / 1000);
             this.videoFrameCount = 0;
             this.lastFpsUpdate = now;
-            console.log(`Video FPS: ${this.videoFps.toFixed(1)}, Latency: ${this.avgLatency.toFixed(0)}ms, Dropped: ${this.framesDropped}`);
+            console.log(`Video FPS: ${this.videoFps.toFixed(1)}, Interval: ${this.avgFrameInterval.toFixed(0)}ms, Dropped: ${this.framesDropped}`);
             this.framesDropped = 0;
           }
 
@@ -128,13 +125,15 @@ AFRAME.registerComponent('controller-updater', {
           img.onload = () => {
             this.videoContext.drawImage(img, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
             
-            // Draw FPS and latency overlay on the video canvas
+            // Draw FPS overlay on the video canvas
+            // Green if FPS is in acceptable range (9-11), red otherwise
             this.videoContext.save();
             this.videoContext.font = 'bold 20px Arial';
             this.videoContext.fillStyle = 'rgba(0, 0, 0, 0.5)';
-            this.videoContext.fillRect(5, 5, 160, 28);
-            this.videoContext.fillStyle = '#00FF00';
-            this.videoContext.fillText(`${this.videoFps.toFixed(1)} FPS | ${this.avgLatency.toFixed(0)}ms`, 12, 25);
+            this.videoContext.fillRect(5, 5, 120, 28);
+            const fpsColor = (this.videoFps >= 9 && this.videoFps <= 11) ? '#00FF00' : '#FF0000';
+            this.videoContext.fillStyle = fpsColor;
+            this.videoContext.fillText(`${this.videoFps.toFixed(1)} FPS`, 12, 25);
             this.videoContext.restore();
 
             // Update A-Frame texture
