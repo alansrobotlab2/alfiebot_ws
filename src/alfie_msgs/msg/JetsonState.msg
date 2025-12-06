@@ -46,6 +46,14 @@ string power_mode              # Current power mode (e.g., MAXN, 5W, 10W, 15W)
 float32 network_rx_mbps        # Network receive rate in Mbps
 float32 network_tx_mbps        # Network transmit rate in Mbps
 
+# WiFi statistics
+string wifi_ssid               # Connected network SSID
+int8 wifi_signal_dbm           # Signal strength in dBm (typically -30 to -90)
+uint8 wifi_signal_percent      # Signal quality percentage (0-100)
+uint16 wifi_link_speed_mbps    # Link speed in Mbps
+string wifi_interface          # WiFi interface name (e.g., wlan0)
+bool wifi_connected            # Whether WiFi is connected
+
 # System uptime and load
 float32 uptime_seconds         # System uptime in seconds
 float32 load_avg_1min          # 1-minute load average

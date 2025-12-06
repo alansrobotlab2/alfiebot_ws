@@ -25,6 +25,8 @@ setup(
         'console_scripts': [
             'master_status = alfie_bringup.master_status:main',
             'master_cmd = alfie_bringup.master_cmd:main',
+            'master_watchdog = alfie_bringup.master_watchdog:main',
+            'jetson_stats = alfie_bringup.jetson_stats:main',
         ],
     },
 )
