@@ -154,16 +154,19 @@ class VoltageMonitor(HealthCheck):
 class DiagnosticTimingMonitor(HealthCheck):
     """
     Monitors GDB diagnostic timing values.
-    Reports error if total timing exceeds the maximum threshold.
+    Reports error if servo timing exceeds the maximum threshold.
+    Reports warning if IMU update duration exceeds 10ms (monitored separately).
     """
     
-    # Timing fields to monitor from GDBDiagnostics
-    TIMING_FIELDS = [
+    # Timing fields to monitor from GDBDiagnostics (excluding IMU which is monitored separately)
+    SERVO_TIMING_FIELDS = [
         'pollservostatusduration',
         'updateservoidleduration',
         'updateservoactiveduration',
-        'imuupdateduration',
     ]
+    
+    # IMU timing threshold in ms
+    IMU_MAX_MS = 10.0
     
     def __init__(self, name: str, max_total_ms: float):
         super().__init__(name)
@@ -180,21 +183,30 @@ class DiagnosticTimingMonitor(HealthCheck):
         }
     
     def check(self) -> Optional[str]:
-        """Check if total timing exceeds maximum"""
+        """Check if servo timing exceeds maximum or IMU timing exceeds 10ms"""
         if not self.current_timings:
             return None  # No data yet
         
-        # Calculate total duration in ms
-        total_ms = 0.0
-        timing_details = []
-        for field_name in self.TIMING_FIELDS:
-            duration_sec = self.current_timings.get(field_name, 0.0)
-            duration_ms = duration_sec * 1000.0
-            total_ms += duration_ms
-            timing_details.append(f'{field_name}={duration_ms:.2f}ms')
+        errors = []
         
-        if total_ms > self.max_total_ms:
-            return f'{self.name} total timing {total_ms:.2f}ms exceeded {self.max_total_ms}ms: {", ".join(timing_details)}'
+        # Calculate servo total duration in ms (excluding IMU)
+        servo_total_ms = 0.0
+        servo_timing_details = []
+        for field_name in self.SERVO_TIMING_FIELDS:
+            duration_ms = self.current_timings.get(field_name, 0.0)
+            servo_total_ms += duration_ms
+            servo_timing_details.append(f'{field_name}={duration_ms:.2f}ms')
+        
+        if servo_total_ms > self.max_total_ms:
+            errors.append(f'{self.name} servo timing {servo_total_ms:.2f}ms exceeded {self.max_total_ms}ms: {", ".join(servo_timing_details)}')
+        
+        # Check IMU timing separately
+        imu_duration_ms = self.current_timings.get('imuupdateduration', 0.0)
+        if imu_duration_ms > self.IMU_MAX_MS:
+            errors.append(f'{self.name} IMU update duration {imu_duration_ms:.2f}ms exceeded {self.IMU_MAX_MS}ms')
+        
+        if errors:
+            return '; '.join(errors)
         
         return None
 
@@ -343,24 +355,21 @@ class ServoAlert:
     """Holds alert thresholds for servo monitoring"""
     servo_index: int
     temp_warn: float = 40.0           # Temperature warning threshold (°C)
-    load_warn: float = 100.0          # Load warning threshold (%)
     current_warn_ma: float = 3000.0   # Current warning threshold (mA = 3A)
 
 
 class ServoMonitor(HealthCheck):
     """
     Monitors servo health for a GDB (servo driver board).
-    Reports warnings for temperature, load, status codes, and current draw.
+    Reports warnings for temperature, status codes, and current draw.
     """
     
     def __init__(self, name: str, servo_names: list,
                  temp_warn: float = 40.0,
-                 load_warn: float = 100.0,
                  current_warn_ma: float = 3000.0):
         super().__init__(name)
         self.servo_names = servo_names
         self.temp_warn = temp_warn
-        self.load_warn = load_warn
         self.current_warn_ma = current_warn_ma
         
         # Store latest servo states
@@ -389,10 +398,6 @@ class ServoMonitor(HealthCheck):
             # Check temperature (servo reports in °C as uint8)
             if servo.current_temperature >= self.temp_warn:
                 servo_warnings.append(f'temp={servo.current_temperature}°C')
-            
-            # Check load (percentage, 100% = max torque)
-            if servo.current_load >= self.load_warn:
-                servo_warnings.append(f'load={servo.current_load:.0f}%')
             
             # Check status code (0 = normal, any other value is an error)
             if servo.servo_status != 0:
@@ -469,25 +474,37 @@ class MasterWatchdogNode(Node):
             max_total_ms=10.0
         )
         
+        # GDB0 board temperature monitor
+        self.health_checks['gdb0_board_temp'] = TemperatureMonitor(
+            name='GDB0 Board Temp',
+            warn_temp=45.0,
+            critical_temp=45.0  # Same as warn - trigger immediately
+        )
+        
+        # GDB1 board temperature monitor
+        self.health_checks['gdb1_board_temp'] = TemperatureMonitor(
+            name='GDB1 Board Temp',
+            warn_temp=45.0,
+            critical_temp=45.0  # Same as warn - trigger immediately
+        )
+        
         # ====================================================================
         # Servo Health Checks
         # ====================================================================
         
-        # GDB0 servo monitor - Right arm + Head (temp >= 40°C, load >= 100%, status != 0, current >= 3A)
+        # GDB0 servo monitor - Right arm + Head (temp >= 50°C, status != 0, current >= 3A)
         self.health_checks['gdb0_servos'] = ServoMonitor(
             name='GDB0',
             servo_names=GDB0_SERVO_NAMES,
-            temp_warn=40.0,
-            load_warn=100.0,
+            temp_warn=50.0,
             current_warn_ma=3000.0
         )
         
-        # GDB1 servo monitor - Left arm
+        # GDB1 servo monitor - Left arm (temp >= 50°C, status != 0, current >= 3A)
         self.health_checks['gdb1_servos'] = ServoMonitor(
             name='GDB1',
             servo_names=GDB1_SERVO_NAMES,
-            temp_warn=40.0,
-            load_warn=100.0,
+            temp_warn=50.0,
             current_warn_ma=3000.0
         )
         
@@ -593,6 +610,8 @@ class MasterWatchdogNode(Node):
         self.health_checks['gdb0_timing'].update(msg.driver_diagnostics)
         # Update servo health monitor
         self.health_checks['gdb0_servos'].update(msg.servo_state)
+        # Update board temperature
+        self.health_checks['gdb0_board_temp'].update(float(msg.board_temp))
     
     def gdb1_callback(self, msg: GDBState) -> None:
         """Callback for gdb1state"""
@@ -604,6 +623,8 @@ class MasterWatchdogNode(Node):
         self.health_checks['gdb1_timing'].update(msg.driver_diagnostics)
         # Update servo health monitor
         self.health_checks['gdb1_servos'].update(msg.servo_state)
+        # Update board temperature
+        self.health_checks['gdb1_board_temp'].update(float(msg.board_temp))
     
     def jetson_callback(self, msg: JetsonState) -> None:
         """Callback for jetsonstate"""
