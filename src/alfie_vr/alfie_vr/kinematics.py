@@ -2,6 +2,7 @@ import math
 import numpy as np
 from typing import List, Union, Tuple
 from alfie_msgs.msg import RobotLowCmd, RobotLowState, ServoCmd
+from alfie_vr.alfie_teleop_vr_config import AlfieTeleopVRConfig
 
 
 
@@ -13,7 +14,7 @@ class SimpleTeleopArm:
     for smooth movement and gripper operations based on VR controller input.
     """
     
-    def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1):
+    def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1, config=None):
         """
         Initialize the SimpleTeleopArm with joint mapping and initial state.
 
@@ -23,11 +24,13 @@ class SimpleTeleopArm:
             kinematics (object): Kinematics model for inverse kinematics calculations.
             prefix (str, optional): Prefix for the arm (e.g., "left" or "right"). Defaults to "right".
             kp (float, optional): Proportional gain for the control loop. Defaults to 1.
+            config (AlfieTeleopVRConfig, optional): Configuration object. Defaults to None (uses default config).
         """
         self.joint_map = joint_map
         self.prefix = prefix
         self.kp = kp
         self.kinematics = kinematics
+        self.config = config if config is not None else AlfieTeleopVRConfig()
         
         # set offset to 0 if prefix is left otherwise 7 for right
         if prefix == 'left':
@@ -146,29 +149,21 @@ class SimpleTeleopArm:
         
         # Calculate relative change (delta) from previous frame
         # Scale factors for converting VR movement to robot workspace
-        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * 80 # * 220  # Scale for the shoulder rotate
-        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * 40 # * 70   # Scale for arm reach (Y)
-        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * 40 # * 70   # Scale for arm reach (Z->X)
+        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * self.config.vr_x_scale
+        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * self.config.vr_y_scale
+        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * self.config.vr_z_scale
 
         # Update previous position for next frame
         self.prev_vr_pos = current_vr_pos
         
-        # Delta control parameters - adjust these for sensitivity
-        pos_scale = 0.05  # Position sensitivity scaling
-        angle_scale = 0.07  # Angle sensitivity scaling (radians, ~4 degrees)
-        wrist_flex_scale = 4.0  # Wrist flex (pitch) amplification factor
-        wrist_roll_scale = 2.0  # Wrist roll amplification factor
-        delta_limit = 0.02  # Maximum delta per update (meters)
-        angle_limit = 0.14  # Maximum angle delta per update (radians, ~8 degrees)
-        
-        delta_x = vr_x * pos_scale
-        delta_y = vr_y * pos_scale  
-        delta_z = vr_z * pos_scale
+        delta_x = vr_x * self.config.pos_scale
+        delta_y = vr_y * self.config.pos_scale  
+        delta_z = vr_z * self.config.pos_scale
         
         # Limit delta values to prevent sudden movements
-        delta_x = max(-delta_limit, min(delta_limit, delta_x))
-        delta_y = max(-delta_limit, min(delta_limit, delta_y))
-        delta_z = max(-delta_limit, min(delta_limit, delta_z))
+        delta_x = max(-self.config.delta_limit, min(self.config.delta_limit, delta_x))
+        delta_y = max(-self.config.delta_limit, min(self.config.delta_limit, delta_y))
+        delta_z = max(-self.config.delta_limit, min(self.config.delta_limit, delta_z))
         
         # Update workspace position
         # VR coordinate system (WebXR): X=left(-)/right(+), Y=down(-)/up(+), Z=forward(-)/back(+)
@@ -193,8 +188,8 @@ class SimpleTeleopArm:
                 return
             
             # Calculate relative change from previous frame (convert VR degrees to radians)
-            delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * angle_scale / 0.07 * wrist_flex_scale
-            delta_pitch = max(-angle_limit, min(angle_limit, delta_pitch))
+            delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * self.config.angle_scale / 0.07 * self.config.wrist_flex_scale
+            delta_pitch = max(-self.config.angle_limit, min(self.config.angle_limit, delta_pitch))
             self.pitch += delta_pitch
             self.pitch = max(-math.pi/2, min(math.pi/2, self.pitch))  # Limit pitch range (±90°)
             
@@ -208,8 +203,8 @@ class SimpleTeleopArm:
                 return
             
             # Convert VR degrees to radians for delta
-            delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * angle_scale / 0.07 * wrist_roll_scale
-            delta_roll = max(-angle_limit, min(angle_limit, delta_roll))
+            delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * self.config.angle_scale / 0.07 * self.config.wrist_roll_scale
+            delta_roll = max(-self.config.angle_limit, min(self.config.angle_limit, delta_roll))
             
             current_roll = self.target_positions.get("wrist_roll", 0.0)
             new_roll = current_roll - delta_roll  # Negated to fix direction
@@ -223,7 +218,7 @@ class SimpleTeleopArm:
         if abs(delta_x) > 0.001:  # Only update if significant movement
             x_scale = 3.5  # Scale factor for shoulder pan (radians)
             delta_pan = delta_x * x_scale
-            delta_pan = max(-angle_limit, min(angle_limit, delta_pan))
+            delta_pan = max(-self.config.angle_limit, min(self.config.angle_limit, delta_pan))
             current_pan = self.target_positions.get("shoulder_pan", 0.0)
             new_pan = current_pan - delta_pan  # Negated to fix direction
             new_pan = max(-math.pi/4, min(math.pi/4, new_pan))  # Limit pan range (±45°)
@@ -247,11 +242,10 @@ class SimpleTeleopArm:
         self.target_positions["wrist_flex"] = (-self.target_positions["shoulder_lift"] - 
                                                self.target_positions["elbow_flex"] + self.pitch)
    
-        # Handle gripper state directly (in radians)
-        if vr_goal.metadata.get('trigger', 0) > 0.5:
-            self.target_positions["gripper"] = 0.785  # ~45 degrees in radians
-        else:
-            self.target_positions["gripper"] = 0.0
+        # Handle gripper state proportionally (in radians)
+        # trigger 0.0 = closed (0.0 rad), trigger 1.0 = fully open (0.785 rad / ~45 degrees)
+        trigger_value = vr_goal.metadata.get('trigger', 0)
+        self.target_positions["gripper"] = trigger_value * 0.785
 
     def p_control_action(self, robot):
         """

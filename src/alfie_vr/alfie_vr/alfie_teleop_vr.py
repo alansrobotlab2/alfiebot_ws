@@ -25,6 +25,7 @@ from alfie_vr.vr_monitor import VRMonitor
 from alfie_vr.kinematics import AlfieArmKinematics
 from alfie_vr.kinematics import SimpleTeleopArm
 from alfie_vr.kinematics import SimpleHeadControl
+from alfie_vr.alfie_teleop_vr_config import AlfieTeleopVRConfig
 
 # Optional visualizer import
 try:
@@ -65,6 +66,9 @@ class AlfieTeleopVRNode(Node):
     
     def __init__(self, enable_debug_viz: bool = False):
         super().__init__('alfiebot_teleop_vr_node')
+        
+        # Load configuration
+        self.config = AlfieTeleopVRConfig()
         
         # Create callback group for state subscription
         self.state_callback_group = ReentrantCallbackGroup()
@@ -240,14 +244,16 @@ class AlfieTeleopVRNode(Node):
             robotlowstate=robot_state,
             kinematics=self.kinematics_left,
             prefix='left',
-            kp=1
+            kp=1,
+            config=self.config
         )
         self.right_arm = SimpleTeleopArm(
             joint_map=RIGHT_ARM_JOINT_MAP,
             robotlowstate=robot_state,
             kinematics=self.kinematics_right,
             prefix='right',
-            kp=1
+            kp=1,
+            config=self.config
         )
         self.head = SimpleHeadControl(
             joint_map=HEAD_JOINT_MAP,
@@ -356,28 +362,24 @@ class AlfieTeleopVRNode(Node):
                 # VR sends this as 'y' key
                 if 'y' in rotation:
                     yaw_deg = float(rotation['y'])
-                    yaw_rad = math.radians(yaw_deg)
+                    yaw_rad = math.radians(yaw_deg) * self.config.head_yaw_scale
                     self.robot_cmd_state.servo_cmd[12].target_location = yaw_rad
                 
                 # Servo 13: Head Tilt (pitch - rotation around Y-axis)
                 # VR sends this as 'x' key
                 if 'x' in rotation:
                     pitch_deg = float(rotation['x'])
-                    pitch_rad = math.radians(pitch_deg)
+                    pitch_rad = math.radians(pitch_deg) * self.config.head_pitch_scale
                     self.robot_cmd_state.servo_cmd[13].target_location = pitch_rad
                 
                 # Servo 14: Head Roll (roll - rotation around X-axis)
                 # VR sends this as 'z' key
                 if 'z' in rotation:
                     roll_deg = float(rotation['z'])
-                    roll_rad = math.radians(roll_deg)
+                    roll_rad = math.radians(roll_deg) * self.config.head_roll_scale
                     self.robot_cmd_state.servo_cmd[14].target_location = roll_rad
         
         # Process joystick input for cmd_vel
-        # Velocity limits
-        MAX_LINEAR_VEL = 0.15  # m/s
-        MAX_ANGULAR_VEL = 1.00  # rad/s
-        
         # Left joystick controls linear velocity (forward/back and strafe left/right)
         if left_controller_goal and hasattr(left_controller_goal, 'metadata') and left_controller_goal.metadata:
             thumbstick = left_controller_goal.metadata.get('thumbstick', {})
@@ -388,8 +390,8 @@ class AlfieTeleopVRNode(Node):
                 joy_y = float(thumbstick.get('y', 0.0))
                 
                 # Map joystick values (-1 to 1) to velocity limits
-                self.robot_cmd_state.cmd_vel.linear.x = -joy_y * MAX_LINEAR_VEL  # forward/back (negated)
-                self.robot_cmd_state.cmd_vel.linear.y = joy_x * MAX_LINEAR_VEL  # strafe left/right
+                self.robot_cmd_state.cmd_vel.linear.x = -joy_y * self.config.max_linear_vel  # forward/back (negated)
+                self.robot_cmd_state.cmd_vel.linear.y = joy_x * self.config.max_linear_vel  # strafe left/right
                 
                 # Debug log
                 if abs(joy_x) > 0.1 or abs(joy_y) > 0.1:
@@ -419,7 +421,7 @@ class AlfieTeleopVRNode(Node):
                 joy_x = float(thumbstick.get('x', 0.0))
                 
                 # Map joystick value (-1 to 1) to angular velocity limit
-                self.robot_cmd_state.cmd_vel.angular.z = joy_x * MAX_ANGULAR_VEL  # Rotation (removed negation)
+                self.robot_cmd_state.cmd_vel.angular.z = joy_x * self.config.max_angular_vel  # Rotation
                 
                 # Debug log
                 if abs(joy_x) > 0.1:
