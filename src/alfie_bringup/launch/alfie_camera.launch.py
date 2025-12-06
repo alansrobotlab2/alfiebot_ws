@@ -327,7 +327,7 @@ def generate_launch_description():
             description="Enables compatibility with RealSense nodes.",
         ),
         DeclareLaunchArgument("rectify_rgb", default_value="true"),
-        DeclareLaunchArgument("pointcloud.enable", default_value="false"),
+        DeclareLaunchArgument("pointcloud.enable", default_value="true"),
         DeclareLaunchArgument("enable_color", default_value="true"),
         DeclareLaunchArgument("enable_depth", default_value="true"),
         DeclareLaunchArgument("enable_infra1", default_value="false"),

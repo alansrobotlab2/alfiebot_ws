@@ -153,7 +153,7 @@ class AlfieTeleopVRNode(Node):
         self.timer = self.create_timer(0.01, self.publish_robotlowcmd)  # 100Hz = 0.01s period
         
         # Create VR monitor
-        self.vr_monitor = VRMonitor(vr_debug=True)
+        self.vr_monitor = VRMonitor(vr_debug=False)
         
         # Thread for running VR monitor async loop
         self.vr_thread = None
@@ -255,22 +255,25 @@ class AlfieTeleopVRNode(Node):
             kp=1
         )
 
-        # Call back calibration service
-        # self.get_logger().info('Calling back calibration service...')
-        # calibrate_client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
-        # if calibrate_client.wait_for_service(timeout_sec=5.0):
-        #     request = BackRequestCalibration.Request()
-        #     future = calibrate_client.call_async(request)
-        #     rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
-        #     if future.result() is not None:
-        #         if future.result().success:
-        #             self.get_logger().info('Back calibration successful')
-        #         else:
-        #             self.get_logger().warn('Back calibration returned failure')
-        #     else:
-        #         self.get_logger().warn('Back calibration service call failed')
-        # else:
-        #     self.get_logger().warn('Back calibration service not available')
+        # Call back calibration service only if not already calibrated
+        if not robot_state.back_state.is_calibrated:
+            self.get_logger().info('Back not calibrated, calling calibration service...')
+            calibrate_client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
+            if calibrate_client.wait_for_service(timeout_sec=5.0):
+                request = BackRequestCalibration.Request()
+                future = calibrate_client.call_async(request)
+                rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+                if future.result() is not None:
+                    if future.result().success:
+                        self.get_logger().info('Back calibration successful')
+                    else:
+                        self.get_logger().warn('Back calibration returned failure')
+                else:
+                    self.get_logger().warn('Back calibration service call failed')
+            else:
+                self.get_logger().warn('Back calibration service not available')
+        else:
+            self.get_logger().info('Back already calibrated, skipping calibration')
         
         self.get_logger().info('Arm and head controllers initialized')
         
@@ -372,8 +375,8 @@ class AlfieTeleopVRNode(Node):
         
         # Process joystick input for cmd_vel
         # Velocity limits
-        MAX_LINEAR_VEL = 0.25  # m/s
-        MAX_ANGULAR_VEL = 1.0  # rad/s
+        MAX_LINEAR_VEL = 0.15  # m/s
+        MAX_ANGULAR_VEL = 1.00  # rad/s
         
         # Left joystick controls linear velocity (forward/back and strafe left/right)
         if left_controller_goal and hasattr(left_controller_goal, 'metadata') and left_controller_goal.metadata:

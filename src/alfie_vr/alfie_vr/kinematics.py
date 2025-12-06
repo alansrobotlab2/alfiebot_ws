@@ -156,7 +156,7 @@ class SimpleTeleopArm:
         # Delta control parameters - adjust these for sensitivity
         pos_scale = 0.05  # Position sensitivity scaling
         angle_scale = 0.07  # Angle sensitivity scaling (radians, ~4 degrees)
-        wrist_flex_scale = 2.0  # Wrist flex (pitch) amplification factor
+        wrist_flex_scale = 4.0  # Wrist flex (pitch) amplification factor
         wrist_roll_scale = 2.0  # Wrist roll amplification factor
         delta_limit = 0.02  # Maximum delta per update (meters)
         angle_limit = 0.14  # Maximum angle delta per update (radians, ~8 degrees)
