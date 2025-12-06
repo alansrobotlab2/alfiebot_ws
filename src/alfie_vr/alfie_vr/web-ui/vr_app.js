@@ -54,6 +54,11 @@ AFRAME.registerComponent('controller-updater', {
     this.videoFps = 0;
     this.lastFpsUpdate = Date.now();
     this.fpsUpdateInterval = 1000; // Update FPS every second
+    
+    // --- Frame tracking for latency and stale frame detection ---
+    this.lastReceivedFrameId = 0;
+    this.avgLatency = 0;
+    this.framesDropped = 0;
 
     const videoPort = 8081;
 
@@ -81,27 +86,55 @@ AFRAME.registerComponent('controller-updater', {
 
       this.videoSocket.on('video_frame', (data) => {
         if (data && data.frame) {
+          const now = Date.now();
+          
+          // Check for out-of-order or duplicate frames
+          if (data.frame_id && data.frame_id <= this.lastReceivedFrameId) {
+            this.framesDropped++;
+            console.log(`Dropping out-of-order frame: ${data.frame_id} <= ${this.lastReceivedFrameId}`);
+            return;
+          }
+          
+          // Calculate network latency if timestamp provided
+          let latencyMs = 0;
+          if (data.timestamp) {
+            latencyMs = now - data.timestamp;
+            // Exponential moving average for latency
+            this.avgLatency = this.avgLatency * 0.9 + latencyMs * 0.1;
+            
+            // Drop frames with excessive latency (more than 500ms old)
+            if (latencyMs > 500) {
+              this.framesDropped++;
+              console.log(`Dropping stale frame, latency: ${latencyMs}ms`);
+              return;
+            }
+          }
+          
+          if (data.frame_id) {
+            this.lastReceivedFrameId = data.frame_id;
+          }
+          
           // Count frames for FPS calculation
           this.videoFrameCount++;
-          const now = Date.now();
           if (now - this.lastFpsUpdate >= this.fpsUpdateInterval) {
             this.videoFps = this.videoFrameCount / ((now - this.lastFpsUpdate) / 1000);
             this.videoFrameCount = 0;
             this.lastFpsUpdate = now;
-            console.log(`Video FPS: ${this.videoFps.toFixed(1)}`);
+            console.log(`Video FPS: ${this.videoFps.toFixed(1)}, Latency: ${this.avgLatency.toFixed(0)}ms, Dropped: ${this.framesDropped}`);
+            this.framesDropped = 0;
           }
 
           const img = new Image();
           img.onload = () => {
             this.videoContext.drawImage(img, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
             
-            // Draw FPS overlay on the video canvas
+            // Draw FPS and latency overlay on the video canvas
             this.videoContext.save();
             this.videoContext.font = 'bold 20px Arial';
             this.videoContext.fillStyle = 'rgba(0, 0, 0, 0.5)';
-            this.videoContext.fillRect(5, 5, 90, 28);
+            this.videoContext.fillRect(5, 5, 160, 28);
             this.videoContext.fillStyle = '#00FF00';
-            this.videoContext.fillText(`${this.videoFps.toFixed(1)} FPS`, 12, 25);
+            this.videoContext.fillText(`${this.videoFps.toFixed(1)} FPS | ${this.avgLatency.toFixed(0)}ms`, 12, 25);
             this.videoContext.restore();
 
             // Update A-Frame texture

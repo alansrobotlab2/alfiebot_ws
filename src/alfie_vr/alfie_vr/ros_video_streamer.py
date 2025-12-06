@@ -7,6 +7,7 @@ import asyncio
 import base64
 import os
 import threading
+import time
 from typing import Optional
 
 import rclpy
@@ -21,13 +22,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 VIDEO_PORT = 8081
 
-FRAME_RATE = 15  # Target frame rate for streaming
+FRAME_RATE = 10  # Target frame rate for streaming
 FRAME_INTERVAL = 1.0 / FRAME_RATE  # Interval between frames in seconds
 
 
 # Initialize FastAPI and Socket.IO
 app = FastAPI()
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+# Use polling=False to force WebSocket only (no long-polling fallback which adds latency)
+sio = socketio.AsyncServer(
+    async_mode='asgi', 
+    cors_allowed_origins='*',
+    ping_timeout=10,
+    ping_interval=5,
+    max_http_buffer_size=1024*1024  # 1MB max for frames
+)
 socket_app = socketio.ASGIApp(sio, app)
 
 # CORS
@@ -46,10 +54,13 @@ ros_node: Optional['VideoStreamerNode'] = None
 is_streaming = False
 stream_task = None
 
+# Frame sequence tracking to detect new frames
+last_sent_frame_id = 0
+
 
 async def video_stream_loop():
     """Stream video frames from ROS2 topic to Socket.IO clients"""
-    global is_streaming, ros_node
+    global is_streaming, ros_node, last_sent_frame_id
     print("Starting ROS2 video stream loop...")
     
     if ros_node is None:
@@ -57,20 +68,55 @@ async def video_stream_loop():
         is_streaming = False
         return
 
+    frames_sent = 0
+    frames_skipped = 0
+    last_stats_time = time.time()
+
     try:
         while is_streaming:
+            loop_start = time.time()
+            
             # Get the latest frame from the ROS node
-            frame_data = ros_node.get_latest_frame()
+            frame_data, frame_id, frame_timestamp = ros_node.get_latest_frame()
             
-            if frame_data is not None:
-                # Frame is already base64 encoded
-                await sio.emit('video_frame', {'frame': frame_data})
+            if frame_data is not None and frame_id > last_sent_frame_id:
+                # Only send if this is a new frame we haven't sent yet
+                last_sent_frame_id = frame_id
+                
+                # Calculate frame age (how old is this frame)
+                frame_age_ms = (time.time() - frame_timestamp) * 1000
+                
+                # Skip frames that are too old (more than 2 frame intervals old)
+                if frame_age_ms > (FRAME_INTERVAL * 2 * 1000):
+                    frames_skipped += 1
+                    print(f"Skipping stale frame (age: {frame_age_ms:.0f}ms)")
+                else:
+                    # Send with timestamp so client can track latency
+                    await sio.emit('video_frame', {
+                        'frame': frame_data,
+                        'timestamp': int(frame_timestamp * 1000),  # ms since epoch
+                        'frame_id': frame_id
+                    })
+                    frames_sent += 1
             
-            # Control frame rate
-            await asyncio.sleep(FRAME_INTERVAL)
+            # Print stats every 5 seconds
+            now = time.time()
+            if now - last_stats_time >= 5.0:
+                effective_fps = frames_sent / (now - last_stats_time)
+                print(f"Video stats: sent={frames_sent} ({effective_fps:.1f} fps), skipped={frames_skipped}")
+                frames_sent = 0
+                frames_skipped = 0
+                last_stats_time = now
+            
+            # Control frame rate - account for processing time
+            elapsed = time.time() - loop_start
+            sleep_time = max(0, FRAME_INTERVAL - elapsed)
+            await asyncio.sleep(sleep_time)
             
     except Exception as e:
         print(f"Stream error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         print("Video stream loop stopped.")
         is_streaming = False
@@ -88,11 +134,12 @@ async def disconnect(sid):
 
 @sio.event
 async def start_video_stream(sid):
-    global is_streaming, stream_task
+    global is_streaming, stream_task, last_sent_frame_id
     print(f"Client {sid} requested video stream")
     
     if not is_streaming:
         is_streaming = True
+        last_sent_frame_id = 0  # Reset frame tracking for new stream
         stream_task = asyncio.create_task(video_stream_loop())
 
 
@@ -115,15 +162,21 @@ class VideoStreamerNode(Node):
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         self.port = self.get_parameter('port').get_parameter_value().integer_value
         
-        # Latest frame storage
+        # Latest frame storage with metadata
         self._latest_frame: Optional[str] = None
+        self._frame_id: int = 0
+        self._frame_timestamp: float = 0.0
         self._frame_lock = threading.Lock()
         
-        # QoS profile for camera images
+        # Frame rate tracking for ROS topic
+        self._ros_frame_count = 0
+        self._ros_last_stats_time = time.time()
+        
+        # QoS profile for camera images - use BEST_EFFORT for lowest latency
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1
+            depth=1  # Only keep the latest frame
         )
         
         # Subscribe to compressed image topic
@@ -141,19 +194,32 @@ class VideoStreamerNode(Node):
     def image_callback(self, msg: CompressedImage):
         """Handle incoming compressed image messages"""
         try:
+            receive_time = time.time()
+            
             # Convert the compressed image data to base64
             frame_b64 = base64.b64encode(msg.data).decode('utf-8')
             
             with self._frame_lock:
                 self._latest_frame = frame_b64
+                self._frame_id += 1
+                self._frame_timestamp = receive_time
+            
+            # Track ROS frame rate
+            self._ros_frame_count += 1
+            now = time.time()
+            if now - self._ros_last_stats_time >= 5.0:
+                ros_fps = self._ros_frame_count / (now - self._ros_last_stats_time)
+                self.get_logger().info(f'ROS topic rate: {ros_fps:.1f} fps')
+                self._ros_frame_count = 0
+                self._ros_last_stats_time = now
                 
         except Exception as e:
             self.get_logger().error(f'Error processing image: {e}')
     
-    def get_latest_frame(self) -> Optional[str]:
-        """Get the latest frame as base64 encoded string"""
+    def get_latest_frame(self) -> tuple[Optional[str], int, float]:
+        """Get the latest frame as base64 encoded string with metadata"""
         with self._frame_lock:
-            return self._latest_frame
+            return self._latest_frame, self._frame_id, self._frame_timestamp
 
 
 def run_uvicorn_server(port: int):
