@@ -99,15 +99,22 @@ void vHardwareInterfaceTask(void *pvParameters)
 
   void vROSTask(void *pvParameters)
   {
-    TickType_t xROSLastWakeTime;
-    const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms = 100Hz
+    // Subscribe this task to the Task Watchdog Timer
+    // If this task doesn't feed the watchdog within TASK_WDT_TIMEOUT_S seconds, ESP32 will reboot
+    esp_task_wdt_add(NULL);
+    
+    // Custom rate limiter to enforce 100Hz max without "catch up" behavior
+    // Unlike xTaskDelayUntil, this ensures we never publish faster than 100Hz
+    // even if previous iterations were delayed
+    RateLimiter rateLimiter(10); // 10ms = 100Hz max
 
-    // Initialize the xROSLastWakeTime variable with the current time
-    xROSLastWakeTime = xTaskGetTickCount();
     while (1)
     {
-      // Wait for the next cycle (precise 100 Hz timing)
-      xTaskDelayUntil(&xROSLastWakeTime, xFrequency);
+      // Feed the task watchdog timer - must happen every iteration to prevent reboot
+      esp_task_wdt_reset();
+      
+      // Wait for the next cycle (guaranteed minimum 10ms between iterations)
+      rateLimiter.waitForNextCycle();
 
       switch (b.agentState)
       {
@@ -158,6 +165,12 @@ void vHardwareInterfaceTask(void *pvParameters)
   {
     // Configure serial transport
     Serial.begin(BAUDRATE);
+
+    // Initialize Task Watchdog Timer with panic (reboot) on timeout
+    // This will reboot the ESP32 if vROSTask locks up
+    // First deinit the default WDT, then reinit with our settings
+    esp_task_wdt_deinit();
+    esp_task_wdt_init(TASK_WDT_TIMEOUT_S, true); // timeout in seconds, panic on timeout
 
     // Load board ID from EEPROM
     b.loadBoardId();

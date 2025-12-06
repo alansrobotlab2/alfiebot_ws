@@ -21,6 +21,8 @@ Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "esp_task_wdt.h"
+
 #include <rcl/rcl.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
@@ -39,8 +41,8 @@ Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 
 // baudrate for serial communication with micro-ROS agent
 //#define BAUDRATE 115200
-//#define BAUDRATE 921600
-#define BAUDRATE 1500000
+#define BAUDRATE 921600
+//#define BAUDRATE  1500000
 
 #define SERVOCOMMANDPACKETSIZE 9  // bytes per servo command packet
 
@@ -54,6 +56,11 @@ Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 #define S_TXD 19
 
 #define WATCHDOG_TIMEOUT_MS 100
+
+// Task Watchdog Timer timeout - if vROSTask doesn't feed the watchdog within this time, ESP32 reboots
+// Note: ESP32 TWDT minimum is 1 second, so we use 1 second as the hardware watchdog
+// The software watchdog (WATCHDOG_TIMEOUT_MS) handles the 100ms keepalive for motor/servo safety
+#define TASK_WDT_TIMEOUT_S 1
 
 
 #define HEARTBEAT_TIMEOUT_MS 10
