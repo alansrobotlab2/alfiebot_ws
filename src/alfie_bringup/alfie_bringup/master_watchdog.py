@@ -148,6 +148,62 @@ class VoltageMonitor(HealthCheck):
 
 
 # ============================================================================
+# Servo Voltage Monitor Health Check (monitors all servos)
+# ============================================================================
+
+class ServoVoltageMonitor(HealthCheck):
+    """
+    Monitors voltage levels for ALL servos on a GDB.
+    Reports error if any servo's voltage deviates from expected by more than tolerance.
+    """
+    
+    def __init__(self, name: str, servo_names: list, expected_voltage: float, tolerance_voltage: float):
+        super().__init__(name)
+        self.servo_names = servo_names
+        self.num_servos = len(servo_names)  # Only monitor servos that have names
+        self.expected_voltage = expected_voltage
+        self.tolerance_voltage = tolerance_voltage
+        self.servo_voltages: Dict[int, float] = {}
+    
+    def update(self, servo_states: list) -> None:
+        """Called when servo states are received"""
+        # Only process the actual number of servos on this board
+        for i in range(min(len(servo_states), self.num_servos)):
+            servo = servo_states[i]
+            # Convert raw voltage (0.1V units) to actual voltage
+            self.servo_voltages[i] = servo.current_voltage / VOLTAGE_SCALE
+    
+    def _get_servo_name(self, index: int) -> str:
+        """Get human-readable servo name for the given index"""
+        if index < len(self.servo_names):
+            return self.servo_names[index]
+        return f'Servo[{index}]'
+    
+    def check(self) -> Optional[str]:
+        """Check if all servo voltages are within tolerance"""
+        if not self.servo_voltages:
+            return None  # No data yet
+        
+        min_voltage = self.expected_voltage - self.tolerance_voltage
+        max_voltage = self.expected_voltage + self.tolerance_voltage
+        
+        errors = []
+        
+        for servo_idx, voltage in self.servo_voltages.items():
+            servo_name = self._get_servo_name(servo_idx)
+            
+            if voltage < min_voltage:
+                errors.append(f'{servo_name}={voltage:.1f}V (low)')
+            elif voltage > max_voltage:
+                errors.append(f'{servo_name}={voltage:.1f}V (high)')
+        
+        if errors:
+            return f'{self.name} voltage out of range ({self.expected_voltage}V ± {self.tolerance_voltage}V): {", ".join(errors)}'
+        
+        return None
+
+
+# ============================================================================
 # Diagnostic Timing Monitor Health Check
 # ============================================================================
 
@@ -448,16 +504,18 @@ class MasterWatchdogNode(Node):
             tolerance_hz=10.0
         )
         
-        # GDB0 voltage monitor (from first servo)
-        self.health_checks['gdb0_voltage'] = VoltageMonitor(
+        # GDB0 voltage monitor (all servos - 12V ± 0.2V)
+        self.health_checks['gdb0_voltage'] = ServoVoltageMonitor(
             name='GDB0',
+            servo_names=GDB0_SERVO_NAMES,
             expected_voltage=12.0,
             tolerance_voltage=0.2
         )
         
-        # GDB1 voltage monitor (from first servo)
-        self.health_checks['gdb1_voltage'] = VoltageMonitor(
+        # GDB1 voltage monitor (all servos - 12V ± 0.2V)
+        self.health_checks['gdb1_voltage'] = ServoVoltageMonitor(
             name='GDB1',
+            servo_names=GDB1_SERVO_NAMES,
             expected_voltage=12.0,
             tolerance_voltage=0.2
         )
@@ -603,9 +661,8 @@ class MasterWatchdogNode(Node):
     def gdb0_callback(self, msg: GDBState) -> None:
         """Callback for gdb0state"""
         self.health_checks['gdb0_rate'].update()
-        # Update voltage from first servo
-        if len(msg.servo_state) > 0:
-            self.health_checks['gdb0_voltage'].update(msg.servo_state[0].current_voltage)
+        # Update voltage monitor for all servos
+        self.health_checks['gdb0_voltage'].update(msg.servo_state)
         # Update diagnostic timings
         self.health_checks['gdb0_timing'].update(msg.driver_diagnostics)
         # Update servo health monitor
@@ -616,9 +673,8 @@ class MasterWatchdogNode(Node):
     def gdb1_callback(self, msg: GDBState) -> None:
         """Callback for gdb1state"""
         self.health_checks['gdb1_rate'].update()
-        # Update voltage from first servo
-        if len(msg.servo_state) > 0:
-            self.health_checks['gdb1_voltage'].update(msg.servo_state[0].current_voltage)
+        # Update voltage monitor for all servos
+        self.health_checks['gdb1_voltage'].update(msg.servo_state)
         # Update diagnostic timings
         self.health_checks['gdb1_timing'].update(msg.driver_diagnostics)
         # Update servo health monitor
