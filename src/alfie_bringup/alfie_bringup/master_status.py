@@ -28,6 +28,10 @@ SERVO_STEPS_PER_REVOLUTION = 4096
 STEPS_TO_RADIANS = 2.0 * np.pi / SERVO_STEPS_PER_REVOLUTION
 SERVO_ACCEL_UNITS_TO_STEPS_PER_SEC2 = 100.0
 
+# Motor encoder constants
+MOTOR_PULSES_PER_REVOLUTION = 22  # Encoder pulses per motor shaft revolution
+MOTOR_PULSES_TO_RADIANS = 2.0 * np.pi / MOTOR_PULSES_PER_REVOLUTION
+
 # Servo unit conversions
 SERVO_LOAD_SCALE = 10.0  # 0.1% units to percentage
 SERVO_VOLTAGE_SCALE = 10.0  # 0.1V units to volts
@@ -332,6 +336,10 @@ class MasterStatusNode(Node):
         names = []
         positions = []
         
+        # Track gripper active joint positions for passive joint synthesis
+        left_gripper_active_pos = None
+        right_gripper_active_pos = None
+        
         # Add servo joints (skip derived servos at indices 2 and 9)
         servo_state_idx = 0
         for i, joint_name in enumerate(SERVO_JOINT_NAMES):
@@ -343,15 +351,31 @@ class MasterStatusNode(Node):
                 servo = robot_state.servo_state[servo_state_idx]
                 names.append(joint_name)
                 positions.append(servo.current_location)
+                
+                # Track gripper active joint positions
+                if joint_name == 'left_gripper_active_joint':
+                    left_gripper_active_pos = servo.current_location
+                elif joint_name == 'right_gripper_active_joint':
+                    right_gripper_active_pos = servo.current_location
+                
                 servo_state_idx += 1
+        
+        # Add synthesized passive gripper joints (negated from active)
+        if left_gripper_active_pos is not None:
+            names.append('left_gripper_passive_joint')
+            positions.append(-left_gripper_active_pos)
+        
+        if right_gripper_active_pos is not None:
+            names.append('right_gripper_passive_joint')
+            positions.append(-right_gripper_active_pos)
         
         # Add motor joints (mecanum wheels)
         for i, joint_name in enumerate(MOTOR_JOINT_NAMES):
             if i < len(robot_state.motor_state):
                 motor = robot_state.motor_state[i]
                 names.append(joint_name)
-                # Convert pulse count to radians (assuming encoder ticks)
-                positions.append(float(motor.pulse_count) * STEPS_TO_RADIANS)
+                # Convert pulse count to radians (22 pulses per revolution)
+                positions.append(float(motor.pulse_count) * MOTOR_PULSES_TO_RADIANS)
         
         # Add back joint (prismatic)
         if robot_state.back_state is not None:
