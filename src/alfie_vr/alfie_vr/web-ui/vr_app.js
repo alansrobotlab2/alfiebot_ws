@@ -1,5 +1,370 @@
 // Wait for A-Frame scene to load
 
+// VR Robot Viewer Component - displays robot state in VR
+AFRAME.registerComponent('vr-robot-viewer', {
+  init: function () {
+    console.log('VR Robot Viewer component initialized');
+    
+    this.robotModel = document.querySelector('#vrRobotModel');
+    this.statusText = document.querySelector('#vrRobotStatus');
+    this.debugUrlText = document.querySelector('#vrDebugUrl');
+    this.debugCodeText = document.querySelector('#vrDebugCode');
+    this.debugInfoText = document.querySelector('#vrDebugInfo');
+    this.links = {};
+    this.joints = {};
+    this.foxgloveClient = null;
+    this.tfSubscriptionId = null;
+    this.jointStateSubscriptionId = null;
+    this.robotDescriptionSubscriptionId = null;
+    this.urdfLoaded = false;
+    this.tfUpdateCount = 0;
+    this.connectionAttempts = 0;
+    
+    // Connect to Foxglove Bridge using WebSocket
+    const foxgloveUrl = `ws://${window.location.hostname}:8765`;
+    this.updateDebug('url', `URL: ${foxgloveUrl}`);
+    this.connectToFoxglove(foxgloveUrl);
+  },
+  
+  connectToFoxglove: function(url) {
+    this.connectionAttempts++;
+    console.log(`VR Viewer: Connecting to Foxglove at ${url} (attempt ${this.connectionAttempts})`);
+    this.updateStatus(`Connecting... #${this.connectionAttempts}`);
+    this.updateDebug('code', 'Code: connecting...');
+    this.updateDebug('info', '');
+    
+    try {
+      // Use the required Foxglove WebSocket subprotocol
+      this.foxgloveClient = new WebSocket(url, ['foxglove.websocket.v1']);
+      this.foxgloveClient.binaryType = 'arraybuffer';
+      
+      this.foxgloveClient.onopen = () => {
+        console.log('VR Viewer: Connected to Foxglove');
+        this.updateStatus('Connected!');
+        this.updateDebug('code', 'Code: OPEN');
+        this.updateDebug('info', 'Waiting for topics...');
+        this.connectionAttempts = 0;
+      };
+      
+      this.foxgloveClient.onmessage = (event) => {
+        this.handleMessage(event.data);
+      };
+      
+      this.foxgloveClient.onerror = (error) => {
+        console.error('VR Viewer: Foxglove error', error);
+        this.updateStatus('Error');
+        this.updateDebug('info', 'Check cert: visit URL in browser');
+      };
+      
+      this.foxgloveClient.onclose = (event) => {
+        console.log('VR Viewer: Foxglove disconnected. Code:', event.code, 'Reason:', event.reason);
+        this.updateStatus('Disconnected');
+        this.updateDebug('code', `Code: ${event.code}`);
+        
+        // Provide helpful info based on close code
+        let info = '';
+        if (event.code === 1006) {
+          info = 'Cert rejected - visit URL first';
+        } else if (event.code === 1002) {
+          info = 'Protocol error';
+        } else if (event.code === 1003) {
+          info = 'Unsupported data';
+        } else if (event.code === 1015) {
+          info = 'TLS handshake failed';
+        }
+        this.updateDebug('info', info);
+        
+        // Retry in 5 seconds
+        setTimeout(() => this.connectToFoxglove(url), 5000);
+      };
+    } catch (error) {
+      console.error('VR Viewer: Failed to connect', error);
+      this.updateStatus('Exception');
+      this.updateDebug('info', error.message || 'Unknown error');
+    }
+  },
+  
+  updateDebug: function(field, value) {
+    if (field === 'url' && this.debugUrlText) {
+      this.debugUrlText.setAttribute('value', value);
+    } else if (field === 'code' && this.debugCodeText) {
+      this.debugCodeText.setAttribute('value', value);
+    } else if (field === 'info' && this.debugInfoText) {
+      this.debugInfoText.setAttribute('value', value);
+    }
+  },
+  
+  handleMessage: function(data) {
+    try {
+      if (typeof data === 'string') {
+        const message = JSON.parse(data);
+        
+        if (message.op === 'advertise') {
+          this.subscribeToTopics(message.channels);
+        } else if (message.op === 'message') {
+          this.handleTopicMessage(message);
+        }
+      }
+    } catch (error) {
+      // Ignore parse errors for binary messages
+    }
+  },
+  
+  subscribeToTopics: function(channels) {
+    const subscriptions = [];
+    
+    for (const channel of channels) {
+      if (channel.topic === '/alfie/tf') {
+        this.tfSubscriptionId = subscriptions.length + 1;
+        subscriptions.push({ id: this.tfSubscriptionId, channelId: channel.id });
+      }
+      if (channel.topic === '/alfie/joint_states') {
+        this.jointStateSubscriptionId = subscriptions.length + 1;
+        subscriptions.push({ id: this.jointStateSubscriptionId, channelId: channel.id });
+      }
+      if (channel.topic === '/alfie/robot_description') {
+        this.robotDescriptionSubscriptionId = subscriptions.length + 1;
+        subscriptions.push({ id: this.robotDescriptionSubscriptionId, channelId: channel.id });
+      }
+    }
+    
+    if (subscriptions.length > 0) {
+      this.foxgloveClient.send(JSON.stringify({ op: 'subscribe', subscriptions }));
+      this.updateStatus(`Subscribed (${subscriptions.length})`);
+      
+      if (!this.robotDescriptionSubscriptionId) {
+        this.loadPlaceholderRobot();
+      }
+    }
+  },
+  
+  handleTopicMessage: function(message) {
+    if (message.topic === '/alfie/tf') {
+      this.processTFData(message.message);
+    } else if (message.topic === '/alfie/joint_states') {
+      this.processJointState(message.message);
+    } else if (message.topic === '/alfie/robot_description') {
+      this.processRobotDescription(message.message);
+    }
+  },
+  
+  processTFData: function(tfData) {
+    if (!tfData || !tfData.transforms) return;
+    
+    for (const transform of tfData.transforms) {
+      const childFrame = transform.child_frame_id;
+      const t = transform.transform.translation;
+      const r = transform.transform.rotation;
+      
+      const linkEl = this.links[childFrame];
+      if (linkEl) {
+        linkEl.object3D.position.set(t.x, t.y, t.z);
+        linkEl.object3D.quaternion.set(r.x, r.y, r.z, r.w);
+      }
+    }
+    
+    this.tfUpdateCount++;
+    if (this.tfUpdateCount % 100 === 0) {
+      this.updateStatus(`TF: ${this.tfUpdateCount}`);
+    }
+  },
+  
+  processJointState: function(jointData) {
+    if (!jointData || !jointData.name || !jointData.position) return;
+    
+    for (let i = 0; i < jointData.name.length; i++) {
+      const jointName = jointData.name[i];
+      const position = jointData.position[i];
+      
+      const joint = this.joints[jointName];
+      if (joint && joint.el) {
+        const axis = joint.axis || [0, 0, 1];
+        // Apply rotation around joint axis
+        if (joint.type === 'revolute' || joint.type === 'continuous') {
+          joint.el.object3D.rotation.set(
+            axis[0] * position,
+            axis[1] * position,
+            axis[2] * position
+          );
+        }
+      }
+    }
+  },
+  
+  processRobotDescription: function(descData) {
+    if (this.urdfLoaded) return;
+    
+    let urdfString = null;
+    if (typeof descData === 'string') {
+      urdfString = descData;
+    } else if (descData.data) {
+      urdfString = descData.data;
+    }
+    
+    if (urdfString && urdfString.includes('<robot')) {
+      this.parseURDF(urdfString);
+    }
+  },
+  
+  parseURDF: function(urdfString) {
+    if (this.urdfLoaded) return;
+    
+    try {
+      const parser = new DOMParser();
+      const urdfDoc = parser.parseFromString(urdfString, 'text/xml');
+      const robotEl = urdfDoc.querySelector('robot');
+      
+      if (!robotEl) return;
+      
+      // Clear existing model
+      while (this.robotModel.firstChild) {
+        this.robotModel.removeChild(this.robotModel.firstChild);
+      }
+      
+      // Parse links and create A-Frame entities
+      const linkElements = urdfDoc.querySelectorAll('link');
+      linkElements.forEach(linkEl => {
+        const linkName = linkEl.getAttribute('name');
+        const visual = linkEl.querySelector('visual');
+        
+        const entity = document.createElement('a-entity');
+        entity.setAttribute('id', `vr-link-${linkName}`);
+        
+        if (visual) {
+          const geometry = visual.querySelector('geometry');
+          const material = visual.querySelector('material');
+          const origin = visual.querySelector('origin');
+          
+          if (geometry) {
+            const box = geometry.querySelector('box');
+            const cylinder = geometry.querySelector('cylinder');
+            const sphere = geometry.querySelector('sphere');
+            
+            let geomStr = '';
+            if (box) {
+              const size = box.getAttribute('size').split(' ');
+              geomStr = `primitive: box; width: ${size[0]}; height: ${size[1]}; depth: ${size[2]}`;
+            } else if (cylinder) {
+              const r = cylinder.getAttribute('radius');
+              const h = cylinder.getAttribute('length');
+              geomStr = `primitive: cylinder; radius: ${r}; height: ${h}`;
+            } else if (sphere) {
+              const r = sphere.getAttribute('radius');
+              geomStr = `primitive: sphere; radius: ${r}`;
+            } else {
+              // Placeholder for mesh
+              geomStr = 'primitive: box; width: 0.03; height: 0.03; depth: 0.03';
+            }
+            
+            entity.setAttribute('geometry', geomStr);
+            
+            // Material color
+            let color = '#666666';
+            if (material) {
+              const colorEl = material.querySelector('color');
+              if (colorEl) {
+                const rgba = colorEl.getAttribute('rgba').split(' ').map(parseFloat);
+                const r = Math.round(rgba[0] * 255).toString(16).padStart(2, '0');
+                const g = Math.round(rgba[1] * 255).toString(16).padStart(2, '0');
+                const b = Math.round(rgba[2] * 255).toString(16).padStart(2, '0');
+                color = `#${r}${g}${b}`;
+              }
+            }
+            entity.setAttribute('material', `color: ${color}; metalness: 0.3; roughness: 0.7`);
+            
+            // Origin offset
+            if (origin) {
+              const xyz = origin.getAttribute('xyz');
+              const rpy = origin.getAttribute('rpy');
+              if (xyz) entity.setAttribute('position', xyz.replace(/ /g, ' '));
+              if (rpy) {
+                const rot = rpy.split(' ').map(r => THREE.MathUtils.radToDeg(parseFloat(r)));
+                entity.setAttribute('rotation', `${rot[0]} ${rot[1]} ${rot[2]}`);
+              }
+            }
+          }
+        }
+        
+        this.links[linkName] = entity;
+        this.robotModel.appendChild(entity);
+      });
+      
+      // Parse joints
+      const jointElements = urdfDoc.querySelectorAll('joint');
+      jointElements.forEach(jointEl => {
+        const jointName = jointEl.getAttribute('name');
+        const jointType = jointEl.getAttribute('type');
+        const child = jointEl.querySelector('child')?.getAttribute('link');
+        const axis = jointEl.querySelector('axis');
+        const origin = jointEl.querySelector('origin');
+        
+        if (child && this.links[child]) {
+          const axisVec = axis ? axis.getAttribute('xyz').split(' ').map(parseFloat) : [0, 0, 1];
+          
+          this.joints[jointName] = {
+            el: this.links[child],
+            type: jointType,
+            axis: axisVec
+          };
+          
+          // Apply joint origin to child link
+          if (origin) {
+            const xyz = origin.getAttribute('xyz');
+            const rpy = origin.getAttribute('rpy');
+            if (xyz) {
+              const pos = xyz.split(' ').map(parseFloat);
+              this.links[child].setAttribute('position', `${pos[0]} ${pos[1]} ${pos[2]}`);
+            }
+            if (rpy) {
+              const rot = rpy.split(' ').map(r => THREE.MathUtils.radToDeg(parseFloat(r)));
+              this.links[child].setAttribute('rotation', `${rot[0]} ${rot[1]} ${rot[2]}`);
+            }
+          }
+        }
+      });
+      
+      this.urdfLoaded = true;
+      this.updateStatus(`Loaded ${Object.keys(this.links).length} links`);
+      console.log('VR Viewer: URDF loaded');
+      
+    } catch (error) {
+      console.error('VR Viewer: URDF parse error', error);
+      this.updateStatus('URDF error');
+    }
+  },
+  
+  loadPlaceholderRobot: function() {
+    console.log('VR Viewer: Loading placeholder robot');
+    
+    const parts = [
+      { name: 'base', geom: 'primitive: box; width: 0.15; height: 0.1; depth: 0.2', pos: '0 0.05 0', color: '#333333' },
+      { name: 'back', geom: 'primitive: box; width: 0.14; height: 0.4; depth: 0.08', pos: '0 0.35 -0.04', color: '#444444' },
+      { name: 'head', geom: 'primitive: sphere; radius: 0.08', pos: '0 0.85 0', color: '#222222' },
+      { name: 'left_upper', geom: 'primitive: cylinder; radius: 0.02; height: 0.2', pos: '0.12 0.6 0.08', color: '#555555' },
+      { name: 'left_lower', geom: 'primitive: cylinder; radius: 0.018; height: 0.18', pos: '0.12 0.45 0.18', color: '#555555' },
+      { name: 'right_upper', geom: 'primitive: cylinder; radius: 0.02; height: 0.2', pos: '-0.12 0.6 0.08', color: '#555555' },
+      { name: 'right_lower', geom: 'primitive: cylinder; radius: 0.018; height: 0.18', pos: '-0.12 0.45 0.18', color: '#555555' },
+    ];
+    
+    parts.forEach(part => {
+      const entity = document.createElement('a-entity');
+      entity.setAttribute('geometry', part.geom);
+      entity.setAttribute('material', `color: ${part.color}; metalness: 0.3; roughness: 0.7`);
+      entity.setAttribute('position', part.pos);
+      this.links[part.name] = entity;
+      this.robotModel.appendChild(entity);
+    });
+    
+    this.updateStatus('Placeholder loaded');
+  },
+  
+  updateStatus: function(message) {
+    if (this.statusText) {
+      this.statusText.setAttribute('value', message);
+    }
+  }
+});
+
 AFRAME.registerComponent('controller-updater', {
   init: function () {
     console.log("Controller updater component initialized.");

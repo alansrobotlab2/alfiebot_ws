@@ -6,6 +6,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch.substitutions import Command
 import os
 from ament_index_python.packages import get_package_share_directory
+import importlib.resources
 
 
 def generate_launch_description():
@@ -15,6 +16,13 @@ def generate_launch_description():
         'urdf',
         'alfiebot.urdf'
     )
+    
+    # Get SSL certificate paths for Foxglove Bridge
+    # Use the same certs as alfie_vr so browser trusts both connections
+    import alfie_vr
+    vr_pkg_dir = os.path.dirname(alfie_vr.__file__)
+    cert_file = os.path.join(vr_pkg_dir, 'cert.pem')
+    key_file = os.path.join(vr_pkg_dir, 'key.pem')
     
     # Read URDF file content
     with open(urdf_file, 'r') as f:

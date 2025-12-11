@@ -13,7 +13,7 @@ body {
   position: fixed;
   top: 0;
   left: 0;
-  width: 100%;
+  width: calc(100% - 440px);
   height: 100vh;
   z-index: 10000;
   background: rgba(255, 255, 255, 0.95);
@@ -594,4 +594,162 @@ a-scene {
 .restart-button:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 15px rgba(244, 67, 54, 0.3);
+}
+
+/* Robot Viewer Panel */
+.robot-viewer-panel {
+  position: fixed;
+  top: 20px;
+  right: 80px;
+  width: 400px;
+  height: calc(100vh - 40px);
+  background: rgba(26, 26, 46, 0.95);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  z-index: 10002;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+}
+
+.robot-viewer-panel.minimized {
+  height: 50px;
+}
+
+.robot-viewer-panel.minimized .robot-viewer-container,
+.robot-viewer-panel.minimized .robot-viewer-info,
+.robot-viewer-panel.minimized .robot-viewer-status {
+  display: none;
+}
+
+.robot-viewer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 15px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px 12px 0 0;
+}
+
+.robot-viewer-title {
+  color: white;
+  font-weight: bold;
+  font-size: 16px;
+}
+
+.robot-viewer-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.viewer-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.viewer-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.1);
+}
+
+.robot-viewer-status {
+  padding: 8px 15px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #a0a0a0;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.robot-viewer-container {
+  flex: 1;
+  min-height: 300px;
+  background: #1a1a2e;
+  position: relative;
+}
+
+.robot-viewer-container canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.robot-viewer-info {
+  padding: 10px 15px;
+  background: rgba(0, 0, 0, 0.3);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.viewer-info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.info-label {
+  color: #888;
+}
+
+.info-value {
+  color: #fff;
+  font-family: monospace;
+}
+
+.info-value.connected {
+  color: #4CAF50;
+}
+
+.info-value.disconnected {
+  color: #f44336;
+}
+
+/* Responsive adjustments for robot viewer */
+@media (max-width: 1200px) {
+  .robot-viewer-panel {
+    width: 350px;
+    right: 70px;
+  }
+  
+  .desktop-interface {
+    width: calc(100% - 390px);
+  }
+}
+
+@media (max-width: 900px) {
+  .robot-viewer-panel {
+    width: 100%;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    height: 300px;
+    border-radius: 12px 12px 0 0;
+  }
+  
+  .desktop-interface {
+    width: 100%;
+    height: calc(100vh - 300px);
+  }
+  
+  .robot-viewer-panel.minimized {
+    height: 50px;
+  }
+}
+
+/* Hide robot viewer in VR mode */
+@media (display-mode: standalone) {
+  .robot-viewer-panel {
+    display: none;
+  }
 } 

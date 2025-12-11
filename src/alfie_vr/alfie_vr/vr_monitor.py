@@ -85,6 +85,9 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
         if self.path == '/' or self.path == '/index.html':
             # Serve main page from web-ui directory
             self.serve_file('web-ui/index.html', 'text/html')
+        elif self.path == '/foxglove-cert':
+            # Serve a page to help accept the Foxglove Bridge certificate
+            self.serve_foxglove_cert_page()
         elif self.path.endswith('.css'):
             # Serve CSS files from web-ui directory
             self.serve_file(f'web-ui{self.path}', 'text/css')
@@ -99,6 +102,64 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
             self.serve_file(f'web-ui{self.path}', content_type)
         else:
             self.send_error(404, "Not found")
+    
+    def serve_foxglove_cert_page(self):
+        """Serve a page that helps accept the Foxglove Bridge certificate."""
+        # Get the hostname from the request
+        host = self.headers.get('Host', 'localhost:8443').split(':')[0]
+        foxglove_url = f"https://{host}:8765"
+        
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Accept Foxglove Certificate</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; background: #1a1a2e; color: #fff; padding: 40px; text-align: center; }}
+        .container {{ max-width: 600px; margin: 0 auto; }}
+        h1 {{ color: #4ecdc4; }}
+        .status {{ padding: 20px; margin: 20px 0; border-radius: 10px; }}
+        .pending {{ background: #f39c12; color: #000; }}
+        .success {{ background: #27ae60; }}
+        .error {{ background: #e74c3c; }}
+        button {{ background: #4ecdc4; border: none; padding: 15px 30px; font-size: 18px; border-radius: 5px; cursor: pointer; margin: 10px; }}
+        button:hover {{ background: #45b7aa; }}
+        .url {{ font-family: monospace; background: #333; padding: 10px; border-radius: 5px; }}
+        iframe {{ display: none; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Foxglove Certificate Setup</h1>
+        <p>The VR robot viewer needs to connect to Foxglove Bridge securely.</p>
+        <p class="url">{foxglove_url}</p>
+        
+        <div id="status" class="status pending">
+            Click the button below to accept the certificate
+        </div>
+        
+        <button onclick="openFoxglove()">Open Foxglove URL</button>
+        <button onclick="window.location.href='/'">Back to VR</button>
+        
+        <p style="margin-top: 30px; font-size: 14px; color: #888;">
+            A new tab will open. You may see a security warning - click "Advanced" and "Proceed" to accept the certificate.
+            Then close that tab and return here.
+        </p>
+    </div>
+    
+    <script>
+        function openFoxglove() {{
+            window.open('{foxglove_url}', '_blank');
+            document.getElementById('status').className = 'status success';
+            document.getElementById('status').innerHTML = 'Tab opened! Accept the certificate warning, then return to VR.';
+        }}
+    </script>
+</body>
+</html>"""
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html')
+        self.end_headers()
+        self.wfile.write(html.encode('utf-8'))
     
     def serve_file(self, filename, content_type):
         """Serve a file with the given content type."""

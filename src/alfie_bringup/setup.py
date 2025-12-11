@@ -13,6 +13,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         # install all launch/*.py into share/alfie_bringup/launch
         ('share/' + package_name + '/launch', glob('launch/*')),
+        # install SSL certificates for Foxglove Bridge TLS
+        ('share/' + package_name + '/certs', glob('certs/*.pem')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
