@@ -2,18 +2,48 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+from launch.substitutions import Command
 import os
 from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
+    # Get URDF file path
+    urdf_file = os.path.join(
+        get_package_share_directory('alfie_urdf'),
+        'urdf',
+        'alfiebot.urdf'
+    )
+    
+    # Read URDF file content
+    with open(urdf_file, 'r') as f:
+        robot_description = f.read()
+
     return LaunchDescription([
+
+        # Robot State Publisher - publishes URDF to /robot_description and TF transforms
+        Node(
+            package='robot_state_publisher',
+            namespace='alfie',
+            remappings=[
+                ('joint_states', '/alfie/joint_states'),
+                ('/tf', '/alfie/tf'),
+                ('/tf_static', '/alfie/tf_static'),
+            ],
+            executable='robot_state_publisher',
+            name='robot_state_publisher',
+            parameters=[{'robot_description': robot_description}],
+            output='screen',
+            emulate_tty=True,
+            respawn=True
+        ),
 
         Node(
             package='micro_ros_agent',
             namespace='alfie',
             executable='micro_ros_agent',
-            arguments=['serial', '--dev', '/dev/ttyUSB0', '--baudrate', '1500000', '-v4'],
+            arguments=['serial', '--dev', '/dev/ttyUSB0', '--baudrate', '921600', '-v4'],
             name='microros_agent_gdb0',
             output='screen',
             emulate_tty=True,
@@ -26,7 +56,7 @@ def generate_launch_description():
             package='micro_ros_agent',
             namespace='alfie',
             executable='micro_ros_agent',
-            arguments=['serial', '--dev', '/dev/ttyUSB1', '--baudrate', '1500000', '-v4'],
+            arguments=['serial', '--dev', '/dev/ttyUSB1', '--baudrate', '921600', '-v4'],
             name='microros_agent_gdb1',
             output='screen',
             emulate_tty=True,
@@ -65,6 +95,30 @@ def generate_launch_description():
             namespace='alfie',
             executable='master_cmd',
             name='master_cmd_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
+            respawn=True
+        ),
+
+        Node(
+            package='alfie_bringup',
+            namespace='alfie',
+            executable='jetson_stats',
+            name='jetson_stats_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
+            respawn=True
+        ),
+
+        Node(
+            package='alfie_bringup',
+            namespace='alfie',
+            executable='master_watchdog',
+            name='master_watchdog_node',
             output='screen',
             emulate_tty=True,
             sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
@@ -128,6 +182,28 @@ def generate_launch_description():
                     'alfie_rgbd_pcl.launch.py'
                 )
             ]),
+        ),
+
+        Node(
+            package='foxglove_bridge',
+            namespace='alfie',
+            executable='foxglove_bridge',
+            name='foxglove_bridge',
+            parameters=[{
+                'send_buffer_limit': 200000000,  # 200MB (default is 10MB)
+                'max_qos_depth': 2,  # Limit queue depth
+                'capabilities': ['clientPublish', 'connectionGraph', 'assets'],
+            }],
+            remappings=[
+                ('/initialpose', '/alfie/initialpose'),
+                ('/move_base_simple/goal', '/alfie/move_base_simple/goal'),
+                ('/clicked_point', '/alfie/clicked_point'),
+            ],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
+            respawn=True
         ),
 
     ])

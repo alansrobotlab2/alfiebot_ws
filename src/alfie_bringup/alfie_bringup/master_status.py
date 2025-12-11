@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 from alfie_msgs.msg import RobotLowState, GDBState, BackState
 from alfie_msgs.msg import ServoState, MotorState
-from sensor_msgs.msg import Imu, MagneticField
+from sensor_msgs.msg import Imu, MagneticField, JointState
 import numpy as np
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from .servo_config import SERVO_POLARITY
@@ -32,6 +32,41 @@ SERVO_ACCEL_UNITS_TO_STEPS_PER_SEC2 = 100.0
 SERVO_LOAD_SCALE = 10.0  # 0.1% units to percentage
 SERVO_VOLTAGE_SCALE = 10.0  # 0.1V units to volts
 SERVO_CURRENT_SCALE = 6.5  # 6.5mA units to milliamps
+
+# Joint names mapping (matching URDF joint names)
+# Servo index to joint name mapping (indices 2 and 9 are derived servos - not published directly)
+SERVO_JOINT_NAMES = [
+    'left_shoulder_yaw_joint',      # Servo 0
+    'left_shoulder_pitch_joint',    # Servo 1
+    None,                           # Servo 2 (derived - left_shoulder2_pitch, mirrored from servo 1)
+    'left_elbow_pitch_joint',       # Servo 3
+    'left_wrist_pitch_joint',       # Servo 4
+    'left_wrist_roll_joint',        # Servo 5
+    'left_gripper_active_joint',    # Servo 6
+    'right_shoulder_yaw_joint',     # Servo 7
+    'right_shoulder_pitch_joint',   # Servo 8
+    None,                           # Servo 9 (derived - right_shoulder2_pitch, mirrored from servo 8)
+    'right_elbow_pitch_joint',      # Servo 10
+    'right_wrist_pitch_joint',      # Servo 11
+    'right_wrist_roll_joint',       # Servo 12
+    'right_gripper_active_joint',   # Servo 13
+    'head_yaw_joint',               # Servo 14
+    'head_pitch_joint',             # Servo 15
+    'head_roll_joint',              # Servo 16
+]
+
+# Motor joint names (mecanum wheels)
+MOTOR_JOINT_NAMES = [
+    'mecanum_fl_joint',  # Motor 0 - Front Left
+    'mecanum_fr_joint',  # Motor 1 - Front Right
+    'mecanum_rl_joint',  # Motor 2 - Rear Left
+    'mecanum_rr_joint',  # Motor 3 - Rear Right
+]
+
+# Other joints from URDF
+OTHER_JOINT_NAMES = [
+    'back_joint',  # Prismatic joint for back lift
+]
 
 
 # ============================================================================
@@ -90,6 +125,13 @@ class MasterStatusNode(Node):
         self.robot_state_pub = self.create_publisher(
             RobotLowState,
             'robotlowstate',
+            qos_reliable
+        )
+        
+        # Publisher for joint states (standard ROS2 joint state topic)
+        self.joint_state_pub = self.create_publisher(
+            JointState,
+            'joint_states',
             qos_reliable
         )
         
@@ -156,6 +198,10 @@ class MasterStatusNode(Node):
         robot_state.servo_state = self._build_servo_states()
         
         self.robot_state_pub.publish(robot_state)
+        
+        # Publish joint states for visualization and TF
+        joint_state = self._build_joint_state(robot_state)
+        self.joint_state_pub.publish(joint_state)
         # self.get_logger().debug('Published robot state')
     
     # ========================================================================
@@ -269,6 +315,54 @@ class MasterStatusNode(Node):
             )
         
         return servo_states
+    
+    def _build_joint_state(self, robot_state: RobotLowState) -> JointState:
+        """Build JointState message from robot state for visualization and TF
+        
+        Args:
+            robot_state: The complete robot low state message
+            
+        Returns:
+            JointState message with all joint positions
+        """
+        joint_state = JointState()
+        joint_state.header.stamp = robot_state.header.stamp
+        joint_state.header.frame_id = ''
+        
+        names = []
+        positions = []
+        
+        # Add servo joints (skip derived servos at indices 2 and 9)
+        servo_state_idx = 0
+        for i, joint_name in enumerate(SERVO_JOINT_NAMES):
+            if joint_name is None:
+                # Derived servo - skip (not in servo_state list)
+                continue
+            
+            if servo_state_idx < len(robot_state.servo_state):
+                servo = robot_state.servo_state[servo_state_idx]
+                names.append(joint_name)
+                positions.append(servo.current_location)
+                servo_state_idx += 1
+        
+        # Add motor joints (mecanum wheels)
+        for i, joint_name in enumerate(MOTOR_JOINT_NAMES):
+            if i < len(robot_state.motor_state):
+                motor = robot_state.motor_state[i]
+                names.append(joint_name)
+                # Convert pulse count to radians (assuming encoder ticks)
+                positions.append(float(motor.pulse_count) * STEPS_TO_RADIANS)
+        
+        # Add back joint (prismatic)
+        if robot_state.back_state is not None:
+            names.append('back_joint')
+            # back_state.current_position is in meters for prismatic joint
+            positions.append(robot_state.back_state.current_position)
+        
+        joint_state.name = names
+        joint_state.position = positions
+        
+        return joint_state
     
     # ========================================================================
     # Conversion Methods
