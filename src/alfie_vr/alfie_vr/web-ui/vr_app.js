@@ -788,8 +788,10 @@ AFRAME.registerComponent('controller-updater', {
     this.videoCanvas = document.getElementById('videoCanvas');
     this.videoContext = this.videoCanvas.getContext('2d');
     this.videoScreen = document.querySelector('#videoScreen');
-    this.videoSocket = null;
+    this.peerConnection = null;
+    this.webrtcConnected = false;
     
+<<<<<<< HEAD
     // Video frame throttling for performance (15 FPS max)
     this.videoTargetFPS = 15;
     this.videoFrameInterval = 1000 / this.videoTargetFPS;
@@ -816,8 +818,75 @@ AFRAME.registerComponent('controller-updater', {
           const mesh = this.videoScreen.getObject3D('mesh');
           if (mesh && mesh.material && mesh.material.map) {
             mesh.material.map.needsUpdate = true;
+=======
+    const webrtcPort = 8083;
+    const webrtcUrl = `https://${serverHostname}:${webrtcPort}/offer`;
+    
+    // Initialize WebRTC connection
+    this.initWebRTC = async () => {
+      console.log('Initializing WebRTC video stream...');
+      
+      try {
+        // Create peer connection with hardware-accelerated codec preferences
+        const config = {
+          iceServers: [], // Direct connection, no STUN/TURN needed on LAN
+          sdpSemantics: 'unified-plan'
+        };
+        this.peerConnection = new RTCPeerConnection(config);
+        
+        // Handle incoming video track
+        this.peerConnection.ontrack = (event) => {
+          console.log('WebRTC: Received video track');
+          if (event.track.kind === 'video') {
+            this.videoElement.srcObject = event.streams[0];
+            this.videoElement.play().catch(e => console.log('Video autoplay blocked:', e));
+            this.webrtcConnected = true;
+            
+            // Update A-Frame video screen to use video element
+            if (this.videoScreen) {
+              this.videoScreen.setAttribute('visible', 'true');
+              // Use video element as texture source
+              this.videoScreen.setAttribute('material', 'src: #webrtcVideo; shader: flat');
+            }
+>>>>>>> f2f9ab9 (use webrtc for video streaming)
           }
+        };
+        
+        this.peerConnection.oniceconnectionstatechange = () => {
+          console.log('WebRTC ICE state:', this.peerConnection.iceConnectionState);
+          if (this.peerConnection.iceConnectionState === 'disconnected' || 
+              this.peerConnection.iceConnectionState === 'failed') {
+            this.webrtcConnected = false;
+            if (this.videoScreen) {
+              this.videoScreen.setAttribute('visible', 'false');
+            }
+            // Retry connection after 3 seconds
+            setTimeout(() => this.initWebRTC(), 3000);
+          }
+        };
+        
+        // Add transceiver for receiving video
+        this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
+        
+        // Create offer
+        const offer = await this.peerConnection.createOffer();
+        await this.peerConnection.setLocalDescription(offer);
+        
+        // Send offer to signaling server
+        console.log('WebRTC: Sending offer to', webrtcUrl);
+        const response = await fetch(webrtcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sdp: this.peerConnection.localDescription.sdp,
+            type: this.peerConnection.localDescription.type
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Signaling failed: ${response.status}`);
         }
+<<<<<<< HEAD
         // If there's a newer frame waiting, process it immediately
         // Otherwise mark as done
         if (this.pendingVideoFrame) {
@@ -830,16 +899,24 @@ AFRAME.registerComponent('controller-updater', {
         this.videoFrameProcessing = false;
       };
       img.src = 'data:image/jpeg;base64,' + frameData;
+=======
+        
+        const answer = await response.json();
+        console.log('WebRTC: Received answer');
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        
+        console.log('WebRTC: Connection established!');
+        
+      } catch (error) {
+        console.error('WebRTC initialization failed:', error);
+        console.log('Will retry in 5 seconds...');
+        // Retry connection
+        setTimeout(() => this.initWebRTC(), 5000);
+      }
+>>>>>>> f2f9ab9 (use webrtc for video streaming)
     };
-
-    const videoPort = 8081;
-
-    // Connect to Web Control Server
-    // Use wss (secure) if the page is loaded via https, otherwise ws
-    const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
-    const videoServerUrl = `${protocol}://${serverHostname}:${videoPort}`;
-    console.log(`Attempting Video Socket.IO connection to: ${videoServerUrl}`);
     
+<<<<<<< HEAD
     try {
       this.videoSocket = io(videoServerUrl, {
         transports: ['websocket', 'polling'],
@@ -965,6 +1042,8 @@ AFRAME.registerComponent('controller-updater', {
       }
     };
     
+=======
+>>>>>>> f2f9ab9 (use webrtc for video streaming)
     // Start WebRTC connection
     this.initWebRTC();
 
