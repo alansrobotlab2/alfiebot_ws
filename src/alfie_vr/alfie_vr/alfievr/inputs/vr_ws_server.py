@@ -68,13 +68,22 @@ class VRControllerState:
 class VRWebSocketServer(BaseInputProvider):
     """WebSocket server for VR controller input."""
     
+<<<<<<< HEAD
     def __init__(self, command_queue: asyncio.Queue, config: AlfieVRConfig, print_only: bool = False, debug_logs: bool = False):
+=======
+    def __init__(self, command_queue: asyncio.Queue, config: AlfieVRConfig, print_only: bool = False, vr_debug: bool = True):
+>>>>>>> 2926fdb (Kinematics updates (#6))
         super().__init__(command_queue)
         self.config = config
         self.clients: Set = set()
         self.server = None
         self.print_only = print_only  # New flag for print-only mode
+<<<<<<< HEAD
         self.debug_logs = debug_logs  # Debug logging flag
+=======
+        self.vr_debug = vr_debug  # Enable verbose VR debug output
+        self.vr_debug = vr_debug  # Enable verbose VR debug output
+>>>>>>> 2926fdb (Kinematics updates (#6))
         
         # Controller states
         self.left_controller = VRControllerState("left")
@@ -84,10 +93,17 @@ class VRWebSocketServer(BaseInputProvider):
         self.left_arm_origin_position = None
         self.right_arm_origin_position = None
     
+<<<<<<< HEAD
     def debug_print(self, msg: str):
         """Print debug message only if debug_logs is enabled."""
         if self.debug_logs:
             print(msg)
+=======
+    def _debug_print(self, message: str):
+        """Print debug message if vr_debug is enabled."""
+        if self.vr_debug:
+            print(message)
+>>>>>>> 2926fdb (Kinematics updates (#6))
     
     def setup_ssl(self) -> Optional[ssl.SSLContext]:
         """Setup SSL context for WebSocket server."""
@@ -211,11 +227,19 @@ class VRWebSocketServer(BaseInputProvider):
         
         # Only print when there is activity
         if has_thumbstick_or_button_activity:
+<<<<<<< HEAD
             self.debug_print(f"[VR_WS] Activity detected:")
             for info in thumbstick_info:
                 self.debug_print(f"  {info}")
             for info in button_info:
                 self.debug_print(f"  {info}")
+=======
+            self._debug_print(f"[VR_WS] Activity detected:")
+            for info in thumbstick_info:
+                self._debug_print(f"  {info}")
+            for info in button_info:
+                self._debug_print(f"  {info}")
+>>>>>>> 2926fdb (Kinematics updates (#6))
         
         # Process headset data if available
         if 'headset' in data:
@@ -225,6 +249,7 @@ class VRWebSocketServer(BaseInputProvider):
                 rot = headset_data.get('rotation', {})
                 quat = headset_data.get('quaternion', {})
                 
+<<<<<<< HEAD
                 # Filter out invalid (0, 0, 0) positions - these are jitter from VR tracking gaps
                 px, py, pz = pos.get('x', 0), pos.get('y', 0), pos.get('z', 0)
                 if abs(px) < 0.001 and abs(py) < 0.001 and abs(pz) < 0.001:
@@ -251,6 +276,28 @@ class VRWebSocketServer(BaseInputProvider):
                         }
                     )
                     await self.send_goal(headset_goal)
+=======
+                self._debug_print(f"[VR_WS] Headset - Position: [{pos.get('x', 0):.3f}, {pos.get('y', 0):.3f}, {pos.get('z', 0):.3f}], "
+                      f"Rotation: [{rot.get('x', 0):.1f}, {rot.get('y', 0):.1f}, {rot.get('z', 0):.1f}]")
+                
+                # Create headset ControlGoal
+                headset_position = np.array([pos.get('x', 0), pos.get('y', 0), pos.get('z', 0)])
+                headset_goal = ControlGoal(
+                    arm="headset",
+                    mode=ControlMode.POSITION_CONTROL,
+                    target_position=headset_position,
+                    wrist_roll_deg=rot.get('y', 0),  # Yaw rotation
+                    wrist_flex_deg=rot.get('x', 0),   # Pitch rotation
+                    metadata={
+                        "source": "vr_headset",
+                        "relative_position": False,
+                        "vr_position": headset_position.tolist(),
+                        "rotation": rot,
+                        "quaternion": quat
+                    }
+                )
+                await self.send_goal(headset_goal)
+>>>>>>> 2926fdb (Kinematics updates (#6))
         
         # Process controller data
         if 'leftController' in data:
@@ -276,7 +323,11 @@ class VRWebSocketServer(BaseInputProvider):
         
         # Print trigger value if it's being squeezed (for debugging)
         if trigger > 0.01:
+<<<<<<< HEAD
             self.debug_print(f"[VR_WS] {hand.upper()} trigger: {trigger:.3f} (active: {trigger_active})")
+=======
+            self._debug_print(f"[VR_WS] {hand.upper()} trigger: {trigger:.3f} (active: {trigger_active})")
+>>>>>>> 2926fdb (Kinematics updates (#6))
         
         # Always send gripper control with analog trigger value
         # Reverse behavior: gripper open by default, closes when trigger pressed
@@ -297,7 +348,11 @@ class VRWebSocketServer(BaseInputProvider):
         # Log trigger state changes
         if trigger_active != controller.trigger_active:
             controller.trigger_active = trigger_active
+<<<<<<< HEAD
             self.debug_print(f"[VR_WS] 🤏 {hand.upper()} trigger: {trigger:.2f} - gripper {'OPENED' if trigger_active else 'CLOSED'}")
+=======
+            self._debug_print(f"[VR_WS] 🤏 {hand.upper()} trigger: {trigger:.2f} - gripper {'OPENED' if trigger_active else 'CLOSED'}")
+>>>>>>> 2926fdb (Kinematics updates (#6))
             logger.info(f"🤏 {hand.upper()} trigger: {trigger:.2f} - gripper {'OPENED' if trigger_active else 'CLOSED'}")
         
         # Modified: directly respond to controller position, no need to press squeeze button

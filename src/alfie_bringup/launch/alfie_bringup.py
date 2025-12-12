@@ -170,14 +170,36 @@ def generate_launch_description():
             respawn=True
         ),
 
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([
-                os.path.join(
-                    get_package_share_directory('alfie_bringup'),
-                    'launch',
-                    'alfie_rgbd_pcl.launch.py'
-                )
-            ]),
+        # IncludeLaunchDescription(
+        #     PythonLaunchDescriptionSource([
+        #         os.path.join(
+        #             get_package_share_directory('alfie_bringup'),
+        #             'launch',
+        #             'alfie_rgbd_pcl.launch.py'
+        #         )
+        #     ]),
+        # ),
+
+        Node(
+            package='foxglove_bridge',
+            namespace='alfie',
+            executable='foxglove_bridge',
+            name='foxglove_bridge',
+            parameters=[{
+                'send_buffer_limit': 200000000,  # 200MB (default is 10MB)
+                'max_qos_depth': 2,  # Limit queue depth
+                'capabilities': ['clientPublish', 'connectionGraph', 'assets'],
+            }],
+            remappings=[
+                ('/initialpose', '/alfie/initialpose'),
+                ('/move_base_simple/goal', '/alfie/move_base_simple/goal'),
+                ('/clicked_point', '/alfie/clicked_point'),
+            ],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
+            respawn=True
         ),
 
         Node(

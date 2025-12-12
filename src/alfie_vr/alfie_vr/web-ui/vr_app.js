@@ -717,50 +717,96 @@ AFRAME.registerComponent('controller-updater', {
     this.videoCanvas = document.getElementById('videoCanvas');
     this.videoContext = this.videoCanvas.getContext('2d');
     this.videoScreen = document.querySelector('#videoScreen');
-    this.peerConnection = null;
-    this.webrtcConnected = false;
+    this.videoSocket = null;
+
+    // --- Video FPS tracking ---
+    this.videoFrameCount = 0;
+    this.videoFps = 0;
+    this.lastFpsUpdate = Date.now();
+    this.fpsUpdateInterval = 1000; // Update FPS every second
     
-    const webrtcPort = 8083;
-    const webrtcUrl = `https://${serverHostname}:${webrtcPort}/offer`;
+    // --- Frame tracking for latency and stale frame detection ---
+    this.lastReceivedFrameId = 0;
+    this.lastFrameTime = 0;  // Time we received the last frame
+    this.avgFrameInterval = 0;  // Average time between frames (ms)
+    this.framesDropped = 0;
+
+    const videoPort = 8081;
+
+    // Connect to Web Control Server
+    // Use wss (secure) if the page is loaded via https, otherwise ws
+    const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
+    const videoServerUrl = `${protocol}://${serverHostname}:${videoPort}`;
+    console.log(`Attempting Video Socket.IO connection to: ${videoServerUrl}`);
     
-    // Initialize WebRTC connection
-    this.initWebRTC = async () => {
-      console.log('Initializing WebRTC video stream...');
+    try {
+      this.videoSocket = io(videoServerUrl, {
+        transports: ['websocket', 'polling'],
+        secure: true,
+        rejectUnauthorized: false // Self-signed certs
+      });
       
-      try {
-        // Create peer connection with low-latency configuration
-        const config = {
-          iceServers: [], // Direct connection, no STUN/TURN needed on LAN
-          sdpSemantics: 'unified-plan',
-          bundlePolicy: 'max-bundle',  // Reduce ICE candidates
-          rtcpMuxPolicy: 'require'     // Mux RTP/RTCP on same port
-        };
-        this.peerConnection = new RTCPeerConnection(config);
-        
-        // Handle incoming video track
-        this.peerConnection.ontrack = (event) => {
-          console.log('WebRTC: Received video track');
-          if (event.track.kind === 'video') {
-            this.videoElement.srcObject = event.streams[0];
-            
-            // Low-latency video playback settings
-            this.videoElement.playsInline = true;
-            this.videoElement.muted = true;
-            
-            // Request low latency hint if available
-            if ('latencyHint' in this.videoElement) {
-              this.videoElement.latencyHint = 'interactive';
+      this.videoSocket.on('connect', () => {
+        console.log('Video Socket.IO connected');
+        // Request video stream start
+        this.videoSocket.emit('start_video_stream');
+        if (this.videoScreen) {
+          this.videoScreen.setAttribute('visible', 'true');
+        }
+      });
+
+      this.videoSocket.on('video_frame', (data) => {
+        if (data && data.frame) {
+          const now = Date.now();
+          
+          // Check for out-of-order or duplicate frames
+          if (data.frame_id && data.frame_id <= this.lastReceivedFrameId) {
+            this.framesDropped++;
+            // Only log occasionally to avoid console spam
+            if (this.framesDropped % 10 === 1) {
+              console.log(`Dropping out-of-order frame: ${data.frame_id} <= ${this.lastReceivedFrameId}`);
             }
+            return;
+          }
+          
+          // Track frame interval (time between frames) - this is reliable
+          // unlike clock-based latency which requires synchronized clocks
+          if (this.lastFrameTime > 0) {
+            const frameInterval = now - this.lastFrameTime;
+            this.avgFrameInterval = this.avgFrameInterval * 0.9 + frameInterval * 0.1;
+          }
+          this.lastFrameTime = now;
+          
+          if (data.frame_id) {
+            this.lastReceivedFrameId = data.frame_id;
+          }
+          
+          // Count frames for FPS calculation
+          this.videoFrameCount++;
+          if (now - this.lastFpsUpdate >= this.fpsUpdateInterval) {
+            this.videoFps = this.videoFrameCount / ((now - this.lastFpsUpdate) / 1000);
+            this.videoFrameCount = 0;
+            this.lastFpsUpdate = now;
+            console.log(`Video FPS: ${this.videoFps.toFixed(1)}, Interval: ${this.avgFrameInterval.toFixed(0)}ms, Dropped: ${this.framesDropped}`);
+            this.framesDropped = 0;
+          }
+
+          const img = new Image();
+          img.onload = () => {
+            this.videoContext.drawImage(img, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
             
-            // Disable buffering for real-time playback
-            if (this.videoElement.buffered) {
-              this.videoElement.preload = 'none';
-            }
-            
-            this.videoElement.play().catch(e => console.log('Video autoplay blocked:', e));
-            this.webrtcConnected = true;
-            
-            // Update A-Frame video screen to use video element
+            // Draw FPS overlay on the video canvas
+            // Green if FPS is in acceptable range (9-11), red otherwise
+            this.videoContext.save();
+            this.videoContext.font = 'bold 20px Arial';
+            this.videoContext.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            this.videoContext.fillRect(5, 5, 120, 28);
+            const fpsColor = (this.videoFps >= 9 && this.videoFps <= 11) ? '#00FF00' : '#FF0000';
+            this.videoContext.fillStyle = fpsColor;
+            this.videoContext.fillText(`${this.videoFps.toFixed(1)} FPS`, 12, 25);
+            this.videoContext.restore();
+
+            // Update A-Frame texture
             if (this.videoScreen) {
               this.videoScreen.setAttribute('visible', 'true');
               // Use video element as texture source
