@@ -18,6 +18,8 @@ from typing import Optional
 
 # Set the absolute path to the alfievr folder
 ALFIEVR_PATH = "/home/alfie/alfiebot_ws/src/alfie_vr/alfie_vr"
+# Path to URDF meshes
+MESHES_PATH = "/home/alfie/alfiebot_ws/src/alfie_urdf/meshes"
 
 def setup_alfievr_environment():
     """Setup alfievr environment"""
@@ -100,6 +102,14 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
             # Serve image files from web-ui directory
             content_type = 'image/jpeg' if self.path.endswith(('.jpg', '.jpeg')) else 'image/png' if self.path.endswith('.png') else 'image/gif'
             self.serve_file(f'web-ui{self.path}', content_type)
+        elif self.path.startswith('/meshes/') and self.path.endswith('.obj'):
+            # Serve OBJ mesh files from alfie_urdf meshes directory
+            mesh_name = self.path[8:]  # Remove '/meshes/' prefix
+            self.serve_mesh_file(mesh_name)
+        elif self.path.startswith('/meshes/') and self.path.endswith('.mtl'):
+            # Serve MTL material files from alfie_urdf meshes directory
+            mtl_name = self.path[8:]  # Remove '/meshes/' prefix
+            self.serve_mesh_file(mtl_name, 'text/plain')
         else:
             self.send_error(404, "Not found")
     
@@ -180,6 +190,31 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(404, f"File not found: {filename}")
         except Exception as e:
             print(f"Error serving file {filename}: {e}")
+            self.send_error(500, "Internal server error")
+    
+    def serve_mesh_file(self, filename, content_type='model/obj'):
+        """Serve a mesh file from the URDF meshes directory."""
+        try:
+            # Security: only allow specific extensions and no path traversal
+            if '..' in filename or filename.startswith('/'):
+                self.send_error(403, "Forbidden")
+                return
+            
+            file_path = os.path.join(MESHES_PATH, filename)
+            
+            if os.path.exists(file_path):
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+                
+                self.send_response(200)
+                self.send_header('Content-Type', content_type)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(content)
+            else:
+                self.send_error(404, f"Mesh not found: {filename}")
+        except Exception as e:
+            print(f"Error serving mesh {filename}: {e}")
             self.send_error(500, "Internal server error")
 
 class SimpleHTTPSServer:

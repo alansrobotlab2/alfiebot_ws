@@ -14,14 +14,13 @@ AFRAME.registerComponent('vr-robot-viewer', {
     this.joints = {};
     this.foxgloveClient = null;
     this.tfSubscriptionId = null;
-    this.jointStateSubscriptionId = null;
     this.robotDescriptionSubscriptionId = null;
     this.urdfLoaded = false;
-    this.tfUpdateCount = 0;
     this.connectionAttempts = 0;
     
-    // Connect to Foxglove Bridge using WebSocket
-    const foxgloveUrl = `ws://${window.location.hostname}:8765`;
+    // Connect to Foxglove Bridge using WebSocket via nginx proxy
+    // Port 8082 is nginx with TLS, proxying to foxglove_bridge on 8765
+    const foxgloveUrl = `wss://${window.location.hostname}:8082`;
     this.updateDebug('url', `URL: ${foxgloveUrl}`);
     this.connectToFoxglove(foxgloveUrl);
   },
@@ -34,8 +33,8 @@ AFRAME.registerComponent('vr-robot-viewer', {
     this.updateDebug('info', '');
     
     try {
-      // Use the required Foxglove WebSocket subprotocol
-      this.foxgloveClient = new WebSocket(url, ['foxglove.websocket.v1']);
+      // Use the Foxglove SDK WebSocket subprotocol (required for foxglove_bridge 3.x)
+      this.foxgloveClient = new WebSocket(url, ['foxglove.sdk.v1']);
       this.foxgloveClient.binaryType = 'arraybuffer';
       
       this.foxgloveClient.onopen = () => {
@@ -98,43 +97,160 @@ AFRAME.registerComponent('vr-robot-viewer', {
     try {
       if (typeof data === 'string') {
         const message = JSON.parse(data);
+        console.log('VR: JSON message received, op:', message.op);
         
-        if (message.op === 'advertise') {
+        if (message.op === 'serverInfo') {
+          console.log('VR: Server info received:', message.name, 'capabilities:', message.capabilities);
+          this.updateDebug('info', 'Server connected');
+        } else if (message.op === 'advertise') {
+          console.log('VR: Advertise received, channels:', message.channels?.length);
           this.subscribeToTopics(message.channels);
         } else if (message.op === 'message') {
           this.handleTopicMessage(message);
         }
+      } else if (data instanceof ArrayBuffer) {
+        this.handleBinaryMessage(data);
+      } else {
+        console.log('VR: Unknown message type:', typeof data);
       }
     } catch (error) {
       // Ignore parse errors for binary messages
     }
   },
   
+  handleBinaryMessage: function(data) {
+    // Foxglove binary message format
+    const view = new DataView(data);
+    const opCode = view.getUint8(0);
+    
+    if (opCode === 1) {  // Message data
+      const subscriptionId = view.getUint32(1, true);
+      const timestamp = view.getBigUint64(5, true);
+      const messageData = new Uint8Array(data, 13);
+      
+      // Handle robot_description (CDR-encoded std_msgs/String)
+      if (subscriptionId === this.robotDescriptionSubscriptionId) {
+        this.handleRobotDescriptionBinary(messageData);
+      }
+      // Handle TF (CDR-encoded tf2_msgs/TFMessage)
+      else if (subscriptionId === this.tfSubscriptionId) {
+        this.handleTFBinary(messageData);
+      }
+    }
+  },
+  
+  handleTFBinary: function(data) {
+    try {
+      // Simple CDR decoder for TFMessage
+      let offset = 4;  // Skip CDR header
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      
+      const readString = () => {
+        const len = view.getUint32(offset, true);
+        offset += 4;
+        const strBytes = new Uint8Array(data.buffer, data.byteOffset + offset, len - 1);
+        offset += len;
+        if (offset % 4 !== 0) offset += 4 - (offset % 4);
+        return new TextDecoder().decode(strBytes);
+      };
+      
+      const align = (n) => { if (offset % n !== 0) offset += n - (offset % n); };
+      
+      // TFMessage: TransformStamped[] transforms
+      const transformCount = view.getUint32(offset, true); offset += 4;
+      
+      for (let i = 0; i < transformCount; i++) {
+        // Header
+        const stampSec = view.getUint32(offset, true); offset += 4;
+        const stampNsec = view.getUint32(offset, true); offset += 4;
+        const frameId = readString();
+        const childFrameId = readString();
+        
+        // Transform: translation (Vector3), rotation (Quaternion)
+        align(8);
+        const tx = view.getFloat64(offset, true); offset += 8;
+        const ty = view.getFloat64(offset, true); offset += 8;
+        const tz = view.getFloat64(offset, true); offset += 8;
+        const qx = view.getFloat64(offset, true); offset += 8;
+        const qy = view.getFloat64(offset, true); offset += 8;
+        const qz = view.getFloat64(offset, true); offset += 8;
+        const qw = view.getFloat64(offset, true); offset += 8;
+        
+        // Apply transform to corresponding link
+        const link = this.links[childFrameId];
+        if (link && link.object3D) {
+          link.object3D.position.set(tx, ty, tz);
+          link.object3D.quaternion.set(qx, qy, qz, qw);
+        }
+      }
+    } catch (error) {
+      // Silently ignore TF decode errors
+    }
+  },
+  
+  handleRobotDescriptionBinary: function(data) {
+    try {
+      // CDR format for ROS2 std_msgs/msg/String:
+      // - 4 bytes: CDR encapsulation header (00 01 00 00 for little-endian)
+      // - 4 bytes: string length (uint32, little-endian, includes null terminator)
+      // - N bytes: string data (UTF-8)
+      // - 1 byte: null terminator
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      
+      // Skip 4-byte CDR encapsulation header, then read string length
+      const stringLength = view.getUint32(4, true);
+      
+      // Extract string (skip 8 bytes header, exclude null terminator)
+      const stringData = new Uint8Array(data.buffer, data.byteOffset + 8, stringLength - 1);
+      const decoder = new TextDecoder();
+      const urdfString = decoder.decode(stringData);
+      
+      console.log('VR: Decoded robot_description CDR, length:', stringLength);
+      
+      if (urdfString.includes('<robot')) {
+        console.log('VR: Found URDF, parsing...');
+        this.parseURDF(urdfString);
+      } else {
+        console.log('VR: No <robot> tag found in data');
+      }
+    } catch (error) {
+      console.error('VR: Failed to parse robot_description CDR:', error);
+    }
+  },
+  
   subscribeToTopics: function(channels) {
+    console.log('VR: subscribeToTopics called with', channels?.length, 'channels');
     const subscriptions = [];
     
     for (const channel of channels) {
       if (channel.topic === '/alfie/tf') {
         this.tfSubscriptionId = subscriptions.length + 1;
         subscriptions.push({ id: this.tfSubscriptionId, channelId: channel.id });
-      }
-      if (channel.topic === '/alfie/joint_states') {
-        this.jointStateSubscriptionId = subscriptions.length + 1;
-        subscriptions.push({ id: this.jointStateSubscriptionId, channelId: channel.id });
+        console.log('VR: Found /alfie/tf, subId:', this.tfSubscriptionId);
       }
       if (channel.topic === '/alfie/robot_description') {
         this.robotDescriptionSubscriptionId = subscriptions.length + 1;
         subscriptions.push({ id: this.robotDescriptionSubscriptionId, channelId: channel.id });
+        console.log('VR: Found /alfie/robot_description, subId:', this.robotDescriptionSubscriptionId);
       }
     }
+    
+    console.log('VR: Total subscriptions:', subscriptions.length);
     
     if (subscriptions.length > 0) {
       this.foxgloveClient.send(JSON.stringify({ op: 'subscribe', subscriptions }));
       this.updateStatus(`Subscribed (${subscriptions.length})`);
+      this.updateDebug('info', `Subs: ${subscriptions.length}`);
       
       if (!this.robotDescriptionSubscriptionId) {
+        console.log('VR: No robot_description found, loading placeholder');
         this.loadPlaceholderRobot();
+      } else {
+        console.log('VR: Waiting for robot_description binary message...');
       }
+    } else {
+      console.log('VR: No topics matched for subscription');
+      this.updateDebug('info', 'No topics found');
     }
   },
   
@@ -221,58 +337,118 @@ AFRAME.registerComponent('vr-robot-viewer', {
         this.robotModel.removeChild(this.robotModel.firstChild);
       }
       
+      // Parse material definitions from URDF root
+      const materialDefs = {};
+      urdfDoc.querySelectorAll('robot > material').forEach(matEl => {
+        const matName = matEl.getAttribute('name');
+        const colorEl = matEl.querySelector('color');
+        if (matName && colorEl) {
+          const rgba = colorEl.getAttribute('rgba').split(' ').map(parseFloat);
+          const r = Math.round(rgba[0] * 255).toString(16).padStart(2, '0');
+          const g = Math.round(rgba[1] * 255).toString(16).padStart(2, '0');
+          const b = Math.round(rgba[2] * 255).toString(16).padStart(2, '0');
+          materialDefs[matName] = `#${r}${g}${b}`;
+        }
+      });
+      console.log('VR: Parsed material definitions:', Object.keys(materialDefs));
+      
+      // Helper function to get material color as hex string
+      const getMaterialColor = (materialEl) => {
+        if (!materialEl) return '#666666';
+        
+        // First check for inline color
+        const colorEl = materialEl.querySelector('color');
+        if (colorEl) {
+          const rgba = colorEl.getAttribute('rgba').split(' ').map(parseFloat);
+          const r = Math.round(rgba[0] * 255).toString(16).padStart(2, '0');
+          const g = Math.round(rgba[1] * 255).toString(16).padStart(2, '0');
+          const b = Math.round(rgba[2] * 255).toString(16).padStart(2, '0');
+          return `#${r}${g}${b}`;
+        }
+        
+        // Otherwise look up by name
+        const matName = materialEl.getAttribute('name');
+        if (matName && materialDefs[matName]) {
+          return materialDefs[matName];
+        }
+        
+        return '#666666';
+      };
+      
       // Parse links and create A-Frame entities
       const linkElements = urdfDoc.querySelectorAll('link');
       linkElements.forEach(linkEl => {
         const linkName = linkEl.getAttribute('name');
-        const visual = linkEl.querySelector('visual');
+        const visuals = linkEl.querySelectorAll('visual');  // Get ALL visuals
         
-        const entity = document.createElement('a-entity');
-        entity.setAttribute('id', `vr-link-${linkName}`);
+        // Create parent entity for the link
+        const linkEntity = document.createElement('a-entity');
+        linkEntity.setAttribute('id', `vr-link-${linkName}`);
         
-        if (visual) {
+        // Process each visual element in this link
+        visuals.forEach((visual, visualIndex) => {
           const geometry = visual.querySelector('geometry');
           const material = visual.querySelector('material');
           const origin = visual.querySelector('origin');
           
           if (geometry) {
+            // Create a child entity for this visual
+            const entity = document.createElement('a-entity');
+            
             const box = geometry.querySelector('box');
             const cylinder = geometry.querySelector('cylinder');
             const sphere = geometry.querySelector('sphere');
+            const mesh = geometry.querySelector('mesh');
             
             let geomStr = '';
             if (box) {
               const size = box.getAttribute('size').split(' ');
               geomStr = `primitive: box; width: ${size[0]}; height: ${size[1]}; depth: ${size[2]}`;
+              entity.setAttribute('geometry', geomStr);
             } else if (cylinder) {
               const r = cylinder.getAttribute('radius');
               const h = cylinder.getAttribute('length');
               geomStr = `primitive: cylinder; radius: ${r}; height: ${h}`;
+              entity.setAttribute('geometry', geomStr);
             } else if (sphere) {
               const r = sphere.getAttribute('radius');
               geomStr = `primitive: sphere; radius: ${r}`;
-            } else {
-              // Placeholder for mesh
-              geomStr = 'primitive: box; width: 0.03; height: 0.03; depth: 0.03';
-            }
-            
-            entity.setAttribute('geometry', geomStr);
-            
-            // Material color
-            let color = '#666666';
-            if (material) {
-              const colorEl = material.querySelector('color');
-              if (colorEl) {
-                const rgba = colorEl.getAttribute('rgba').split(' ').map(parseFloat);
-                const r = Math.round(rgba[0] * 255).toString(16).padStart(2, '0');
-                const g = Math.round(rgba[1] * 255).toString(16).padStart(2, '0');
-                const b = Math.round(rgba[2] * 255).toString(16).padStart(2, '0');
-                color = `#${r}${g}${b}`;
+              entity.setAttribute('geometry', geomStr);
+            } else if (mesh) {
+              // Load OBJ mesh
+              const filename = mesh.getAttribute('filename');
+              const scale = mesh.getAttribute('scale');
+              
+              if (filename && filename.startsWith('package://alfie_urdf/meshes/')) {
+                // Convert package:// URL to web server URL
+                const meshName = filename.replace('package://alfie_urdf/meshes/', '');
+                const meshUrl = `/meshes/${meshName}`;
+                
+                // Use A-Frame's obj-model component
+                entity.setAttribute('obj-model', `obj: url(${meshUrl})`);
+                
+                // Apply scale if specified
+                if (scale) {
+                  const scaleVals = scale.split(' ').map(parseFloat);
+                  entity.setAttribute('scale', `${scaleVals[0]} ${scaleVals[1]} ${scaleVals[2]}`);
+                }
+                
+                console.log('VR: Loading mesh:', meshUrl);
+              } else {
+                // Fallback placeholder for unknown mesh paths
+                entity.setAttribute('geometry', 'primitive: box; width: 0.03; height: 0.03; depth: 0.03');
               }
+            } else {
+              // Placeholder for unknown geometry
+              geomStr = 'primitive: box; width: 0.03; height: 0.03; depth: 0.03';
+              entity.setAttribute('geometry', geomStr);
             }
+            
+            // Material color - use helper to resolve named materials
+            const color = getMaterialColor(material);
             entity.setAttribute('material', `color: ${color}; metalness: 0.3; roughness: 0.7`);
             
-            // Origin offset
+            // Origin offset for this visual
             if (origin) {
               const xyz = origin.getAttribute('xyz');
               const rpy = origin.getAttribute('rpy');
@@ -280,25 +456,37 @@ AFRAME.registerComponent('vr-robot-viewer', {
               if (rpy) {
                 const rot = rpy.split(' ').map(r => THREE.MathUtils.radToDeg(parseFloat(r)));
                 entity.setAttribute('rotation', `${rot[0]} ${rot[1]} ${rot[2]}`);
+                // Set Euler order for URDF fixed-axis RPY
+                entity.addEventListener('loaded', () => {
+                  if (entity.object3D) entity.object3D.rotation.order = 'ZYX';
+                });
               }
             }
+            
+            // Add visual entity to link entity
+            linkEntity.appendChild(entity);
           }
-        }
+        });  // End of visuals.forEach
         
-        this.links[linkName] = entity;
-        this.robotModel.appendChild(entity);
+        this.links[linkName] = linkEntity;
+        // Don't add to robotModel yet - we'll build hierarchy from joints
       });
       
-      // Parse joints
+      // Parse joints and build parent-child hierarchy
       const jointElements = urdfDoc.querySelectorAll('joint');
+      const childLinks = new Set();  // Track which links are children
+      
       jointElements.forEach(jointEl => {
         const jointName = jointEl.getAttribute('name');
         const jointType = jointEl.getAttribute('type');
+        const parent = jointEl.querySelector('parent')?.getAttribute('link');
         const child = jointEl.querySelector('child')?.getAttribute('link');
         const axis = jointEl.querySelector('axis');
         const origin = jointEl.querySelector('origin');
         
-        if (child && this.links[child]) {
+        if (parent && child && this.links[parent] && this.links[child]) {
+          childLinks.add(child);
+          
           const axisVec = axis ? axis.getAttribute('xyz').split(' ').map(parseFloat) : [0, 0, 1];
           
           this.joints[jointName] = {
@@ -307,7 +495,7 @@ AFRAME.registerComponent('vr-robot-viewer', {
             axis: axisVec
           };
           
-          // Apply joint origin to child link
+          // Apply joint origin transform to child link
           if (origin) {
             const xyz = origin.getAttribute('xyz');
             const rpy = origin.getAttribute('rpy');
@@ -318,10 +506,29 @@ AFRAME.registerComponent('vr-robot-viewer', {
             if (rpy) {
               const rot = rpy.split(' ').map(r => THREE.MathUtils.radToDeg(parseFloat(r)));
               this.links[child].setAttribute('rotation', `${rot[0]} ${rot[1]} ${rot[2]}`);
+              // Set Euler order for URDF fixed-axis RPY
+              const childLink = this.links[child];
+              childLink.addEventListener('loaded', () => {
+                if (childLink.object3D) childLink.object3D.rotation.order = 'ZYX';
+              });
             }
           }
+          
+          // Add child link as child of parent link (makes transforms accumulate)
+          this.links[parent].appendChild(this.links[child]);
         }
       });
+      
+      // Add root links (those that aren't children of any joint) to the robot model
+      Object.keys(this.links).forEach(linkName => {
+        if (!childLinks.has(linkName)) {
+          this.robotModel.appendChild(this.links[linkName]);
+          console.log('VR: Root link:', linkName);
+        }
+      });
+      
+      // Rotate robot model to convert from ROS (Z-up) to A-Frame (Y-up)
+      this.robotModel.setAttribute('rotation', '-90 0 0');
       
       this.urdfLoaded = true;
       this.updateStatus(`Loaded ${Object.keys(this.links).length} links`);
@@ -860,8 +1067,8 @@ AFRAME.registerComponent('controller-updater', {
         const leftRotY = THREE.MathUtils.radToDeg(leftRotEuler.y);
         const leftRotZ = THREE.MathUtils.radToDeg(leftRotEuler.z);
 
-        // 添加调试信息
-        console.log(`Left Hand - Visible: ${this.leftHand.object3D.visible}, Pos: ${leftPos.x.toFixed(2)},${leftPos.y.toFixed(2)},${leftPos.z.toFixed(2)}`);
+        // 添加调试信息 (commented out to reduce lag)
+        // console.log(`Left Hand - Visible: ${this.leftHand.object3D.visible}, Pos: ${leftPos.x.toFixed(2)},${leftPos.y.toFixed(2)},${leftPos.z.toFixed(2)}`);
 
         // Calculate relative rotation if grip is held
         if (this.leftGripDown && this.leftGripInitialRotation) {
@@ -878,8 +1085,8 @@ AFRAME.registerComponent('controller-updater', {
             );
           }
           
-          console.log('Left relative rotation:', this.leftRelativeRotation);
-          console.log('Left Z-axis rotation:', this.leftZAxisRotation.toFixed(1), 'degrees');
+          // console.log('Left relative rotation:', this.leftRelativeRotation);
+          // console.log('Left Z-axis rotation:', this.leftZAxisRotation.toFixed(1), 'degrees');
         }
 
         // Create display text including relative rotation when grip is held
@@ -915,14 +1122,14 @@ AFRAME.registerComponent('controller-updater', {
         if (this.leftHand && this.leftHand.components && this.leftHand.components['tracked-controls']) {
             const leftGamepad = this.leftHand.components['tracked-controls'].controller?.gamepad;
             if (leftGamepad) {
-                // Log all button states for debugging
-                if (leftGamepad.buttons) {
-                    for (let i = 0; i < leftGamepad.buttons.length; i++) {
-                        if (leftGamepad.buttons[i].pressed) {
-                            console.log(`Left Hand Button ${i} pressed`);
-                        }
-                    }
-                }
+                // Log all button states for debugging (commented out to reduce lag)
+                // if (leftGamepad.buttons) {
+                //     for (let i = 0; i < leftGamepad.buttons.length; i++) {
+                //         if (leftGamepad.buttons[i].pressed) {
+                //             console.log(`Left Hand Button ${i} pressed`);
+                //         }
+                //     }
+                // }
                 
                 // 摇杆
                 leftController.thumbstick = {
@@ -941,7 +1148,7 @@ AFRAME.registerComponent('controller-updater', {
             }
         }
     } else {
-        console.log('Left hand object not available');
+        // console.log('Left hand object not available');
     }
 
     // Update Right Hand Text & Collect Data
@@ -954,8 +1161,8 @@ AFRAME.registerComponent('controller-updater', {
         const rightRotY = THREE.MathUtils.radToDeg(rightRotEuler.y);
         const rightRotZ = THREE.MathUtils.radToDeg(rightRotEuler.z);
 
-        // 添加调试信息
-        console.log(`Right Hand - Visible: ${this.rightHand.object3D.visible}, Pos: ${rightPos.x.toFixed(2)},${rightPos.y.toFixed(2)},${rightPos.z.toFixed(2)}`);
+        // 添加调试信息 (commented out to reduce lag)
+        // console.log(`Right Hand - Visible: ${this.rightHand.object3D.visible}, Pos: ${rightPos.x.toFixed(2)},${rightPos.y.toFixed(2)},${rightPos.z.toFixed(2)}`);
 
         // Calculate relative rotation if grip is held
         if (this.rightGripDown && this.rightGripInitialRotation) {
@@ -972,8 +1179,8 @@ AFRAME.registerComponent('controller-updater', {
             );
           }
           
-          console.log('Right relative rotation:', this.rightRelativeRotation);
-          console.log('Right Z-axis rotation:', this.rightZAxisRotation.toFixed(1), 'degrees');
+          // console.log('Right relative rotation:', this.rightRelativeRotation);
+          // console.log('Right Z-axis rotation:', this.rightZAxisRotation.toFixed(1), 'degrees');
         }
 
         // Create display text including relative rotation when grip is held
@@ -1010,14 +1217,14 @@ AFRAME.registerComponent('controller-updater', {
         if (this.rightHand && this.rightHand.components && this.rightHand.components['tracked-controls']) {
             const rightGamepad = this.rightHand.components['tracked-controls'].controller?.gamepad;
             if (rightGamepad) {
-                // Log all button states for debugging
-                if (rightGamepad.buttons) {
-                    for (let i = 0; i < rightGamepad.buttons.length; i++) {
-                        if (rightGamepad.buttons[i].pressed) {
-                            console.log(`Right Hand Button ${i} pressed`);
-                        }
-                    }
-                }
+                // Log all button states for debugging (commented out to reduce lag)
+                // if (rightGamepad.buttons) {
+                //     for (let i = 0; i < rightGamepad.buttons.length; i++) {
+                //         if (rightGamepad.buttons[i].pressed) {
+                //             console.log(`Right Hand Button ${i} pressed`);
+                //         }
+                //     }
+                // }
                 
                 // 摇杆
                 rightController.thumbstick = {
@@ -1037,7 +1244,7 @@ AFRAME.registerComponent('controller-updater', {
             }
         }
     } else {
-        console.log('Right hand object not available');
+        // console.log('Right hand object not available');
     }
 
     // Collect headset data
@@ -1071,9 +1278,9 @@ AFRAME.registerComponent('controller-updater', {
           w: this.headset.object3D.quaternion.w 
         };
         
-        console.log(`Headset - Pos: ${headsetPos.x.toFixed(2)},${headsetPos.y.toFixed(2)},${headsetPos.z.toFixed(2)}`);
+        // console.log(`Headset - Pos: ${headsetPos.x.toFixed(2)},${headsetPos.y.toFixed(2)},${headsetPos.z.toFixed(2)}`);
     } else {
-        console.log('Headset object not available');
+        // console.log('Headset object not available');
     }
 
     // Send combined packet if WebSocket is open and at least one controller has valid data
@@ -1092,15 +1299,15 @@ AFRAME.registerComponent('controller-updater', {
             };
             this.websocket.send(JSON.stringify(dualControllerData));
             
-            // 添加调试信息
-            console.log('Sending VR data:', {
-                left: hasValidLeft ? 'valid' : 'invalid',
-                right: hasValidRight ? 'valid' : 'invalid',
-                headset: hasValidHeadset ? 'valid' : 'invalid',
-                leftPos: leftController.position,
-                rightPos: rightController.position,
-                headsetPos: headset.position
-            });
+            // 添加调试信息 (commented out to reduce lag)
+            // console.log('Sending VR data:', {
+            //     left: hasValidLeft ? 'valid' : 'invalid',
+            //     right: hasValidRight ? 'valid' : 'invalid',
+            //     headset: hasValidHeadset ? 'valid' : 'invalid',
+            //     leftPos: leftController.position,
+            //     rightPos: rightController.position,
+            //     headsetPos: headset.position
+            // });
         }
     }
   }

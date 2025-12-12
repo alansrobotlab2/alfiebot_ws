@@ -219,26 +219,32 @@ class VRWebSocketServer(BaseInputProvider):
                 rot = headset_data.get('rotation', {})
                 quat = headset_data.get('quaternion', {})
                 
-                print(f"[VR_WS] Headset - Position: [{pos.get('x', 0):.3f}, {pos.get('y', 0):.3f}, {pos.get('z', 0):.3f}], "
-                      f"Rotation: [{rot.get('x', 0):.1f}, {rot.get('y', 0):.1f}, {rot.get('z', 0):.1f}]")
-                
-                # Create headset ControlGoal
-                headset_position = np.array([pos.get('x', 0), pos.get('y', 0), pos.get('z', 0)])
-                headset_goal = ControlGoal(
-                    arm="headset",
-                    mode=ControlMode.POSITION_CONTROL,
-                    target_position=headset_position,
-                    wrist_roll_deg=rot.get('y', 0),  # Yaw rotation
-                    wrist_flex_deg=rot.get('x', 0),   # Pitch rotation
-                    metadata={
-                        "source": "vr_headset",
-                        "relative_position": False,
-                        "vr_position": headset_position.tolist(),
-                        "rotation": rot,
-                        "quaternion": quat
-                    }
-                )
-                await self.send_goal(headset_goal)
+                # Filter out invalid (0, 0, 0) positions - these are jitter from VR tracking gaps
+                px, py, pz = pos.get('x', 0), pos.get('y', 0), pos.get('z', 0)
+                if abs(px) < 0.001 and abs(py) < 0.001 and abs(pz) < 0.001:
+                    # Skip this frame - invalid headset data
+                    pass
+                else:
+                    print(f"[VR_WS] Headset - Position: [{px:.3f}, {py:.3f}, {pz:.3f}], "
+                          f"Rotation: [{rot.get('x', 0):.1f}, {rot.get('y', 0):.1f}, {rot.get('z', 0):.1f}]")
+                    
+                    # Create headset ControlGoal
+                    headset_position = np.array([px, py, pz])
+                    headset_goal = ControlGoal(
+                        arm="headset",
+                        mode=ControlMode.POSITION_CONTROL,
+                        target_position=headset_position,
+                        wrist_roll_deg=rot.get('y', 0),  # Yaw rotation
+                        wrist_flex_deg=rot.get('x', 0),   # Pitch rotation
+                        metadata={
+                            "source": "vr_headset",
+                            "relative_position": False,
+                            "vr_position": headset_position.tolist(),
+                            "rotation": rot,
+                            "quaternion": quat
+                        }
+                    )
+                    await self.send_goal(headset_goal)
         
         # Process controller data
         if 'leftController' in data:
@@ -291,9 +297,16 @@ class VRWebSocketServer(BaseInputProvider):
         # Modified: directly respond to controller position, no need to press squeeze button
         # Check if there is position data
         if position and all(k in position for k in ['x', 'y', 'z']):
+            px, py, pz = position.get('x', 0), position.get('y', 0), position.get('z', 0)
+            
+            # Filter out invalid (0, 0, 0) positions - these are jitter from VR tracking gaps
+            if abs(px) < 0.001 and abs(py) < 0.001 and abs(pz) < 0.001:
+                # Skip this frame - invalid controller data
+                return
+            
             # If origin is not yet set, set current position as origin
             if controller.origin_position is None:
-                controller.origin_position = np.array([position.get('x', 0), position.get('y', 0), position.get('z', 0)])
+                controller.origin_position = np.array([px, py, pz])
                 
                 # Set quaternion origin
                 if quaternion and all(k in quaternion for k in ['x', 'y', 'z', 'w']):

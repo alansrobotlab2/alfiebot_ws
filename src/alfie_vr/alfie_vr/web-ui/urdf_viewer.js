@@ -5,7 +5,8 @@ class URDFViewer {
   constructor(containerId, options = {}) {
     this.container = document.getElementById(containerId);
     this.options = {
-      foxgloveUrl: options.foxgloveUrl || `wss://${window.location.hostname}:8765`,
+      // Port 8082 is nginx proxy that terminates TLS and forwards to foxglove_bridge on 8765
+      foxgloveUrl: options.foxgloveUrl || `wss://${window.location.hostname}:8082`,
       urdfUrl: options.urdfUrl || '/urdf/alfiebot.urdf',
       meshBasePath: options.meshBasePath || '/meshes/',
       ...options
@@ -87,14 +88,97 @@ class URDFViewer {
   }
 
   setupControls() {
-    // Use OrbitControls if available
-    if (typeof THREE.OrbitControls !== 'undefined') {
-      this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
-      this.controls.enableDamping = true;
-      this.controls.dampingFactor = 0.05;
-      this.controls.target.set(0, 0.4, 0);
-      this.controls.update();
-    }
+    // Simple mouse orbit controls implementation
+    this.isDragging = false;
+    this.previousMousePosition = { x: 0, y: 0 };
+    this.spherical = { theta: 0, phi: Math.PI / 4, radius: 1.5 };
+    this.target = new THREE.Vector3(0, 0.4, 0);
+    
+    const container = this.container;
+    
+    // Mouse down - start dragging
+    container.addEventListener('mousedown', (e) => {
+      this.isDragging = true;
+      this.previousMousePosition = { x: e.clientX, y: e.clientY };
+    });
+    
+    // Mouse up - stop dragging
+    container.addEventListener('mouseup', () => {
+      this.isDragging = false;
+    });
+    
+    container.addEventListener('mouseleave', () => {
+      this.isDragging = false;
+    });
+    
+    // Mouse move - rotate camera
+    container.addEventListener('mousemove', (e) => {
+      if (!this.isDragging) return;
+      
+      const deltaX = e.clientX - this.previousMousePosition.x;
+      const deltaY = e.clientY - this.previousMousePosition.y;
+      
+      // Rotate around target
+      this.spherical.theta -= deltaX * 0.01;
+      this.spherical.phi -= deltaY * 0.01;
+      
+      // Clamp phi to avoid flipping
+      this.spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, this.spherical.phi));
+      
+      this.updateCameraPosition();
+      this.previousMousePosition = { x: e.clientX, y: e.clientY };
+    });
+    
+    // Mouse wheel - zoom
+    container.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.spherical.radius += e.deltaY * 0.001;
+      this.spherical.radius = Math.max(0.3, Math.min(5, this.spherical.radius));
+      this.updateCameraPosition();
+    }, { passive: false });
+    
+    // Touch support for mobile
+    container.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        this.isDragging = true;
+        this.previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }
+    });
+    
+    container.addEventListener('touchend', () => {
+      this.isDragging = false;
+    });
+    
+    container.addEventListener('touchmove', (e) => {
+      if (!this.isDragging || e.touches.length !== 1) return;
+      
+      const deltaX = e.touches[0].clientX - this.previousMousePosition.x;
+      const deltaY = e.touches[0].clientY - this.previousMousePosition.y;
+      
+      this.spherical.theta -= deltaX * 0.01;
+      this.spherical.phi -= deltaY * 0.01;
+      this.spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, this.spherical.phi));
+      
+      this.updateCameraPosition();
+      this.previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    });
+    
+    // Initialize camera position
+    this.updateCameraPosition();
+  }
+  
+  updateCameraPosition() {
+    // Convert spherical coordinates to Cartesian
+    const x = this.spherical.radius * Math.sin(this.spherical.phi) * Math.sin(this.spherical.theta);
+    const y = this.spherical.radius * Math.cos(this.spherical.phi);
+    const z = this.spherical.radius * Math.sin(this.spherical.phi) * Math.cos(this.spherical.theta);
+    
+    this.camera.position.set(
+      this.target.x + x,
+      this.target.y + y,
+      this.target.z + z
+    );
+    this.camera.lookAt(this.target);
   }
 
   async connectToFoxglove() {
@@ -102,8 +186,8 @@ class URDFViewer {
     this.updateStatus('Connecting to Foxglove...');
     
     try {
-      // Create WebSocket connection to Foxglove Bridge with the required subprotocol
-      this.foxgloveClient = new WebSocket(this.options.foxgloveUrl, ['foxglove.websocket.v1']);
+      // Create WebSocket connection to Foxglove Bridge with the SDK subprotocol (required for foxglove_bridge 3.x)
+      this.foxgloveClient = new WebSocket(this.options.foxgloveUrl, ['foxglove.sdk.v1']);
       
       this.foxgloveClient.binaryType = 'arraybuffer';
       
@@ -283,20 +367,44 @@ class URDFViewer {
 
   handleRobotDescriptionMessage(data) {
     try {
+      // CDR format for ROS2 std_msgs/msg/String:
+      // - 4 bytes: CDR encapsulation header (00 01 00 00 for little-endian)
+      // - 4 bytes: string length (uint32, little-endian, includes null terminator)
+      // - N bytes: string data (UTF-8)
+      // - 1 byte: null terminator
+      
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      
+      // Skip 4-byte CDR encapsulation header, then read string length
+      const stringLength = view.getUint32(4, true);
+      
+      // Extract the string (skip 8 bytes header, exclude null terminator)
+      const stringData = new Uint8Array(data.buffer, data.byteOffset + 8, stringLength - 1);
       const decoder = new TextDecoder();
-      const jsonStr = decoder.decode(data);
-      const descData = JSON.parse(jsonStr);
-      this.processRobotDescription(descData);
+      const urdfString = decoder.decode(stringData);
+      
+      console.log('Decoded robot_description CDR message, length:', stringLength);
+      
+      if (urdfString.includes('<robot')) {
+        console.log('Found URDF in robot_description');
+        this.parseAndLoadURDF(urdfString);
+      } else {
+        console.log('robot_description does not contain URDF XML');
+      }
     } catch (error) {
-      // Try parsing as plain URDF string
+      console.error('Failed to parse robot description CDR:', error);
+      // Fallback: try parsing as plain text or JSON
       try {
         const decoder = new TextDecoder();
-        const urdfString = decoder.decode(data);
-        if (urdfString.includes('<robot')) {
-          this.parseAndLoadURDF(urdfString);
+        const text = decoder.decode(data);
+        if (text.includes('<robot')) {
+          this.parseAndLoadURDF(text);
+        } else {
+          const jsonData = JSON.parse(text);
+          this.processRobotDescription(jsonData);
         }
       } catch (e) {
-        console.error('Failed to parse robot description:', e);
+        console.error('Fallback parsing also failed:', e);
       }
     }
   }
@@ -347,16 +455,49 @@ class URDFViewer {
       this.links = {};
       this.joints = {};
       
+      // Parse material definitions from URDF root
+      const materialDefs = {};
+      urdfDoc.querySelectorAll('robot > material').forEach(matEl => {
+        const matName = matEl.getAttribute('name');
+        const colorEl = matEl.querySelector('color');
+        if (matName && colorEl) {
+          const rgba = colorEl.getAttribute('rgba').split(' ').map(parseFloat);
+          materialDefs[matName] = new THREE.Color(rgba[0], rgba[1], rgba[2]);
+        }
+      });
+      console.log('Parsed material definitions:', Object.keys(materialDefs));
+      
+      // Helper function to get material color
+      const getMaterialColor = (materialEl) => {
+        if (!materialEl) return 0x666666;
+        
+        // First check for inline color
+        const colorEl = materialEl.querySelector('color');
+        if (colorEl) {
+          const rgba = colorEl.getAttribute('rgba').split(' ').map(parseFloat);
+          return new THREE.Color(rgba[0], rgba[1], rgba[2]);
+        }
+        
+        // Otherwise look up by name
+        const matName = materialEl.getAttribute('name');
+        if (matName && materialDefs[matName]) {
+          return materialDefs[matName];
+        }
+        
+        return 0x666666;
+      };
+      
       // Parse links
       const linkElements = urdfDoc.querySelectorAll('link');
       linkElements.forEach(linkEl => {
         const linkName = linkEl.getAttribute('name');
-        const visual = linkEl.querySelector('visual');
+        const visuals = linkEl.querySelectorAll('visual');  // Get ALL visuals
         
         const linkGroup = new THREE.Group();
         linkGroup.name = linkName;
         
-        if (visual) {
+        // Process each visual element in this link
+        visuals.forEach(visual => {
           const geometry = visual.querySelector('geometry');
           const origin = visual.querySelector('origin');
           const material = visual.querySelector('material');
@@ -382,19 +523,73 @@ class URDFViewer {
               const radius = parseFloat(sphere.getAttribute('radius'));
               geom = new THREE.SphereGeometry(radius, 16, 16);
             } else if (meshEl) {
-              // For mesh files, create a placeholder box
-              geom = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+              // Load OBJ mesh file
+              const filename = meshEl.getAttribute('filename');
+              const scaleAttr = meshEl.getAttribute('scale');
+              
+              if (filename && filename.startsWith('package://alfie_urdf/meshes/') && filename.endsWith('.obj')) {
+                const meshName = filename.replace('package://alfie_urdf/meshes/', '');
+                const meshUrl = `/meshes/${meshName}`;
+                
+                // Load OBJ asynchronously
+                const loader = new THREE.OBJLoader();
+                loader.load(
+                  meshUrl,
+                  (obj) => {
+                    // Apply material color to all children
+                    const matColor = getMaterialColor(material);
+                    
+                    obj.traverse((child) => {
+                      if (child.isMesh) {
+                        child.material = new THREE.MeshStandardMaterial({
+                          color: matColor,
+                          metalness: 0.3,
+                          roughness: 0.7
+                        });
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                      }
+                    });
+                    
+                    // Apply scale if specified
+                    if (scaleAttr) {
+                      const scaleVals = scaleAttr.split(' ').map(parseFloat);
+                      obj.scale.set(scaleVals[0], scaleVals[1], scaleVals[2]);
+                    }
+                    
+                    // Apply origin transform
+                    if (origin) {
+                      const xyz = origin.getAttribute('xyz');
+                      const rpy = origin.getAttribute('rpy');
+                      if (xyz) {
+                        const pos = xyz.split(' ').map(parseFloat);
+                        obj.position.set(pos[0], pos[1], pos[2]);
+                      }
+                      if (rpy) {
+                        const rot = rpy.split(' ').map(parseFloat);
+                        // URDF uses fixed-axis RPY (roll, pitch, yaw = X, Y, Z)
+                        obj.rotation.order = 'ZYX';  // Fixed-axis XYZ = intrinsic ZYX
+                        obj.rotation.set(rot[0], rot[1], rot[2]);
+                      }
+                    }
+                    
+                    linkGroup.add(obj);
+                  },
+                  undefined,
+                  (error) => {
+                    console.warn('Failed to load mesh:', meshUrl, error);
+                  }
+                );
+                // Don't create placeholder - mesh will be added async
+                geom = null;
+              } else {
+                // Fallback placeholder for unsupported mesh formats
+                geom = new THREE.BoxGeometry(0.03, 0.03, 0.03);
+              }
             }
             
             if (geom) {
-              let color = 0x666666;
-              if (material) {
-                const colorEl = material.querySelector('color');
-                if (colorEl) {
-                  const rgba = colorEl.getAttribute('rgba').split(' ').map(parseFloat);
-                  color = new THREE.Color(rgba[0], rgba[1], rgba[2]);
-                }
-              }
+              const color = getMaterialColor(material);
               
               const mat = new THREE.MeshStandardMaterial({
                 color: color,
@@ -417,6 +612,8 @@ class URDFViewer {
                 }
                 if (rpy) {
                   const rot = rpy.split(' ').map(parseFloat);
+                  // URDF uses fixed-axis RPY (roll, pitch, yaw = X, Y, Z)
+                  mesh.rotation.order = 'ZYX';  // Fixed-axis XYZ = intrinsic ZYX
                   mesh.rotation.set(rot[0], rot[1], rot[2]);
                 }
               }
@@ -424,14 +621,16 @@ class URDFViewer {
               linkGroup.add(mesh);
             }
           }
-        }
+        });  // End of visuals.forEach
         
         this.links[linkName] = linkGroup;
-        this.robot.add(linkGroup);
+        // Don't add to robot yet - we'll build hierarchy from joints
       });
       
       // Parse joints to build hierarchy
       const jointElements = urdfDoc.querySelectorAll('joint');
+      const childLinks = new Set();  // Track which links are children
+      
       jointElements.forEach(jointEl => {
         const jointName = jointEl.getAttribute('name');
         const jointType = jointEl.getAttribute('type');
@@ -447,21 +646,42 @@ class URDFViewer {
           axis: axis ? axis.getAttribute('xyz').split(' ').map(parseFloat) : [0, 0, 1]
         };
         
-        // Apply origin to child link
-        if (child && this.links[child] && origin) {
-          const xyz = origin.getAttribute('xyz');
-          const rpy = origin.getAttribute('rpy');
+        // Build parent-child hierarchy
+        if (parent && child && this.links[parent] && this.links[child]) {
+          childLinks.add(child);
           
-          if (xyz) {
-            const pos = xyz.split(' ').map(parseFloat);
-            this.links[child].position.set(pos[0], pos[1], pos[2]);
+          // Apply joint origin transform to child link
+          if (origin) {
+            const xyz = origin.getAttribute('xyz');
+            const rpy = origin.getAttribute('rpy');
+            
+            if (xyz) {
+              const pos = xyz.split(' ').map(parseFloat);
+              this.links[child].position.set(pos[0], pos[1], pos[2]);
+            }
+            if (rpy) {
+              const rot = rpy.split(' ').map(parseFloat);
+              // URDF uses fixed-axis RPY (roll, pitch, yaw = X, Y, Z)
+              this.links[child].rotation.order = 'ZYX';  // Fixed-axis XYZ = intrinsic ZYX
+              this.links[child].rotation.set(rot[0], rot[1], rot[2]);
+            }
           }
-          if (rpy) {
-            const rot = rpy.split(' ').map(parseFloat);
-            this.links[child].rotation.set(rot[0], rot[1], rot[2]);
-          }
+          
+          // Add child link as child of parent link (this makes transforms accumulate)
+          this.links[parent].add(this.links[child]);
         }
       });
+      
+      // Add root links (those that aren't children of any joint) to the robot
+      Object.keys(this.links).forEach(linkName => {
+        if (!childLinks.has(linkName)) {
+          this.robot.add(this.links[linkName]);
+          console.log('Root link:', linkName);
+        }
+      });
+      
+      // Rotate to convert from ROS (Z-up) to Three.js (Y-up) coordinate system
+      this.robot.rotation.x = -Math.PI / 2;
       
       this.scene.add(this.robot);
       this.urdfLoaded = true;
@@ -624,10 +844,6 @@ class URDFViewer {
   animate() {
     requestAnimationFrame(() => this.animate());
     
-    if (this.controls) {
-      this.controls.update();
-    }
-    
     if (this.renderer && this.scene && this.camera) {
       this.renderer.render(this.scene, this.camera);
     }
@@ -691,8 +907,9 @@ class URDFViewer {
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('urdfViewerContainer');
   if (container) {
-    // Use wss:// for secure WebSocket connection to Foxglove Bridge
-    const foxgloveUrl = `wss://${window.location.hostname}:8765`;
+    // Use wss:// via nginx proxy (port 8082) for secure WebSocket connection
+    // nginx terminates TLS and proxies to foxglove_bridge on port 8765
+    const foxgloveUrl = `wss://${window.location.hostname}:8082`;
     
     window.urdfViewer = new URDFViewer('urdfViewerContainer', {
       foxgloveUrl: foxgloveUrl

@@ -2,15 +2,19 @@
 <robot name="alfiebot.021.urdf">
 
   <material name="aluminum_black">
-    <color rgba="0.2 0.2 0.2 1"/>
-  </material>
-
-  <material name="plastic_black">
     <color rgba="0.1 0.1 0.1 1"/>
   </material>
 
+  <material name="body_black">
+    <color rgba="0.15 0.15 0.15 1"/>
+  </material>
+
+  <material name="plastic_black">
+    <color rgba="0.05 0.05 0.05 1"/>
+  </material>
+
   <material name="glass_black">
-    <color rgba="0 0 0.8 1"/>
+    <color rgba="0.05 0.05 0.05 1"/>
   </material>
 
   <material name="brass">
@@ -25,12 +29,10 @@
     <color rgba="0.66 0.67 0.71 1"/>
   </material>
 
-  <material name="body_black">
-    <color rgba="0.25 0.25 0.25 1"/>
-  </material>
+
 
   <material name="rubber_black">
-    <color rgba="0.1 0.1 0.1 1"/>
+    <color rgba="0.05 0.05 0.05 1"/>
   </material>
 
   <material name="glass_yellow">
@@ -45,6 +47,9 @@
     <color rgba="0.8 0.4 0.0 1"/>
   </material>
 
+  <material name="plastic_grey">
+    <color rgba="0.5 0.5 0.5 1"/>
+  </material>
 
   <joint name="back_joint" type="prismatic">
     <origin xyz="-0.001102 0.0016674 0.3291568" rpy="0. 0. 3.1415927"/>
@@ -206,70 +211,70 @@
     <visual>
       <origin xyz="-0.098 -0.007 0.05725" rpy="0. 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0.0064 0.04 " rpy="3.1415927 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/v_bearing.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/v_bearing.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0.007 0.1 " rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/pillow_block_adapter.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/pillow_block_adapter.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0.007 0.1 " rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/left_shoulder.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/left_shoulder.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0.007 0.1 " rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/back_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/back_frame.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="aluminum_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="0.0009153 -0.0064 0.0736835" rpy="3.1415927 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/v_bearing.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/v_bearing.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.1029153 -0.0064 0.0736835" rpy="3.1415927 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/v_bearing.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/v_bearing.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0.098 -0.007 0.05725" rpy="0. 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0.007 0.1 " rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/right_shoulder.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/right_shoulder.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="-0.102 -0.0064 0.04 " rpy="3.1415927 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/v_bearing.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/v_bearing.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
@@ -284,154 +289,154 @@
     <visual>
       <origin xyz="-0.001302 0.0336644 0.2746568" rpy="0. 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/optical_endstop_block.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/optical_endstop_block.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="-0.001302 0.0331644 0.0276568" rpy="0. 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/buck_converter.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/buck_converter.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="aluminum"/>
     </visual>
     <visual>
       <origin xyz="-0.0011033 0.0196107 0.8266568" rpy="0. 0. -0.0025961"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/neck_base.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/neck_base.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="-0.001302 0.0196644 0.0449068" rpy="0. 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/battery_adapter_plate.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/battery_adapter_plate.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="-0.001135 0.0916674 0.7974541" rpy="3.1415927 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/back_servo_cover.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/back_servo_cover.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="0.0542753 0.0684031 0.0314471" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/wifi_antenna.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/wifi_antenna.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.001102 0.0196644 0.0271568" rpy="0. 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/flsun_arm.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/flsun_arm.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="-0.001135 0.0296674 0.7974541" rpy="1.5707964 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/jgb37_520.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/jgb37_520.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="aluminum"/>
     </visual>
     <visual>
       <origin xyz="0.0542753 0.0684031 0.0314471" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/wifi_nut.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/wifi_nut.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="brass"/>
     </visual>
     <visual>
       <origin xyz="-0.001302 0.0463674 0.0241568" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/base_plate.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/base_plate.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0011403 0.0054173 0.8514068" rpy="-3.1415927 0. -1.5733924"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0846183 0.0741196 0.0619034" rpy="-1.1724066 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/speaker_accent.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/speaker_accent.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_orange"/>
     </visual>
     <visual>
       <origin xyz="0.0542854 0.0531264 0.0314244" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/wifi_antenna.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/wifi_antenna.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.001302 0.0454377 0.0241568" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/ugv_base.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/ugv_base.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0846183 0.0741196 0.0619034" rpy="-1.1724066 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/speaker.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/speaker.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.001102 0.0196644 0.0271568" rpy="0. 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/flsun_rail.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/flsun_rail.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="aluminum"/>
     </visual>
     <visual>
       <origin xyz="-0.001302 0.0832644 0.0241568" rpy="0. 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/buckdown_spacer.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/buckdown_spacer.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="0.0542854 0.0531264 0.0314244" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/wifi_nut.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/wifi_nut.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="brass"/>
     </visual>
     <visual>
       <origin xyz="-0.001135 0.0196674 0.7974541" rpy="3.1415927 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/back_servo_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/back_servo_frame.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="aluminum_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0010395 0.0334644 0.074102 " rpy="0. -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/6010_battery.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/6010_battery.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0846183 0.0741196 0.0619034" rpy="-1.1724066 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/speaker_cover.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/speaker_cover.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0846183 0.0741196 0.0619034" rpy="-1.1724066 0. 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/speaker_base.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/speaker_base.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
@@ -446,77 +451,77 @@
     <visual>
       <origin xyz="-0. -0. -0.01725" rpy="3.1415927 -0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0.0071363 0.0002454 0.0970189" rpy="-1.5707964 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/oakd_lite.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/oakd_lite.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0. -0.01725" rpy="-3.1415927 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="-0.0967828 0.0002681 0.0396251" rpy="-1.5707964 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/respeaker.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/respeaker.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0944828 0.1128894 0.036915 " rpy="-1.5707964 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/eye_glass.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/eye_glass.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="glass_yellow"/>
     </visual>
     <visual>
       <origin xyz="-0.0944828 0.0008894 0.036915 " rpy="-1.5707964 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/eye_glass.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/eye_glass.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="glass_yellow"/>
     </visual>
     <visual>
       <origin xyz="0.00775 0.0002454 0.0365189" rpy="-1.5707964 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/head_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/head_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0944828 0.1128894 0.036915 " rpy="-1.5707964 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/eye_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/eye_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0. -0.0357" rpy="-1.5707964 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/neck4_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/neck4_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0944828 0.0008894 0.036915 " rpy="-1.5707964 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/eye_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/eye_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0. -0.01725" rpy="-3.1415927 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
@@ -531,91 +536,91 @@
     <visual>
       <origin xyz="0.0672499 0.5326688 -0.0786977" rpy="1.5707964 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/tube.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/tube.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="-0.2158563 -0.0012424 0.017225 " rpy="0. 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0.0672499 -0.539283 0.1163364" rpy="-1.5707964 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/wrist_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/wrist_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="0.0672499 -0.5392672 0.1163611" rpy="-1.5707964 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0.0672499 -0.5392672 0.1163611" rpy="-1.5707964 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/elbow_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/elbow_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="0. 0. 0.01725" rpy="0. 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0.0672499 -0.5392672 0.1163611" rpy="-1.5707964 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0.0672499 -0.539283 0.1163364" rpy="-1.5707964 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.2158563 -0.005356 0.0204384" rpy="3.1415927 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.2158563 -0.0012424 0.017225 " rpy="0. 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0. 0. 0.01725" rpy="0. 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0.0672499 -0.539283 0.1163364" rpy="-1.5707964 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0. 0. 0.01725" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
@@ -630,7 +635,7 @@
     <visual>
       <origin xyz="0.7760407 0.0370184 0.1359393" rpy="-0. -1.5707961 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/upper_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/upper_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
@@ -645,21 +650,21 @@
     <visual>
       <origin xyz="-0.03125 0. 0.015 " rpy="3.1415927 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper_liner.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper_liner.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="rubber_orange"/>
     </visual>
     <visual>
       <origin xyz="-0.03125 0. 0.015 " rpy="3.1415927 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <collision>
       <origin xyz="-0.0313332 -0.0001633 -0.0049882" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper_active_collision.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper_active_collision.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </collision>
@@ -674,21 +679,21 @@
     <visual>
       <origin xyz="0.03125 -0. -0.005 " rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper_liner.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper_liner.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="rubber_orange"/>
     </visual>
     <visual>
       <origin xyz="0.03125 -0. -0.005 " rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <collision>
       <origin xyz="0.031 -0.0003 -0.0044" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper_passive_collision.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper_passive_collision.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </collision>
@@ -703,14 +708,14 @@
     <visual>
       <origin xyz="-0.02245 -0.015625 0.021 " rpy="1.5707964 -0.0148905 -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.01 -0.015625 0.021 " rpy="-1.5707964 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/hand_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/hand_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
@@ -725,56 +730,56 @@
     <visual>
       <origin xyz="-0.0001294 -0.0002184 -0.0003 " rpy="0. 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/shoulder_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/shoulder_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="0.0206675 0.0000265 -0.0508856" rpy="3.1415927 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="-0.0206912 -0.0000007 -0.0509092" rpy="0. 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0.0206675 0.0000265 -0.0508856" rpy="3.1415927 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="-0.0001294 -0.0002184 -0.0003 " rpy="0. 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/shoulder_bearing.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/shoulder_bearing.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0206912 -0.0000007 -0.0509092" rpy="0. 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0.0206675 0.0000265 -0.0508856" rpy="3.1415927 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0206912 -0.0000007 -0.0509092" rpy="0. 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
@@ -789,21 +794,21 @@
     <visual>
       <origin xyz="0.0000108 -0.020328 0.0188602" rpy="-1.5707965 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/wrist.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/wrist.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0. -0.038 0.019" rpy="1.5707964 1.5707961 -3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0. -0.038 0.019" rpy="1.5707964 -0.0000002 -3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
@@ -818,125 +823,125 @@
     <visual>
       <origin xyz="0.0237753 0.0193919 0.0281856" rpy="3.1415927 0. -0.8726646"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.014912 0.02679 0.0282389" rpy="2.186276 0.5235988 1.4789153"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0001322 -0.0000806 -0.018527 " rpy="-1.5707964 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/mecanum_fl_link_hub.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/mecanum_fl_link_hub.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0290498 -0.0101026 0.0282005" rpy="-2.186276 0.5235988 0.9645456"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0157596 -0.0264119 0.0282005" rpy="-2.186276 0.5235988 1.6626773"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0232258 -0.0200468 0.0281856" rpy="-3.1415927 0. -2.268928 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.005797 0.0301076 0.0282389" rpy="2.186276 0.5235988 0.7807837"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0286436 0.010937 0.0282389" rpy="2.186276 0.5235988 2.177047 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0049047 -0.0303628 0.0282005" rpy="-2.186276 0.5235988 2.360809 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0306778 -0.0004275 0.0281856" rpy="3.1415927 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <collision>
       <origin xyz="0.0237753 0.0193919 0.0281856" rpy="3.1415927 0. -0.8726646"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.014912 0.02679 0.0282389" rpy="2.186276 0.5235988 1.4789153"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0290498 -0.0101026 0.0282005" rpy="-2.186276 0.5235988 0.9645456"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0157596 -0.0264119 0.0282005" rpy="-2.186276 0.5235988 1.6626773"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0232258 -0.0200468 0.0281856" rpy="-3.1415927 0. -2.268928 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.005797 0.0301076 0.0282389" rpy="2.186276 0.5235988 0.7807837"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0286436 0.010937 0.0282389" rpy="2.186276 0.5235988 2.177047 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0049047 -0.0303628 0.0282005" rpy="-2.186276 0.5235988 2.360809 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0306778 -0.0004275 0.0281856" rpy="3.1415927 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
   </link>
@@ -950,125 +955,125 @@
     <visual>
       <origin xyz="0.0290288 -0.0101091 -0.0282764" rpy="3.0898395 0.0013398 1.2734836"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0231955 -0.0200459 -0.0282591" rpy="-2.133727 0.5903624 -1.8805304"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0057898 0.0302133 -0.02825 " rpy="2.543315 0.189642 -2.368782"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0287354 0.0109153 -0.0282764" rpy="3.0898395 0.0013398 1.9716153"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0149965 0.0268394 -0.028273 " rpy="2.9902365 0.0114981 2.76935 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0307403 -0.0004917 -0.0282137" rpy="2.0234883 0.7461636 -0.4526919"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0157454 -0.026407 -0.028273 " rpy="2.9902365 0.0114981 0.6749548"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0238669 0.0194043 -0.0282286" rpy="2.240851 0.4593191 -1.3681865"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0048618 -0.0302659 -0.0282377" rpy="-1.8992568 0.9467018 -1.4168686"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0001322 0.0000806 0.018527 " rpy="1.5707964 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/mecanum_fr_link_hub.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/mecanum_fr_link_hub.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <collision>
       <origin xyz="0.0290288 -0.0101091 -0.0282764" rpy="3.0898395 0.0013398 1.2734836"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0231955 -0.0200459 -0.0282591" rpy="-2.133727 0.5903624 -1.8805304"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0057898 0.0302133 -0.02825 " rpy="2.543315 0.189642 -2.368782"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0287354 0.0109153 -0.0282764" rpy="3.0898395 0.0013398 1.9716153"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0149965 0.0268394 -0.028273 " rpy="2.9902365 0.0114981 2.76935 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0307403 -0.0004917 -0.0282137" rpy="2.0234883 0.7461636 -0.4526919"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0157454 -0.026407 -0.028273 " rpy="2.9902365 0.0114981 0.6749548"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0238669 0.0194043 -0.0282286" rpy="2.240851 0.4593191 -1.3681865"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0048618 -0.0302659 -0.0282377" rpy="-1.8992568 0.9467018 -1.4168686"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
   </link>
@@ -1082,125 +1087,125 @@
     <visual>
       <origin xyz="-0.0289972 -0.0100267 0.0282098" rpy="-1.2217305 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0232493 -0.0201361 0.0282246" rpy="-0.9553166 -0.5235988 3.0589406"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0057591 0.0301143 0.0282631" rpy="0.9553166 -0.5235988 0.7807837"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0286582 0.0109581 0.0282098" rpy="-1.9198622 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0149097 0.0268156 0.0282098" rpy="-2.6179938 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0306724 -0.0004299 0.0282755" rpy="0.7382554 -0.2971161 -0.8325408"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0157681 -0.0263199 0.0282098" rpy="-0.5235988 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0001322 0.0000806 -0.018527 " rpy="1.5707964 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/mecanum_rl_link_hub.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/mecanum_rl_link_hub.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0.0048668 -0.0303695 0.0282246" rpy="-0.9553166 -0.5235988 2.360809 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0237688 0.019367 0.0282631" rpy="0.9553166 -0.5235988 0.082652 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <collision>
       <origin xyz="-0.0289972 -0.0100267 0.0282098" rpy="-1.2217305 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0232493 -0.0201361 0.0282246" rpy="-0.9553166 -0.5235988 3.0589406"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0057591 0.0301143 0.0282631" rpy="0.9553166 -0.5235988 0.7807837"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0286582 0.0109581 0.0282098" rpy="-1.9198622 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0149097 0.0268156 0.0282098" rpy="-2.6179938 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0306724 -0.0004299 0.0282755" rpy="0.7382554 -0.2971161 -0.8325408"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0157681 -0.0263199 0.0282098" rpy="-0.5235988 -1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0048668 -0.0303695 0.0282246" rpy="-0.9553166 -0.5235988 2.360809 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0237688 0.019367 0.0282631" rpy="0.9553166 -0.5235988 0.082652 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
   </link>
@@ -1214,125 +1219,125 @@
     <visual>
       <origin xyz="0.0238566 -0.0193678 -0.0282563" rpy="-1.5170586 -1.4634758 -0.644394 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.014992 -0.0268577 -0.0282036" rpy="0.9966134 -0.5756602 0.4730145"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0001322 0.0000806 0.018527 " rpy="1.5707964 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/mecanum_rr_link_hub.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/mecanum_rr_link_hub.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0289869 0.0100279 -0.0282491" rpy="-1.1055627 -0.7273656 -3.025425 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0157486 0.02631 -0.0282419" rpy="-0.9966134 -0.5756602 2.6685781"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0232311 0.0201359 -0.0282505" rpy="1.5170586 -1.4634758 -2.4971986"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0057783 -0.0302104 -0.0282027" rpy="0.9853742 -0.5611966 1.159907 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="-0.028749 -0.0109475 -0.0282128" rpy="1.1055627 -0.7273656 -0.1161676"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0048482 0.0302768 -0.0282411" rpy="-0.9853742 -0.5611966 1.9816856"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <visual>
       <origin xyz="0.0306778 0.0004275 -0.0281856" rpy="0. 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="rubber_black"/>
     </visual>
     <collision>
       <origin xyz="0.0238566 -0.0193678 -0.0282563" rpy="-1.5170586 -1.4634758 -0.644394 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.014992 -0.0268577 -0.0282036" rpy="0.9966134 -0.5756602 0.4730145"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0289869 0.0100279 -0.0282491" rpy="-1.1055627 -0.7273656 -3.025425 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.0157486 0.02631 -0.0282419" rpy="-0.9966134 -0.5756602 2.6685781"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0232311 0.0201359 -0.0282505" rpy="1.5170586 -1.4634758 -2.4971986"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0057783 -0.0302104 -0.0282027" rpy="0.9853742 -0.5611966 1.159907 "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="-0.028749 -0.0109475 -0.0282128" rpy="1.1055627 -0.7273656 -0.1161676"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0048482 0.0302768 -0.0282411" rpy="-0.9853742 -0.5611966 1.9816856"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
     <collision>
       <origin xyz="0.0306778 0.0004275 -0.0281856" rpy="0. 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/roller.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/roller.obj" scale="1. 1. 1."/>
       </geometry>
     </collision>
   </link>
@@ -1346,7 +1351,7 @@
     <visual>
       <origin xyz="0. 0.015 -0.044" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/neck2_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/neck2_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
@@ -1361,28 +1366,28 @@
     <visual>
       <origin xyz="0. 0. 0.0215" rpy="3.1415927 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0. 0. 0.02" rpy="3.1415927 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0.0346271 0.0001068 0.0194332" rpy="3.1415927 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/neck3_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/neck3_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="0. 0. 0.0215" rpy="3.1415927 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
@@ -1397,84 +1402,84 @@
     <visual>
       <origin xyz="0.0672499 0.5326688 -0.0786977" rpy="1.5707961 1.5707963 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/tube.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/tube.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.2158563 -0.0012424 0.017225 " rpy="0.0000001 -0.0000001 1.5707965"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0.06725 -0.539283 0.1163363" rpy="-1.5707963 -1.5707963 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/wrist_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/wrist_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="0.06725 -0.5392672 0.1163611" rpy="-1.5707963 -1.5707963 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0.06725 -0.5392672 0.1163611" rpy="-1.5707963 -1.5707963 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/elbow_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/elbow_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="0. -0. 0.01725" rpy="-0.0000001 0.0000001 -1.5707963"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0.06725 -0.5392672 0.1163611" rpy="-1.5707963 -1.5707963 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0.06725 -0.539283 0.1163363" rpy="-1.5707963 -1.5707963 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.2158563 -0.005356 0.0204384" rpy="3.1415925 -0.0000001 -3.1415925"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.2158563 -0.0012424 0.017225 " rpy="0.0000001 -0.0000001 1.5707965"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0. -0. 0.01725" rpy="-0.0000001 0.0000001 -1.5707963"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0.06725 -0.539283 0.1163363" rpy="-1.5707963 -1.5707963 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
       </geometry>
 
       <material name="aluminum_black"/>
@@ -1482,7 +1487,7 @@
     <visual>
       <origin xyz="0. -0. 0.01725" rpy="0.0000001 0.0000001 0.0000001"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
@@ -1497,7 +1502,7 @@
     <visual>
       <origin xyz="0.7760408 0.0370184 0.1359393" rpy="-0. -1.5707961 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/upper_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/upper_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
@@ -1512,21 +1517,21 @@
     <visual>
       <origin xyz="-0.03125 0. 0.015 " rpy="-3.1415927 0. -3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper_liner.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper_liner.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="rubber_orange"/>
     </visual>
     <visual>
       <origin xyz="-0.03125 0. 0.015 " rpy="-3.1415927 0. -3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <collision>
       <origin xyz="-0.0313332 -0.0001633 -0.0049882" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper_active_collision.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper_active_collision.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </collision>
@@ -1541,21 +1546,21 @@
     <visual>
       <origin xyz="0.03125 -0. -0.005 " rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0.03125 -0. -0.005 " rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper_liner.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper_liner.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="rubber_orange"/>
     </visual>
     <collision>
       <origin xyz="0.031 -0.0003 -0.0044" rpy="0. 0. 0."/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/gripper_passive_collision.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/gripper_passive_collision.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </collision>
@@ -1570,14 +1575,14 @@
     <visual>
       <origin xyz="0.02245 0.015625 0.021 " rpy="1.5707964 -0.0148905 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0.01 0.015625 0.021 " rpy="-1.5707964 0. 1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/hand_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/hand_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
@@ -1592,56 +1597,56 @@
     <visual>
       <origin xyz="0. -0. 0." rpy="0. 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/shoulder_frame.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/shoulder_frame.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="0.0206675 0.0000265 -0.0508856" rpy="3.1415927 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="-0.0206912 -0.0000007 -0.0509092" rpy="0. 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0.0206675 0.0000265 -0.0508856" rpy="3.1415927 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/passive_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="0. -0. 0." rpy="0. 0. 3.1415927"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/shoulder_bearing.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/shoulder_bearing.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0206912 -0.0000007 -0.0509092" rpy="0. 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="0.0206675 0.0000265 -0.0508856" rpy="3.1415927 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0206912 -0.0000007 -0.0509092" rpy="0. 1.5707964 0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
@@ -1656,21 +1661,21 @@
     <visual>
       <origin xyz="-0.0000108 -0.020328 0.0186398" rpy="1.5707961 0. -1.5707964"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/wrist.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/wrist.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0.038 0.0185" rpy="-1.5707749 -1.5707961 -0.0000214"/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/st3215.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/st3215.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0.038 0.0185" rpy="-1.5707964 0.0000002 -0. "/>
       <geometry>
-        <mesh filename="file:///home/alansrobotlab/Downloads/urdf/urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
+        <mesh filename="package://alfie_urdf/meshes/active_horn.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_white"/>
     </visual>
