@@ -271,7 +271,7 @@ class AlfieTeleopVRNode(Node):
             kp=1
         )
 
-        # Call back calibration service only if not already calibrated
+        # Call back calibration service if not already calibrated
         if not robot_state.back_state.is_calibrated:
             self.get_logger().info('Back not calibrated, calling calibration service...')
             calibrate_client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
