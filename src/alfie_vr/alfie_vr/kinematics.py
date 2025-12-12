@@ -2,6 +2,7 @@ import math
 import numpy as np
 from typing import List, Union, Tuple
 from alfie_msgs.msg import RobotLowCmd, RobotLowState, ServoCmd
+from alfie_vr.alfie_teleop_vr_config import AlfieTeleopVRConfig
 
 
 
@@ -13,7 +14,7 @@ class SimpleTeleopArm:
     for smooth movement and gripper operations based on VR controller input.
     """
     
-    def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1):
+    def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1, config=None):
         """
         Initialize the SimpleTeleopArm with joint mapping and initial state.
 
@@ -23,11 +24,13 @@ class SimpleTeleopArm:
             kinematics (object): Kinematics model for inverse kinematics calculations.
             prefix (str, optional): Prefix for the arm (e.g., "left" or "right"). Defaults to "right".
             kp (float, optional): Proportional gain for the control loop. Defaults to 1.
+            config (AlfieTeleopVRConfig, optional): Configuration object. Defaults to None (uses default config).
         """
         self.joint_map = joint_map
         self.prefix = prefix
         self.kp = kp
         self.kinematics = kinematics
+        self.config = config if config is not None else AlfieTeleopVRConfig()
         
         # set offset to 0 if prefix is left otherwise 7 for right
         if prefix == 'left':
@@ -146,27 +149,21 @@ class SimpleTeleopArm:
         
         # Calculate relative change (delta) from previous frame
         # Scale factors for converting VR movement to robot workspace
-        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * 80 # * 220  # Scale for the shoulder rotate
-        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * 40 # * 70   # Scale for arm reach (Y)
-        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * 40 # * 70   # Scale for arm reach (Z->X)
+        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * self.config.vr_x_scale
+        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * self.config.vr_y_scale
+        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * self.config.vr_z_scale
 
         # Update previous position for next frame
         self.prev_vr_pos = current_vr_pos
         
-        # Delta control parameters - adjust these for sensitivity
-        pos_scale = 0.05  # Position sensitivity scaling
-        angle_scale = 0.07  # Angle sensitivity scaling (radians, ~4 degrees)
-        delta_limit = 0.02  # Maximum delta per update (meters)
-        angle_limit = 0.14  # Maximum angle delta per update (radians, ~8 degrees)
-        
-        delta_x = vr_x * pos_scale
-        delta_y = vr_y * pos_scale  
-        delta_z = vr_z * pos_scale
+        delta_x = vr_x * self.config.pos_scale
+        delta_y = vr_y * self.config.pos_scale  
+        delta_z = vr_z * self.config.pos_scale
         
         # Limit delta values to prevent sudden movements
-        delta_x = max(-delta_limit, min(delta_limit, delta_x))
-        delta_y = max(-delta_limit, min(delta_limit, delta_y))
-        delta_z = max(-delta_limit, min(delta_limit, delta_z))
+        delta_x = max(-self.config.delta_limit, min(self.config.delta_limit, delta_x))
+        delta_y = max(-self.config.delta_limit, min(self.config.delta_limit, delta_y))
+        delta_z = max(-self.config.delta_limit, min(self.config.delta_limit, delta_z))
         
         # Update workspace position
         # VR coordinate system (WebXR): X=left(-)/right(+), Y=down(-)/up(+), Z=forward(-)/back(+)
@@ -191,8 +188,8 @@ class SimpleTeleopArm:
                 return
             
             # Calculate relative change from previous frame (convert VR degrees to radians)
-            delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * angle_scale / 0.07
-            delta_pitch = max(-angle_limit, min(angle_limit, delta_pitch))
+            delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * self.config.angle_scale / 0.07 * self.config.wrist_flex_scale
+            delta_pitch = max(-self.config.angle_limit, min(self.config.angle_limit, delta_pitch))
             self.pitch += delta_pitch
             self.pitch = max(-math.pi/2, min(math.pi/2, self.pitch))  # Limit pitch range (±90°)
             
@@ -206,8 +203,8 @@ class SimpleTeleopArm:
                 return
             
             # Convert VR degrees to radians for delta
-            delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * angle_scale / 0.07
-            delta_roll = max(-angle_limit, min(angle_limit, delta_roll))
+            delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * self.config.angle_scale / 0.07 * self.config.wrist_roll_scale
+            delta_roll = max(-self.config.angle_limit, min(self.config.angle_limit, delta_roll))
             
             current_roll = self.target_positions.get("wrist_roll", 0.0)
             new_roll = current_roll - delta_roll  # Negated to fix direction
@@ -221,7 +218,7 @@ class SimpleTeleopArm:
         if abs(delta_x) > 0.001:  # Only update if significant movement
             x_scale = 3.5  # Scale factor for shoulder pan (radians)
             delta_pan = delta_x * x_scale
-            delta_pan = max(-angle_limit, min(angle_limit, delta_pan))
+            delta_pan = max(-self.config.angle_limit, min(self.config.angle_limit, delta_pan))
             current_pan = self.target_positions.get("shoulder_pan", 0.0)
             new_pan = current_pan - delta_pan  # Negated to fix direction
             new_pan = max(-math.pi/4, min(math.pi/4, new_pan))  # Limit pan range (±45°)
@@ -245,11 +242,10 @@ class SimpleTeleopArm:
         self.target_positions["wrist_flex"] = (-self.target_positions["shoulder_lift"] - 
                                                self.target_positions["elbow_flex"] + self.pitch)
    
-        # Handle gripper state directly (in radians)
-        if vr_goal.metadata.get('trigger', 0) > 0.5:
-            self.target_positions["gripper"] = 0.785  # ~45 degrees in radians
-        else:
-            self.target_positions["gripper"] = 0.0
+        # Handle gripper state proportionally (in radians)
+        # trigger 0.0 = closed (0.0 rad), trigger 1.0 = fully open (0.785 rad / ~45 degrees)
+        trigger_value = vr_goal.metadata.get('trigger', 0)
+        self.target_positions["gripper"] = trigger_value * 0.785
 
     def p_control_action(self, robot):
         """
@@ -370,14 +366,18 @@ class AlfieArmKinematics:
     - shoulder_lift = 0: L1 points straight DOWN (-Y direction)
     - elbow_flex = 0: L2 is perpendicular to L1, pointing forward (+X direction)
     
+    Note: The elbow joint has a forward offset (elbow_offset) from the end of L1.
+    At zero position, this offset is in the +X direction.
+    
     All public methods use radians for input/output.
     """
 
-    def __init__(self, l1=0.2387, l2=0.2160):
+    def __init__(self, l1=0.2387, l2=0.2160, elbow_offset=0.040):
         self.l1 = l1  # Length of the first link (upper arm)
         self.l2 = l2  # Length of the second link (lower arm)
+        self.elbow_offset = elbow_offset  # Forward offset at elbow joint (40mm)
 
-    def forward_kinematics(self, shoulder_lift, elbow_flex, l1=None, l2=None):
+    def forward_kinematics(self, shoulder_lift, elbow_flex, l1=None, l2=None, elbow_offset=None):
         """
         Calculate forward kinematics for the inverted 2-link arm.
         
@@ -386,6 +386,7 @@ class AlfieArmKinematics:
             elbow_flex: Elbow joint angle in radians (0 = L2 perpendicular to L1)
             l1: Upper arm length (default uses instance value)
             l2: Lower arm length (default uses instance value)
+            elbow_offset: Forward offset at elbow joint (default uses instance value)
             
         Returns:
             x, y: End effector coordinates in meters
@@ -394,29 +395,40 @@ class AlfieArmKinematics:
             l1 = self.l1
         if l2 is None:
             l2 = self.l2
+        if elbow_offset is None:
+            elbow_offset = self.elbow_offset
         
         # At shoulder_lift=0, L1 points down (-pi/2 from +X axis)
         # Positive shoulder_lift rotates L1 forward (toward +X)
         theta1 = -math.pi/2 + shoulder_lift
         
-        # Elbow position
+        # Elbow position (end of L1)
         x_elbow = l1 * math.cos(theta1)
         y_elbow = l1 * math.sin(theta1)
         
+        # The elbow offset is perpendicular to L1 (in the direction L2 points at elbow_flex=0)
         # At elbow_flex=0, L2 is perpendicular to L1 (rotated +90° from L1)
-        # This means L2 points in the direction of theta1 + pi/2
+        offset_angle = theta1 + math.pi/2
+        x_offset = elbow_offset * math.cos(offset_angle)
+        y_offset = elbow_offset * math.sin(offset_angle)
+        
+        # L2 pivot point (where L2 actually starts, after the offset)
+        x_pivot = x_elbow + x_offset
+        y_pivot = y_elbow + y_offset
+        
+        # At elbow_flex=0, L2 points in the direction of theta1 + pi/2
         # Positive elbow_flex bends the arm (rotates L2 toward L1)
         theta2 = theta1 + math.pi/2 - elbow_flex
         
         # End effector position
-        x = x_elbow + l2 * math.cos(theta2)
-        y = y_elbow + l2 * math.sin(theta2)
+        x = x_pivot + l2 * math.cos(theta2)
+        y = y_pivot + l2 * math.sin(theta2)
         
         return x, y
     
     def get_elbow_position(self, shoulder_lift, l1=None):
         """
-        Get the elbow joint position for visualization.
+        Get the elbow joint position (end of L1) for visualization.
         
         Parameters:
             shoulder_lift: Shoulder joint angle in radians
@@ -433,16 +445,48 @@ class AlfieArmKinematics:
         y_elbow = l1 * math.sin(theta1)
         
         return x_elbow, y_elbow
-
-    def inverse_kinematics(self, x, y, l1=None, l2=None):
+    
+    def get_l2_pivot_position(self, shoulder_lift, l1=None, elbow_offset=None):
         """
-        Calculate inverse kinematics for the inverted 2-link arm.
+        Get the L2 pivot position (where L2 starts, after the elbow offset) for visualization.
+        
+        Parameters:
+            shoulder_lift: Shoulder joint angle in radians
+            l1: Upper arm length (default uses instance value)
+            elbow_offset: Forward offset at elbow joint (default uses instance value)
+            
+        Returns:
+            x_pivot, y_pivot: L2 pivot coordinates in meters
+        """
+        if l1 is None:
+            l1 = self.l1
+        if elbow_offset is None:
+            elbow_offset = self.elbow_offset
+        
+        theta1 = -math.pi/2 + shoulder_lift
+        x_elbow = l1 * math.cos(theta1)
+        y_elbow = l1 * math.sin(theta1)
+        
+        # The elbow offset is perpendicular to L1
+        offset_angle = theta1 + math.pi/2
+        x_pivot = x_elbow + elbow_offset * math.cos(offset_angle)
+        y_pivot = y_elbow + elbow_offset * math.sin(offset_angle)
+        
+        return x_pivot, y_pivot
+
+    def inverse_kinematics(self, x, y, l1=None, l2=None, elbow_offset=None):
+        """
+        Calculate inverse kinematics for the inverted 2-link arm with elbow offset.
+        
+        The elbow offset creates a more complex geometry. We use an iterative approach
+        to find the joint angles that place the end effector at the target position.
         
         Parameters:
             x: End effector x coordinate (forward)
             y: End effector y coordinate (up, typically negative for inverted arm)
             l1: Upper arm length (default uses instance value)
             l2: Lower arm length (default uses instance value)
+            elbow_offset: Forward offset at elbow joint (default uses instance value)
             
         Returns:
             shoulder_lift, elbow_flex: Joint angles in radians
@@ -451,11 +495,30 @@ class AlfieArmKinematics:
             l1 = self.l1
         if l2 is None:
             l2 = self.l2
+        if elbow_offset is None:
+            elbow_offset = self.elbow_offset
+        
+        # The effective reach from shoulder to end effector is affected by the offset.
+        # We model this as a 2-link arm where the "effective L1" includes the offset contribution.
+        # 
+        # At elbow_flex=0, the offset adds directly to the forward reach.
+        # The effective geometry forms a triangle with:
+        # - L1 going from shoulder to elbow
+        # - Offset going perpendicular to L1 at the elbow
+        # - L2 going from the offset end to the end effector
+        #
+        # We can combine L1 and the offset into an "effective first link" for IK purposes.
+        
+        # Calculate effective first link length and angle offset
+        # The offset is perpendicular to L1, so they form a right triangle
+        l1_eff = math.sqrt(l1**2 + elbow_offset**2)
+        # Angle offset: how much the effective L1 is rotated from actual L1
+        offset_angle = math.atan2(elbow_offset, l1)
         
         # Calculate distance from origin to target point
         r = math.sqrt(x**2 + y**2)
-        r_max = l1 + l2
-        r_min = abs(l1 - l2)
+        r_max = l1_eff + l2
+        r_min = abs(l1_eff - l2)
         
         # Clamp to reachable workspace
         if r > r_max:
@@ -469,18 +532,19 @@ class AlfieArmKinematics:
             y *= scale
             r = r_min * 1.001
         
-        # Law of cosines to find the angle at the elbow
-        cos_angle_at_elbow = (l1**2 + l2**2 - r**2) / (2 * l1 * l2)
+        # Law of cosines to find the angle at the elbow (using effective L1)
+        cos_angle_at_elbow = (l1_eff**2 + l2**2 - r**2) / (2 * l1_eff * l2)
         cos_angle_at_elbow = max(-1.0, min(1.0, cos_angle_at_elbow))
         angle_at_elbow = math.acos(cos_angle_at_elbow)  # Interior angle at elbow
         
         # elbow_flex = 0 means L2 perpendicular to L1 (angle = pi/2)
-        # For inverted arm, negate the elbow flex
-        elbow_flex = -(math.pi/2 - angle_at_elbow)
+        # But we need to account for the offset angle
+        # The effective interior angle at zero elbow_flex is pi/2 - offset_angle
+        elbow_flex = -(math.pi/2 - offset_angle - angle_at_elbow)
         
-        # Find theta1 (absolute angle of L1 from +X axis)
+        # Find theta1_eff (absolute angle of effective L1 from +X axis)
         # Using law of cosines to find angle at shoulder
-        cos_angle_at_shoulder = (l1**2 + r**2 - l2**2) / (2 * l1 * r)
+        cos_angle_at_shoulder = (l1_eff**2 + r**2 - l2**2) / (2 * l1_eff * r)
         cos_angle_at_shoulder = max(-1.0, min(1.0, cos_angle_at_shoulder))
         angle_at_shoulder = math.acos(cos_angle_at_shoulder)
         
@@ -489,7 +553,12 @@ class AlfieArmKinematics:
         
         # For inverted arm, we subtract the shoulder angle to keep the elbow
         # on the correct side (below the line from shoulder to end effector)
-        theta1 = target_angle - angle_at_shoulder
+        theta1_eff = target_angle - angle_at_shoulder
+        
+        # Convert from effective L1 angle to actual L1 angle
+        # theta1_eff is the angle of the effective L1 (shoulder to pivot)
+        # The actual L1 is rotated by -offset_angle from the effective L1
+        theta1 = theta1_eff - offset_angle
         
         # Convert theta1 to shoulder_lift
         # theta1 = -pi/2 + shoulder_lift, so shoulder_lift = theta1 + pi/2

@@ -49,6 +49,18 @@ AFRAME.registerComponent('controller-updater', {
     this.videoScreen = document.querySelector('#videoScreen');
     this.videoSocket = null;
 
+    // --- Video FPS tracking ---
+    this.videoFrameCount = 0;
+    this.videoFps = 0;
+    this.lastFpsUpdate = Date.now();
+    this.fpsUpdateInterval = 1000; // Update FPS every second
+    
+    // --- Frame tracking for latency and stale frame detection ---
+    this.lastReceivedFrameId = 0;
+    this.lastFrameTime = 0;  // Time we received the last frame
+    this.avgFrameInterval = 0;  // Average time between frames (ms)
+    this.framesDropped = 0;
+
     const videoPort = 8081;
 
     // Connect to Web Control Server
@@ -75,9 +87,55 @@ AFRAME.registerComponent('controller-updater', {
 
       this.videoSocket.on('video_frame', (data) => {
         if (data && data.frame) {
+          const now = Date.now();
+          
+          // Check for out-of-order or duplicate frames
+          if (data.frame_id && data.frame_id <= this.lastReceivedFrameId) {
+            this.framesDropped++;
+            // Only log occasionally to avoid console spam
+            if (this.framesDropped % 10 === 1) {
+              console.log(`Dropping out-of-order frame: ${data.frame_id} <= ${this.lastReceivedFrameId}`);
+            }
+            return;
+          }
+          
+          // Track frame interval (time between frames) - this is reliable
+          // unlike clock-based latency which requires synchronized clocks
+          if (this.lastFrameTime > 0) {
+            const frameInterval = now - this.lastFrameTime;
+            this.avgFrameInterval = this.avgFrameInterval * 0.9 + frameInterval * 0.1;
+          }
+          this.lastFrameTime = now;
+          
+          if (data.frame_id) {
+            this.lastReceivedFrameId = data.frame_id;
+          }
+          
+          // Count frames for FPS calculation
+          this.videoFrameCount++;
+          if (now - this.lastFpsUpdate >= this.fpsUpdateInterval) {
+            this.videoFps = this.videoFrameCount / ((now - this.lastFpsUpdate) / 1000);
+            this.videoFrameCount = 0;
+            this.lastFpsUpdate = now;
+            console.log(`Video FPS: ${this.videoFps.toFixed(1)}, Interval: ${this.avgFrameInterval.toFixed(0)}ms, Dropped: ${this.framesDropped}`);
+            this.framesDropped = 0;
+          }
+
           const img = new Image();
           img.onload = () => {
             this.videoContext.drawImage(img, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
+            
+            // Draw FPS overlay on the video canvas
+            // Green if FPS is in acceptable range (9-11), red otherwise
+            this.videoContext.save();
+            this.videoContext.font = 'bold 20px Arial';
+            this.videoContext.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            this.videoContext.fillRect(5, 5, 120, 28);
+            const fpsColor = (this.videoFps >= 9 && this.videoFps <= 11) ? '#00FF00' : '#FF0000';
+            this.videoContext.fillStyle = fpsColor;
+            this.videoContext.fillText(`${this.videoFps.toFixed(1)} FPS`, 12, 25);
+            this.videoContext.restore();
+
             // Update A-Frame texture
             if (this.videoScreen) {
               const mesh = this.videoScreen.getObject3D('mesh');
