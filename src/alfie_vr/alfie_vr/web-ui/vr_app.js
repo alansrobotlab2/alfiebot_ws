@@ -650,15 +650,12 @@ AFRAME.registerComponent('controller-updater', {
     this.videoScreen = document.querySelector('#videoScreen');
     this.videoSocket = null;
     
-    // Video frame throttling for performance (15 FPS max)
-    this.videoTargetFPS = 15;
-    this.videoFrameInterval = 1000 / this.videoTargetFPS;
-    this.lastVideoFrameTime = 0;
+    // Video frame handling - optimized for performance
     this.pendingVideoFrame = null;
     this.videoFrameProcessing = false;
     
-    // Process video frame function - always displays the most recent frame
-    this.processVideoFrame = () => {
+    // Process video frame using createImageBitmap for off-main-thread decoding
+    this.processVideoFrame = async () => {
       if (!this.pendingVideoFrame) {
         this.videoFrameProcessing = false;
         return;
@@ -668,9 +665,23 @@ AFRAME.registerComponent('controller-updater', {
       const frameData = this.pendingVideoFrame;
       this.pendingVideoFrame = null; // Clear so we get the next fresh frame
       
-      const img = new Image();
-      img.onload = () => {
-        this.videoContext.drawImage(img, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
+      try {
+        // Convert base64 to binary more efficiently
+        const binaryString = atob(frameData);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: 'image/jpeg' });
+        
+        // Use createImageBitmap for off-main-thread decoding (much faster!)
+        const bitmap = await createImageBitmap(blob);
+        
+        // Draw to canvas
+        this.videoContext.drawImage(bitmap, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
+        bitmap.close(); // Free memory
+        
         // Update A-Frame texture
         if (this.videoScreen) {
           const mesh = this.videoScreen.getObject3D('mesh');
@@ -678,18 +689,16 @@ AFRAME.registerComponent('controller-updater', {
             mesh.material.map.needsUpdate = true;
           }
         }
-        // If there's a newer frame waiting, process it immediately
-        // Otherwise mark as done
-        if (this.pendingVideoFrame) {
-          this.processVideoFrame();
-        } else {
-          this.videoFrameProcessing = false;
-        }
-      };
-      img.onerror = () => {
+      } catch (e) {
+        console.error('Video frame decode error:', e);
+      }
+      
+      // If there's a newer frame waiting, process it immediately
+      if (this.pendingVideoFrame) {
+        this.processVideoFrame();
+      } else {
         this.videoFrameProcessing = false;
-      };
-      img.src = 'data:image/jpeg;base64,' + frameData;
+      }
     };
 
     const videoPort = 8081;
