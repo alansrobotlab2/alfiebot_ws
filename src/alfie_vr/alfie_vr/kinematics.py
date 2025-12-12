@@ -34,12 +34,20 @@ class SimpleTeleopArm:
             config (AlfieTeleopVRConfig, optional): Configuration object. Defaults to None (uses default config).
 >>>>>>> 2926fdb (Kinematics updates (#6))
         """
+<<<<<<< HEAD
         self.debug_logs = debug_logs
 
         # VR position multipliers (VR controller position -> robot arm movement)
         self.vr_x_multiplier = 40  # Scale for shoulder rotate
         self.vr_y_multiplier = 40  # Scale for arm reach (Y)
         self.vr_z_multiplier = 40  # Scale for arm reach (Z->X)
+=======
+
+        # VR position multipliers (VR controller position -> robot arm movement)
+        self.vr_x_multiplier = 20  # Scale for shoulder rotate
+        self.vr_y_multiplier = 20  # Scale for arm reach (Y)
+        self.vr_z_multiplier = 20  # Scale for arm reach (Z->X)
+>>>>>>> 3f51f8f (add multipliers for kinematics and head)
         
         # Wrist multipliers (VR controller rotation -> robot wrist rotation)
         self.wrist_pitch_multiplier = 2.0
@@ -176,6 +184,7 @@ class SimpleTeleopArm:
         # Calculate relative change (delta) from previous frame
         # Scale factors for converting VR movement to robot workspace
 <<<<<<< HEAD
+<<<<<<< HEAD
         vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * self.vr_x_multiplier  # Scale for the shoulder rotate
         vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * self.vr_y_multiplier  # Scale for arm reach (Y)
         vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * self.vr_z_multiplier  # Scale for arm reach (Z->X)
@@ -184,6 +193,16 @@ class SimpleTeleopArm:
         vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * self.config.vr_y_scale
         vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * self.config.vr_z_scale
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * self.config.vr_x_scale
+        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * self.config.vr_y_scale
+        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * self.config.vr_z_scale
+=======
+        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * self.vr_x_multiplier  # Scale for the shoulder rotate
+        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * self.vr_y_multiplier  # Scale for arm reach (Y)
+        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * self.vr_z_multiplier  # Scale for arm reach (Z->X)
+>>>>>>> a3981ae (add multipliers for kinematics and head)
+>>>>>>> 3f51f8f (add multipliers for kinematics and head)
 
         # Update previous position for next frame
         self.prev_vr_pos = current_vr_pos
@@ -221,6 +240,7 @@ class SimpleTeleopArm:
             
             # Calculate relative change from previous frame (convert VR degrees to radians)
 <<<<<<< HEAD
+<<<<<<< HEAD
             delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * angle_scale / 0.07
             delta_pitch *= self.wrist_pitch_multiplier
             delta_pitch = max(-angle_limit, min(angle_limit, delta_pitch))
@@ -228,6 +248,15 @@ class SimpleTeleopArm:
             delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * self.config.angle_scale / 0.07 * self.config.wrist_flex_scale
             delta_pitch = max(-self.config.angle_limit, min(self.config.angle_limit, delta_pitch))
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+            delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * self.config.angle_scale / 0.07 * self.config.wrist_flex_scale
+            delta_pitch = max(-self.config.angle_limit, min(self.config.angle_limit, delta_pitch))
+=======
+            delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * angle_scale / 0.07
+            delta_pitch *= self.wrist_pitch_multiplier
+            delta_pitch = max(-angle_limit, min(angle_limit, delta_pitch))
+>>>>>>> a3981ae (add multipliers for kinematics and head)
+>>>>>>> 3f51f8f (add multipliers for kinematics and head)
             self.pitch += delta_pitch
             self.pitch = max(-math.pi/2, min(math.pi/2, self.pitch))  # Limit pitch range (±90°)
             
@@ -242,6 +271,7 @@ class SimpleTeleopArm:
             
             # Convert VR degrees to radians for delta
 <<<<<<< HEAD
+<<<<<<< HEAD
             delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * angle_scale / 0.07
             delta_roll *= self.wrist_roll_multiplier
             delta_roll = max(-angle_limit, min(angle_limit, delta_roll))
@@ -249,6 +279,15 @@ class SimpleTeleopArm:
             delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * self.config.angle_scale / 0.07 * self.config.wrist_roll_scale
             delta_roll = max(-self.config.angle_limit, min(self.config.angle_limit, delta_roll))
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+            delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * self.config.angle_scale / 0.07 * self.config.wrist_roll_scale
+            delta_roll = max(-self.config.angle_limit, min(self.config.angle_limit, delta_roll))
+=======
+            delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * angle_scale / 0.07
+            delta_roll *= self.wrist_roll_multiplier
+            delta_roll = max(-angle_limit, min(angle_limit, delta_roll))
+>>>>>>> a3981ae (add multipliers for kinematics and head)
+>>>>>>> 3f51f8f (add multipliers for kinematics and head)
             
             current_roll = self.target_positions.get("wrist_roll", 0.0)
             new_roll = current_roll - delta_roll  # Negated to fix direction

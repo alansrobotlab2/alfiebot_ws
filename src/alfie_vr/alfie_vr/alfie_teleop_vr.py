@@ -24,8 +24,6 @@ from geometry_msgs.msg import Twist
 from alfie_vr.vr_monitor import VRMonitor
 from alfie_vr.kinematics import AlfieArmKinematics
 from alfie_vr.kinematics import SimpleTeleopArm
-from alfie_vr.kinematics import SimpleHeadControl
-from alfie_vr.alfie_teleop_vr_config import AlfieTeleopVRConfig
 
 # Optional visualizer import
 try:
@@ -66,9 +64,11 @@ class AlfieTeleopVRNode(Node):
     
     def __init__(self, enable_debug_viz: bool = False):
         super().__init__('alfiebot_teleop_vr_node')
-        
-        # Load configuration
-        self.config = AlfieTeleopVRConfig()
+
+        # Head tracking multipliers (headset rotation -> robot head rotation)
+        self.head_pitch_multiplier = 2.0
+        self.head_roll_multiplier = 2.0
+        self.head_yaw_multiplier = 2.0
         
         # Create callback group for state subscription
         self.state_callback_group = ReentrantCallbackGroup()
@@ -262,12 +262,6 @@ class AlfieTeleopVRNode(Node):
             robotlowstate=robot_state,
             kinematics=self.kinematics_right,
             prefix='right',
-            kp=1,
-            config=self.config
-        )
-        self.head = SimpleHeadControl(
-            joint_map=HEAD_JOINT_MAP,
-            robotlowstate=robot_state,
             kp=1
         )
 
@@ -371,22 +365,22 @@ class AlfieTeleopVRNode(Node):
                 # Servo 12: Head Pan (yaw - rotation around Z-axis)
                 # VR sends this as 'y' key
                 if 'y' in rotation:
-                    yaw_deg = float(rotation['y'])
-                    yaw_rad = math.radians(yaw_deg) * self.config.head_yaw_scale
+                    yaw_deg = float(rotation['y']) * self.head_yaw_multiplier
+                    yaw_rad = math.radians(yaw_deg)
                     self.robot_cmd_state.servo_cmd[12].target_location = yaw_rad
                 
                 # Servo 13: Head Tilt (pitch - rotation around Y-axis)
                 # VR sends this as 'x' key
                 if 'x' in rotation:
-                    pitch_deg = float(rotation['x'])
-                    pitch_rad = math.radians(pitch_deg) * self.config.head_pitch_scale
+                    pitch_deg = float(rotation['x']) * self.head_pitch_multiplier
+                    pitch_rad = math.radians(pitch_deg)
                     self.robot_cmd_state.servo_cmd[13].target_location = pitch_rad
                 
                 # Servo 14: Head Roll (roll - rotation around X-axis)
                 # VR sends this as 'z' key
                 if 'z' in rotation:
-                    roll_deg = float(rotation['z'])
-                    roll_rad = math.radians(roll_deg) * self.config.head_roll_scale
+                    roll_deg = float(rotation['z']) * self.head_roll_multiplier
+                    roll_rad = math.radians(roll_deg)
                     self.robot_cmd_state.servo_cmd[14].target_location = roll_rad
         
         # Process joystick input for cmd_vel
