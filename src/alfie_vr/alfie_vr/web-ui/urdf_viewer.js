@@ -29,11 +29,6 @@ class URDFViewer {
     this.tfUpdateCount = 0;
     this.isConnected = false;
     
-    // TF rate tracking
-    this.tfRateCount = 0;
-    this.tfRateHz = 0;
-    this.lastRateUpdate = performance.now();
-    
     // Frame rate limiting (10 FPS = 100ms between frames)
     this.targetFPS = 10;
     this.frameInterval = 1000 / this.targetFPS;
@@ -955,6 +950,11 @@ class URDFViewer {
 
   animate(currentTime = 0) {
     requestAnimationFrame((time) => this.animate(time));
+    
+    // Throttle rendering to target FPS
+    const elapsed = currentTime - this.lastFrameTime;
+    if (elapsed < this.frameInterval) return;
+    this.lastFrameTime = currentTime - (elapsed % this.frameInterval);
     
 <<<<<<< HEAD
     // Throttle rendering to target FPS

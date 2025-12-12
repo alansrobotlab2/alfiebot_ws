@@ -18,6 +18,7 @@ AFRAME.registerComponent('vr-robot-viewer', {
     this.connectionAttempts = 0;
     
 <<<<<<< HEAD
+<<<<<<< HEAD
     // Batching/throttling infrastructure - queue updates for tick() to apply
     // This prevents DOM manipulation during WebSocket callbacks which causes VR jitter
     this.pendingTFUpdates = [];      // Queue of TF transforms to apply
@@ -31,10 +32,16 @@ AFRAME.registerComponent('vr-robot-viewer', {
     
     // Legacy throttling (kept for backwards compatibility)
     this.targetFPS = 10;
+=======
+    // Throttling for performance - limit updates to 10 FPS
+    this.targetFPS = 10;
+    this.updateInterval = 1000 / this.targetFPS;
+>>>>>>> 40c4099 (some more fixes, vr headset view changes, throttle tf and urdf updates; video still laggy)
     this.lastTFUpdateTime = 0;
     this.lastJointUpdateTime = 0;
     this.pendingTFData = null;
     this.pendingJointData = null;
+<<<<<<< HEAD
     
     // TF rate tracking
     this.tfRateCount = 0;
@@ -48,6 +55,10 @@ AFRAME.registerComponent('vr-robot-viewer', {
     // Port 8082 is nginx with TLS, proxying to foxglove_bridge on 8765
     const foxgloveUrl = `wss://${window.location.hostname}:8082`;
 =======
+=======
+    this.tfUpdateCount = 0;
+    
+>>>>>>> 40c4099 (some more fixes, vr headset view changes, throttle tf and urdf updates; video still laggy)
     // Connect to Foxglove Bridge using WebSocket via nginx proxy
     // Port 8082 is nginx with TLS, proxying to foxglove_bridge on 8765
     const foxgloveUrl = `wss://${window.location.hostname}:8082`;
@@ -205,11 +216,16 @@ AFRAME.registerComponent('vr-robot-viewer', {
         
         // Transform: translation (Vector3), rotation (Quaternion)
 <<<<<<< HEAD
+<<<<<<< HEAD
         // CDR alignment quirk: after child_frame_id, ensure offset % 8 === 4
         if (offset % 8 === 0) offset += 4;
 =======
         align(8);
 >>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
+=======
+        // CDR alignment quirk: after child_frame_id, ensure offset % 8 === 4
+        if (offset % 8 === 0) offset += 4;
+>>>>>>> 40c4099 (some more fixes, vr headset view changes, throttle tf and urdf updates; video still laggy)
         const tx = view.getFloat64(offset, true); offset += 8;
         const ty = view.getFloat64(offset, true); offset += 8;
         const tz = view.getFloat64(offset, true); offset += 8;
@@ -328,8 +344,21 @@ AFRAME.registerComponent('vr-robot-viewer', {
   processTFData: function(tfData) {
     if (!tfData || !tfData.transforms) return;
     
+<<<<<<< HEAD
     // Queue TF updates instead of applying immediately
     // This prevents DOM manipulation during WebSocket callback which causes VR jitter
+=======
+    // Throttle TF updates for performance
+    const now = performance.now();
+    if (now - this.lastTFUpdateTime < this.updateInterval) {
+      // Store for next update cycle
+      this.pendingTFData = tfData;
+      return;
+    }
+    this.lastTFUpdateTime = now;
+    this.pendingTFData = null;
+    
+>>>>>>> 40c4099 (some more fixes, vr headset view changes, throttle tf and urdf updates; video still laggy)
     for (const transform of tfData.transforms) {
       const childFrame = transform.child_frame_id;
       const t = transform.transform.translation;
@@ -348,8 +377,20 @@ AFRAME.registerComponent('vr-robot-viewer', {
   processJointState: function(jointData) {
     if (!jointData || !jointData.name || !jointData.position) return;
     
+<<<<<<< HEAD
     // Queue joint updates instead of applying immediately
     // This prevents DOM manipulation during WebSocket callback which causes VR jitter
+=======
+    // Throttle joint updates for performance
+    const now = performance.now();
+    if (now - this.lastJointUpdateTime < this.updateInterval) {
+      this.pendingJointData = jointData;
+      return;
+    }
+    this.lastJointUpdateTime = now;
+    this.pendingJointData = null;
+    
+>>>>>>> 40c4099 (some more fixes, vr headset view changes, throttle tf and urdf updates; video still laggy)
     for (let i = 0; i < jointData.name.length; i++) {
       this.pendingJointUpdates.push({
         jointName: jointData.name[i],
@@ -748,18 +789,48 @@ AFRAME.registerComponent('controller-updater', {
     this.videoContext = this.videoCanvas.getContext('2d');
     this.videoScreen = document.querySelector('#videoScreen');
     this.videoSocket = null;
-
-    // --- Video FPS tracking ---
-    this.videoFrameCount = 0;
-    this.videoFps = 0;
-    this.lastFpsUpdate = Date.now();
-    this.fpsUpdateInterval = 1000; // Update FPS every second
     
-    // --- Frame tracking for latency and stale frame detection ---
-    this.lastReceivedFrameId = 0;
-    this.lastFrameTime = 0;  // Time we received the last frame
-    this.avgFrameInterval = 0;  // Average time between frames (ms)
-    this.framesDropped = 0;
+    // Video frame throttling for performance (15 FPS max)
+    this.videoTargetFPS = 15;
+    this.videoFrameInterval = 1000 / this.videoTargetFPS;
+    this.lastVideoFrameTime = 0;
+    this.pendingVideoFrame = null;
+    this.videoFrameProcessing = false;
+    
+    // Process video frame function - always displays the most recent frame
+    this.processVideoFrame = () => {
+      if (!this.pendingVideoFrame) {
+        this.videoFrameProcessing = false;
+        return;
+      }
+      
+      this.videoFrameProcessing = true;
+      const frameData = this.pendingVideoFrame;
+      this.pendingVideoFrame = null; // Clear so we get the next fresh frame
+      
+      const img = new Image();
+      img.onload = () => {
+        this.videoContext.drawImage(img, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
+        // Update A-Frame texture
+        if (this.videoScreen) {
+          const mesh = this.videoScreen.getObject3D('mesh');
+          if (mesh && mesh.material && mesh.material.map) {
+            mesh.material.map.needsUpdate = true;
+          }
+        }
+        // If there's a newer frame waiting, process it immediately
+        // Otherwise mark as done
+        if (this.pendingVideoFrame) {
+          this.processVideoFrame();
+        } else {
+          this.videoFrameProcessing = false;
+        }
+      };
+      img.onerror = () => {
+        this.videoFrameProcessing = false;
+      };
+      img.src = 'data:image/jpeg;base64,' + frameData;
+    };
 
     const videoPort = 8081;
 
@@ -787,17 +858,15 @@ AFRAME.registerComponent('controller-updater', {
 
       this.videoSocket.on('video_frame', (data) => {
         if (data && data.frame) {
-          const now = Date.now();
+          // Always keep the latest frame - don't throttle on receive
+          // Just store it and let the render loop handle display
+          this.pendingVideoFrame = data.frame;
           
-          // Check for out-of-order or duplicate frames
-          if (data.frame_id && data.frame_id <= this.lastReceivedFrameId) {
-            this.framesDropped++;
-            // Only log occasionally to avoid console spam
-            if (this.framesDropped % 10 === 1) {
-              console.log(`Dropping out-of-order frame: ${data.frame_id} <= ${this.lastReceivedFrameId}`);
-            }
-            return;
+          // If we're not already processing a frame, start immediately
+          if (!this.videoFrameProcessing) {
+            this.processVideoFrame();
           }
+<<<<<<< HEAD
           
           // Track frame interval (time between frames) - this is reliable
           // unlike clock-based latency which requires synchronized clocks
@@ -878,6 +947,8 @@ AFRAME.registerComponent('controller-updater', {
         
         if (!response.ok) {
           throw new Error(`Signaling failed: ${response.status}`);
+=======
+>>>>>>> 40c4099 (some more fixes, vr headset view changes, throttle tf and urdf updates; video still laggy)
         }
         
         const answer = await response.json();
