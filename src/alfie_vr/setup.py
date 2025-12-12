@@ -33,6 +33,10 @@ setup(
         'python-socketio',
         'fastapi',
         'uvicorn',
+        'aiortc',
+        'aiohttp',
+        'opencv-python',
+        'av',
     ],
     zip_safe=False,
     maintainer='alansrobotlab',
@@ -47,7 +51,7 @@ setup(
     entry_points={
         'console_scripts': [
             'alfie_teleop_vr = alfie_vr.alfie_teleop_vr:main',
-            'ros_video_streamer = alfie_vr.ros_video_streamer:main',
+            'ros_video_webrtc = alfie_vr.ros_video_webrtc:main',
         ],
     },
 )

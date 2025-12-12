@@ -644,110 +644,97 @@ AFRAME.registerComponent('controller-updater', {
     const websocketUrl = `wss://${serverHostname}:${websocketPort}`;
     console.log(`Attempting WebSocket connection to: ${websocketUrl}`);
 
-    // --- Video Stream Setup (Socket.IO) ---
+    // --- Video Stream Setup (WebRTC - hardware accelerated, low latency) ---
+    this.videoElement = document.getElementById('webrtcVideo');
     this.videoCanvas = document.getElementById('videoCanvas');
     this.videoContext = this.videoCanvas.getContext('2d');
     this.videoScreen = document.querySelector('#videoScreen');
-    this.videoSocket = null;
+    this.peerConnection = null;
+    this.webrtcConnected = false;
     
-    // Video frame handling - optimized for performance
-    this.pendingVideoFrame = null;
-    this.videoFrameProcessing = false;
+    const webrtcPort = 8083;
+    const webrtcUrl = `https://${serverHostname}:${webrtcPort}/offer`;
     
-    // Process video frame using createImageBitmap for off-main-thread decoding
-    this.processVideoFrame = async () => {
-      if (!this.pendingVideoFrame) {
-        this.videoFrameProcessing = false;
-        return;
-      }
-      
-      this.videoFrameProcessing = true;
-      const frameData = this.pendingVideoFrame;
-      this.pendingVideoFrame = null; // Clear so we get the next fresh frame
+    // Initialize WebRTC connection
+    this.initWebRTC = async () => {
+      console.log('Initializing WebRTC video stream...');
       
       try {
-        // Convert base64 to binary more efficiently
-        const binaryString = atob(frameData);
-        const len = binaryString.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        const blob = new Blob([bytes], { type: 'image/jpeg' });
+        // Create peer connection with hardware-accelerated codec preferences
+        const config = {
+          iceServers: [], // Direct connection, no STUN/TURN needed on LAN
+          sdpSemantics: 'unified-plan'
+        };
+        this.peerConnection = new RTCPeerConnection(config);
         
-        // Use createImageBitmap for off-main-thread decoding (much faster!)
-        const bitmap = await createImageBitmap(blob);
-        
-        // Draw to canvas
-        this.videoContext.drawImage(bitmap, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
-        bitmap.close(); // Free memory
-        
-        // Update A-Frame texture
-        if (this.videoScreen) {
-          const mesh = this.videoScreen.getObject3D('mesh');
-          if (mesh && mesh.material && mesh.material.map) {
-            mesh.material.map.needsUpdate = true;
+        // Handle incoming video track
+        this.peerConnection.ontrack = (event) => {
+          console.log('WebRTC: Received video track');
+          if (event.track.kind === 'video') {
+            this.videoElement.srcObject = event.streams[0];
+            this.videoElement.play().catch(e => console.log('Video autoplay blocked:', e));
+            this.webrtcConnected = true;
+            
+            // Update A-Frame video screen to use video element
+            if (this.videoScreen) {
+              this.videoScreen.setAttribute('visible', 'true');
+              // Use video element as texture source
+              this.videoScreen.setAttribute('material', 'src: #webrtcVideo; shader: flat');
+            }
           }
+        };
+        
+        this.peerConnection.oniceconnectionstatechange = () => {
+          console.log('WebRTC ICE state:', this.peerConnection.iceConnectionState);
+          if (this.peerConnection.iceConnectionState === 'disconnected' || 
+              this.peerConnection.iceConnectionState === 'failed') {
+            this.webrtcConnected = false;
+            if (this.videoScreen) {
+              this.videoScreen.setAttribute('visible', 'false');
+            }
+            // Retry connection after 3 seconds
+            setTimeout(() => this.initWebRTC(), 3000);
+          }
+        };
+        
+        // Add transceiver for receiving video
+        this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
+        
+        // Create offer
+        const offer = await this.peerConnection.createOffer();
+        await this.peerConnection.setLocalDescription(offer);
+        
+        // Send offer to signaling server
+        console.log('WebRTC: Sending offer to', webrtcUrl);
+        const response = await fetch(webrtcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sdp: this.peerConnection.localDescription.sdp,
+            type: this.peerConnection.localDescription.type
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Signaling failed: ${response.status}`);
         }
-      } catch (e) {
-        console.error('Video frame decode error:', e);
-      }
-      
-      // If there's a newer frame waiting, process it immediately
-      if (this.pendingVideoFrame) {
-        this.processVideoFrame();
-      } else {
-        this.videoFrameProcessing = false;
+        
+        const answer = await response.json();
+        console.log('WebRTC: Received answer');
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        
+        console.log('WebRTC: Connection established!');
+        
+      } catch (error) {
+        console.error('WebRTC initialization failed:', error);
+        console.log('Will retry in 5 seconds...');
+        // Retry connection
+        setTimeout(() => this.initWebRTC(), 5000);
       }
     };
-
-    const videoPort = 8081;
-
-    // Connect to Web Control Server
-    // Use wss (secure) if the page is loaded via https, otherwise ws
-    const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
-    const videoServerUrl = `${protocol}://${serverHostname}:${videoPort}`;
-    console.log(`Attempting Video Socket.IO connection to: ${videoServerUrl}`);
     
-    try {
-      this.videoSocket = io(videoServerUrl, {
-        transports: ['websocket', 'polling'],
-        secure: true,
-        rejectUnauthorized: false // Self-signed certs
-      });
-      
-      this.videoSocket.on('connect', () => {
-        console.log('Video Socket.IO connected');
-        // Request video stream start
-        this.videoSocket.emit('start_video_stream');
-        if (this.videoScreen) {
-          this.videoScreen.setAttribute('visible', 'true');
-        }
-      });
-
-      this.videoSocket.on('video_frame', (data) => {
-        if (data && data.frame) {
-          // Always keep the latest frame - don't throttle on receive
-          // Just store it and let the render loop handle display
-          this.pendingVideoFrame = data.frame;
-          
-          // If we're not already processing a frame, start immediately
-          if (!this.videoFrameProcessing) {
-            this.processVideoFrame();
-          }
-        }
-      });
-
-      this.videoSocket.on('disconnect', () => {
-        console.log('Video Socket.IO disconnected');
-        if (this.videoScreen) {
-          this.videoScreen.setAttribute('visible', 'false');
-        }
-      });
-
-    } catch (error) {
-      console.error('Failed to initialize Video Socket.IO:', error);
-    }
+    // Start WebRTC connection
+    this.initWebRTC();
 
     // !!! IMPORTANT: Replace 'YOUR_LAPTOP_IP' with the actual IP address of your laptop !!!
     // const websocketUrl = 'ws://YOUR_LAPTOP_IP:8442';
