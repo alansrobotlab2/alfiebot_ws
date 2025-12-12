@@ -7,9 +7,8 @@ AFRAME.registerComponent('vr-robot-viewer', {
     
     this.robotModel = document.querySelector('#vrRobotModel');
     this.statusText = document.querySelector('#vrRobotStatus');
-    this.debugUrlText = document.querySelector('#vrDebugUrl');
-    this.debugCodeText = document.querySelector('#vrDebugCode');
-    this.debugInfoText = document.querySelector('#vrDebugInfo');
+    this.foxgloveStatusText = document.querySelector('#vrFoxgloveStatus');
+    this.tfCountText = document.querySelector('#vrTFCount');
     this.links = {};
     this.joints = {};
     this.foxgloveClient = null;
@@ -30,7 +29,6 @@ AFRAME.registerComponent('vr-robot-viewer', {
     // Connect to Foxglove Bridge using WebSocket via nginx proxy
     // Port 8082 is nginx with TLS, proxying to foxglove_bridge on 8765
     const foxgloveUrl = `wss://${window.location.hostname}:8082`;
-    this.updateDebug('url', `URL: ${foxgloveUrl}`);
     this.connectToFoxglove(foxgloveUrl);
   },
   
@@ -38,8 +36,7 @@ AFRAME.registerComponent('vr-robot-viewer', {
     this.connectionAttempts++;
     console.log(`VR Viewer: Connecting to Foxglove at ${url} (attempt ${this.connectionAttempts})`);
     this.updateStatus(`Connecting... #${this.connectionAttempts}`);
-    this.updateDebug('code', 'Code: connecting...');
-    this.updateDebug('info', '');
+    this.updateFoxgloveStatus(false);
     
     try {
       // Use the Foxglove SDK WebSocket subprotocol (required for foxglove_bridge 3.x)
@@ -48,9 +45,8 @@ AFRAME.registerComponent('vr-robot-viewer', {
       
       this.foxgloveClient.onopen = () => {
         console.log('VR Viewer: Connected to Foxglove');
-        this.updateStatus('Connected!');
-        this.updateDebug('code', 'Code: OPEN');
-        this.updateDebug('info', 'Waiting for topics...');
+        this.updateStatus('Connected');
+        this.updateFoxgloveStatus(true);
         this.connectionAttempts = 0;
       };
       
@@ -61,26 +57,13 @@ AFRAME.registerComponent('vr-robot-viewer', {
       this.foxgloveClient.onerror = (error) => {
         console.error('VR Viewer: Foxglove error', error);
         this.updateStatus('Error');
-        this.updateDebug('info', 'Check cert: visit URL in browser');
+        this.updateFoxgloveStatus(false);
       };
       
       this.foxgloveClient.onclose = (event) => {
         console.log('VR Viewer: Foxglove disconnected. Code:', event.code, 'Reason:', event.reason);
         this.updateStatus('Disconnected');
-        this.updateDebug('code', `Code: ${event.code}`);
-        
-        // Provide helpful info based on close code
-        let info = '';
-        if (event.code === 1006) {
-          info = 'Cert rejected - visit URL first';
-        } else if (event.code === 1002) {
-          info = 'Protocol error';
-        } else if (event.code === 1003) {
-          info = 'Unsupported data';
-        } else if (event.code === 1015) {
-          info = 'TLS handshake failed';
-        }
-        this.updateDebug('info', info);
+        this.updateFoxgloveStatus(false);
         
         // Retry in 5 seconds
         setTimeout(() => this.connectToFoxglove(url), 5000);
@@ -88,17 +71,20 @@ AFRAME.registerComponent('vr-robot-viewer', {
     } catch (error) {
       console.error('VR Viewer: Failed to connect', error);
       this.updateStatus('Exception');
-      this.updateDebug('info', error.message || 'Unknown error');
+      this.updateFoxgloveStatus(false);
     }
   },
   
-  updateDebug: function(field, value) {
-    if (field === 'url' && this.debugUrlText) {
-      this.debugUrlText.setAttribute('value', value);
-    } else if (field === 'code' && this.debugCodeText) {
-      this.debugCodeText.setAttribute('value', value);
-    } else if (field === 'info' && this.debugInfoText) {
-      this.debugInfoText.setAttribute('value', value);
+  updateFoxgloveStatus: function(connected) {
+    if (this.foxgloveStatusText) {
+      this.foxgloveStatusText.setAttribute('value', connected ? 'Connected' : 'Disconnected');
+      this.foxgloveStatusText.setAttribute('color', connected ? '#4CAF50' : '#f44336');
+    }
+  },
+  
+  updateTFCount: function() {
+    if (this.tfCountText) {
+      this.tfCountText.setAttribute('value', this.tfUpdateCount.toString());
     }
   },
   
@@ -110,7 +96,6 @@ AFRAME.registerComponent('vr-robot-viewer', {
         
         if (message.op === 'serverInfo') {
           console.log('VR: Server info received:', message.name, 'capabilities:', message.capabilities);
-          this.updateDebug('info', 'Server connected');
         } else if (message.op === 'advertise') {
           console.log('VR: Advertise received, channels:', message.channels?.length);
           this.subscribeToTopics(message.channels);
@@ -250,7 +235,6 @@ AFRAME.registerComponent('vr-robot-viewer', {
     if (subscriptions.length > 0) {
       this.foxgloveClient.send(JSON.stringify({ op: 'subscribe', subscriptions }));
       this.updateStatus(`Subscribed (${subscriptions.length})`);
-      this.updateDebug('info', `Subs: ${subscriptions.length}`);
       
       if (!this.robotDescriptionSubscriptionId) {
         console.log('VR: No robot_description found, loading placeholder');
@@ -260,7 +244,7 @@ AFRAME.registerComponent('vr-robot-viewer', {
       }
     } else {
       console.log('VR: No topics matched for subscription');
-      this.updateDebug('info', 'No topics found');
+      this.updateStatus('No topics found');
     }
   },
   
@@ -300,8 +284,9 @@ AFRAME.registerComponent('vr-robot-viewer', {
     }
     
     this.tfUpdateCount++;
-    if (this.tfUpdateCount % 100 === 0) {
-      this.updateStatus(`TF: ${this.tfUpdateCount}`);
+    // Update TF count display every 10 updates (throttled for performance)
+    if (this.tfUpdateCount % 10 === 0) {
+      this.updateTFCount();
     }
   },
   
@@ -1459,17 +1444,20 @@ function addControllerTrackingButton() {
                 document.body.appendChild(startButton);
                 console.log('Official "Start Controller Tracking" button added.');
 
-                // Listen for VR session events to hide/show start button
+                // Listen for VR session events to hide/show start button and dimmer
                 const sceneEl = document.querySelector('a-scene');
+                const dimmer = document.querySelector('#passthroughDimmer');
                 if (sceneEl) {
                     sceneEl.addEventListener('enter-vr', () => {
-                        console.log('Entered VR - hiding start button');
+                        console.log('Entered VR - hiding start button, showing dimmer');
                         startButton.style.display = 'none';
+                        if (dimmer) dimmer.setAttribute('visible', 'true');
                     });
 
                     sceneEl.addEventListener('exit-vr', () => {
-                        console.log('Exited VR - showing start button');
+                        console.log('Exited VR - showing start button, hiding dimmer');
                         startButton.style.display = 'block';
+                        if (dimmer) dimmer.setAttribute('visible', 'false');
                     });
                 }
 
