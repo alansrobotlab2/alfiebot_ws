@@ -29,6 +29,11 @@ class URDFViewer {
     this.tfUpdateCount = 0;
     this.isConnected = false;
     
+    // TF rate tracking
+    this.tfRateCount = 0;
+    this.tfRateHz = 0;
+    this.lastRateUpdate = performance.now();
+    
     // Frame rate limiting (10 FPS = 100ms between frames)
     this.targetFPS = 10;
     this.frameInterval = 1000 / this.targetFPS;
@@ -44,6 +49,9 @@ class URDFViewer {
     this.connectToFoxglove();
     this.animate();
     
+    // Start rate update interval (every 5 seconds)
+    setInterval(() => this.updateTFRate(), 5000);
+    
     // Handle container resize
     window.addEventListener('resize', () => this.onResize());
     new ResizeObserver(() => this.onResize()).observe(this.container);
@@ -52,7 +60,7 @@ class URDFViewer {
   setupScene() {
     // Create Three.js scene
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1a2e);
+    this.scene.background = new THREE.Color(0x303030);
     
     // Add grid helper
     const gridHelper = new THREE.GridHelper(2, 20, 0x444444, 0x333333);
@@ -776,9 +784,9 @@ class URDFViewer {
         this.applyTransformToLink(childFrameId);
       }
       
-      // Update TF count
+      // Update TF count and rate tracking
       this.tfUpdateCount++;
-      this.updateTFCount();
+      this.tfRateCount++;  // Count every update for accurate rate
       
     } catch (error) {
       // Log TF decode errors for debugging
@@ -805,9 +813,9 @@ class URDFViewer {
       this.applyTransformToLink(childFrame);
     }
     
-    // Update TF count
+    // Update TF count and rate tracking
     this.tfUpdateCount++;
-    this.updateTFCount();
+    this.tfRateCount++;  // Count every update for accurate rate
   }
 
   handleJointStateMessage(data) {
@@ -963,9 +971,24 @@ class URDFViewer {
   }
 
   updateTFCount() {
+    // Legacy method - rate tracking now happens in TF handlers
+    // UI updated by updateTFRate every 5 seconds
+  }
+  
+  updateTFRate() {
+    const now = performance.now();
+    const elapsed = (now - this.lastRateUpdate) / 1000; // seconds
+    
+    if (elapsed > 0) {
+      this.tfRateHz = this.tfRateCount / elapsed;
+    }
+    
+    this.tfRateCount = 0;
+    this.lastRateUpdate = now;
+    
     const countEl = document.getElementById('tfUpdateCount');
     if (countEl) {
-      countEl.textContent = this.tfUpdateCount.toString();
+      countEl.textContent = this.tfRateHz.toFixed(1) + ' Hz';
     }
   }
 

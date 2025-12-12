@@ -690,7 +690,7 @@ a-scene {
 .robot-viewer-container {
   flex: 1;
   min-height: 300px;
-  background: #1a1a2e;
+  background: #303030;
   position: relative;
 }
 

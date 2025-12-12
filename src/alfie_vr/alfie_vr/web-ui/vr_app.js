@@ -26,6 +26,14 @@ AFRAME.registerComponent('vr-robot-viewer', {
     this.pendingJointData = null;
     this.tfUpdateCount = 0;
     
+    // TF rate tracking
+    this.tfRateCount = 0;
+    this.tfRateHz = 0;
+    this.lastRateUpdate = performance.now();
+    
+    // Start rate update interval (every 5 seconds)
+    setInterval(() => this.updateTFRate(), 5000);
+    
     // Connect to Foxglove Bridge using WebSocket via nginx proxy
     // Port 8082 is nginx with TLS, proxying to foxglove_bridge on 8765
     const foxgloveUrl = `wss://${window.location.hostname}:8082`;
@@ -83,8 +91,23 @@ AFRAME.registerComponent('vr-robot-viewer', {
   },
   
   updateTFCount: function() {
+    // Legacy method - rate tracking now happens in TF handlers
+    // UI updated by updateTFRate every 5 seconds
+  },
+  
+  updateTFRate: function() {
+    const now = performance.now();
+    const elapsed = (now - this.lastRateUpdate) / 1000; // seconds
+    
+    if (elapsed > 0) {
+      this.tfRateHz = this.tfRateCount / elapsed;
+    }
+    
+    this.tfRateCount = 0;
+    this.lastRateUpdate = now;
+    
     if (this.tfCountText) {
-      this.tfCountText.setAttribute('value', this.tfUpdateCount.toString());
+      this.tfCountText.setAttribute('value', this.tfRateHz.toFixed(1) + ' Hz');
     }
   },
   
@@ -179,11 +202,9 @@ AFRAME.registerComponent('vr-robot-viewer', {
         }
       }
       
-      // Update TF counter
+      // Update TF count and rate tracking
       this.tfUpdateCount++;
-      if (this.tfUpdateCount % 10 === 0) {
-        this.updateTFCount();
-      }
+      this.tfRateCount++;  // Count every update for accurate rate
     } catch (error) {
       // Silently ignore TF decode errors
     }

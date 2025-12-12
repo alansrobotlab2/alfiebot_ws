@@ -131,8 +131,8 @@
           <span class="info-value" id="foxgloveStatus">Disconnected</span>
         </div>
         <div class="viewer-info-row">
-          <span class="info-label">TF Updates:</span>
-          <span class="info-value" id="tfUpdateCount">0</span>
+          <span class="info-label">TF Rate:</span>
+          <span class="info-value" id="tfUpdateCount">0 Hz</span>
         </div>
       </div>
     </div>
@@ -190,15 +190,15 @@
                    material="shader: flat"></a-plane>
           
           <!-- Foxglove status row (4x larger text) -->
-          <a-text value="Foxglove:" position="-0.27 -0.38 0.002" 
+          <a-text value="Foxglove:" position="-0.27 -0.39 0.002" 
                   align="left" color="#888888" scale="0.14 0.14 0.14"></a-text>
-          <a-text id="vrFoxgloveStatus" value="Disconnected" position="0.27 -0.38 0.002" 
+          <a-text id="vrFoxgloveStatus" value="Disconnected" position="0.27 -0.39 0.002" 
                   align="right" color="#f44336" scale="0.14 0.14 0.14"></a-text>
           
-          <!-- TF Updates row (4x larger text) -->
-          <a-text value="TF Updates:" position="-0.27 -0.44 0.002" 
+          <!-- TF Rate row (4x larger text) -->
+          <a-text value="TF Rate:" position="-0.27 -0.44 0.002" 
                   align="left" color="#888888" scale="0.14 0.14 0.14"></a-text>
-          <a-text id="vrTFCount" value="0" position="0.27 -0.44 0.002" 
+          <a-text id="vrTFCount" value="0 Hz" position="0.27 -0.44 0.002" 
                   align="right" color="white" scale="0.14 0.14 0.14"></a-text>
           
         </a-entity>
