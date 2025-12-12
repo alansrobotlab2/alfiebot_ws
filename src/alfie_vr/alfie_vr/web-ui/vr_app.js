@@ -119,17 +119,12 @@ AFRAME.registerComponent('vr-robot-viewer', {
         
         if (message.op === 'serverInfo') {
           console.log('VR: Server info received:', message.name, 'capabilities:', message.capabilities);
-          this.updateDebug('info', 'Server connected');
         } else if (message.op === 'advertise') {
           console.log('VR: Advertise received, channels:', message.channels?.length);
           this.subscribeToTopics(message.channels);
         } else if (message.op === 'message') {
           this.handleTopicMessage(message);
         }
-      } else if (data instanceof ArrayBuffer) {
-        this.handleBinaryMessage(data);
-      } else {
-        console.log('VR: Unknown message type:', typeof data);
       } else if (data instanceof ArrayBuffer) {
         this.handleBinaryMessage(data);
       } else {
@@ -245,106 +240,6 @@ AFRAME.registerComponent('vr-robot-viewer', {
     }
   },
   
-  handleBinaryMessage: function(data) {
-    // Foxglove binary message format
-    const view = new DataView(data);
-    const opCode = view.getUint8(0);
-    
-    if (opCode === 1) {  // Message data
-      const subscriptionId = view.getUint32(1, true);
-      const timestamp = view.getBigUint64(5, true);
-      const messageData = new Uint8Array(data, 13);
-      
-      // Handle robot_description (CDR-encoded std_msgs/String)
-      if (subscriptionId === this.robotDescriptionSubscriptionId) {
-        this.handleRobotDescriptionBinary(messageData);
-      }
-      // Handle TF (CDR-encoded tf2_msgs/TFMessage)
-      else if (subscriptionId === this.tfSubscriptionId) {
-        this.handleTFBinary(messageData);
-      }
-    }
-  },
-  
-  handleTFBinary: function(data) {
-    try {
-      // Simple CDR decoder for TFMessage
-      let offset = 4;  // Skip CDR header
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-      
-      const readString = () => {
-        const len = view.getUint32(offset, true);
-        offset += 4;
-        const strBytes = new Uint8Array(data.buffer, data.byteOffset + offset, len - 1);
-        offset += len;
-        if (offset % 4 !== 0) offset += 4 - (offset % 4);
-        return new TextDecoder().decode(strBytes);
-      };
-      
-      const align = (n) => { if (offset % n !== 0) offset += n - (offset % n); };
-      
-      // TFMessage: TransformStamped[] transforms
-      const transformCount = view.getUint32(offset, true); offset += 4;
-      
-      for (let i = 0; i < transformCount; i++) {
-        // Header
-        const stampSec = view.getUint32(offset, true); offset += 4;
-        const stampNsec = view.getUint32(offset, true); offset += 4;
-        const frameId = readString();
-        const childFrameId = readString();
-        
-        // Transform: translation (Vector3), rotation (Quaternion)
-        align(8);
-        const tx = view.getFloat64(offset, true); offset += 8;
-        const ty = view.getFloat64(offset, true); offset += 8;
-        const tz = view.getFloat64(offset, true); offset += 8;
-        const qx = view.getFloat64(offset, true); offset += 8;
-        const qy = view.getFloat64(offset, true); offset += 8;
-        const qz = view.getFloat64(offset, true); offset += 8;
-        const qw = view.getFloat64(offset, true); offset += 8;
-        
-        // Apply transform to corresponding link
-        const link = this.links[childFrameId];
-        if (link && link.object3D) {
-          link.object3D.position.set(tx, ty, tz);
-          link.object3D.quaternion.set(qx, qy, qz, qw);
-        }
-      }
-    } catch (error) {
-      // Silently ignore TF decode errors
-    }
-  },
-  
-  handleRobotDescriptionBinary: function(data) {
-    try {
-      // CDR format for ROS2 std_msgs/msg/String:
-      // - 4 bytes: CDR encapsulation header (00 01 00 00 for little-endian)
-      // - 4 bytes: string length (uint32, little-endian, includes null terminator)
-      // - N bytes: string data (UTF-8)
-      // - 1 byte: null terminator
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-      
-      // Skip 4-byte CDR encapsulation header, then read string length
-      const stringLength = view.getUint32(4, true);
-      
-      // Extract string (skip 8 bytes header, exclude null terminator)
-      const stringData = new Uint8Array(data.buffer, data.byteOffset + 8, stringLength - 1);
-      const decoder = new TextDecoder();
-      const urdfString = decoder.decode(stringData);
-      
-      console.log('VR: Decoded robot_description CDR, length:', stringLength);
-      
-      if (urdfString.includes('<robot')) {
-        console.log('VR: Found URDF, parsing...');
-        this.parseURDF(urdfString);
-      } else {
-        console.log('VR: No <robot> tag found in data');
-      }
-    } catch (error) {
-      console.error('VR: Failed to parse robot_description CDR:', error);
-    }
-  },
-  
   subscribeToTopics: function(channels) {
     console.log('VR: subscribeToTopics called with', channels?.length, 'channels');
     const subscriptions = [];
@@ -367,19 +262,16 @@ AFRAME.registerComponent('vr-robot-viewer', {
     if (subscriptions.length > 0) {
       this.foxgloveClient.send(JSON.stringify({ op: 'subscribe', subscriptions }));
       this.updateStatus(`Subscribed (${subscriptions.length})`);
-      this.updateDebug('info', `Subs: ${subscriptions.length}`);
       
       if (!this.robotDescriptionSubscriptionId) {
         console.log('VR: No robot_description found, loading placeholder');
         this.loadPlaceholderRobot();
       } else {
         console.log('VR: Waiting for robot_description binary message...');
-      } else {
-        console.log('VR: Waiting for robot_description binary message...');
       }
     } else {
       console.log('VR: No topics matched for subscription');
-      this.updateDebug('info', 'No topics found');
+      this.updateStatus('No topics found');
     }
   },
   
@@ -554,49 +446,14 @@ AFRAME.registerComponent('vr-robot-viewer', {
               const size = box.getAttribute('size').split(' ');
               geomStr = `primitive: box; width: ${size[0]}; height: ${size[1]}; depth: ${size[2]}`;
               entity.setAttribute('geometry', geomStr);
-              entity.setAttribute('geometry', geomStr);
             } else if (cylinder) {
               const r = cylinder.getAttribute('radius');
               const h = cylinder.getAttribute('length');
               geomStr = `primitive: cylinder; radius: ${r}; height: ${h}`;
               entity.setAttribute('geometry', geomStr);
-              entity.setAttribute('geometry', geomStr);
             } else if (sphere) {
               const r = sphere.getAttribute('radius');
               geomStr = `primitive: sphere; radius: ${r}`;
-              entity.setAttribute('geometry', geomStr);
-            } else if (mesh) {
-              // Load OBJ mesh
-              const filename = mesh.getAttribute('filename');
-              const scale = mesh.getAttribute('scale');
-              
-              if (filename && filename.startsWith('package://alfie_urdf/meshes/')) {
-                // Convert package:// URL to web server URL
-                const meshName = filename.replace('package://alfie_urdf/meshes/', '');
-                const meshUrl = `/meshes/${meshName}`;
-                
-                // Use A-Frame's obj-model component
-                entity.setAttribute('obj-model', `obj: url(${meshUrl})`);
-                
-                // Apply scale if specified
-                if (scale) {
-                  const scaleVals = scale.split(' ').map(parseFloat);
-                  entity.setAttribute('scale', `${scaleVals[0]} ${scaleVals[1]} ${scaleVals[2]}`);
-                }
-                
-                console.log('VR: Loading mesh:', meshUrl);
-              } else {
-                // Fallback placeholder for unknown mesh paths
-                entity.setAttribute('geometry', 'primitive: box; width: 0.03; height: 0.03; depth: 0.03');
-              }
-            } else {
-              // Placeholder for unknown geometry
-              geomStr = 'primitive: box; width: 0.03; height: 0.03; depth: 0.03';
-              entity.setAttribute('geometry', geomStr);
-            }
-            
-            // Material color - use helper to resolve named materials
-            const color = getMaterialColor(material);
               entity.setAttribute('geometry', geomStr);
             } else if (mesh) {
               // Load OBJ mesh
