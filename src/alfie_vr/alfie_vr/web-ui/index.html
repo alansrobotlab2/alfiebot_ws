@@ -134,11 +134,6 @@
           <span class="info-label">TF Updates:</span>
           <span class="info-value" id="tfUpdateCount">0</span>
         </div>
-        <div class="viewer-info-row" id="certWarning" style="display: none;">
-          <a href="#" id="acceptCertLink" target="_blank" style="color: #f39c12; font-size: 11px;">
-            ⚠️ Click here to accept Foxglove certificate
-          </a>
-        </div>
       </div>
     </div>
 
@@ -164,11 +159,11 @@
         <a-plane id="videoScreen" position="0 -0.4 -3.0" width="1.8" height="1.2" material="shader: flat; src: #videoCanvas" visible="false"></a-plane>
         
         <!-- VR Robot Viewer Panel (Head Locked - follows headset view) -->
-        <a-entity id="vrRobotViewer" position="1.5 -0.6 -3.25" rotation="0 -20 0" scale="1.5 1.5 1.5" vr-robot-viewer>
+        <a-entity id="vrRobotViewer" position="1.5 -0.45 -3.25" rotation="0 -20 0" scale="1.5 1.5 1.5" vr-robot-viewer>
           <!-- Panel background with border effect -->
           <a-plane id="vrRobotPanel" width="0.62" height="0.9" color="#4a5568" opacity="0.95" 
                    material="shader: flat; side: double" position="0 -0.02 -0.001"></a-plane>
-          <a-plane width="0.6" height="0.88" color="#1a1a2e" opacity="0.95" 
+          <a-plane width="0.6" height="0.88" color="#303030" opacity="0.8" 
                    material="shader: flat; side: double" position="0 -0.02 0"></a-plane>
           
           <!-- Panel header bar (gradient effect with two layers) -->
@@ -186,7 +181,7 @@
                   align="left" color="#a0a0a0" scale="0.035 0.035 0.035"></a-text>
           
           <!-- Robot model container -->
-          <a-entity id="vrRobotModel" position="0 -0.05 0.15" scale="0.55 0.55 0.55" rotation="0 180 0">
+          <a-entity id="vrRobotModel" position="0 -0.25 0.10" scale="0.55 0.55 0.55" rotation="0 180 0">
             <!-- Robot model will be dynamically added here -->
           </a-entity>
           
@@ -194,17 +189,17 @@
           <a-plane position="0 -0.42 0.001" width="0.58" height="0.1" color="#000000" opacity="0.4"
                    material="shader: flat"></a-plane>
           
-          <!-- Foxglove status row -->
+          <!-- Foxglove status row (4x larger text) -->
           <a-text value="Foxglove:" position="-0.27 -0.38 0.002" 
-                  align="left" color="#888888" scale="0.035 0.035 0.035"></a-text>
+                  align="left" color="#888888" scale="0.14 0.14 0.14"></a-text>
           <a-text id="vrFoxgloveStatus" value="Disconnected" position="0.27 -0.38 0.002" 
-                  align="right" color="#f44336" scale="0.035 0.035 0.035"></a-text>
+                  align="right" color="#f44336" scale="0.14 0.14 0.14"></a-text>
           
-          <!-- TF Updates row -->
+          <!-- TF Updates row (4x larger text) -->
           <a-text value="TF Updates:" position="-0.27 -0.44 0.002" 
-                  align="left" color="#888888" scale="0.035 0.035 0.035"></a-text>
+                  align="left" color="#888888" scale="0.14 0.14 0.14"></a-text>
           <a-text id="vrTFCount" value="0" position="0.27 -0.44 0.002" 
-                  align="right" color="white" scale="0.035 0.035 0.035"></a-text>
+                  align="right" color="white" scale="0.14 0.14 0.14"></a-text>
           
         </a-entity>
       </a-entity>

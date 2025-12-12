@@ -12,7 +12,7 @@ def generate_launch_description():
         Node(
             package='alfie_vr',
             namespace='alfie',
-            executable='ros_video_streamer',
+            executable='ros_video_webrtc',
             name='ros_video_streamer_node',
             output='screen',
             emulate_tty=True,
