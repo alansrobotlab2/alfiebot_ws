@@ -18,9 +18,11 @@ class URDFViewer {
     this.controls = null;
     this.robot = null;
     this.links = {};
+    this.joints = {};
     this.transforms = {};
     this.foxgloveClient = null;
     this.tfSubscriptionId = null;
+    this.tfStaticSubscriptionId = null;
     this.jointStateSubscriptionId = null;
     this.robotDescriptionSubscriptionId = null;
     this.urdfLoaded = false;
@@ -291,7 +293,7 @@ class URDFViewer {
       const messageData = new Uint8Array(data, 13);
       
       // Decode based on subscription
-      if (subscriptionId === this.tfSubscriptionId) {
+      if (subscriptionId === this.tfSubscriptionId || subscriptionId === this.tfStaticSubscriptionId) {
         this.handleTFMessage(messageData);
       } else if (subscriptionId === this.jointStateSubscriptionId) {
         this.handleJointStateMessage(messageData);
@@ -305,7 +307,7 @@ class URDFViewer {
     const subscriptions = [];
     
     for (const channel of channels) {
-      // Subscribe to TF topic
+      // Subscribe to TF topic (dynamic transforms)
       if (channel.topic === '/alfie/tf') {
         this.tfSubscriptionId = subscriptions.length + 1;
         subscriptions.push({
@@ -313,6 +315,16 @@ class URDFViewer {
           channelId: channel.id
         });
         console.log(`Subscribing to TF: ${channel.topic}`);
+      }
+      
+      // Subscribe to TF static topic (static transforms for fixed joints)
+      if (channel.topic === '/alfie/tf_static') {
+        this.tfStaticSubscriptionId = subscriptions.length + 1;
+        subscriptions.push({
+          id: this.tfStaticSubscriptionId,
+          channelId: channel.id
+        });
+        console.log(`Subscribing to TF static: ${channel.topic}`);
       }
       
       // Subscribe to joint states
@@ -624,6 +636,7 @@ class URDFViewer {
         });  // End of visuals.forEach
         
         this.links[linkName] = linkGroup;
+        console.log('Parsed link:', linkName, 'children:', linkGroup.children.length);
         // Don't add to robot yet - we'll build hierarchy from joints
       });
       
@@ -672,12 +685,19 @@ class URDFViewer {
         }
       });
       
-      // Add root links (those that aren't children of any joint) to the robot
+      // For TF-based updates, we use a FLAT structure (not hierarchical)
+      // Each link is added directly to the robot group and positioned via TF
+      // This allows TF transforms to work correctly
       Object.keys(this.links).forEach(linkName => {
+        // Add ALL links directly to robot (flat structure for TF)
         if (!childLinks.has(linkName)) {
+          // Root links go directly under robot
           this.robot.add(this.links[linkName]);
           console.log('Root link:', linkName);
         }
+        // Child links are already added to parents in hierarchy
+        // The hierarchy is maintained for initial positioning from URDF
+        // TF updates will override positions as transforms arrive
       });
       
       // Rotate to convert from ROS (Z-up) to Three.js (Y-up) coordinate system
@@ -695,19 +715,72 @@ class URDFViewer {
   }
 
   handleTFMessage(data) {
-    // Decode TF message (tf2_msgs/TFMessage)
-    // This is simplified - full implementation would use ROS message deserialization
+    // Decode TF message (tf2_msgs/TFMessage) in CDR format
     try {
-      const decoder = new TextDecoder();
-      const jsonStr = decoder.decode(data);
-      const tfData = JSON.parse(jsonStr);
-      this.processTFData(tfData);
+      let offset = 4;  // Skip CDR header
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      
+      const readString = () => {
+        const len = view.getUint32(offset, true);
+        offset += 4;
+        // len includes null terminator, so read len-1 bytes for string content
+        const strBytes = new Uint8Array(data.buffer, data.byteOffset + offset, len > 0 ? len - 1 : 0);
+        offset += len;
+        // Align to 4 bytes after string
+        if (offset % 4 !== 0) offset += 4 - (offset % 4);
+        return new TextDecoder().decode(strBytes);
+      };
+      
+      const align = (n) => { if (offset % n !== 0) offset += n - (offset % n); };
+      
+      // TFMessage: TransformStamped[] transforms
+      const transformCount = view.getUint32(offset, true); 
+      offset += 4;
+      
+      for (let i = 0; i < transformCount; i++) {
+        // Header: stamp (sec, nanosec) + frame_id
+        const stampSec = view.getUint32(offset, true); offset += 4;
+        const stampNsec = view.getUint32(offset, true); offset += 4;
+        const frameId = readString();
+        const childFrameId = readString();
+        
+        // Transform: translation (Vector3 float64), rotation (Quaternion float64)
+        align(8);
+        const tx = view.getFloat64(offset, true); offset += 8;
+        const ty = view.getFloat64(offset, true); offset += 8;
+        const tz = view.getFloat64(offset, true); offset += 8;
+        const qx = view.getFloat64(offset, true); offset += 8;
+        const qy = view.getFloat64(offset, true); offset += 8;
+        const qz = view.getFloat64(offset, true); offset += 8;
+        const qw = view.getFloat64(offset, true); offset += 8;
+        
+        // Store transform
+        this.transforms[childFrameId] = {
+          parent: frameId,
+          position: new THREE.Vector3(tx, ty, tz),
+          quaternion: new THREE.Quaternion(qx, qy, qz, qw)
+        };
+        
+        if (this.tfUpdateCount < 3) {
+          console.log('TF received:', frameId, '->', childFrameId, 'pos:', tx.toFixed(3), ty.toFixed(3), tz.toFixed(3));
+        }
+        
+        // Apply transform to corresponding link
+        this.applyTransformToLink(childFrameId);
+      }
+      
+      // Update TF count
+      this.tfUpdateCount++;
+      this.updateTFCount();
+      
     } catch (error) {
-      // Binary format - would need proper ROS CDR deserialization
+      // Log TF decode errors for debugging
+      console.warn('TF decode error:', error, 'at offset approx', error.offset || 'unknown');
     }
   }
 
   processTFData(tfData) {
+    // JSON format fallback (for non-CDR messages)
     if (!tfData || !tfData.transforms) return;
     
     for (const transform of tfData.transforms) {
@@ -716,6 +789,7 @@ class URDFViewer {
       const rotation = transform.transform.rotation;
       
       this.transforms[childFrame] = {
+        parent: transform.header?.frame_id || '',
         position: new THREE.Vector3(translation.x, translation.y, translation.z),
         quaternion: new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w)
       };
@@ -752,13 +826,24 @@ class URDFViewer {
   }
 
   applyTransformToLink(frameName) {
-    const linkName = frameName.replace('_link', '').replace('/', '');
-    const link = this.links[linkName] || this.links[frameName];
+    // Try exact match first, then common variations
+    let link = this.links[frameName];
+    if (!link) {
+      // Try without leading slash
+      const cleanName = frameName.replace(/^\//, '');
+      link = this.links[cleanName];
+    }
     
     if (link && this.transforms[frameName]) {
       const tf = this.transforms[frameName];
+      
+      // Apply the transform from TF
+      // TF gives us the transform from parent to child frame
       link.position.copy(tf.position);
       link.quaternion.copy(tf.quaternion);
+    } else if (this.tfUpdateCount < 5) {
+      // Log first few misses for debugging
+      console.log('TF frame not found in links:', frameName, 'Available:', Object.keys(this.links).slice(0, 10));
     }
   }
 
