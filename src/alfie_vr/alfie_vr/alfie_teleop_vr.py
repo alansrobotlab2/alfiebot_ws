@@ -728,22 +728,25 @@ class AlfieTeleopVRNode(Node):
             kp=1
         )
 
-        # Call back calibration service
-        # self.get_logger().info('Calling back calibration service...')
-        # calibrate_client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
-        # if calibrate_client.wait_for_service(timeout_sec=5.0):
-        #     request = BackRequestCalibration.Request()
-        #     future = calibrate_client.call_async(request)
-        #     rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
-        #     if future.result() is not None:
-        #         if future.result().success:
-        #             self.get_logger().info('Back calibration successful')
-        #         else:
-        #             self.get_logger().warn('Back calibration returned failure')
-        #     else:
-        #         self.get_logger().warn('Back calibration service call failed')
-        # else:
-        #     self.get_logger().warn('Back calibration service not available')
+        # Call back calibration service if not already calibrated
+        if not robot_state.back_state.is_calibrated:
+            self.get_logger().info('Back not calibrated, calling calibration service...')
+            calibrate_client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
+            if calibrate_client.wait_for_service(timeout_sec=5.0):
+                request = BackRequestCalibration.Request()
+                future = calibrate_client.call_async(request)
+                rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+                if future.result() is not None:
+                    if future.result().success:
+                        self.get_logger().info('Back calibration successful')
+                    else:
+                        self.get_logger().warn('Back calibration returned failure')
+                else:
+                    self.get_logger().warn('Back calibration service call failed')
+            else:
+                self.get_logger().warn('Back calibration service not available')
+        else:
+            self.get_logger().info('Back already calibrated, skipping calibration')
         
         self.get_logger().info('Arm and head controllers initialized')
         
