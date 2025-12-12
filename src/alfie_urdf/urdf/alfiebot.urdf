@@ -19,14 +19,21 @@
 
   <material name="body_black">
     <color rgba="0.15 0.15 0.15 1"/>
+    <color rgba="0.1 0.1 0.1 1"/>
+  </material>
+
+  <material name="body_black">
+    <color rgba="0.15 0.15 0.15 1"/>
   </material>
 
 >>>>>>> a3fc23a (urdf update, reference package, add some color)
   <material name="plastic_black">
     <color rgba="0.05 0.05 0.05 1"/>
+    <color rgba="0.05 0.05 0.05 1"/>
   </material>
 
   <material name="glass_black">
+    <color rgba="0.05 0.05 0.05 1"/>
     <color rgba="0.05 0.05 0.05 1"/>
   </material>
 
@@ -42,7 +49,10 @@
     <color rgba="0.66 0.67 0.71 1"/>
   </material>
 
+
+
   <material name="rubber_black">
+    <color rgba="0.05 0.05 0.05 1"/>
     <color rgba="0.05 0.05 0.05 1"/>
   </material>
 
@@ -66,9 +76,12 @@
     <color rgba="0.5 0.5 0.5 1"/>
   </material>
 
+<<<<<<< HEAD
 
 >>>>>>> a3fc23a (urdf update, reference package, add some color)
 
+=======
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
   <joint name="back_joint" type="prismatic">
     <origin xyz="-0.001102 0.0016674 0.3291568" rpy="0. 0. 3.1415927"/>
     <parent link="base_link"/>

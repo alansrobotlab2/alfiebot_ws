@@ -17,6 +17,7 @@ AFRAME.registerComponent('vr-robot-viewer', {
     this.urdfLoaded = false;
     this.connectionAttempts = 0;
     
+<<<<<<< HEAD
     // Batching/throttling infrastructure - queue updates for tick() to apply
     // This prevents DOM manipulation during WebSocket callbacks which causes VR jitter
     this.pendingTFUpdates = [];      // Queue of TF transforms to apply
@@ -46,6 +47,12 @@ AFRAME.registerComponent('vr-robot-viewer', {
     // Connect to Foxglove Bridge using WebSocket via nginx proxy
     // Port 8082 is nginx with TLS, proxying to foxglove_bridge on 8765
     const foxgloveUrl = `wss://${window.location.hostname}:8082`;
+=======
+    // Connect to Foxglove Bridge using WebSocket via nginx proxy
+    // Port 8082 is nginx with TLS, proxying to foxglove_bridge on 8765
+    const foxgloveUrl = `wss://${window.location.hostname}:8082`;
+    this.updateDebug('url', `URL: ${foxgloveUrl}`);
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
     this.connectToFoxglove(foxgloveUrl);
   },
   
@@ -128,6 +135,10 @@ AFRAME.registerComponent('vr-robot-viewer', {
         
         if (message.op === 'serverInfo') {
           console.log('VR: Server info received:', message.name, 'capabilities:', message.capabilities);
+<<<<<<< HEAD
+=======
+          this.updateDebug('info', 'Server connected');
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
         } else if (message.op === 'advertise') {
           console.log('VR: Advertise received, channels:', message.channels?.length);
           this.subscribeToTopics(message.channels);
@@ -193,8 +204,12 @@ AFRAME.registerComponent('vr-robot-viewer', {
         const childFrameId = readString();
         
         // Transform: translation (Vector3), rotation (Quaternion)
+<<<<<<< HEAD
         // CDR alignment quirk: after child_frame_id, ensure offset % 8 === 4
         if (offset % 8 === 0) offset += 4;
+=======
+        align(8);
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
         const tx = view.getFloat64(offset, true); offset += 8;
         const ty = view.getFloat64(offset, true); offset += 8;
         const tz = view.getFloat64(offset, true); offset += 8;
@@ -203,6 +218,7 @@ AFRAME.registerComponent('vr-robot-viewer', {
         const qz = view.getFloat64(offset, true); offset += 8;
         const qw = view.getFloat64(offset, true); offset += 8;
         
+<<<<<<< HEAD
         // Queue transform update instead of applying immediately
         // This prevents DOM manipulation during WebSocket callback
         this.pendingTFUpdates.push({
@@ -215,6 +231,15 @@ AFRAME.registerComponent('vr-robot-viewer', {
       // Update TF count and rate tracking
       this.tfUpdateCount++;
       this.tfRateCount++;  // Count every update for accurate rate
+=======
+        // Apply transform to corresponding link
+        const link = this.links[childFrameId];
+        if (link && link.object3D) {
+          link.object3D.position.set(tx, ty, tz);
+          link.object3D.quaternion.set(qx, qy, qz, qw);
+        }
+      }
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
     } catch (error) {
       // Silently ignore TF decode errors
     }
@@ -272,6 +297,7 @@ AFRAME.registerComponent('vr-robot-viewer', {
     if (subscriptions.length > 0) {
       this.foxgloveClient.send(JSON.stringify({ op: 'subscribe', subscriptions }));
       this.updateStatus(`Subscribed (${subscriptions.length})`);
+      this.updateDebug('info', `Subs: ${subscriptions.length}`);
       
       if (!this.robotDescriptionSubscriptionId) {
         console.log('VR: No robot_description found, loading placeholder');
@@ -281,7 +307,11 @@ AFRAME.registerComponent('vr-robot-viewer', {
       }
     } else {
       console.log('VR: No topics matched for subscription');
+<<<<<<< HEAD
       this.updateStatus('No topics found');
+=======
+      this.updateDebug('info', 'No topics found');
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
     }
   },
   

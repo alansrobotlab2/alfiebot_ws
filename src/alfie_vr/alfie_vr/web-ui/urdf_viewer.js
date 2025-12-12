@@ -649,7 +649,10 @@ class URDFViewer {
         });  // End of visuals.forEach
         
         this.links[linkName] = linkGroup;
+<<<<<<< HEAD
         console.log('Parsed link:', linkName, 'children:', linkGroup.children.length);
+=======
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
         // Don't add to robot yet - we'll build hierarchy from joints
       });
       
@@ -698,6 +701,7 @@ class URDFViewer {
         }
       });
       
+<<<<<<< HEAD
       // For TF-based updates, we use a FLAT structure (not hierarchical)
       // Each link is added directly to the robot group and positioned via TF
       // This allows TF transforms to work correctly
@@ -711,6 +715,14 @@ class URDFViewer {
         // Child links are already added to parents in hierarchy
         // The hierarchy is maintained for initial positioning from URDF
         // TF updates will override positions as transforms arrive
+=======
+      // Add root links (those that aren't children of any joint) to the robot
+      Object.keys(this.links).forEach(linkName => {
+        if (!childLinks.has(linkName)) {
+          this.robot.add(this.links[linkName]);
+          console.log('Root link:', linkName);
+        }
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
       });
       
       // Rotate to convert from ROS (Z-up) to Three.js (Y-up) coordinate system
@@ -944,11 +956,14 @@ class URDFViewer {
   animate(currentTime = 0) {
     requestAnimationFrame((time) => this.animate(time));
     
+<<<<<<< HEAD
     // Throttle rendering to target FPS
     const elapsed = currentTime - this.lastFrameTime;
     if (elapsed < this.frameInterval) return;
     this.lastFrameTime = currentTime - (elapsed % this.frameInterval);
     
+=======
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
     if (this.renderer && this.scene && this.camera) {
       this.renderer.render(this.scene, this.camera);
     }

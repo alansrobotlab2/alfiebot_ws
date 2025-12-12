@@ -250,13 +250,20 @@ class VRWebSocketServer(BaseInputProvider):
                 quat = headset_data.get('quaternion', {})
                 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
                 # Filter out invalid (0, 0, 0) positions - these are jitter from VR tracking gaps
                 px, py, pz = pos.get('x', 0), pos.get('y', 0), pos.get('z', 0)
                 if abs(px) < 0.001 and abs(py) < 0.001 and abs(pz) < 0.001:
                     # Skip this frame - invalid headset data
                     pass
                 else:
+<<<<<<< HEAD
                     self.debug_print(f"[VR_WS] Headset - Position: [{px:.3f}, {py:.3f}, {pz:.3f}], "
+=======
+                    print(f"[VR_WS] Headset - Position: [{px:.3f}, {py:.3f}, {pz:.3f}], "
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
                           f"Rotation: [{rot.get('x', 0):.1f}, {rot.get('y', 0):.1f}, {rot.get('z', 0):.1f}]")
                     
                     # Create headset ControlGoal
@@ -276,6 +283,7 @@ class VRWebSocketServer(BaseInputProvider):
                         }
                     )
                     await self.send_goal(headset_goal)
+<<<<<<< HEAD
 =======
                 self._debug_print(f"[VR_WS] Headset - Position: [{pos.get('x', 0):.3f}, {pos.get('y', 0):.3f}, {pos.get('z', 0):.3f}], "
                       f"Rotation: [{rot.get('x', 0):.1f}, {rot.get('y', 0):.1f}, {rot.get('z', 0):.1f}]")
@@ -298,6 +306,8 @@ class VRWebSocketServer(BaseInputProvider):
                 )
                 await self.send_goal(headset_goal)
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+>>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
         
         # Process controller data
         if 'leftController' in data:
