@@ -49,10 +49,6 @@
     <color rgba="0.66 0.67 0.71 1"/>
   </material>
 
-  <material name="body_black">
-    <color rgba="0.25 0.25 0.25 1"/>
-  </material>
-
   <material name="rubber_black">
     <color rgba="0.05 0.05 0.05 1"/>
     <color rgba="0.05 0.05 0.05 1"/>
@@ -429,6 +425,7 @@
         <mesh filename="package://alfie_urdf/meshes/speaker.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_grey"/>
+<<<<<<< HEAD
     </visual>
     <visual>
       <origin xyz="-0.001102 0.0196644 0.0271568" rpy="0. 0. 3.1415927"/>
@@ -465,6 +462,8 @@
         <mesh filename="package://alfie_urdf/meshes/speaker.obj" scale="1. 1. 1."/>
       </geometry>
       <material name="plastic_grey"/>
+=======
+>>>>>>> bbed9cc (urdf color fixes, nocache on web app)
     </visual>
     <visual>
       <origin xyz="-0.001102 0.0196644 0.0271568" rpy="0. 0. 3.1415927"/>
