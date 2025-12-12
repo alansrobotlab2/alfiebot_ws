@@ -13,7 +13,11 @@ def generate_launch_description():
         Node(
             package='alfie_vr',
             namespace='alfie',
+<<<<<<< HEAD
             executable='ros_video_webrtc_hw',
+=======
+            executable='ros_video_webrtc',
+>>>>>>> 325f352 (updated vr launch file)
             name='ros_video_streamer_node',
             output='screen',
             emulate_tty=True,
