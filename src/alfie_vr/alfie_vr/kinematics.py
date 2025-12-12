@@ -24,6 +24,16 @@ class SimpleTeleopArm:
             prefix (str, optional): Prefix for the arm (e.g., "left" or "right"). Defaults to "right".
             kp (float, optional): Proportional gain for the control loop. Defaults to 1.
         """
+
+        # VR position multipliers (VR controller position -> robot arm movement)
+        self.vr_x_multiplier = 20  # Scale for shoulder rotate
+        self.vr_y_multiplier = 20  # Scale for arm reach (Y)
+        self.vr_z_multiplier = 20  # Scale for arm reach (Z->X)
+        
+        # Wrist multipliers (VR controller rotation -> robot wrist rotation)
+        self.wrist_pitch_multiplier = 2.0
+        self.wrist_roll_multiplier = 2.0
+
         self.joint_map = joint_map
         self.prefix = prefix
         self.kp = kp
@@ -52,6 +62,8 @@ class SimpleTeleopArm:
         self.last_vr_time = 0.0
         self.vr_deadzone = 0.001  # Minimum movement threshold
         self.max_delta_per_frame = 0.005  # Maximum position change per frame
+        
+
         
         # Set step size
         self.degree_step = 2
@@ -146,9 +158,9 @@ class SimpleTeleopArm:
         
         # Calculate relative change (delta) from previous frame
         # Scale factors for converting VR movement to robot workspace
-        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * 80 # * 220  # Scale for the shoulder rotate
-        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * 40 # * 70   # Scale for arm reach (Y)
-        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * 40 # * 70   # Scale for arm reach (Z->X)
+        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * self.vr_x_multiplier  # Scale for the shoulder rotate
+        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * self.vr_y_multiplier  # Scale for arm reach (Y)
+        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * self.vr_z_multiplier  # Scale for arm reach (Z->X)
 
         # Update previous position for next frame
         self.prev_vr_pos = current_vr_pos
@@ -192,6 +204,7 @@ class SimpleTeleopArm:
             
             # Calculate relative change from previous frame (convert VR degrees to radians)
             delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * angle_scale / 0.07
+            delta_pitch *= self.wrist_pitch_multiplier
             delta_pitch = max(-angle_limit, min(angle_limit, delta_pitch))
             self.pitch += delta_pitch
             self.pitch = max(-math.pi/2, min(math.pi/2, self.pitch))  # Limit pitch range (±90°)
@@ -207,6 +220,7 @@ class SimpleTeleopArm:
             
             # Convert VR degrees to radians for delta
             delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * angle_scale / 0.07
+            delta_roll *= self.wrist_roll_multiplier
             delta_roll = max(-angle_limit, min(angle_limit, delta_roll))
             
             current_roll = self.target_positions.get("wrist_roll", 0.0)
@@ -268,92 +282,6 @@ class SimpleTeleopArm:
             error = self.target_positions[j] - current[j]
             control = self.kp * error
             action[f"{self.joint_map[j]}.pos"] = current[j] + control
-        return action
-
-
-class SimpleHeadControl:
-    """
-    A class for controlling robot head motors using VR thumbstick input.
-    
-    Provides simple head movement control with proportional control for smooth operation.
-    """
-    
-    def __init__(self, joint_map, robotlowstate, kp=1):
-        """
-        Initialize the SimpleHeadControl.
-
-        Args:
-            robotlowstate (object): RobotLowState instance from the robot.
-            kp (float, optional): Proportional gain for the control loop. Defaults to 1.
-        """
-        self.joint_map = joint_map
-        self.kp = kp
-        self.degree_step = 2  # Move 2 degrees each time
-        # Initialize head motor positions
-        self.target_positions = {
-            "head_yaw": robotlowstate.servo_state[12].current_location,
-            "head_pitch": robotlowstate.servo_state[13].current_location,
-            "head_roll": robotlowstate.servo_state[14].current_location,
-        }
-        self.zero_pos = {"head_yaw": 0.0, "head_pitch": 0.0, "head_roll": 0.0}
-
-    def handle_vr_input(self, vr_goal):
-        """
-        Process VR input to update head motor target positions.
-
-        Uses the VR controller's thumbstick input to incrementally adjust
-        the pan (head_motor_1) and tilt (head_motor_2) of the head.
-
-        Args:
-            vr_goal (object): VR controller goal data containing metadata with thumbstick values.
-        """
-        # Map VR input to head motor targets
-        rotation = vr_goal.metadata.get('rotation', {})
-        if rotation:
-            thumb_x = rotation.get('x', 0)
-            thumb_y = rotation.get('y', 0)
-            if abs(thumb_x) > 0.1:
-                if thumb_x > 0:
-                    self.target_positions["head_motor_1"] += self.degree_step
-                else:
-                    self.target_positions["head_motor_1"] -= self.degree_step
-            if abs(thumb_y) > 0.1:
-                if thumb_y > 0:
-                    self.target_positions["head_motor_2"] += self.degree_step
-                else:
-                    self.target_positions["head_motor_2"] -= self.degree_step
-                    
-    def move_to_zero_position(self, robot):
-        """
-        Move the head motors to their zero positions.
-
-        Resets the target positions to zero and sends the action to the robot.
-
-        Args:
-            robot (object): The robot instance to send actions to.
-        """
-        print(f"[HEAD] Moving to Zero Position: {self.zero_pos} ......")
-        self.target_positions = self.zero_pos.copy()
-        action = self.p_control_action(robot)
-        robot.send_action(action)
-
-    def p_control_action(self, robot):
-        """
-        Generate proportional control action for head motors.
-        
-        Args:
-            robot: Robot instance to get current observations
-            
-        Returns:
-            dict: Action dictionary with position commands for head motors
-        """
-        obs = robot.get_observation()
-        action = {}
-        for motor in self.target_positions:
-            current = obs.get(f"{self.joint_map[motor]}.pos", 0.0)
-            error = self.target_positions[motor] - current
-            control = self.kp * error
-            action[f"{self.joint_map[motor]}.pos"] = current + control
         return action
 
 
