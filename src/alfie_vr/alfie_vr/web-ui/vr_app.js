@@ -17,14 +17,23 @@ AFRAME.registerComponent('vr-robot-viewer', {
     this.urdfLoaded = false;
     this.connectionAttempts = 0;
     
-    // Throttling for performance - limit updates to 10 FPS
+    // Batching/throttling infrastructure - queue updates for tick() to apply
+    // This prevents DOM manipulation during WebSocket callbacks which causes VR jitter
+    this.pendingTFUpdates = [];      // Queue of TF transforms to apply
+    this.pendingJointUpdates = [];   // Queue of joint state updates to apply
+    this.pendingStatusUpdate = null; // Pending status text update
+    this.pendingDebugUpdates = [];   // Queue of debug text updates
+    this.updateInterval = 100;       // Apply updates every 100ms (10 FPS)
+    this.lastUpdateTime = 0;
+    this.isUpdating = false;         // Prevent concurrent updates
+    this.tfUpdateCount = 0;
+    
+    // Legacy throttling (kept for backwards compatibility)
     this.targetFPS = 10;
-    this.updateInterval = 1000 / this.targetFPS;
     this.lastTFUpdateTime = 0;
     this.lastJointUpdateTime = 0;
     this.pendingTFData = null;
     this.pendingJointData = null;
-    this.tfUpdateCount = 0;
     
     // TF rate tracking
     this.tfRateCount = 0;
@@ -194,12 +203,13 @@ AFRAME.registerComponent('vr-robot-viewer', {
         const qz = view.getFloat64(offset, true); offset += 8;
         const qw = view.getFloat64(offset, true); offset += 8;
         
-        // Apply transform to corresponding link
-        const link = this.links[childFrameId];
-        if (link && link.object3D) {
-          link.object3D.position.set(tx, ty, tz);
-          link.object3D.quaternion.set(qx, qy, qz, qw);
-        }
+        // Queue transform update instead of applying immediately
+        // This prevents DOM manipulation during WebSocket callback
+        this.pendingTFUpdates.push({
+          childFrameId: childFrameId,
+          tx: tx, ty: ty, tz: tz,
+          qx: qx, qy: qy, qz: qz, qw: qw
+        });
       }
       
       // Update TF count and rate tracking
@@ -288,63 +298,33 @@ AFRAME.registerComponent('vr-robot-viewer', {
   processTFData: function(tfData) {
     if (!tfData || !tfData.transforms) return;
     
-    // Throttle TF updates for performance
-    const now = performance.now();
-    if (now - this.lastTFUpdateTime < this.updateInterval) {
-      // Store for next update cycle
-      this.pendingTFData = tfData;
-      return;
-    }
-    this.lastTFUpdateTime = now;
-    this.pendingTFData = null;
-    
+    // Queue TF updates instead of applying immediately
+    // This prevents DOM manipulation during WebSocket callback which causes VR jitter
     for (const transform of tfData.transforms) {
       const childFrame = transform.child_frame_id;
       const t = transform.transform.translation;
       const r = transform.transform.rotation;
       
-      const linkEl = this.links[childFrame];
-      if (linkEl) {
-        linkEl.object3D.position.set(t.x, t.y, t.z);
-        linkEl.object3D.quaternion.set(r.x, r.y, r.z, r.w);
-      }
+      this.pendingTFUpdates.push({
+        childFrameId: childFrame,
+        tx: t.x, ty: t.y, tz: t.z,
+        qx: r.x, qy: r.y, qz: r.z, qw: r.w
+      });
     }
     
     this.tfUpdateCount++;
-    // Update TF count display every 10 updates (throttled for performance)
-    if (this.tfUpdateCount % 10 === 0) {
-      this.updateTFCount();
-    }
   },
   
   processJointState: function(jointData) {
     if (!jointData || !jointData.name || !jointData.position) return;
     
-    // Throttle joint updates for performance
-    const now = performance.now();
-    if (now - this.lastJointUpdateTime < this.updateInterval) {
-      this.pendingJointData = jointData;
-      return;
-    }
-    this.lastJointUpdateTime = now;
-    this.pendingJointData = null;
-    
+    // Queue joint updates instead of applying immediately
+    // This prevents DOM manipulation during WebSocket callback which causes VR jitter
     for (let i = 0; i < jointData.name.length; i++) {
-      const jointName = jointData.name[i];
-      const position = jointData.position[i];
-      
-      const joint = this.joints[jointName];
-      if (joint && joint.el) {
-        const axis = joint.axis || [0, 0, 1];
-        // Apply rotation around joint axis
-        if (joint.type === 'revolute' || joint.type === 'continuous') {
-          joint.el.object3D.rotation.set(
-            axis[0] * position,
-            axis[1] * position,
-            axis[2] * position
-          );
-        }
-      }
+      this.pendingJointUpdates.push({
+        jointName: jointData.name[i],
+        position: jointData.position[i]
+      });
     }
   },
   
@@ -607,8 +587,84 @@ AFRAME.registerComponent('vr-robot-viewer', {
   },
   
   updateStatus: function(message) {
-    if (this.statusText) {
-      this.statusText.setAttribute('value', message);
+    // Queue status update instead of immediate DOM manipulation
+    this.pendingStatusUpdate = message;
+  },
+  
+  applyStatusUpdate: function() {
+    if (this.pendingStatusUpdate !== null && this.statusText) {
+      this.statusText.setAttribute('value', this.pendingStatusUpdate);
+      this.pendingStatusUpdate = null;
+    }
+  },
+  
+  applyPendingUpdates: function() {
+    // Apply only the latest TF updates for each link (skip intermediate ones)
+    const latestTFByLink = {};
+    for (const update of this.pendingTFUpdates) {
+      latestTFByLink[update.childFrameId] = update;
+    }
+    this.pendingTFUpdates = [];
+    
+    for (const childFrameId in latestTFByLink) {
+      const update = latestTFByLink[childFrameId];
+      const link = this.links[childFrameId];
+      if (link && link.object3D) {
+        link.object3D.position.set(update.tx, update.ty, update.tz);
+        link.object3D.quaternion.set(update.qx, update.qy, update.qz, update.qw);
+      }
+    }
+    
+    // Apply only the latest joint updates for each joint (skip intermediate ones)
+    const latestJointByName = {};
+    for (const update of this.pendingJointUpdates) {
+      latestJointByName[update.jointName] = update;
+    }
+    this.pendingJointUpdates = [];
+    
+    for (const jointName in latestJointByName) {
+      const update = latestJointByName[jointName];
+      const joint = this.joints[jointName];
+      if (joint && joint.el) {
+        const axis = joint.axis || [0, 0, 1];
+        if (joint.type === 'revolute' || joint.type === 'continuous') {
+          joint.el.object3D.rotation.set(
+            axis[0] * update.position,
+            axis[1] * update.position,
+            axis[2] * update.position
+          );
+        }
+      }
+    }
+    
+    // Apply status update
+    this.applyStatusUpdate();
+  },
+  
+  tick: function(time, deltaTime) {
+    // Apply all batched updates during the A-Frame render loop
+    // This ensures DOM updates happen synchronously with VR tracking
+    const now = performance.now();
+    
+    // Only apply updates at the configured interval to reduce load
+    if (now - this.lastUpdateTime < this.updateInterval) {
+      return;
+    }
+    
+    // Prevent concurrent updates
+    if (this.isUpdating) {
+      return;
+    }
+    
+    this.isUpdating = true;
+    this.lastUpdateTime = now;
+    
+    try {
+      this.applyPendingUpdates();
+    } catch (error) {
+      console.error('VR Robot Viewer: Error applying pending updates', error);
+    } finally {
+      this.isUpdating = false;
     }
   }
 });
