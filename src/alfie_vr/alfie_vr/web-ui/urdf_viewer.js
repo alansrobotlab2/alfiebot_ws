@@ -29,6 +29,11 @@ class URDFViewer {
     this.tfUpdateCount = 0;
     this.isConnected = false;
     
+    // Frame rate limiting (10 FPS = 100ms between frames)
+    this.targetFPS = 10;
+    this.frameInterval = 1000 / this.targetFPS;
+    this.lastFrameTime = 0;
+    
     this.init();
   }
 
@@ -745,7 +750,9 @@ class URDFViewer {
         const childFrameId = readString();
         
         // Transform: translation (Vector3 float64), rotation (Quaternion float64)
-        align(8);
+        // CDR alignment quirk: after child_frame_id, ensure offset % 8 === 4
+        // (Transform struct has internal padding that results in this pattern)
+        if (offset % 8 === 0) offset += 4;
         const tx = view.getFloat64(offset, true); offset += 8;
         const ty = view.getFloat64(offset, true); offset += 8;
         const tz = view.getFloat64(offset, true); offset += 8;
@@ -926,8 +933,13 @@ class URDFViewer {
     this.renderer.setSize(width, height);
   }
 
-  animate() {
-    requestAnimationFrame(() => this.animate());
+  animate(currentTime = 0) {
+    requestAnimationFrame((time) => this.animate(time));
+    
+    // Throttle rendering to target FPS
+    const elapsed = currentTime - this.lastFrameTime;
+    if (elapsed < this.frameInterval) return;
+    this.lastFrameTime = currentTime - (elapsed % this.frameInterval);
     
     if (this.renderer && this.scene && this.camera) {
       this.renderer.render(this.scene, this.camera);

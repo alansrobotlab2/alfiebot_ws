@@ -18,6 +18,15 @@ AFRAME.registerComponent('vr-robot-viewer', {
     this.urdfLoaded = false;
     this.connectionAttempts = 0;
     
+    // Throttling for performance - limit updates to 10 FPS
+    this.targetFPS = 10;
+    this.updateInterval = 1000 / this.targetFPS;
+    this.lastTFUpdateTime = 0;
+    this.lastJointUpdateTime = 0;
+    this.pendingTFData = null;
+    this.pendingJointData = null;
+    this.tfUpdateCount = 0;
+    
     // Connect to Foxglove Bridge using WebSocket via nginx proxy
     // Port 8082 is nginx with TLS, proxying to foxglove_bridge on 8765
     const foxgloveUrl = `wss://${window.location.hostname}:8082`;
@@ -167,7 +176,8 @@ AFRAME.registerComponent('vr-robot-viewer', {
         const childFrameId = readString();
         
         // Transform: translation (Vector3), rotation (Quaternion)
-        align(8);
+        // CDR alignment quirk: after child_frame_id, ensure offset % 8 === 4
+        if (offset % 8 === 0) offset += 4;
         const tx = view.getFloat64(offset, true); offset += 8;
         const ty = view.getFloat64(offset, true); offset += 8;
         const tz = view.getFloat64(offset, true); offset += 8;
@@ -267,6 +277,16 @@ AFRAME.registerComponent('vr-robot-viewer', {
   processTFData: function(tfData) {
     if (!tfData || !tfData.transforms) return;
     
+    // Throttle TF updates for performance
+    const now = performance.now();
+    if (now - this.lastTFUpdateTime < this.updateInterval) {
+      // Store for next update cycle
+      this.pendingTFData = tfData;
+      return;
+    }
+    this.lastTFUpdateTime = now;
+    this.pendingTFData = null;
+    
     for (const transform of tfData.transforms) {
       const childFrame = transform.child_frame_id;
       const t = transform.transform.translation;
@@ -287,6 +307,15 @@ AFRAME.registerComponent('vr-robot-viewer', {
   
   processJointState: function(jointData) {
     if (!jointData || !jointData.name || !jointData.position) return;
+    
+    // Throttle joint updates for performance
+    const now = performance.now();
+    if (now - this.lastJointUpdateTime < this.updateInterval) {
+      this.pendingJointData = jointData;
+      return;
+    }
+    this.lastJointUpdateTime = now;
+    this.pendingJointData = null;
     
     for (let i = 0; i < jointData.name.length; i++) {
       const jointName = jointData.name[i];
@@ -620,6 +649,48 @@ AFRAME.registerComponent('controller-updater', {
     this.videoContext = this.videoCanvas.getContext('2d');
     this.videoScreen = document.querySelector('#videoScreen');
     this.videoSocket = null;
+    
+    // Video frame throttling for performance (15 FPS max)
+    this.videoTargetFPS = 15;
+    this.videoFrameInterval = 1000 / this.videoTargetFPS;
+    this.lastVideoFrameTime = 0;
+    this.pendingVideoFrame = null;
+    this.videoFrameProcessing = false;
+    
+    // Process video frame function - always displays the most recent frame
+    this.processVideoFrame = () => {
+      if (!this.pendingVideoFrame) {
+        this.videoFrameProcessing = false;
+        return;
+      }
+      
+      this.videoFrameProcessing = true;
+      const frameData = this.pendingVideoFrame;
+      this.pendingVideoFrame = null; // Clear so we get the next fresh frame
+      
+      const img = new Image();
+      img.onload = () => {
+        this.videoContext.drawImage(img, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
+        // Update A-Frame texture
+        if (this.videoScreen) {
+          const mesh = this.videoScreen.getObject3D('mesh');
+          if (mesh && mesh.material && mesh.material.map) {
+            mesh.material.map.needsUpdate = true;
+          }
+        }
+        // If there's a newer frame waiting, process it immediately
+        // Otherwise mark as done
+        if (this.pendingVideoFrame) {
+          this.processVideoFrame();
+        } else {
+          this.videoFrameProcessing = false;
+        }
+      };
+      img.onerror = () => {
+        this.videoFrameProcessing = false;
+      };
+      img.src = 'data:image/jpeg;base64,' + frameData;
+    };
 
     const videoPort = 8081;
 
@@ -647,18 +718,14 @@ AFRAME.registerComponent('controller-updater', {
 
       this.videoSocket.on('video_frame', (data) => {
         if (data && data.frame) {
-          const img = new Image();
-          img.onload = () => {
-            this.videoContext.drawImage(img, 0, 0, this.videoCanvas.width, this.videoCanvas.height);
-            // Update A-Frame texture
-            if (this.videoScreen) {
-              const mesh = this.videoScreen.getObject3D('mesh');
-              if (mesh && mesh.material && mesh.material.map) {
-                mesh.material.map.needsUpdate = true;
-              }
-            }
-          };
-          img.src = 'data:image/jpeg;base64,' + data.frame;
+          // Always keep the latest frame - don't throttle on receive
+          // Just store it and let the render loop handle display
+          this.pendingVideoFrame = data.frame;
+          
+          // If we're not already processing a frame, start immediately
+          if (!this.videoFrameProcessing) {
+            this.processVideoFrame();
+          }
         }
       });
 

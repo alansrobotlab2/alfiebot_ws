@@ -538,7 +538,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/tube.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_white"/>
+      <material name="plastic_black"/>
     </visual>
     <visual>
       <origin xyz="-0.2158563 -0.0012424 0.017225 " rpy="0. 0. 1.5707964"/>
@@ -559,7 +559,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_grey"/>
     </visual>
     <visual>
       <origin xyz="0.0672499 -0.5392672 0.1163611" rpy="-1.5707964 -1.5707964 0. "/>
@@ -580,14 +580,14 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_grey"/>
     </visual>
     <visual>
       <origin xyz="0.0672499 -0.539283 0.1163364" rpy="-1.5707964 -1.5707964 0. "/>
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_grey"/>
     </visual>
     <visual>
       <origin xyz="-0.2158563 -0.005356 0.0204384" rpy="3.1415927 0. 3.1415927"/>
@@ -615,7 +615,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_grey"/>
     </visual>
     <visual>
       <origin xyz="0. 0. 0.01725" rpy="0. 0. 0."/>
@@ -1425,7 +1425,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_grey"/>
     </visual>
     <visual>
       <origin xyz="0.06725 -0.5392672 0.1163611" rpy="-1.5707963 -1.5707963 0. "/>
@@ -1446,14 +1446,14 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_grey"/>
     </visual>
     <visual>
       <origin xyz="0.06725 -0.539283 0.1163363" rpy="-1.5707963 -1.5707963 0. "/>
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/bracket_lower.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_grey"/>
     </visual>
     <visual>
       <origin xyz="-0.2158563 -0.005356 0.0204384" rpy="3.1415925 -0.0000001 -3.1415925"/>
@@ -1481,8 +1481,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/bracket_upper.obj" scale="1. 1. 1."/>
       </geometry>
-
-      <material name="aluminum_black"/>
+      <material name="plastic_grey"/>
     </visual>
     <visual>
       <origin xyz="0. -0. 0.01725" rpy="0.0000001 0.0000001 0.0000001"/>
