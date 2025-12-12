@@ -14,6 +14,9 @@ Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 // 512 Hz proven optimal in experimental testing with 110 RPM motors
 #define PWMFREQUENCY 512
 
+// Task watchdog timeout in seconds - ESP32 will reboot if task doesn't feed WDT within this time
+#define TASK_WDT_TIMEOUT_S 1
+
 #include <cstdint>
 #include <Arduino.h>
 #include <micro_ros_platformio.h>
@@ -31,6 +34,10 @@ Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 
 #include "memorystruct.h"
 #include "commandstruct.h"
+
+#include "esp_task_wdt.h"
+
+#include "utils.h"
 
 // #include <alfie_msgs/msg/servo_memory_map.h>
 #include <alfie_msgs/msg/gdb_state.h>
