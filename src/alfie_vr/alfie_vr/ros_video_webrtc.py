@@ -25,17 +25,22 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.contrib.media import MediaRelay
 
 VIDEO_PORT = 8083  # Different port from Socket.IO streamer
+TARGET_FPS = 30  # Target frame rate
 
 # Global reference to the ROS node
 ros_node: Optional['WebRTCVideoNode'] = None
 relay = MediaRelay()
 pcs = set()  # Track peer connections for cleanup
 
+# Asyncio event for frame signaling (set from ROS callback thread)
+frame_event: Optional[asyncio.Event] = None
+frame_loop: Optional[asyncio.AbstractEventLoop] = None
+
 
 class ROSVideoTrack(VideoStreamTrack):
     """
     A video track that reads frames from ROS2 compressed image topic.
-    Sends JPEG frames directly when possible for efficiency.
+    Uses event-driven frame delivery for minimal latency.
     """
     
     kind = "video"
@@ -45,22 +50,39 @@ class ROSVideoTrack(VideoStreamTrack):
         self.node = node
         self._timestamp = 0
         self._frame_count = 0
+        self._last_frame_data = None  # Cache to detect new frames
+        self._black_frame = None  # Cached black frame
     
     async def recv(self):
-        """Receive the next video frame"""
-        pts, time_base = await self.next_timestamp()
+        """Receive the next video frame with minimal latency"""
+        global frame_event
         
-        # Get latest frame from ROS
+        # Wait for new frame signal OR timeout (for max latency bound)
+        # Short timeout ensures we don't block forever if frames stop
+        if frame_event:
+            try:
+                await asyncio.wait_for(frame_event.wait(), timeout=1.0/TARGET_FPS)
+                frame_event.clear()
+            except asyncio.TimeoutError:
+                pass  # Continue with whatever frame we have
+        else:
+            # Fallback: minimal sleep if event not available
+            await asyncio.sleep(0.001)
+        
+        pts, time_base = self._next_timestamp()
+        
+        # Get latest frame from ROS (lock-free read)
         frame_data = self.node.get_latest_frame()
         
         if frame_data is not None:
             try:
                 # Decode JPEG to numpy array
                 np_arr = np.frombuffer(frame_data, np.uint8)
+                # Use IMREAD_UNCHANGED for speed, then convert
                 img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 
                 if img is not None:
-                    # Convert BGR to RGB
+                    # Convert BGR to RGB in-place for efficiency
                     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                     
                     # Create VideoFrame
@@ -71,19 +93,17 @@ class ROSVideoTrack(VideoStreamTrack):
             except Exception as e:
                 print(f"Frame decode error: {e}")
         
-        # Return a black frame if no data
-        black = np.zeros((480, 640, 3), dtype=np.uint8)
-        frame = VideoFrame.from_ndarray(black, format="rgb24")
+        # Return a cached black frame if no data
+        if self._black_frame is None:
+            self._black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        frame = VideoFrame.from_ndarray(self._black_frame, format="rgb24")
         frame.pts = pts
         frame.time_base = time_base
         return frame
     
-    async def next_timestamp(self):
-        """Generate timestamps for frames at ~30fps"""
-        # Wait for next frame timing (~30fps)
-        await asyncio.sleep(1/30)
-        
-        self._timestamp += 3000  # 90000 / 30 fps
+    def _next_timestamp(self):
+        """Generate timestamps for frames (no async overhead)"""
+        self._timestamp += int(90000 / TARGET_FPS)
         return self._timestamp, fractions.Fraction(1, 90000)
 
 
@@ -101,9 +121,8 @@ class WebRTCVideoNode(Node):
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         self.port = self.get_parameter('port').get_parameter_value().integer_value
         
-        # Latest frame storage (raw bytes, not base64)
+        # Latest frame storage (raw bytes) - atomic assignment, no lock needed
         self._latest_frame: Optional[bytes] = None
-        self._frame_lock = threading.Lock()
         
         # QoS profile for camera images
         qos_profile = QoSProfile(
@@ -126,14 +145,21 @@ class WebRTCVideoNode(Node):
     
     def image_callback(self, msg: CompressedImage):
         """Handle incoming compressed image messages"""
-        with self._frame_lock:
-            # Store raw bytes (not base64) for efficiency
-            self._latest_frame = bytes(msg.data)
+        global frame_event, frame_loop
+        
+        # Store raw bytes - use atomic assignment (no lock needed for single ref)
+        self._latest_frame = bytes(msg.data)
+        
+        # Signal waiting WebRTC tracks that new frame is available
+        if frame_event and frame_loop:
+            try:
+                frame_loop.call_soon_threadsafe(frame_event.set)
+            except RuntimeError:
+                pass  # Loop may be closed
     
     def get_latest_frame(self) -> Optional[bytes]:
-        """Get the latest frame as raw bytes"""
-        with self._frame_lock:
-            return self._latest_frame
+        """Get the latest frame as raw bytes (lock-free)"""
+        return self._latest_frame
 
 
 async def offer(request):
@@ -201,6 +227,12 @@ def create_ssl_context():
 
 async def run_webrtc_server(port: int):
     """Run the WebRTC signaling server"""
+    global frame_event, frame_loop
+    
+    # Initialize frame signaling event in this loop
+    frame_event = asyncio.Event()
+    frame_loop = asyncio.get_running_loop()
+    
     app = web.Application()
     
     # CORS headers for all responses

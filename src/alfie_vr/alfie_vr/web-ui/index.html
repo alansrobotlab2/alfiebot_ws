@@ -15,8 +15,8 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <!-- Hidden video element for WebRTC stream -->
-    <video id="webrtcVideo" autoplay playsinline muted style="display: none;"></video>
+    <!-- Hidden video element for WebRTC stream - low latency hints -->
+    <video id="webrtcVideo" autoplay playsinline muted disablePictureInPicture style="display: none;"></video>
     <!-- Hidden canvas for video texture (fallback) -->
     <canvas id="videoCanvas" width="640" height="480" style="display: none;"></canvas>
 

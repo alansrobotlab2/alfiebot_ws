@@ -645,10 +645,12 @@ AFRAME.registerComponent('controller-updater', {
       console.log('Initializing WebRTC video stream...');
       
       try {
-        // Create peer connection with hardware-accelerated codec preferences
+        // Create peer connection with low-latency configuration
         const config = {
           iceServers: [], // Direct connection, no STUN/TURN needed on LAN
-          sdpSemantics: 'unified-plan'
+          sdpSemantics: 'unified-plan',
+          bundlePolicy: 'max-bundle',  // Reduce ICE candidates
+          rtcpMuxPolicy: 'require'     // Mux RTP/RTCP on same port
         };
         this.peerConnection = new RTCPeerConnection(config);
         
@@ -657,6 +659,21 @@ AFRAME.registerComponent('controller-updater', {
           console.log('WebRTC: Received video track');
           if (event.track.kind === 'video') {
             this.videoElement.srcObject = event.streams[0];
+            
+            // Low-latency video playback settings
+            this.videoElement.playsInline = true;
+            this.videoElement.muted = true;
+            
+            // Request low latency hint if available
+            if ('latencyHint' in this.videoElement) {
+              this.videoElement.latencyHint = 'interactive';
+            }
+            
+            // Disable buffering for real-time playback
+            if (this.videoElement.buffered) {
+              this.videoElement.preload = 'none';
+            }
+            
             this.videoElement.play().catch(e => console.log('Video autoplay blocked:', e));
             this.webrtcConnected = true;
             
