@@ -387,6 +387,41 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/speaker.obj" scale="1. 1. 1."/>
       </geometry>
+      <material name="plastic_black"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.001102 0.0196644 0.0271568" rpy="0. 0. 3.1415927"/>
+      <geometry>
+        <mesh filename="package://alfie_urdf/meshes/flsun_rail.obj" scale="1. 1. 1."/>
+      </geometry>
+      <material name="aluminum"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.001302 0.0832644 0.0241568" rpy="0. 0. 1.5707964"/>
+      <geometry>
+        <mesh filename="package://alfie_urdf/meshes/buckdown_spacer.obj" scale="1. 1. 1."/>
+      </geometry>
+      <material name="body_black"/>
+    </visual>
+    <visual>
+      <origin xyz="0.0542854 0.0531264 0.0314244" rpy="0. 0. 0."/>
+      <geometry>
+        <mesh filename="package://alfie_urdf/meshes/wifi_nut.obj" scale="1. 1. 1."/>
+      </geometry>
+      <material name="brass"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.001135 0.0196674 0.7974541" rpy="3.1415927 0. 0. "/>
+      <geometry>
+        <mesh filename="package://alfie_urdf/meshes/back_servo_frame.obj" scale="1. 1. 1."/>
+      </geometry>
+      <material name="body_black"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0846183 0.0741196 0.0619034" rpy="-1.1724066 0. 0. "/>
+      <geometry>
+        <mesh filename="package://alfie_urdf/meshes/speaker.obj" scale="1. 1. 1."/>
+      </geometry>
       <material name="plastic_grey"/>
     </visual>
     <visual>
