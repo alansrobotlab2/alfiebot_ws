@@ -178,6 +178,12 @@ AFRAME.registerComponent('vr-robot-viewer', {
           link.object3D.quaternion.set(qx, qy, qz, qw);
         }
       }
+      
+      // Update TF counter
+      this.tfUpdateCount++;
+      if (this.tfUpdateCount % 10 === 0) {
+        this.updateTFCount();
+      }
     } catch (error) {
       // Silently ignore TF decode errors
     }

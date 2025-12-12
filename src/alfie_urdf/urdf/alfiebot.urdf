@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<robot name="alfiebot.021.urdf">
+<robot name="alfiebot">
 
   <material name="aluminum_black">
-    <color rgba="0.1 0.1 0.1 1"/>
+    <color rgba="0.05 0.05 0.05 1"/>
   </material>
 
   <material name="body_black">
-    <color rgba="0.15 0.15 0.15 1"/>
+    <color rgba="0.1 0.1 0.1 1"/>
   </material>
 
   <material name="plastic_black">
@@ -29,8 +29,6 @@
     <color rgba="0.66 0.67 0.71 1"/>
   </material>
 
-
-
   <material name="rubber_black">
     <color rgba="0.05 0.05 0.05 1"/>
   </material>
@@ -48,7 +46,7 @@
   </material>
 
   <material name="plastic_grey">
-    <color rgba="0.5 0.5 0.5 1"/>
+    <color rgba="0.2 0.2 0.2 1"/>
   </material>
 
   <joint name="back_joint" type="prismatic">
@@ -389,7 +387,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/speaker.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_grey"/>
     </visual>
     <visual>
       <origin xyz="-0.001102 0.0196644 0.0271568" rpy="0. 0. 3.1415927"/>
@@ -659,14 +657,13 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/gripper.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <collision>
       <origin xyz="-0.0313332 -0.0001633 -0.0049882" rpy="0. 0. 0."/>
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/gripper_active_collision.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
     </collision>
   </link>
 
@@ -688,7 +685,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/gripper.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <collision>
       <origin xyz="0.031 -0.0003 -0.0044" rpy="0. 0. 0."/>
@@ -760,7 +757,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/shoulder_bearing.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="-0.0206912 -0.0000007 -0.0509092" rpy="0. 1.5707964 0. "/>
@@ -796,7 +793,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/wrist.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_white"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="0. -0.038 0.019" rpy="1.5707964 1.5707961 -3.1415927"/>
@@ -839,7 +836,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/mecanum_fl_link_hub.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0290498 -0.0101026 0.0282005" rpy="-2.186276 0.5235988 0.9645456"/>
@@ -1020,7 +1017,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/mecanum_fr_link_hub.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_white"/>
+      <material name="aluminum_black"/>
     </visual>
     <collision>
       <origin xyz="0.0290288 -0.0101091 -0.0282764" rpy="3.0898395 0.0013398 1.2734836"/>
@@ -1138,7 +1135,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/mecanum_rl_link_hub.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_white"/>
+      <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="0.0048668 -0.0303695 0.0282246" rpy="-0.9553166 -0.5235988 2.360809 "/>
@@ -1235,7 +1232,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/mecanum_rr_link_hub.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="aluminum_black"/>
     </visual>
     <visual>
       <origin xyz="-0.0289869 0.0100279 -0.0282491" rpy="-1.1055627 -0.7273656 -3.025425 "/>
@@ -1353,7 +1350,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/neck2_frame.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
   </link>
 
@@ -1382,7 +1379,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/neck3_frame.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="aluminum_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="0. 0. 0.0215" rpy="3.1415927 0. 3.1415927"/>
@@ -1525,7 +1522,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/gripper.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <collision>
       <origin xyz="-0.0313332 -0.0001633 -0.0049882" rpy="0. 0. 0."/>
@@ -1547,7 +1544,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/gripper.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="0.03125 -0. -0.005 " rpy="0. 0. 0."/>
@@ -1561,7 +1558,6 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/gripper_passive_collision.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
     </collision>
   </link>
 
@@ -1626,7 +1622,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/shoulder_bearing.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_white"/>
     </visual>
     <visual>
       <origin xyz="-0.0206912 -0.0000007 -0.0509092" rpy="0. 1.5707964 0. "/>
@@ -1662,7 +1658,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/wrist.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="body_black"/>
     </visual>
     <visual>
       <origin xyz="-0. -0.038 0.0185" rpy="-1.5707749 -1.5707961 -0.0000214"/>

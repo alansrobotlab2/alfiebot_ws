@@ -184,6 +184,10 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
                 
                 self.send_response(200)
                 self.send_header('Content-Type', content_type)
+                # Disable caching for development - always fetch fresh files
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
                 self.end_headers()
                 self.wfile.write(content)
             else:
