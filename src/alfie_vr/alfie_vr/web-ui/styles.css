@@ -603,6 +603,8 @@ a-scene {
   right: 80px;
   width: 400px;
   height: calc(100vh - 40px);
+  min-width: 280px;
+  min-height: 200px;
   background: rgba(26, 26, 46, 0.95);
   border-radius: 12px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
@@ -612,10 +614,12 @@ a-scene {
   overflow: hidden;
   backdrop-filter: blur(10px);
   border: 1px solid rgba(102, 126, 234, 0.3);
+  resize: both;
 }
 
 .robot-viewer-panel.minimized {
   height: 50px;
+  resize: none;
 }
 
 .robot-viewer-panel.minimized .robot-viewer-container,
@@ -631,12 +635,23 @@ a-scene {
   padding: 12px 15px;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border-radius: 12px 12px 0 0;
+  cursor: grab;
+  user-select: none;
+}
+
+.robot-viewer-header:active {
+  cursor: grabbing;
+}
+
+.robot-viewer-header.dragging {
+  cursor: grabbing;
 }
 
 .robot-viewer-title {
   color: white;
   font-weight: bold;
   font-size: 16px;
+  pointer-events: none;
 }
 
 .robot-viewer-controls {
@@ -715,6 +730,23 @@ a-scene {
   color: #f44336;
 }
 
+/* Resize handle indicator */
+.robot-viewer-panel::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 12px;
+  height: 12px;
+  background: linear-gradient(135deg, transparent 50%, rgba(102, 126, 234, 0.5) 50%);
+  border-radius: 0 0 8px 0;
+  pointer-events: none;
+}
+
+.robot-viewer-panel.minimized::after {
+  display: none;
+}
+
 /* Responsive adjustments for robot viewer */
 @media (max-width: 1200px) {
   .robot-viewer-panel {
@@ -730,11 +762,13 @@ a-scene {
 @media (max-width: 900px) {
   .robot-viewer-panel {
     width: 100%;
+    left: 0 !important;
     right: 0;
-    top: auto;
+    top: auto !important;
     bottom: 0;
     height: 300px;
     border-radius: 12px 12px 0 0;
+    resize: vertical;
   }
   
   .desktop-interface {

@@ -112,148 +112,7 @@
       </div>
     </div>
 
-    <!-- Desktop Interface -->
-    <div class="desktop-interface" id="desktopInterface">
-      <div class="desktop-header">
-        <div class="desktop-title">AlfieVR</div>
-        <div class="desktop-subtitle">Dual-arm robot control via VR controllers and keyboard</div>
-        
-        <div class="status-section">
-          <h2>🤖 Robot Status</h2>
-          <div class="status-grid">
-            <div class="status-item">
-              <div class="status-indicator" id="leftArmStatus"></div>
-              <span>Left Arm</span>
-            </div>
-            <div class="status-item">
-              <div class="status-indicator" id="rightArmStatus"></div>
-              <span>Right Arm</span>
-            </div>
-            <div class="status-item">
-              <div class="status-indicator" id="vrStatus"></div>
-              <span>VR Connected</span>
-            </div>
-          </div>
-          
-          <!-- Robot Engagement Controls -->
-          <div class="robot-controls">
-            <button id="robotEngageBtn" class="engage-btn" onclick="toggleRobotEngagement()">
-              <span id="engageBtnText">🔌 Connect Robot</span>
-            </button>
-            <div class="engagement-status">
-              <span id="engagementStatusText">Motors Disengaged</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- VR Instructions Section -->
-        <div class="vr-instructions-section">
-          <h2>🥽 VR Controller Instructions</h2>
-          <div class="instructions-content">
-            <div class="instructions-image">
-              <img src="media/telegrip_instructions.jpg" alt="VR Controller Instructions" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
-            </div>
-            <div class="instructions-text">
-              <div class="instruction-item">
-                <strong>Setup:</strong> Go to <span id="vrServerUrl" style="font-family: monospace; background: rgba(255,255,255,0.2); padding: 2px 6px; border-radius: 4px;">https://loading...</span> in your headset's browser and click "Start"
-              </div>
-              <div class="instruction-item">
-                <strong>Grip Button:</strong> The robot arm's gripper tip will track your relative controller movements as long as you hold the grip button
-              </div>
-              <div class="instruction-item">
-                <strong>Controller Orientation:</strong> Roll and pitch of your controller will be matched on the wrist joint of the robot arm
-              </div>
-              <div class="instruction-item">
-                <strong>Trigger Button:</strong> The gripper stays closed while you hold the trigger button. Release the trigger button to open the gripper.
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="keyboard-help">
-        <!-- Collapsed state: just the enable button -->
-        <div class="keyboard-help-collapsed">
-          <div class="control-toggle" id="keyboardToggle" onclick="toggleKeyboardControl()">
-            <span>🎮</span>
-            <span id="keyboardToggleText">Enable Keyboard Control</span>
-          </div>
-        </div>
-        
-        <!-- Expanded state: title, disable button, and content -->
-        <div class="keyboard-help-expanded">
-          <div class="keyboard-help-header">
-            <div class="control-toggle active" onclick="toggleKeyboardControl()">
-              <span>🎮</span>
-              <span>Disable Keyboard Control</span>
-            </div>
-            <div class="help-title">
-              <span>⌨️</span>
-              Keyboard Controls
-            </div>
-          </div>
-          
-          <div class="help-columns">
-            <div class="help-column">
-              <h4>Left Arm</h4>
-              <div class="key-group">
-                <div class="key-row">
-                  <span><kbd class="key">W</kbd> / <kbd class="key">S</kbd></span>
-                  <span class="key-desc">Forward / Backward</span>
-                </div>
-                <div class="key-row">
-                  <span><kbd class="key">A</kbd> / <kbd class="key">D</kbd></span>
-                  <span class="key-desc">Left / Right</span>
-                </div>
-                <div class="key-row">
-                  <span><kbd class="key">Q</kbd> / <kbd class="key">E</kbd></span>
-                  <span class="key-desc">Down / Up</span>
-                </div>
-                <div class="key-row">
-                  <span><kbd class="key">Z</kbd> / <kbd class="key">X</kbd></span>
-                  <span class="key-desc">Wrist Roll</span>
-                </div>
-                <div class="key-row">
-                  <span><kbd class="key">F</kbd></span>
-                  <span class="key-desc">Toggle Gripper</span>
-                </div>
-              </div>
-            </div>
-            
-            <div class="help-column">
-              <h4>Right Arm</h4>
-              <div class="key-group">
-                <div class="key-row">
-                  <span><kbd class="key">I</kbd> / <kbd class="key">K</kbd></span>
-                  <span class="key-desc">Forward / Backward</span>
-                </div>
-                <div class="key-row">
-                  <span><kbd class="key">J</kbd> / <kbd class="key">L</kbd></span>
-                  <span class="key-desc">Left / Right</span>
-                </div>
-                <div class="key-row">
-                  <span><kbd class="key">U</kbd> / <kbd class="key">O</kbd></span>
-                  <span class="key-desc">Up / Down</span>
-                </div>
-                <div class="key-row">
-                  <span><kbd class="key">N</kbd> / <kbd class="key">M</kbd></span>
-                  <span class="key-desc">Wrist Roll</span>
-                </div>
-                <div class="key-row">
-                  <span><kbd class="key">;</kbd></span>
-                  <span class="key-desc">Toggle Gripper</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #bdc3c7; color: #7f8c8d; font-size: 13px;">
-            <strong>Tips:</strong> Position control activates automatically when you press movement keys. 
-            Use <kbd class="key">ESC</kbd> to stop the system.
-          </div>
-        </div>
-      </div>
-    </div>
+    
 
     <!-- Robot Viewer Panel (right side) -->
     <div class="robot-viewer-panel" id="robotViewerPanel">
@@ -300,9 +159,9 @@
         <a-plane id="videoScreen" position="0 -0.4 -3.0" width="1.8" height="1.2" material="shader: flat; src: #videoCanvas" visible="false"></a-plane>
         
         <!-- VR Robot Viewer Panel (Head Locked - follows headset view) -->
-        <a-entity id="vrRobotViewer" position="1.5 -0.5 -3.0" rotation="0 -20 0" scale="1.5 1.5 1.5" vr-robot-viewer>
+        <a-entity id="vrRobotViewer" position="1.5 -0.6 -3.25" rotation="0 -20 0" scale="1.5 1.5 1.5" vr-robot-viewer>
           <!-- Panel background -->
-          <a-plane id="vrRobotPanel" width="0.6" height="1.0" color="#1a1a2e" opacity="1.0" 
+          <a-plane id="vrRobotPanel" width="0.6" height="0.85" color="#1a1a2e" opacity="0.6" 
                    material="shader: flat; side: double"></a-plane>
           
           <!-- Panel header -->
@@ -316,15 +175,10 @@
                   align="left" color="#aaaaaa" scale="0.04 0.04 0.04"></a-text>
           
           <!-- Robot model container (scaled down) -->
-          <a-entity id="vrRobotModel" position="0 -0.175 0.15" scale="0.6 0.6 0.6" rotation="0 180 0">
+          <a-entity id="vrRobotModel" position="0 -0.195 0.15" scale="0.6 0.6 0.6" rotation="0 180 0">
             <!-- Robot model will be dynamically added here -->
           </a-entity>
           
-          <!-- Grid floor for reference -->
-          <a-entity position="0 -0.47 0.05">
-            <a-plane width="0.5" height="0.3" rotation="-90 0 0" color="#333344" 
-                     material="shader: flat; opacity: 0.5"></a-plane>
-          </a-entity>
         </a-entity>
       </a-entity>
 

@@ -418,7 +418,168 @@ document.addEventListener('DOMContentLoaded', () => {
       closeSettings();
     }
   });
+  
+  // Initialize draggable robot viewer panel
+  initDraggablePanel();
 });
+
+// Make robot viewer panel draggable
+function initDraggablePanel() {
+  const panel = document.getElementById('robotViewerPanel');
+  const header = panel?.querySelector('.robot-viewer-header');
+  
+  if (!panel || !header) return;
+  
+  let isDragging = false;
+  let startX, startY;
+  let initialLeft, initialTop;
+  
+  // Convert from right positioning to left positioning for dragging
+  const initializePosition = () => {
+    const rect = panel.getBoundingClientRect();
+    panel.style.left = rect.left + 'px';
+    panel.style.top = rect.top + 'px';
+    panel.style.right = 'auto';
+  };
+  
+  header.addEventListener('mousedown', (e) => {
+    // Don't drag if clicking on buttons
+    if (e.target.closest('.robot-viewer-controls')) return;
+    
+    isDragging = true;
+    header.classList.add('dragging');
+    
+    // Initialize position on first drag
+    if (panel.style.left === '' || panel.style.left === 'auto') {
+      initializePosition();
+    }
+    
+    startX = e.clientX;
+    startY = e.clientY;
+    initialLeft = parseInt(panel.style.left) || 0;
+    initialTop = parseInt(panel.style.top) || 0;
+    
+    e.preventDefault();
+  });
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    
+    const deltaX = e.clientX - startX;
+    const deltaY = e.clientY - startY;
+    
+    let newLeft = initialLeft + deltaX;
+    let newTop = initialTop + deltaY;
+    
+    // Constrain to viewport
+    const rect = panel.getBoundingClientRect();
+    const maxLeft = window.innerWidth - rect.width;
+    const maxTop = window.innerHeight - 50; // Keep at least header visible
+    
+    newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+    newTop = Math.max(0, Math.min(newTop, maxTop));
+    
+    panel.style.left = newLeft + 'px';
+    panel.style.top = newTop + 'px';
+  });
+  
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      header.classList.remove('dragging');
+      // Save position to localStorage
+      savePanelPosition(panel);
+    }
+  });
+  
+  // Touch support for mobile/tablets
+  header.addEventListener('touchstart', (e) => {
+    if (e.target.closest('.robot-viewer-controls')) return;
+    
+    isDragging = true;
+    header.classList.add('dragging');
+    
+    if (panel.style.left === '' || panel.style.left === 'auto') {
+      initializePosition();
+    }
+    
+    const touch = e.touches[0];
+    startX = touch.clientX;
+    startY = touch.clientY;
+    initialLeft = parseInt(panel.style.left) || 0;
+    initialTop = parseInt(panel.style.top) || 0;
+  });
+  
+  document.addEventListener('touchmove', (e) => {
+    if (!isDragging) return;
+    
+    const touch = e.touches[0];
+    const deltaX = touch.clientX - startX;
+    const deltaY = touch.clientY - startY;
+    
+    let newLeft = initialLeft + deltaX;
+    let newTop = initialTop + deltaY;
+    
+    const rect = panel.getBoundingClientRect();
+    const maxLeft = window.innerWidth - rect.width;
+    const maxTop = window.innerHeight - 50;
+    
+    newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+    newTop = Math.max(0, Math.min(newTop, maxTop));
+    
+    panel.style.left = newLeft + 'px';
+    panel.style.top = newTop + 'px';
+  });
+  
+  document.addEventListener('touchend', () => {
+    if (isDragging) {
+      isDragging = false;
+      header.classList.remove('dragging');
+      savePanelPosition(panel);
+    }
+  });
+  
+  // Handle resize events to update URDF viewer
+  const resizeObserver = new ResizeObserver(() => {
+    // Trigger URDF viewer resize if it exists
+    if (window.urdfViewer && typeof window.urdfViewer.onResize === 'function') {
+      window.urdfViewer.onResize();
+    }
+    savePanelPosition(panel);
+  });
+  resizeObserver.observe(panel);
+  
+  // Restore saved position
+  restorePanelPosition(panel);
+}
+
+function savePanelPosition(panel) {
+  const position = {
+    left: panel.style.left,
+    top: panel.style.top,
+    width: panel.style.width || panel.offsetWidth + 'px',
+    height: panel.style.height || panel.offsetHeight + 'px'
+  };
+  localStorage.setItem('robotViewerPanelPosition', JSON.stringify(position));
+}
+
+function restorePanelPosition(panel) {
+  const saved = localStorage.getItem('robotViewerPanelPosition');
+  if (saved) {
+    try {
+      const position = JSON.parse(saved);
+      if (position.left && position.left !== 'auto') {
+        panel.style.left = position.left;
+        panel.style.right = 'auto';
+      }
+      if (position.top) panel.style.top = position.top;
+      if (position.width) panel.style.width = position.width;
+      if (position.height) panel.style.height = position.height;
+    } catch (e) {
+      console.warn('Failed to restore panel position:', e);
+    }
+  }
+}
 
 // Handle window resize
 window.addEventListener('resize', updateUIForDevice); 
