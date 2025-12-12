@@ -14,7 +14,7 @@
 <robot name="alfiebot.urdf">
 
   <material name="aluminum_black">
-    <color rgba="0.1 0.1 0.1 1"/>
+    <color rgba="0.05 0.05 0.05 1"/>
   </material>
 
   <material name="body_black">
@@ -23,7 +23,7 @@
   </material>
 
   <material name="body_black">
-    <color rgba="0.15 0.15 0.15 1"/>
+    <color rgba="0.1 0.1 0.1 1"/>
   </material>
 
 >>>>>>> a3fc23a (urdf update, reference package, add some color)
@@ -49,8 +49,6 @@
     <color rgba="0.66 0.67 0.71 1"/>
   </material>
 
-
-
   <material name="rubber_black">
     <color rgba="0.05 0.05 0.05 1"/>
     <color rgba="0.05 0.05 0.05 1"/>
@@ -70,10 +68,14 @@
 
   <material name="plastic_grey">
 <<<<<<< HEAD
+<<<<<<< HEAD
     <color rgba="0.2 0.2 0.2 1"/>
   </material>
 =======
     <color rgba="0.5 0.5 0.5 1"/>
+=======
+    <color rgba="0.2 0.2 0.2 1"/>
+>>>>>>> 0330203 (urdf color fixes, nocache on web app)
   </material>
 
 <<<<<<< HEAD
@@ -422,7 +424,7 @@
       <geometry>
         <mesh filename="package://alfie_urdf/meshes/speaker.obj" scale="1. 1. 1."/>
       </geometry>
-      <material name="plastic_black"/>
+      <material name="plastic_grey"/>
     </visual>
     <visual>
       <origin xyz="-0.001102 0.0196644 0.0271568" rpy="0. 0. 3.1415927"/>

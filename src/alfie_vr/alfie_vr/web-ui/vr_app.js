@@ -255,7 +255,16 @@ AFRAME.registerComponent('vr-robot-viewer', {
           link.object3D.quaternion.set(qx, qy, qz, qw);
         }
       }
+<<<<<<< HEAD
 >>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
+=======
+      
+      // Update TF counter
+      this.tfUpdateCount++;
+      if (this.tfUpdateCount % 10 === 0) {
+        this.updateTFCount();
+      }
+>>>>>>> 0330203 (urdf color fixes, nocache on web app)
     } catch (error) {
       // Silently ignore TF decode errors
     }
