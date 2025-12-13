@@ -54,6 +54,7 @@ setup(
         'console_scripts': [
             'alfie_teleop_vr = alfie_vr.alfie_teleop_vr:main',
             'ros_video_webrtc = alfie_vr.ros_video_webrtc:main',
+            'ros_video_webrtc_hw = alfie_vr.ros_video_webrtc_hw:main',
         ],
     },
 )
