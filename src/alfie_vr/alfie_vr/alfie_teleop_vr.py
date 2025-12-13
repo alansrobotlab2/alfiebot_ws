@@ -193,7 +193,7 @@ class AlfieTeleopVRNode(Node):
         
         # Debug visualizer (initialized after arm controllers)
         self.debug_visualizer = None
-        self.enable_debug_viz = enable_debug_viz
+        self.enable_debug_viz = False  # Set to False to disable
         self.latest_left_controller_goal = None  # Store for visualization
         
         # Create timer for visualization data update at 30Hz (just pushes data to viz thread)

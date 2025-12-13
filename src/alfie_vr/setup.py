@@ -55,9 +55,13 @@ setup(
             'alfie_teleop_vr = alfie_vr.alfie_teleop_vr:main',
             'ros_video_webrtc = alfie_vr.ros_video_webrtc:main',
 <<<<<<< HEAD
+<<<<<<< HEAD
             'ros_video_webrtc_hw = alfie_vr.ros_video_webrtc_hw:main',
 =======
 >>>>>>> f2f9ab9 (use webrtc for video streaming)
+=======
+            'ros_video_webrtc_hw = alfie_vr.ros_video_webrtc_hw:main',
+>>>>>>> 154ed15 (hw encoded video streaming, 3mbs)
         ],
     },
 )
