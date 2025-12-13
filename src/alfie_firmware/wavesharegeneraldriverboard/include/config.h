@@ -15,7 +15,8 @@ Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 #define PWMFREQUENCY 512
 
 // Task watchdog timeout in seconds - ESP32 will reboot if task doesn't feed WDT within this time
-#define TASK_WDT_TIMEOUT_S 1
+// Set to 3s to tolerate occasional blocking operations (ping, service calls)
+#define TASK_WDT_TIMEOUT_S 3
 
 #include <cstdint>
 #include <Arduino.h>
@@ -60,7 +61,9 @@ Board 1: /dev/ttyUSB1 - left arm, eye lights, shoulder limit switch
 #define S_RXD 18
 #define S_TXD 19
 
-#define WATCHDOG_TIMEOUT_MS 100
+// Command watchdog timeout - if no GDBCmd received within this time, disable servos/motors
+// Set to 500ms to tolerate blocking ROS operations (ping can block up to 200ms)
+#define WATCHDOG_TIMEOUT_MS 500
 
 
 #define HEARTBEAT_TIMEOUT_MS 10

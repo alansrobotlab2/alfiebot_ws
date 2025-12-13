@@ -45,11 +45,23 @@ void service_callback(const void *request, void *response)
   uint8_t address = req->address;
 
   // coordinate with the servo update loop to pause it while we do this operation
+  // Add timeout to prevent blocking forever if servo loop hangs
   b.servoLoopState = b.REQUEST_STOP;
 
-  while (b.servoLoopState != b.STOPPED)
+  const int MAX_WAIT_MS = 100;  // Maximum 100ms wait for servo loop to stop
+  int wait_count = 0;
+  while (b.servoLoopState != b.STOPPED && wait_count < MAX_WAIT_MS)
   {
     vTaskDelay(pdMS_TO_TICKS(1));
+    wait_count++;
+  }
+  
+  // If we timed out, force resume and return error
+  if (b.servoLoopState != b.STOPPED)
+  {
+    b.servoLoopState = b.RUNNING;
+    res->memorymap.readmemoryresult = -1;  // Indicate timeout error
+    return;
   }
 
   switch (req->operation)

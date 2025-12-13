@@ -119,7 +119,8 @@ void vHardwareInterfaceTask(void *pvParameters)
       {
       case b.WAITING_AGENT:
         // Every 500ms, check if the micro-ROS agent is available and update agentState accordingly.
-        EXECUTE_EVERY_N_MS(100, b.agentState = (RMW_RET_OK == rmw_uros_ping_agent(50, 1)) ? b.AGENT_AVAILABLE : b.WAITING_AGENT;);
+        // Use short timeout (20ms, 1 attempt) to avoid blocking too long
+        EXECUTE_EVERY_N_MS(100, b.agentState = (RMW_RET_OK == rmw_uros_ping_agent(20, 1)) ? b.AGENT_AVAILABLE : b.WAITING_AGENT;);
         vTaskDelay(pdMS_TO_TICKS(50));
         break;
       case b.AGENT_AVAILABLE:
@@ -132,7 +133,12 @@ void vHardwareInterfaceTask(void *pvParameters)
         break;
       case b.AGENT_CONNECTED:
         // Check connection health every 200ms
-        EXECUTE_EVERY_N_MS(200, b.agentState = (RMW_RET_OK == rmw_uros_ping_agent(100, 10)) ? b.AGENT_CONNECTED : b.AGENT_DISCONNECTED;);
+        // Use shorter timeout (50ms, 2 attempts = max 100ms blocking) to avoid starving cmd callbacks
+        // Feed watchdog before potentially blocking ping operation
+        EXECUTE_EVERY_N_MS(200, 
+          esp_task_wdt_reset();
+          b.agentState = (RMW_RET_OK == rmw_uros_ping_agent(50, 2)) ? b.AGENT_CONNECTED : b.AGENT_DISCONNECTED;
+        );
         RCSOFTCHECK(rcl_publish(&b.publisher, &b.driverState, NULL));
 
         // Process ROS callbacks (commands) - give it 1ms to process queued messages
