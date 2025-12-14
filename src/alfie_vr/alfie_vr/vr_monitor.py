@@ -265,7 +265,7 @@ class SimpleHTTPSServer:
 class VRMonitor:
     """VR control information monitor"""
     
-    def __init__(self, vr_debug=True):
+    def __init__(self, debug_logs: bool = False):
         self.config = None
         self.vr_server = None
         self.https_server = None
@@ -275,7 +275,7 @@ class VRMonitor:
         self.right_goal = None
         self.headset_goal = None  # Add headset goal
         self._goal_lock = threading.Lock()  # Add thread lock
-        self.vr_debug = vr_debug
+        self.debug_logs = debug_logs  # Debug logging flag
     
     def initialize(self):
         """Initialize VR monitor"""
@@ -305,7 +305,7 @@ class VRMonitor:
                 command_queue=self.command_queue,
                 config=self.config,
                 print_only=False,  # Changed to False to send data to queue
-                vr_debug=self.vr_debug,  # Enable verbose VR debug output
+                debug_logs=self.debug_logs  # Pass debug logging flag
             )
         except Exception as e:
             print(f"❌ Failed to create VR WebSocket server: {e}")

@@ -159,8 +159,8 @@ class AlfieTeleopVRNode(Node):
         # Create timer for 100Hz publishing
         self.timer = self.create_timer(0.01, self.publish_robotlowcmd)  # 100Hz = 0.01s period
         
-        # Create VR monitor
-        self.vr_monitor = VRMonitor(vr_debug=False)
+        # Create VR monitor (pass debug_logs flag)
+        self.vr_monitor = VRMonitor(debug_logs=self.debug_logs)
         
         # Thread for running VR monitor async loop
         self.vr_thread = None
@@ -255,14 +255,15 @@ class AlfieTeleopVRNode(Node):
             kinematics=self.kinematics_left,
             prefix='left',
             kp=1,
-            config=self.config
+            debug_logs=self.debug_logs
         )
         self.right_arm = SimpleTeleopArm(
             joint_map=RIGHT_ARM_JOINT_MAP,
             robotlowstate=robot_state,
             kinematics=self.kinematics_right,
             prefix='right',
-            kp=1
+            kp=1,
+            debug_logs=self.debug_logs
         )
 
         # Call back calibration service if not already calibrated

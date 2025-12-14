@@ -69,21 +69,29 @@ class VRWebSocketServer(BaseInputProvider):
     """WebSocket server for VR controller input."""
     
 <<<<<<< HEAD
+<<<<<<< HEAD
     def __init__(self, command_queue: asyncio.Queue, config: AlfieVRConfig, print_only: bool = False, debug_logs: bool = False):
 =======
     def __init__(self, command_queue: asyncio.Queue, config: AlfieVRConfig, print_only: bool = False, vr_debug: bool = True):
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+    def __init__(self, command_queue: asyncio.Queue, config: AlfieVRConfig, print_only: bool = False, debug_logs: bool = False):
+>>>>>>> 289bf8f (enable conditional debug logs)
         super().__init__(command_queue)
         self.config = config
         self.clients: Set = set()
         self.server = None
         self.print_only = print_only  # New flag for print-only mode
 <<<<<<< HEAD
+<<<<<<< HEAD
         self.debug_logs = debug_logs  # Debug logging flag
 =======
         self.vr_debug = vr_debug  # Enable verbose VR debug output
         self.vr_debug = vr_debug  # Enable verbose VR debug output
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+        self.debug_logs = debug_logs  # Debug logging flag
+>>>>>>> 289bf8f (enable conditional debug logs)
         
         # Controller states
         self.left_controller = VRControllerState("left")
@@ -94,16 +102,22 @@ class VRWebSocketServer(BaseInputProvider):
         self.right_arm_origin_position = None
     
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 289bf8f (enable conditional debug logs)
     def debug_print(self, msg: str):
         """Print debug message only if debug_logs is enabled."""
         if self.debug_logs:
             print(msg)
+<<<<<<< HEAD
 =======
     def _debug_print(self, message: str):
         """Print debug message if vr_debug is enabled."""
         if self.vr_debug:
             print(message)
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+>>>>>>> 289bf8f (enable conditional debug logs)
     
     def setup_ssl(self) -> Optional[ssl.SSLContext]:
         """Setup SSL context for WebSocket server."""
@@ -228,6 +242,7 @@ class VRWebSocketServer(BaseInputProvider):
         # Only print when there is activity
         if has_thumbstick_or_button_activity:
 <<<<<<< HEAD
+<<<<<<< HEAD
             self.debug_print(f"[VR_WS] Activity detected:")
             for info in thumbstick_info:
                 self.debug_print(f"  {info}")
@@ -235,11 +250,18 @@ class VRWebSocketServer(BaseInputProvider):
                 self.debug_print(f"  {info}")
 =======
             self._debug_print(f"[VR_WS] Activity detected:")
+=======
+            self.debug_print(f"[VR_WS] Activity detected:")
+>>>>>>> 289bf8f (enable conditional debug logs)
             for info in thumbstick_info:
-                self._debug_print(f"  {info}")
+                self.debug_print(f"  {info}")
             for info in button_info:
+<<<<<<< HEAD
                 self._debug_print(f"  {info}")
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+                self.debug_print(f"  {info}")
+>>>>>>> 289bf8f (enable conditional debug logs)
         
         # Process headset data if available
         if 'headset' in data:
@@ -260,10 +282,14 @@ class VRWebSocketServer(BaseInputProvider):
                     pass
                 else:
 <<<<<<< HEAD
+<<<<<<< HEAD
                     self.debug_print(f"[VR_WS] Headset - Position: [{px:.3f}, {py:.3f}, {pz:.3f}], "
 =======
                     print(f"[VR_WS] Headset - Position: [{px:.3f}, {py:.3f}, {pz:.3f}], "
 >>>>>>> 741f959 (urdf rendered correctly; laggy; no tf)
+=======
+                    self.debug_print(f"[VR_WS] Headset - Position: [{px:.3f}, {py:.3f}, {pz:.3f}], "
+>>>>>>> 289bf8f (enable conditional debug logs)
                           f"Rotation: [{rot.get('x', 0):.1f}, {rot.get('y', 0):.1f}, {rot.get('z', 0):.1f}]")
                     
                     # Create headset ControlGoal
@@ -334,10 +360,14 @@ class VRWebSocketServer(BaseInputProvider):
         # Print trigger value if it's being squeezed (for debugging)
         if trigger > 0.01:
 <<<<<<< HEAD
+<<<<<<< HEAD
             self.debug_print(f"[VR_WS] {hand.upper()} trigger: {trigger:.3f} (active: {trigger_active})")
 =======
             self._debug_print(f"[VR_WS] {hand.upper()} trigger: {trigger:.3f} (active: {trigger_active})")
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+            self.debug_print(f"[VR_WS] {hand.upper()} trigger: {trigger:.3f} (active: {trigger_active})")
+>>>>>>> 289bf8f (enable conditional debug logs)
         
         # Always send gripper control with analog trigger value
         # Reverse behavior: gripper open by default, closes when trigger pressed
@@ -359,10 +389,14 @@ class VRWebSocketServer(BaseInputProvider):
         if trigger_active != controller.trigger_active:
             controller.trigger_active = trigger_active
 <<<<<<< HEAD
+<<<<<<< HEAD
             self.debug_print(f"[VR_WS] 🤏 {hand.upper()} trigger: {trigger:.2f} - gripper {'OPENED' if trigger_active else 'CLOSED'}")
 =======
             self._debug_print(f"[VR_WS] 🤏 {hand.upper()} trigger: {trigger:.2f} - gripper {'OPENED' if trigger_active else 'CLOSED'}")
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+            self.debug_print(f"[VR_WS] 🤏 {hand.upper()} trigger: {trigger:.2f} - gripper {'OPENED' if trigger_active else 'CLOSED'}")
+>>>>>>> 289bf8f (enable conditional debug logs)
             logger.info(f"🤏 {hand.upper()} trigger: {trigger:.2f} - gripper {'OPENED' if trigger_active else 'CLOSED'}")
         
         # Modified: directly respond to controller position, no need to press squeeze button

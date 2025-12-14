@@ -15,10 +15,17 @@ class SimpleTeleopArm:
     """
     
 <<<<<<< HEAD
+<<<<<<< HEAD
     def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1, debug_logs=False):
 =======
     def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1, config=None):
 >>>>>>> 2926fdb (Kinematics updates (#6))
+=======
+    def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1, config=None):
+=======
+    def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1, debug_logs=False):
+>>>>>>> 511670b (enable conditional debug logs)
+>>>>>>> 289bf8f (enable conditional debug logs)
         """
         Initialize the SimpleTeleopArm with joint mapping and initial state.
 
@@ -28,6 +35,7 @@ class SimpleTeleopArm:
             kinematics (object): Kinematics model for inverse kinematics calculations.
             prefix (str, optional): Prefix for the arm (e.g., "left" or "right"). Defaults to "right".
             kp (float, optional): Proportional gain for the control loop. Defaults to 1.
+<<<<<<< HEAD
 <<<<<<< HEAD
             debug_logs (bool, optional): Enable debug logging. Defaults to False.
 =======
@@ -48,6 +56,19 @@ class SimpleTeleopArm:
         self.vr_y_multiplier = 20  # Scale for arm reach (Y)
         self.vr_z_multiplier = 20  # Scale for arm reach (Z->X)
 >>>>>>> 3f51f8f (add multipliers for kinematics and head)
+=======
+            config (AlfieTeleopVRConfig, optional): Configuration object. Defaults to None (uses default config).
+=======
+            debug_logs (bool, optional): Enable debug logging. Defaults to False.
+>>>>>>> 511670b (enable conditional debug logs)
+        """
+        self.debug_logs = debug_logs
+
+        # VR position multipliers (VR controller position -> robot arm movement)
+        self.vr_x_multiplier = 40  # Scale for shoulder rotate
+        self.vr_y_multiplier = 40  # Scale for arm reach (Y)
+        self.vr_z_multiplier = 40  # Scale for arm reach (Z->X)
+>>>>>>> 289bf8f (enable conditional debug logs)
         
         # Wrist multipliers (VR controller rotation -> robot wrist rotation)
         self.wrist_pitch_multiplier = 2.0
