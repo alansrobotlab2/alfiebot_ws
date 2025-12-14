@@ -85,10 +85,8 @@ OTHER_JOINT_NAMES = [
 class MasterStatusNode(Node):
     def __init__(self):
         super().__init__('master_status_node')
-        # Use BEST_EFFORT QoS for gdb state subscriptions (to match gdb publishers)
+        # Use BEST_EFFORT QoS for all communication
         qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        # Use RELIABLE QoS for robot state topic
-        qos_reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         
         # Use shared servo polarity configuration
         self.servo_polarity = SERVO_POLARITY
@@ -134,26 +132,26 @@ class MasterStatusNode(Node):
             qos_best_effort
         )
         
-        # Subscribe to Jetson state (use RELIABLE for Jetson stats)
+        # Subscribe to Jetson state (use BEST_EFFORT)
         self.jetson_sub = self.create_subscription(
             JetsonState,
             'low/jetsonstate',
             self.jetson_callback,
-            qos_reliable
+            qos_best_effort
         )
         
-        # Publisher for robot low state (use RELIABLE for subscribers)
+        # Publisher for robot low state (use BEST_EFFORT)
         self.robot_state_pub = self.create_publisher(
             RobotLowState,
             'robotlowstate',
-            qos_reliable
+            qos_best_effort
         )
         
-        # Publisher for joint states (standard ROS2 joint state topic)
+        # Publisher for joint states (use BEST_EFFORT)
         self.joint_state_pub = self.create_publisher(
             JointState,
             'joint_states',
-            qos_reliable
+            qos_best_effort
         )
         
         # Create timer for 100Hz publishing (0.01 seconds = 10ms)

@@ -115,11 +115,16 @@ This firmware uses micro-ROS to communicate with ROS2. The following custom mess
 - `alfie_msgs/srv/BackRequestCalibration`: Calibration service (request: empty, response: bool success)
 
 ### Topics
-- Subscriber: `/backcmd` - Receives actuator commands
-- Publisher: `/backstate` - Publishes actuator state at 100Hz
+- Subscriber: `/backcmd` - Receives actuator commands (Best Effort QoS)
+- Publisher: `/backstate` - Publishes actuator state at 100Hz (Best Effort QoS)
 
 ### Services
-- Service: `/calibrate_back` - Calibration service (type: `alfie_msgs/srv/BackRequestCalibration`)
+- Service: `/calibrate_back` - Calibration service (type: `alfie_msgs/srv/BackRequestCalibration`, Reliable QoS)
+
+### QoS Configuration
+All topic publishers and subscribers use **Best Effort** QoS for low-latency communication. This prioritizes speed over guaranteed delivery, which is appropriate for real-time motor control where stale data is worse than missing a single message.
+
+The calibration service uses **Reliable** QoS to ensure request/response delivery for the calibration procedure.
 
 ### Calibration Procedure
 

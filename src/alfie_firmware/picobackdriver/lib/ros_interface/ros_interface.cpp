@@ -91,7 +91,8 @@ bool createRosEntities(void) {
     }
     
     // Create subscriber for backcmd topic (uses node namespace)
-    ret = rclc_subscription_init_default(
+    // Using best effort QoS for low-latency communication
+    ret = rclc_subscription_init_best_effort(
         &back_subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, BackCmd),
@@ -104,7 +105,8 @@ bool createRosEntities(void) {
     }
     
     // Create publisher for back state (uses node namespace)
-    ret = rclc_publisher_init_default(
+    // Using best effort QoS for low-latency communication
+    ret = rclc_publisher_init_best_effort(
         &state_publisher,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, BackState),

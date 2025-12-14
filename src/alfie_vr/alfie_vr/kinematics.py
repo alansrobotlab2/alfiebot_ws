@@ -266,11 +266,11 @@ class SimpleTeleopArm:
         self.target_positions["wrist_flex"] = (-self.target_positions["shoulder_lift"] - 
                                                self.target_positions["elbow_flex"] + self.pitch)
    
-        # Handle gripper state directly (in radians)
-        if vr_goal.metadata.get('trigger', 0) > 0.5:
-            self.target_positions["gripper"] = 0.785  # ~45 degrees in radians
-        else:
-            self.target_positions["gripper"] = 0.0
+        # Handle gripper state proportionally based on trigger value (in radians)
+        # Trigger value 0.0-1.0 maps to gripper 0.0-0.785 radians (~0-45 degrees)
+        trigger_value = vr_goal.metadata.get('trigger', 0)
+        trigger_value = max(0.0, min(1.0, trigger_value))  # Clamp to 0-1 range
+        self.target_positions["gripper"] = trigger_value * 0.785
 
     def p_control_action(self, robot):
         """

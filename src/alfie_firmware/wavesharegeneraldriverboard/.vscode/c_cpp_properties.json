@@ -500,7 +500,7 @@
                 "RMW_UXRCE_MAX_SUBSCRIPTIONS=1",
                 "RMW_UXRCE_MAX_SERVICES=1",
                 "RMW_UXRCE_MAX_CLIENTS=1",
-                "RMW_UXRCE_MAX_HISTORY=1",
+                "RMW_UXRCE_MAX_HISTORY=4",
                 "HAVE_CONFIG_H",
                 "MBEDTLS_CONFIG_FILE=\"mbedtls/esp_config.h\"",
                 "UNITY_INCLUDE_CONFIG_H",

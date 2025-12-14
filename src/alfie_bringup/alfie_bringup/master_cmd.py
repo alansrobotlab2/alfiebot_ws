@@ -42,8 +42,8 @@ SERVO_ACCEL_UNITS_TO_STEPS_PER_SEC2 = 100.0
 class MasterCmdNode(Node):
     def __init__(self):
         super().__init__('master_cmd_node')
-        # Use RELIABLE QoS for command topics
-        qos_reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        # Use BEST_EFFORT QoS for all communication
+        qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         
         # Use shared servo polarity configuration
         self.servo_polarity = SERVO_POLARITY
@@ -55,32 +55,32 @@ class MasterCmdNode(Node):
         self.last_robot_cmd_time = None
         self.last_warn_time = None  # For throttling warnings
         
-        # Subscribe to robot low command (use RELIABLE)
+        # Subscribe to robot low command (use BEST_EFFORT)
         self.robot_cmd_sub = self.create_subscription(
             RobotLowCmd,
             'robotlowcmd',
             self.robot_cmd_callback,
-            qos_reliable
+            qos_best_effort
         )
         
-        # Publishers for gdb commands (use RELIABLE)
+        # Publishers for gdb commands (use BEST_EFFORT)
         self.gdb0_cmd_pub = self.create_publisher(
             GDBCmd,
             'low/gdb0cmd',
-            qos_reliable
+            qos_best_effort
         )
         
         self.gdb1_cmd_pub = self.create_publisher(
             GDBCmd,
             'low/gdb1cmd',
-            qos_reliable
+            qos_best_effort
         )
         
-        # Publisher for back command (use RELIABLE)
+        # Publisher for back command (use BEST_EFFORT)
         self.back_cmd_pub = self.create_publisher(
             BackCmd,
             'low/backcmd',
-            qos_reliable
+            qos_best_effort
         )
         
         # Create timer for 100Hz publishing (0.01 seconds = 10ms)

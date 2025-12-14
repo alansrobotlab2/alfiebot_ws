@@ -15,6 +15,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from alfie_msgs.msg import RobotLowCmd, RobotLowState, ServoCmd, BackCmd
 from alfie_msgs.srv import BackRequestCalibration
 from geometry_msgs.msg import Twist
@@ -546,11 +547,14 @@ class AlfieTeleopVRNode(Node):
         # Create callback group for state subscription
         self.state_callback_group = ReentrantCallbackGroup()
         
+        # QoS profile for best effort communication
+        qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        
         # Create publisher for robot low-level commands
         self.cmd_publisher = self.create_publisher(
             RobotLowCmd,
             '/alfie/robotlowcmd',
-            1
+            qos_best_effort
         )
         
         # Create subscriber for robot low-level state
@@ -558,7 +562,7 @@ class AlfieTeleopVRNode(Node):
             RobotLowState,
             '/alfie/robotlowstate',
             self.robot_state_callback,
-            1,
+            qos_best_effort,
             callback_group=self.state_callback_group
         )
         

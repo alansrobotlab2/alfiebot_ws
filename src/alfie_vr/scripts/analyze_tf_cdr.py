@@ -6,6 +6,7 @@ This helps debug the JavaScript CDR decoder.
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from rclpy.serialization import serialize_message, deserialize_message
 from tf2_msgs.msg import TFMessage
 from geometry_msgs.msg import TransformStamped
@@ -16,11 +17,13 @@ class TFAnalyzer(Node):
     def __init__(self):
         super().__init__('tf_analyzer')
         
+        qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        
         self.subscription = self.create_subscription(
             TFMessage,
             '/alfie/tf',
             self.tf_callback,
-            10
+            qos_best_effort
         )
         self.message_count = 0
         self.get_logger().info('TF Analyzer started, listening to /alfie/tf')

@@ -260,8 +260,8 @@ bool create_ros_entities()
       ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, GDBState),
       b.getStatePublisher()));
 
-  // create subscriber
-  RCCHECK(rclc_subscription_init_default(
+  // create subscriber with best-effort QoS for reliable high-frequency command reception
+  RCCHECK(rclc_subscription_init_best_effort(
       &b.subscriber,
       &b.node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, GDBCmd),

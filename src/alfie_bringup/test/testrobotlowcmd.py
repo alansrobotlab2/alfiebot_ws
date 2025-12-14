@@ -10,8 +10,8 @@ class RobotLowCmdPublisher(Node):
     def __init__(self):
         super().__init__('test_robotlowcmd_publisher')
         
-        # QoS profile matching the master_topics node
-        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        # QoS profile - use best effort
+        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         
         # Create publisher
         self.publisher = self.create_publisher(

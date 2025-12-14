@@ -19,6 +19,7 @@ Head roll ranges from -π/4 to π/4 radians (0 when trigger not pressed).
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Joy
 from geometry_msgs.msg import Twist
 from alfie_msgs.msg import RobotLowCmd, ServoCmd
@@ -28,6 +29,9 @@ import math
 class JoyDriveNode(Node):
     def __init__(self):
         super().__init__('joydrive_node')
+        
+        # QoS profile for best effort communication
+        qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         
         # Declare parameters for mecanum drive control
         self.declare_parameter('linear_x_axis', 1)  # Y-axis for forward/backward (axis 1 = left stick Y)
@@ -64,14 +68,14 @@ class JoyDriveNode(Node):
             Joy,
             '/joy',
             self.joy_callback,
-            10
+            qos_best_effort
         )
         
         # Create publisher for robot low-level commands
         self.cmd_pub = self.create_publisher(
             RobotLowCmd,
             '/alfie/robotlowcmd',
-            10
+            qos_best_effort
         )
         
         self.get_logger().info('Joydrive node started (Mecanum drive control + Head servos + Eye brightness + Head roll)')

@@ -9,6 +9,7 @@ Requires: pip install jetson-stats
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from alfie_msgs.msg import JetsonState
 from std_msgs.msg import Header
 import os
@@ -30,11 +31,14 @@ class JetsonStatsNode(Node):
     def __init__(self):
         super().__init__('jetson_stats_node')
         
+        # QoS profile for best effort communication
+        qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        
         # Publisher for Jetson state
         self.publisher = self.create_publisher(
             JetsonState,
             '/alfie/low/jetsonstate',
-            10
+            qos_best_effort
         )
         
         # Try to import jtop

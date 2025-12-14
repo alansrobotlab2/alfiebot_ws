@@ -46,8 +46,7 @@ class RightArmEchoNode(Node):
     def __init__(self):
         super().__init__('right_arm_echo_node')
         
-        # QoS profiles
-        qos_reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        # QoS profiles - use best effort for all communication
         qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         
         # Subscribe to robot low state (use BEST_EFFORT to match publisher)
@@ -58,11 +57,11 @@ class RightArmEchoNode(Node):
             qos_best_effort
         )
         
-        # Publisher for robot low command (use RELIABLE)
+        # Publisher for robot low command (use BEST_EFFORT)
         self.cmd_pub = self.create_publisher(
             RobotLowCmd,
             '/alfie/robotlowcmd',
-            qos_reliable
+            qos_best_effort
         )
         
         # Initialize state storage

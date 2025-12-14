@@ -141,8 +141,9 @@ void vHardwareInterfaceTask(void *pvParameters)
         );
         RCSOFTCHECK(rcl_publish(&b.publisher, &b.driverState, NULL));
 
-        // Process ROS callbacks (commands) - give it 1ms to process queued messages
-        rclc_executor_spin_some(&b.executor, RCL_MS_TO_NS(1));
+        // Process ROS callbacks (commands) - give it 5ms to process queued messages
+        // Increased from 1ms for more reliable 100Hz command processing
+        rclc_executor_spin_some(&b.executor, RCL_MS_TO_NS(5));
 
         // Watchdog: Check if GDBCmd timeout occurred
         if (b.last_drivercmd_time > 0 && (millis() - b.last_drivercmd_time) > WATCHDOG_TIMEOUT_MS)
