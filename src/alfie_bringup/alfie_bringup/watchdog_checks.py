@@ -1,27 +1,22 @@
 """
-Master Watchdog Node
+Watchdog Health Check Classes
 
-Monitors the health of critical subsystems by subscribing to state topics
-and tracking message reception timing and rates.
+Contains all health monitoring classes used by the Master Status Node
+to monitor the health of critical subsystems.
 """
 
-import rclpy
-from rclpy.node import Node
-from alfie_msgs.msg import GDBState, JetsonState
-from rclpy.qos import QoSProfile, ReliabilityPolicy
-from typing import Optional, Dict, Callable
-from dataclasses import dataclass, field
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 
 # ============================================================================
-# Constants and Configuration
+# Constants
 # ============================================================================
 
-# Watchdog check rate
-WATCHDOG_RATE_HZ = 1.0  # Check once per second
-WATCHDOG_PERIOD_SEC = 1.0 / WATCHDOG_RATE_HZ
+# Voltage is reported in 0.1V units
+VOLTAGE_SCALE = 10.0
 
 
 # ============================================================================
@@ -103,46 +98,6 @@ class RateMonitor(HealthCheck):
             return f'{self.name} rate too low: {self.current_rate:.1f}Hz (expected {self.expected_hz}Hz ± {self.tolerance_hz}Hz)'
         elif self.current_rate > max_rate:
             return f'{self.name} rate too high: {self.current_rate:.1f}Hz (expected {self.expected_hz}Hz ± {self.tolerance_hz}Hz)'
-        
-        return None
-
-
-# ============================================================================
-# Voltage Monitor Health Check
-# ============================================================================
-
-# Voltage is reported in 0.1V units
-VOLTAGE_SCALE = 10.0
-
-
-class VoltageMonitor(HealthCheck):
-    """
-    Monitors servo voltage levels.
-    Reports error if voltage deviates from expected by more than tolerance.
-    """
-    
-    def __init__(self, name: str, expected_voltage: float, tolerance_voltage: float):
-        super().__init__(name)
-        self.expected_voltage = expected_voltage
-        self.tolerance_voltage = tolerance_voltage
-        self.current_voltage: Optional[float] = None
-    
-    def update(self, raw_voltage: int) -> None:
-        """Called when a message is received with raw voltage value (0.1V units)"""
-        self.current_voltage = raw_voltage / VOLTAGE_SCALE
-    
-    def check(self) -> Optional[str]:
-        """Check if voltage is within tolerance"""
-        if self.current_voltage is None:
-            return None  # No data yet
-        
-        min_voltage = self.expected_voltage - self.tolerance_voltage
-        max_voltage = self.expected_voltage + self.tolerance_voltage
-        
-        if self.current_voltage < min_voltage:
-            return f'{self.name} voltage too low: {self.current_voltage:.1f}V (expected {self.expected_voltage}V ± {self.tolerance_voltage}V)'
-        elif self.current_voltage > max_voltage:
-            return f'{self.name} voltage too high: {self.current_voltage:.1f}V (expected {self.expected_voltage}V ± {self.tolerance_voltage}V)'
         
         return None
 
@@ -378,42 +333,6 @@ class WifiMonitor(HealthCheck):
 # Servo Monitor Health Check
 # ============================================================================
 
-# Servo names for GDB0 (driver0) - Right arm and head
-# Indices 0-9 map to driver0/servo01-servo10
-GDB0_SERVO_NAMES = [
-    'R Shoulder Yaw',     # servo01
-    'R Shoulder1 Pitch',  # servo02
-    'R Shoulder2 Pitch',  # servo03 (derived)
-    'R Elbow Pitch',      # servo04
-    'R Wrist Pitch',      # servo05
-    'R Wrist Roll',       # servo06
-    'R Hand',             # servo07
-    'Head Yaw',           # servo08
-    'Head Pitch',         # servo09
-    'Head Roll',          # servo10
-]
-
-# Servo names for GDB1 (driver1) - Left arm
-# Indices 0-6 map to driver1/servo01-servo07
-GDB1_SERVO_NAMES = [
-    'L Shoulder Yaw',     # servo01
-    'L Shoulder1 Pitch',  # servo02
-    'L Shoulder2 Pitch',  # servo03 (derived)
-    'L Elbow Pitch',      # servo04
-    'L Wrist Pitch',      # servo05
-    'L Wrist Roll',       # servo06
-    'L Hand',             # servo07
-]
-
-
-@dataclass
-class ServoAlert:
-    """Holds alert thresholds for servo monitoring"""
-    servo_index: int
-    temp_warn: float = 40.0           # Temperature warning threshold (°C)
-    current_warn_ma: float = 3000.0   # Current warning threshold (mA = 3A)
-
-
 class ServoMonitor(HealthCheck):
     """
     Monitors servo health for a GDB (servo driver board).
@@ -475,262 +394,190 @@ class ServoMonitor(HealthCheck):
 
 
 # ============================================================================
-# MasterWatchdogNode Class
+# Servo Names Configuration
 # ============================================================================
 
-class MasterWatchdogNode(Node):
-    def __init__(self):
-        super().__init__('master_watchdog_node')
-        
-        # Use BEST_EFFORT QoS for gdb state subscriptions (to match gdb publishers)
-        qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        
-        # ====================================================================
-        # Health Checks Registry
-        # ====================================================================
-        self.health_checks: Dict[str, HealthCheck] = {}
-        
-        # GDB0 rate monitor
-        self.health_checks['gdb0_rate'] = RateMonitor(
-            name='GDB0',
-            expected_hz=100.0,
-            tolerance_hz=10.0
-        )
-        
-        # GDB1 rate monitor
-        self.health_checks['gdb1_rate'] = RateMonitor(
-            name='GDB1',
-            expected_hz=100.0,
-            tolerance_hz=10.0
-        )
-        
-        # GDB0 voltage monitor (all servos - 12V ± 0.2V)
-        self.health_checks['gdb0_voltage'] = ServoVoltageMonitor(
-            name='GDB0',
-            servo_names=GDB0_SERVO_NAMES,
-            expected_voltage=12.0,
-            tolerance_voltage=0.2
-        )
-        
-        # GDB1 voltage monitor (all servos - 12V ± 0.2V)
-        self.health_checks['gdb1_voltage'] = ServoVoltageMonitor(
-            name='GDB1',
-            servo_names=GDB1_SERVO_NAMES,
-            expected_voltage=12.0,
-            tolerance_voltage=0.2
-        )
-        
-        # GDB0 diagnostic timing monitor
-        self.health_checks['gdb0_timing'] = DiagnosticTimingMonitor(
-            name='GDB0',
-            max_total_ms=10.0
-        )
-        
-        # GDB1 diagnostic timing monitor
-        self.health_checks['gdb1_timing'] = DiagnosticTimingMonitor(
-            name='GDB1',
-            max_total_ms=10.0
-        )
-        
-        # GDB0 board temperature monitor
-        self.health_checks['gdb0_board_temp'] = TemperatureMonitor(
-            name='GDB0 Board Temp',
-            warn_temp=45.0,
-            critical_temp=45.0  # Same as warn - trigger immediately
-        )
-        
-        # GDB1 board temperature monitor
-        self.health_checks['gdb1_board_temp'] = TemperatureMonitor(
-            name='GDB1 Board Temp',
-            warn_temp=45.0,
-            critical_temp=45.0  # Same as warn - trigger immediately
-        )
-        
-        # ====================================================================
-        # Servo Health Checks
-        # ====================================================================
-        
-        # GDB0 servo monitor - Right arm + Head (temp >= 50°C, status != 0, current >= 3A)
-        self.health_checks['gdb0_servos'] = ServoMonitor(
-            name='GDB0',
-            servo_names=GDB0_SERVO_NAMES,
-            temp_warn=50.0,
-            current_warn_ma=3000.0
-        )
-        
-        # GDB1 servo monitor - Left arm (temp >= 50°C, status != 0, current >= 3A)
-        self.health_checks['gdb1_servos'] = ServoMonitor(
-            name='GDB1',
-            servo_names=GDB1_SERVO_NAMES,
-            temp_warn=50.0,
-            current_warn_ma=3000.0
-        )
-        
-        # ====================================================================
-        # Jetson Health Checks
-        # ====================================================================
-        
-        # Temperature monitors (warn at 70°C, critical at 85°C)
-        self.health_checks['jetson_cpu_temp'] = TemperatureMonitor(
-            name='Jetson CPU Temp',
-            warn_temp=70.0,
-            critical_temp=85.0
-        )
-        
-        self.health_checks['jetson_gpu_temp'] = TemperatureMonitor(
-            name='Jetson GPU Temp',
-            warn_temp=70.0,
-            critical_temp=85.0
-        )
-        
-        self.health_checks['jetson_thermal'] = TemperatureMonitor(
-            name='Jetson Thermal Junction',
-            warn_temp=85.0,
-            critical_temp=95.0
-        )
-        
-        # Memory monitors (warn at 85%, critical at 95%)
-        self.health_checks['jetson_ram'] = ThresholdMonitor(
-            name='Jetson RAM',
-            warn_percent=85.0,
-            critical_percent=95.0
-        )
-        
-        self.health_checks['jetson_swap'] = ThresholdMonitor(
-            name='Jetson Swap',
-            warn_percent=50.0,
-            critical_percent=80.0
-        )
-        
-        # Disk monitor (warn at 80%, critical at 95%)
-        self.health_checks['jetson_disk'] = ThresholdMonitor(
-            name='Jetson Disk',
-            warn_percent=80.0,
-            critical_percent=95.0
-        )
-        
-        # CPU load monitor (warn at 90%, critical at 98%)
-        self.health_checks['jetson_cpu_load'] = ThresholdMonitor(
-            name='Jetson CPU Load',
-            warn_percent=90.0,
-            critical_percent=98.0
-        )
-        
-        # WiFi monitor (require connection, warn below -75dBm)
-        self.health_checks['jetson_wifi'] = WifiMonitor(
-            name='Jetson WiFi',
-            min_signal_dbm=-75,
-            require_connected=True
-        )
-        
-        # ====================================================================
-        # Subscriptions
-        # ====================================================================
-        self.gdb0_sub = self.create_subscription(
-            GDBState,
-            '/alfie/low/gdb0state',
-            self.gdb0_callback,
-            qos_best_effort
-        )
-        
-        self.gdb1_sub = self.create_subscription(
-            GDBState,
-            '/alfie/low/gdb1state',
-            self.gdb1_callback,
-            qos_best_effort
-        )
-        
-        self.jetson_sub = self.create_subscription(
-            JetsonState,
-            '/alfie/low/jetsonstate',
-            self.jetson_callback,
-            10  # Use default RELIABLE QoS for Jetson stats
-        )
-        
-        # ====================================================================
-        # Watchdog Timer
-        # ====================================================================
-        self.watchdog_timer = self.create_timer(WATCHDOG_PERIOD_SEC, self.run_health_checks)
-        
-        self.get_logger().info(f'Master Watchdog Node started - checking at {WATCHDOG_RATE_HZ}Hz')
-    
-    # ========================================================================
-    # Callback Methods
-    # ========================================================================
-    
-    def gdb0_callback(self, msg: GDBState) -> None:
-        """Callback for gdb0state"""
-        self.health_checks['gdb0_rate'].update()
-        # Update voltage monitor for all servos
-        self.health_checks['gdb0_voltage'].update(msg.servo_state)
-        # Update diagnostic timings
-        self.health_checks['gdb0_timing'].update(msg.driver_diagnostics)
-        # Update servo health monitor
-        self.health_checks['gdb0_servos'].update(msg.servo_state)
-        # Update board temperature
-        self.health_checks['gdb0_board_temp'].update(float(msg.board_temp))
-    
-    def gdb1_callback(self, msg: GDBState) -> None:
-        """Callback for gdb1state"""
-        self.health_checks['gdb1_rate'].update()
-        # Update voltage monitor for all servos
-        self.health_checks['gdb1_voltage'].update(msg.servo_state)
-        # Update diagnostic timings
-        self.health_checks['gdb1_timing'].update(msg.driver_diagnostics)
-        # Update servo health monitor
-        self.health_checks['gdb1_servos'].update(msg.servo_state)
-        # Update board temperature
-        self.health_checks['gdb1_board_temp'].update(float(msg.board_temp))
-    
-    def jetson_callback(self, msg: JetsonState) -> None:
-        """Callback for jetsonstate"""
-        # Temperature monitors
-        self.health_checks['jetson_cpu_temp'].update(msg.cpu_temp)
-        self.health_checks['jetson_gpu_temp'].update(msg.gpu_temp)
-        self.health_checks['jetson_thermal'].update(msg.thermal_temp)
-        
-        # Memory/resource monitors
-        self.health_checks['jetson_ram'].update(msg.ram_usage_percent)
-        self.health_checks['jetson_swap'].update(msg.swap_usage_percent)
-        self.health_checks['jetson_disk'].update(msg.disk_usage_percent)
-        self.health_checks['jetson_cpu_load'].update(msg.cpu_usage_percent)
-        
-        # WiFi monitor
-        self.health_checks['jetson_wifi'].update(
-            connected=msg.wifi_connected,
-            signal_dbm=msg.wifi_signal_dbm,
-            ssid=msg.wifi_ssid
-        )
-    
-    # ========================================================================
-    # Health Check Runner
-    # ========================================================================
-    
-    def run_health_checks(self) -> None:
-        """Run all registered health checks"""
-        for check_name, check in self.health_checks.items():
-            error_msg = check.check()
-            if error_msg:
-                self.get_logger().error(error_msg)
+# Servo names for GDB0 (driver0) - Right arm and head
+# Indices 0-9 map to driver0/servo01-servo10
+GDB0_SERVO_NAMES = [
+    'R Shoulder Yaw',     # servo01
+    'R Shoulder1 Pitch',  # servo02
+    'R Shoulder2 Pitch',  # servo03 (derived)
+    'R Elbow Pitch',      # servo04
+    'R Wrist Pitch',      # servo05
+    'R Wrist Roll',       # servo06
+    'R Hand',             # servo07
+    'Head Yaw',           # servo08
+    'Head Pitch',         # servo09
+    'Head Roll',          # servo10
+]
+
+# Servo names for GDB1 (driver1) - Left arm
+# Indices 0-6 map to driver1/servo01-servo07
+GDB1_SERVO_NAMES = [
+    'L Shoulder Yaw',     # servo01
+    'L Shoulder1 Pitch',  # servo02
+    'L Shoulder2 Pitch',  # servo03 (derived)
+    'L Elbow Pitch',      # servo04
+    'L Wrist Pitch',      # servo05
+    'L Wrist Roll',       # servo06
+    'L Hand',             # servo07
+]
 
 
 # ============================================================================
-# Main Entry Point
+# Watchdog Configuration Factory
 # ============================================================================
 
-def main(args=None):
-    rclpy.init(args=args)
-    node = MasterWatchdogNode()
+def create_health_checks() -> Dict[str, HealthCheck]:
+    """
+    Create and return all configured health checks.
     
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
-
-if __name__ == '__main__':
-    main()
-
+    Returns:
+        Dictionary of health check name to HealthCheck instance
+    """
+    health_checks: Dict[str, HealthCheck] = {}
+    
+    # ========================================================================
+    # GDB Rate Monitors
+    # ========================================================================
+    
+    health_checks['gdb0_rate'] = RateMonitor(
+        name='GDB0',
+        expected_hz=100.0,
+        tolerance_hz=10.0
+    )
+    
+    health_checks['gdb1_rate'] = RateMonitor(
+        name='GDB1',
+        expected_hz=100.0,
+        tolerance_hz=10.0
+    )
+    
+    # ========================================================================
+    # GDB Voltage Monitors
+    # ========================================================================
+    
+    health_checks['gdb0_voltage'] = ServoVoltageMonitor(
+        name='GDB0',
+        servo_names=GDB0_SERVO_NAMES,
+        expected_voltage=12.0,
+        tolerance_voltage=0.2
+    )
+    
+    health_checks['gdb1_voltage'] = ServoVoltageMonitor(
+        name='GDB1',
+        servo_names=GDB1_SERVO_NAMES,
+        expected_voltage=12.0,
+        tolerance_voltage=0.2
+    )
+    
+    # ========================================================================
+    # GDB Diagnostic Timing Monitors
+    # ========================================================================
+    
+    health_checks['gdb0_timing'] = DiagnosticTimingMonitor(
+        name='GDB0',
+        max_total_ms=10.0
+    )
+    
+    health_checks['gdb1_timing'] = DiagnosticTimingMonitor(
+        name='GDB1',
+        max_total_ms=10.0
+    )
+    
+    # ========================================================================
+    # GDB Board Temperature Monitors
+    # ========================================================================
+    
+    health_checks['gdb0_board_temp'] = TemperatureMonitor(
+        name='GDB0 Board Temp',
+        warn_temp=45.0,
+        critical_temp=45.0
+    )
+    
+    health_checks['gdb1_board_temp'] = TemperatureMonitor(
+        name='GDB1 Board Temp',
+        warn_temp=45.0,
+        critical_temp=45.0
+    )
+    
+    # ========================================================================
+    # Servo Health Monitors
+    # ========================================================================
+    
+    health_checks['gdb0_servos'] = ServoMonitor(
+        name='GDB0',
+        servo_names=GDB0_SERVO_NAMES,
+        temp_warn=50.0,
+        current_warn_ma=3000.0
+    )
+    
+    health_checks['gdb1_servos'] = ServoMonitor(
+        name='GDB1',
+        servo_names=GDB1_SERVO_NAMES,
+        temp_warn=50.0,
+        current_warn_ma=3000.0
+    )
+    
+    # ========================================================================
+    # Jetson Temperature Monitors
+    # ========================================================================
+    
+    health_checks['jetson_cpu_temp'] = TemperatureMonitor(
+        name='Jetson CPU Temp',
+        warn_temp=70.0,
+        critical_temp=85.0
+    )
+    
+    health_checks['jetson_gpu_temp'] = TemperatureMonitor(
+        name='Jetson GPU Temp',
+        warn_temp=70.0,
+        critical_temp=85.0
+    )
+    
+    health_checks['jetson_thermal'] = TemperatureMonitor(
+        name='Jetson Thermal Junction',
+        warn_temp=85.0,
+        critical_temp=95.0
+    )
+    
+    # ========================================================================
+    # Jetson Resource Monitors
+    # ========================================================================
+    
+    health_checks['jetson_ram'] = ThresholdMonitor(
+        name='Jetson RAM',
+        warn_percent=85.0,
+        critical_percent=95.0
+    )
+    
+    health_checks['jetson_swap'] = ThresholdMonitor(
+        name='Jetson Swap',
+        warn_percent=50.0,
+        critical_percent=80.0
+    )
+    
+    health_checks['jetson_disk'] = ThresholdMonitor(
+        name='Jetson Disk',
+        warn_percent=80.0,
+        critical_percent=95.0
+    )
+    
+    health_checks['jetson_cpu_load'] = ThresholdMonitor(
+        name='Jetson CPU Load',
+        warn_percent=90.0,
+        critical_percent=98.0
+    )
+    
+    # ========================================================================
+    # WiFi Monitor
+    # ========================================================================
+    
+    health_checks['jetson_wifi'] = WifiMonitor(
+        name='Jetson WiFi',
+        min_signal_dbm=-75,
+        require_connected=True
+    )
+    
+    return health_checks

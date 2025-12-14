@@ -1,13 +1,14 @@
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.msg import RobotLowState, GDBState, BackState
+from alfie_msgs.msg import RobotLowState, GDBState, BackState, JetsonState
 from alfie_msgs.msg import ServoState, MotorState
 from sensor_msgs.msg import Imu, MagneticField, JointState
 import numpy as np
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from .servo_config import SERVO_POLARITY
+from .watchdog_checks import create_health_checks, HealthCheck
 
 
 # ============================================================================
@@ -17,6 +18,10 @@ from .servo_config import SERVO_POLARITY
 # Publishing configuration
 PUBLISH_RATE_HZ = 100
 PUBLISH_PERIOD_SEC = 1.0 / PUBLISH_RATE_HZ  # 0.01 seconds
+
+# Watchdog check rate (slower than publish rate)
+WATCHDOG_RATE_HZ = 1.0  # Check once per second
+WATCHDOG_PERIOD_SEC = 1.0 / WATCHDOG_RATE_HZ
 
 # Servo mapping
 NUM_SERVOS_GDB1 = 7  # Left arm servos (0-6), but skipping index 2
@@ -93,6 +98,10 @@ class MasterStatusNode(Node):
         self.gdb1_state: Optional[GDBState] = None
         self.oak_imu: Optional[Imu] = None
         self.back_state: Optional[BackState] = None
+        self.jetson_state: Optional[JetsonState] = None
+        
+        # Initialize watchdog health checks
+        self.health_checks: Dict[str, HealthCheck] = create_health_checks()
         
         # Subscribe to gdb states (use BEST_EFFORT to match gdb publishers)
         self.gdb0_sub = self.create_subscription(
@@ -125,6 +134,14 @@ class MasterStatusNode(Node):
             qos_best_effort
         )
         
+        # Subscribe to Jetson state (use RELIABLE for Jetson stats)
+        self.jetson_sub = self.create_subscription(
+            JetsonState,
+            'low/jetsonstate',
+            self.jetson_callback,
+            qos_reliable
+        )
+        
         # Publisher for robot low state (use RELIABLE for subscribers)
         self.robot_state_pub = self.create_publisher(
             RobotLowState,
@@ -142,7 +159,10 @@ class MasterStatusNode(Node):
         # Create timer for 100Hz publishing (0.01 seconds = 10ms)
         self.state_timer = self.create_timer(PUBLISH_PERIOD_SEC, self.publish_robot_state)
         
-        self.get_logger().info(f'Master Status Node started - publishing at {PUBLISH_RATE_HZ}Hz')
+        # Create watchdog timer for 1Hz health checks
+        self.watchdog_timer = self.create_timer(WATCHDOG_PERIOD_SEC, self.run_health_checks)
+        
+        self.get_logger().info(f'Master Status Node started - publishing at {PUBLISH_RATE_HZ}Hz, watchdog at {WATCHDOG_RATE_HZ}Hz')
     
     # ========================================================================
     # Callback Methods
@@ -151,10 +171,24 @@ class MasterStatusNode(Node):
     def gdb0_callback(self, msg: GDBState) -> None:
         """Callback for gdb0state"""
         self.gdb0_state = msg
+        
+        # Update watchdog health checks
+        self.health_checks['gdb0_rate'].update()
+        self.health_checks['gdb0_voltage'].update(msg.servo_state)
+        self.health_checks['gdb0_timing'].update(msg.driver_diagnostics)
+        self.health_checks['gdb0_servos'].update(msg.servo_state)
+        self.health_checks['gdb0_board_temp'].update(float(msg.board_temp))
     
     def gdb1_callback(self, msg: GDBState) -> None:
         """Callback for gdb1state"""
         self.gdb1_state = msg
+        
+        # Update watchdog health checks
+        self.health_checks['gdb1_rate'].update()
+        self.health_checks['gdb1_voltage'].update(msg.servo_state)
+        self.health_checks['gdb1_timing'].update(msg.driver_diagnostics)
+        self.health_checks['gdb1_servos'].update(msg.servo_state)
+        self.health_checks['gdb1_board_temp'].update(float(msg.board_temp))
     
     def oak_imu_callback(self, msg: Imu) -> None:
         """Callback for Oak IMU data"""
@@ -163,6 +197,24 @@ class MasterStatusNode(Node):
     def back_state_callback(self, msg: BackState) -> None:
         """Callback for back state"""
         self.back_state = msg
+    
+    def jetson_callback(self, msg: JetsonState) -> None:
+        """Callback for Jetson state"""
+        self.jetson_state = msg
+        
+        # Update watchdog health checks for Jetson
+        self.health_checks['jetson_cpu_temp'].update(msg.cpu_temp)
+        self.health_checks['jetson_gpu_temp'].update(msg.gpu_temp)
+        self.health_checks['jetson_thermal'].update(msg.thermal_temp)
+        self.health_checks['jetson_ram'].update(msg.ram_usage_percent)
+        self.health_checks['jetson_swap'].update(msg.swap_usage_percent)
+        self.health_checks['jetson_disk'].update(msg.disk_usage_percent)
+        self.health_checks['jetson_cpu_load'].update(msg.cpu_usage_percent)
+        self.health_checks['jetson_wifi'].update(
+            connected=msg.wifi_connected,
+            signal_dbm=msg.wifi_signal_dbm,
+            ssid=msg.wifi_ssid
+        )
     
     # ========================================================================
     # Publishing Methods
@@ -550,6 +602,17 @@ class MasterStatusNode(Node):
         # radians = raw_position * (2π / 4096) = raw_position * π / 2048
         radians = raw_position * np.pi / 2048.0
         return radians
+    
+    # ========================================================================
+    # Watchdog Health Check Runner
+    # ========================================================================
+    
+    def run_health_checks(self) -> None:
+        """Run all registered health checks and log errors"""
+        for check_name, check in self.health_checks.items():
+            error_msg = check.check()
+            if error_msg:
+                self.get_logger().error(error_msg)
 
 
 # ============================================================================
