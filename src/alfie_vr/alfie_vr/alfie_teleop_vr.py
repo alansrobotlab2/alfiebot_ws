@@ -626,11 +626,14 @@ class AlfieTeleopVRNode(Node):
         self.robot_cmd_state.back_cmd.acceleration = 0.1
         self.robot_cmd_state.cmd_vel = Twist()
         
+        # Debug logging flag - set to True to enable verbose debug output
+        self.debug_logs = False
+        
         # Create timer for 100Hz publishing
         self.timer = self.create_timer(0.01, self.publish_robotlowcmd)  # 100Hz = 0.01s period
         
-        # Create VR monitor
-        self.vr_monitor = VRMonitor()
+        # Create VR monitor (pass debug_logs flag)
+        self.vr_monitor = VRMonitor(debug_logs=self.debug_logs)
         
         # Thread for running VR monitor async loop
         self.vr_thread = None
@@ -673,6 +676,11 @@ class AlfieTeleopVRNode(Node):
         
         # Start VR monitor in separate thread
         self.start_vr_monitor()
+    
+    def debug_log(self, msg: str):
+        """Log a debug message only if debug_logs is enabled."""
+        if self.debug_logs:
+            self.get_logger().info(msg)
     
     def start_vr_monitor(self):
         """Start VR monitor in a separate thread"""
@@ -719,14 +727,16 @@ class AlfieTeleopVRNode(Node):
             robotlowstate=robot_state,
             kinematics=self.kinematics_left,
             prefix='left',
-            kp=1
+            kp=1,
+            debug_logs=self.debug_logs
         )
         self.right_arm = SimpleTeleopArm(
             joint_map=RIGHT_ARM_JOINT_MAP,
             robotlowstate=robot_state,
             kinematics=self.kinematics_right,
             prefix='right',
-            kp=1
+            kp=1,
+            debug_logs=self.debug_logs
         )
 
         # Call back calibration service if not already calibrated
@@ -867,7 +877,7 @@ class AlfieTeleopVRNode(Node):
                 
                 # Debug log
                 if abs(joy_x) > 0.1 or abs(joy_y) > 0.1:
-                    self.get_logger().info(f'Left thumbstick: x={joy_x:.2f}, y={joy_y:.2f} -> linear.x={self.robot_cmd_state.cmd_vel.linear.x:.2f}, linear.y={self.robot_cmd_state.cmd_vel.linear.y:.2f}')
+                    self.debug_log(f'Left thumbstick: x={joy_x:.2f}, y={joy_y:.2f} -> linear.x={self.robot_cmd_state.cmd_vel.linear.x:.2f}, linear.y={self.robot_cmd_state.cmd_vel.linear.y:.2f}')
             
             # Y button: reset both arms to zero positions
             buttons = left_controller_goal.metadata.get('buttons', {})
@@ -897,7 +907,7 @@ class AlfieTeleopVRNode(Node):
                 
                 # Debug log
                 if abs(joy_x) > 0.1:
-                    self.get_logger().info(f'Right thumbstick: x={joy_x:.2f} -> angular.z={self.robot_cmd_state.cmd_vel.angular.z:.2f}')
+                    self.debug_log(f'Right thumbstick: x={joy_x:.2f} -> angular.z={self.robot_cmd_state.cmd_vel.angular.z:.2f}')
             
             # A/B buttons: back height control (range 0.000 to 0.390)
             # B button increases height, A button decreases height
@@ -930,7 +940,7 @@ class AlfieTeleopVRNode(Node):
                 self.robot_cmd_state.back_cmd.position = new_back_pos
                 
                 # Debug log
-                self.get_logger().info(f'Back height: {new_back_pos:.3f} ({"B" if button_b else "A"} pressed)')
+                self.debug_log(f'Back height: {new_back_pos:.3f} ({"B" if button_b else "A"} pressed)')
         
         # Process arm control using SimpleTeleopArm with VR controller input
         # Only process when grip button is held (delta control relative to grip press)
@@ -946,7 +956,7 @@ class AlfieTeleopVRNode(Node):
                 
                 # Detect grip press (transition from not pressed to pressed)
                 if left_grip_active and not self.left_grip_active:
-                    self.get_logger().info('Left grip pressed - starting arm tracking')
+                    self.debug_log('Left grip pressed - starting arm tracking')
                     # Reset delta tracking by clearing previous position
                     if hasattr(self.left_arm, 'prev_vr_pos'):
                         delattr(self.left_arm, 'prev_vr_pos')
@@ -957,7 +967,7 @@ class AlfieTeleopVRNode(Node):
                 
                 # Detect grip release
                 if not left_grip_active and self.left_grip_active:
-                    self.get_logger().info('Left grip released - stopping arm tracking')
+                    self.debug_log('Left grip released - stopping arm tracking')
                 
                 self.left_grip_active = left_grip_active
                 
@@ -986,7 +996,7 @@ class AlfieTeleopVRNode(Node):
                 
                 # Detect grip press
                 if right_grip_active and not self.right_grip_active:
-                    self.get_logger().info('Right grip pressed - starting arm tracking')
+                    self.debug_log('Right grip pressed - starting arm tracking')
                     if hasattr(self.right_arm, 'prev_vr_pos'):
                         delattr(self.right_arm, 'prev_vr_pos')
                     if hasattr(self.right_arm, 'prev_wrist_flex'):
@@ -996,7 +1006,7 @@ class AlfieTeleopVRNode(Node):
                 
                 # Detect grip release
                 if not right_grip_active and self.right_grip_active:
-                    self.get_logger().info('Right grip released - stopping arm tracking')
+                    self.debug_log('Right grip released - stopping arm tracking')
                 
                 self.right_grip_active = right_grip_active
                 

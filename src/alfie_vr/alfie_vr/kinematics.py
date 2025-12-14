@@ -13,7 +13,7 @@ class SimpleTeleopArm:
     for smooth movement and gripper operations based on VR controller input.
     """
     
-    def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1):
+    def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1, debug_logs=False):
         """
         Initialize the SimpleTeleopArm with joint mapping and initial state.
 
@@ -23,12 +23,14 @@ class SimpleTeleopArm:
             kinematics (object): Kinematics model for inverse kinematics calculations.
             prefix (str, optional): Prefix for the arm (e.g., "left" or "right"). Defaults to "right".
             kp (float, optional): Proportional gain for the control loop. Defaults to 1.
+            debug_logs (bool, optional): Enable debug logging. Defaults to False.
         """
+        self.debug_logs = debug_logs
 
         # VR position multipliers (VR controller position -> robot arm movement)
-        self.vr_x_multiplier = 20  # Scale for shoulder rotate
-        self.vr_y_multiplier = 20  # Scale for arm reach (Y)
-        self.vr_z_multiplier = 20  # Scale for arm reach (Z->X)
+        self.vr_x_multiplier = 40  # Scale for shoulder rotate
+        self.vr_y_multiplier = 40  # Scale for arm reach (Y)
+        self.vr_z_multiplier = 40  # Scale for arm reach (Z->X)
         
         # Wrist multipliers (VR controller rotation -> robot wrist rotation)
         self.wrist_pitch_multiplier = 2.0
@@ -123,6 +125,11 @@ class SimpleTeleopArm:
             action = self.p_control_action(robot)
             robot.send_action(action)
 
+    def debug_print(self, msg: str):
+        """Print debug message only if debug_logs is enabled."""
+        if self.debug_logs:
+            print(msg)
+
     def handle_vr_input(self, vr_goal, gripper_state):
         """
         Handle VR input with delta action control - incremental position updates.
@@ -154,7 +161,7 @@ class SimpleTeleopArm:
             self.prev_vr_pos = current_vr_pos
             return  # Skip first frame to establish baseline
         
-        print(current_vr_pos)
+        self.debug_print(f"{current_vr_pos}")
         
         # Calculate relative change (delta) from previous frame
         # Scale factors for converting VR movement to robot workspace
@@ -193,7 +200,7 @@ class SimpleTeleopArm:
         
         # Debug: show position changes
         if abs(delta_y) > 0.001 or abs(delta_z) > 0.001:
-            print(f"[{self.prefix}] delta_y={delta_y:.4f}, delta_z={delta_z:.4f} -> x={self.current_x:.4f}, y={self.current_y:.4f}")
+            self.debug_print(f"[{self.prefix}] delta_y={delta_y:.4f}, delta_z={delta_z:.4f} -> x={self.current_x:.4f}, y={self.current_y:.4f}")
 
         # Handle wrist angles with delta control - use relative changes (all in radians)
         if hasattr(vr_goal, 'wrist_flex_deg') and vr_goal.wrist_flex_deg is not None:
@@ -246,14 +253,14 @@ class SimpleTeleopArm:
             # IK returns radians - use directly
             
             # Debug: print current position and IK results
-            print(f"[{self.prefix}] x={self.current_x:.4f}, y={self.current_y:.4f} -> shoulder_lift={math.degrees(joint2_target):.1f}°, elbow_flex={math.degrees(joint3_target):.1f}°")
+            self.debug_print(f"[{self.prefix}] x={self.current_x:.4f}, y={self.current_y:.4f} -> shoulder_lift={math.degrees(joint2_target):.1f}°, elbow_flex={math.degrees(joint3_target):.1f}°")
             
             # Smooth transition to new joint positions, Smoothing factor 0-1, higher = faster response
             alpha = 0.3
             self.target_positions["shoulder_lift"] = (1-alpha) * self.target_positions.get("shoulder_lift", 0.0) + alpha * joint2_target
             self.target_positions["elbow_flex"] = (1-alpha) * self.target_positions.get("elbow_flex", 0.0) + alpha * joint3_target
         except Exception as e:
-            print(f"[{self.prefix}] VR IK failed: {e}")
+            self.debug_print(f"[{self.prefix}] VR IK failed: {e}")
         
         # Calculate wrist_flex to maintain end-effector orientation
         self.target_positions["wrist_flex"] = (-self.target_positions["shoulder_lift"] - 
