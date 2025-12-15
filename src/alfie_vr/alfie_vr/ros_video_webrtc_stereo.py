@@ -10,11 +10,12 @@ Key optimizations:
 - Single stereo frame buffer, atomically updated
 - No MediaRelay buffering
 - Event-driven frame delivery to WebRTC
+- CUDA acceleration on Jetson (resize, color convert, blur)
 
 Color mapping:
 - Uses proper homography to project RGB onto left/right views
 - Accounts for camera positions and intrinsics
-- YCbCr color transfer preserves stereo luminance detail
+- YCrCb color transfer preserves stereo luminance detail
 """
 
 import asyncio
@@ -33,6 +34,34 @@ from sensor_msgs.msg import CompressedImage, CameraInfo
 import cv2
 import numpy as np
 from av import VideoFrame
+
+# Check for CUDA availability (Jetson Orin NX)
+USE_CUDA = False
+USE_NVJPEG = False
+_cuda_stream = None
+_cuda_box_filter = None
+
+try:
+    if cv2.cuda.getCudaEnabledDeviceCount() > 0:
+        USE_CUDA = True
+        # Pre-create CUDA stream for async operations
+        _cuda_stream = cv2.cuda.Stream()
+        # Pre-create box filter for chroma blur (5x5)
+        _cuda_box_filter = cv2.cuda.createBoxFilter(
+            cv2.CV_8UC1, cv2.CV_8UC1, (5, 5)
+        )
+        print(f"✅ CUDA enabled: device {cv2.cuda.getDevice()}")
+        
+        # Check for NVJPEG hardware JPEG decoder (Jetson)
+        try:
+            # Test if cudacodec is available (has NVJPEG on Jetson)
+            if hasattr(cv2, 'cudacodec'):
+                USE_NVJPEG = True
+                print("✅ NVJPEG hardware decode available")
+        except Exception:
+            pass
+except Exception as e:
+    print(f"⚠️ CUDA not available, using CPU: {e}")
 
 from aiohttp import web
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
@@ -123,8 +152,8 @@ class StereoVideoNode(Node):
         self.declare_parameter('rgb_camera_info_topic', '/alfie/oak/rgb/camera_info')
         self.declare_parameter('colorize', True)  # Map RGB color onto B/W stereo
         self.declare_parameter('port', VIDEO_PORT)
-        self.declare_parameter('output_width', 2560)  # 1280 per eye
-        self.declare_parameter('output_height', 720)
+        self.declare_parameter('output_width', 1280)  # 640 per eye
+        self.declare_parameter('output_height', 400)
         
         # OAK-D Lite camera geometry (meters)
         # Stereo baseline: 75mm, RGB is centered between left/right
@@ -172,6 +201,11 @@ class StereoVideoNode(Node):
         self._H_rgb_to_left: Optional[np.ndarray] = None
         self._H_rgb_to_right: Optional[np.ndarray] = None
         self._homographies_computed = False
+        
+        # Pre-allocated buffers for colorization (avoid per-frame allocation)
+        self._cached_chroma: Optional[np.ndarray] = None  # Cached Cr,Cb channels from RGB
+        self._cached_rgb_size: Optional[Tuple[int, int]] = None
+        self._result_buffer = np.zeros((self.output_height, self.eye_width, 3), dtype=np.uint8)
         
         # Cached warped RGB frames for each eye
         self._rgb_warped_left: Optional[np.ndarray] = None
@@ -241,12 +275,17 @@ class StereoVideoNode(Node):
         self.get_logger().info(f'Right eye: {self.right_topic}')
         if self.colorize:
             self.get_logger().info(f'RGB color: {self.rgb_topic}')
-            self.get_logger().info('Colorization: ENABLED (homography-based projection)')
+            self.get_logger().info('Colorization: ENABLED (YCrCb fast path)')
             self.get_logger().info(f'Stereo baseline: {self.stereo_baseline*100:.1f}cm')
         else:
             self.get_logger().info('Colorization: DISABLED')
         self.get_logger().info(f'Output: {self.output_width}x{self.output_height}')
         self.get_logger().info(f'WebRTC port: {self.port}')
+        # Show acceleration status
+        if USE_CUDA:
+            self.get_logger().info('🚀 CUDA acceleration: ENABLED (Jetson GPU)')
+        else:
+            self.get_logger().info('⚠️ CUDA acceleration: DISABLED (CPU only)')
     
     def left_info_callback(self, msg: CameraInfo):
         """Store left camera intrinsics"""
@@ -343,61 +382,31 @@ class StereoVideoNode(Node):
         """
         Colorize grayscale stereo image using RGB camera as color source.
         
-        Approach: Direct color mapping in LAB space
-        1. Convert RGB to LAB
-        2. Replace L channel with grayscale (preserves stereo detail)
-        3. Scale chrominance to match luminance range
+        OPTIMIZED: Uses YCrCb (faster than LAB), caches chroma channels,
+        avoids per-frame allocations, uses box filter instead of Gaussian.
         
         Args:
             gray_frame: The grayscale image (as RGB with equal channels)
             is_left: True for left eye, False for right eye
         """
-        rgb_frame = self._rgb_frame
-        if rgb_frame is None:
+        if self._cached_chroma is None:
             return gray_frame
         
         try:
-            # Resize RGB to match stereo frame
-            rgb_resized = cv2.resize(rgb_frame, (gray_frame.shape[1], gray_frame.shape[0]))
-            
-            # Convert RGB to LAB color space (better for color manipulation)
-            rgb_lab = cv2.cvtColor(rgb_resized, cv2.COLOR_RGB2LAB).astype(np.float32)
-            
-            # Get grayscale luminance
+            # Get grayscale Y channel directly (already uint8)
             if len(gray_frame.shape) == 3:
-                gray_l = gray_frame[:, :, 0].astype(np.float32)
+                gray_y = gray_frame[:, :, 0]
             else:
-                gray_l = gray_frame.astype(np.float32)
+                gray_y = gray_frame
             
-            # Scale grayscale to LAB L range (0-255 in OpenCV's LAB)
-            # The stereo cameras may have different exposure than RGB
-            # Match the histogram/range of the RGB L channel
-            rgb_l = rgb_lab[:, :, 0]
+            # Combine: stereo Y + cached RGB chroma (Cr, Cb)
+            # Write directly to pre-allocated buffer
+            self._result_buffer[:, :, 0] = gray_y
+            self._result_buffer[:, :, 1] = self._cached_chroma[:, :, 0]  # Cr
+            self._result_buffer[:, :, 2] = self._cached_chroma[:, :, 1]  # Cb
             
-            # Normalize grayscale to match RGB luminance distribution
-            gray_mean, gray_std = np.mean(gray_l), np.std(gray_l) + 1e-6
-            rgb_l_mean, rgb_l_std = np.mean(rgb_l), np.std(rgb_l) + 1e-6
-            
-            # Scale grayscale to have same mean/std as RGB luminance
-            # This helps match exposure differences
-            gray_l_matched = (gray_l - gray_mean) * (rgb_l_std / gray_std) + rgb_l_mean
-            gray_l_matched = np.clip(gray_l_matched, 0, 255)
-            
-            # Get A and B channels (color) from RGB, with slight blur
-            a_channel = cv2.GaussianBlur(rgb_lab[:, :, 1], (15, 15), 0)
-            b_channel = cv2.GaussianBlur(rgb_lab[:, :, 2], (15, 15), 0)
-            
-            # Debug logging
-            if self._rgb_count % 300 == 1 and is_left:
-                a_std = np.std(a_channel)
-                b_std = np.std(b_channel)
-                self.get_logger().info(f'LAB: L_gray={gray_mean:.0f} L_rgb={rgb_l_mean:.0f} | a_std={a_std:.1f} b_std={b_std:.1f}')
-            
-            # Combine: matched grayscale luminance + RGB color channels
-            result_lab = np.stack([gray_l_matched, a_channel, b_channel], axis=2).astype(np.uint8)
-            
-            # Convert back to RGB
-            colorized = cv2.cvtColor(result_lab, cv2.COLOR_LAB2RGB)
+            # Convert YCrCb back to RGB
+            colorized = cv2.cvtColor(self._result_buffer, cv2.COLOR_YCrCb2RGB)
             return colorized
             
         except Exception as e:
@@ -405,17 +414,69 @@ class StereoVideoNode(Node):
             return gray_frame
     
     def rgb_callback(self, msg: CompressedImage):
-        """Handle incoming RGB image for color reference"""
+        """Handle incoming RGB image - extract and cache chroma for colorization"""
         try:
             nparr = np.frombuffer(msg.data, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if frame is not None:
-                # Convert BGR to RGB
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self._rgb_frame = frame_rgb
+                target_size = (self.eye_width, self.output_height)
+                if self._cached_rgb_size != target_size or self._cached_chroma is None:
+                    self._cached_chroma = np.zeros((self.output_height, self.eye_width, 2), dtype=np.uint8)
+                    self._cached_rgb_size = target_size
+                
+                if USE_CUDA:
+                    # CUDA-accelerated path
+                    self._rgb_callback_cuda(frame, target_size)
+                else:
+                    # CPU path
+                    self._rgb_callback_cpu(frame, target_size)
+                
                 self._rgb_count += 1
         except Exception as e:
             self.get_logger().error(f'RGB decode error: {e}')
+    
+    def _rgb_callback_cpu(self, frame: np.ndarray, target_size: Tuple[int, int]):
+        """CPU path for RGB processing"""
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        self._rgb_frame = frame_rgb
+        rgb_resized = cv2.resize(frame_rgb, target_size, interpolation=cv2.INTER_LINEAR)
+        ycrcb = cv2.cvtColor(rgb_resized, cv2.COLOR_RGB2YCrCb)
+        self._cached_chroma[:, :, 0] = cv2.blur(ycrcb[:, :, 1], (5, 5))
+        self._cached_chroma[:, :, 1] = cv2.blur(ycrcb[:, :, 2], (5, 5))
+    
+    def _rgb_callback_cuda(self, frame: np.ndarray, target_size: Tuple[int, int]):
+        """CUDA-accelerated path for RGB processing on Jetson"""
+        global _cuda_stream, _cuda_box_filter
+        
+        # Upload to GPU
+        gpu_frame = cv2.cuda.GpuMat()
+        gpu_frame.upload(frame, _cuda_stream)
+        
+        # BGR to RGB on GPU
+        gpu_rgb = cv2.cuda.cvtColor(gpu_frame, cv2.COLOR_BGR2RGB, stream=_cuda_stream)
+        
+        # Resize on GPU (very fast)
+        gpu_resized = cv2.cuda.resize(gpu_rgb, target_size, interpolation=cv2.INTER_LINEAR, stream=_cuda_stream)
+        
+        # RGB to YCrCb on GPU
+        gpu_ycrcb = cv2.cuda.cvtColor(gpu_resized, cv2.COLOR_RGB2YCrCb, stream=_cuda_stream)
+        
+        # Split channels on GPU
+        gpu_channels = cv2.cuda.split(gpu_ycrcb, _cuda_stream)
+        
+        # Apply box blur to Cr and Cb channels on GPU
+        gpu_cr_blur = cv2.cuda.GpuMat()
+        gpu_cb_blur = cv2.cuda.GpuMat()
+        _cuda_box_filter.apply(gpu_channels[1], gpu_cr_blur, stream=_cuda_stream)
+        _cuda_box_filter.apply(gpu_channels[2], gpu_cb_blur, stream=_cuda_stream)
+        
+        # Download results (single sync point)
+        _cuda_stream.waitForCompletion()
+        self._cached_chroma[:, :, 0] = gpu_cr_blur.download()
+        self._cached_chroma[:, :, 1] = gpu_cb_blur.download()
+        
+        # Also keep RGB on CPU for reference
+        self._rgb_frame = gpu_rgb.download()
     
     def left_callback(self, msg: CompressedImage):
         """Handle incoming left image - decode immediately"""
@@ -423,9 +484,10 @@ class StereoVideoNode(Node):
             nparr = np.frombuffer(msg.data, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if frame is not None:
-                # Convert BGR to RGB and resize
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_resized = cv2.resize(frame_rgb, (self.eye_width, self.output_height))
+                if USE_CUDA:
+                    frame_resized = self._process_stereo_frame_cuda(frame)
+                else:
+                    frame_resized = self._process_stereo_frame_cpu(frame)
                 
                 # Apply colorization if enabled (left eye)
                 if self.colorize:
@@ -445,9 +507,10 @@ class StereoVideoNode(Node):
             nparr = np.frombuffer(msg.data, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if frame is not None:
-                # Convert BGR to RGB and resize
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_resized = cv2.resize(frame_rgb, (self.eye_width, self.output_height))
+                if USE_CUDA:
+                    frame_resized = self._process_stereo_frame_cuda(frame)
+                else:
+                    frame_resized = self._process_stereo_frame_cpu(frame)
                 
                 # Apply colorization if enabled (right eye)
                 if self.colorize:
@@ -458,6 +521,24 @@ class StereoVideoNode(Node):
                 self._right_count += 1
         except Exception as e:
             self.get_logger().error(f'Right decode error: {e}')
+    
+    def _process_stereo_frame_cpu(self, frame: np.ndarray) -> np.ndarray:
+        """CPU path for stereo frame processing"""
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        return cv2.resize(frame_rgb, (self.eye_width, self.output_height))
+    
+    def _process_stereo_frame_cuda(self, frame: np.ndarray) -> np.ndarray:
+        """CUDA-accelerated stereo frame processing on Jetson"""
+        global _cuda_stream
+        
+        # Upload, convert, resize all on GPU
+        gpu_frame = cv2.cuda.GpuMat()
+        gpu_frame.upload(frame, _cuda_stream)
+        gpu_rgb = cv2.cuda.cvtColor(gpu_frame, cv2.COLOR_BGR2RGB, stream=_cuda_stream)
+        gpu_resized = cv2.cuda.resize(gpu_rgb, (self.eye_width, self.output_height), 
+                                       interpolation=cv2.INTER_LINEAR, stream=_cuda_stream)
+        _cuda_stream.waitForCompletion()
+        return gpu_resized.download()
             
     def _update_stereo_frame(self):
         """Update the stereo frame buffer and signal WebRTC"""
