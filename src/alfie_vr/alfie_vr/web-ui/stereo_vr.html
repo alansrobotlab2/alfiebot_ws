@@ -77,7 +77,7 @@
             left: 50%;
             transform: translate(-50%, -50%);
             max-width: 90%;
-            max-height: 80%;
+            max-height: 95%;
             border: 2px solid #333;
             border-radius: 8px;
         }
@@ -102,39 +102,49 @@
             top: 70px;
             right: 20px;
             background: rgba(0, 0, 0, 0.9);
-            padding: 15px;
+            padding: 20px;
             border-radius: 10px;
             border: 1px solid #444;
             z-index: 1000;
-            font-size: 12px;
-            min-width: 220px;
+            font-size: 16px;
+            min-width: 286px;
         }
         
         #controls h3 {
-            margin: 0 0 10px 0;
+            margin: 0 0 13px 0;
             color: #4CAF50;
-            font-size: 14px;
+            font-size: 18px;
+            cursor: move;
+            user-select: none;
+            padding: 5px;
+            margin: -5px -5px 13px -5px;
+            border-radius: 5px;
+        }
+        
+        #controls h3:hover {
+            background: rgba(255, 255, 255, 0.1);
         }
         
         .control-row {
             display: flex;
             align-items: center;
-            margin: 8px 0;
-            gap: 8px;
+            margin: 10px 0;
+            gap: 10px;
         }
         
         .control-row label {
-            flex: 0 0 100px;
+            flex: 0 0 130px;
             color: #aaa;
         }
         
         .control-row input[type="range"] {
             flex: 1;
-            min-width: 80px;
+            min-width: 104px;
+            height: 16px;
         }
         
         .control-row .value {
-            flex: 0 0 50px;
+            flex: 0 0 65px;
             text-align: right;
             color: #fff;
             font-family: monospace;
@@ -144,10 +154,11 @@
             background: #333;
             border: 1px solid #555;
             color: #fff;
-            padding: 5px 10px;
-            border-radius: 4px;
+            padding: 7px 13px;
+            border-radius: 5px;
             cursor: pointer;
-            margin: 2px;
+            margin: 3px;
+            font-size: 13px;
         }
         
         .control-btn:hover {
@@ -171,7 +182,7 @@
         <h3>🎯 Stereo Adjustments</h3>
         <div class="control-row">
             <label>Vertical Offset</label>
-            <input type="range" id="verticalOffset" min="-0.5" max="0.5" step="0.01" value="0">
+            <input type="range" id="verticalOffset" min="-1" max="1" step="0.01" value="0">
             <span class="value" id="verticalOffsetVal">0.00</span>
         </div>
         <div class="control-row">
@@ -756,11 +767,74 @@
             startPreview();
         }
         
+        // Make settings panel draggable
+        function initDraggable() {
+            const controls = document.getElementById('controls');
+            const header = controls.querySelector('h3');
+            let isDragging = false;
+            let offsetX, offsetY;
+            
+            header.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                offsetX = e.clientX - controls.offsetLeft;
+                offsetY = e.clientY - controls.offsetTop;
+                controls.style.right = 'auto';
+                controls.style.left = controls.offsetLeft + 'px';
+            });
+            
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                e.preventDefault();
+                let newX = e.clientX - offsetX;
+                let newY = e.clientY - offsetY;
+                
+                // Keep within viewport bounds
+                newX = Math.max(0, Math.min(newX, window.innerWidth - controls.offsetWidth));
+                newY = Math.max(0, Math.min(newY, window.innerHeight - controls.offsetHeight));
+                
+                controls.style.left = newX + 'px';
+                controls.style.top = newY + 'px';
+            });
+            
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+            
+            // Touch support for VR headset
+            header.addEventListener('touchstart', (e) => {
+                isDragging = true;
+                const touch = e.touches[0];
+                offsetX = touch.clientX - controls.offsetLeft;
+                offsetY = touch.clientY - controls.offsetTop;
+                controls.style.right = 'auto';
+                controls.style.left = controls.offsetLeft + 'px';
+            });
+            
+            document.addEventListener('touchmove', (e) => {
+                if (!isDragging) return;
+                e.preventDefault();
+                const touch = e.touches[0];
+                let newX = touch.clientX - offsetX;
+                let newY = touch.clientY - offsetY;
+                
+                newX = Math.max(0, Math.min(newX, window.innerWidth - controls.offsetWidth));
+                newY = Math.max(0, Math.min(newY, window.innerHeight - controls.offsetHeight));
+                
+                controls.style.left = newX + 'px';
+                controls.style.top = newY + 'px';
+            }, { passive: false });
+            
+            document.addEventListener('touchend', () => {
+                isDragging = false;
+            });
+        }
+        
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', async () => {
             console.log('Stereo VR Vision - Initializing...');
             loadSettings();
             setupControls();
+            initDraggable();
             await initWebRTC();
             await initXR();
         });
