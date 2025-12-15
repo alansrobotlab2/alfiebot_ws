@@ -126,7 +126,10 @@ class VRWebSocketServer(BaseInputProvider):
                 self.websocket_handler, 
                 host, 
                 port, 
-                ssl=ssl_context
+                ssl=ssl_context,
+                ping_interval=30,  # Send ping every 30 seconds
+                ping_timeout=60,   # Wait up to 60 seconds for pong response
+                close_timeout=10   # Wait 10 seconds for close handshake
             )
             self.is_running = True
             logger.info(f"VR WebSocket server running on wss://{host}:{port}")

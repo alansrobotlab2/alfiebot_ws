@@ -685,6 +685,10 @@ AFRAME.registerComponent('controller-updater', {
 
     // --- WebSocket Setup ---
     this.websocket = null;
+    this.websocketReconnectTimer = null;
+    this.websocketReconnectDelay = 2000; // 2 seconds
+    this.keepAliveInterval = null;
+    this.keepAliveDelay = 15000; // Send keepalive every 15 seconds
     this.leftGripDown = false;
     this.rightGripDown = false;
     this.leftTriggerDown = false;
@@ -711,6 +715,21 @@ AFRAME.registerComponent('controller-updater', {
     const websocketPort = 8442; // Make sure this matches controller_server.py
     const websocketUrl = `wss://${serverHostname}:${websocketPort}`;
     console.log(`Attempting WebSocket connection to: ${websocketUrl}`);
+    
+    // --- Page Visibility Handling ---
+    // Detect when page is hidden/shown (VR browser backgrounding)
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        console.log('Page hidden - VR browser may throttle connection');
+      } else {
+        console.log('Page visible again - checking WebSocket connection');
+        // Reconnect if needed when page becomes visible
+        if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+          console.log('WebSocket not connected, attempting reconnection...');
+          this.connectWebSocket(websocketUrl);
+        }
+      }
+    });
 
     // --- Video Stream Setup (WebRTC - hardware accelerated, low latency) ---
     this.videoElement = document.getElementById('webrtcVideo');
@@ -821,35 +840,106 @@ AFRAME.registerComponent('controller-updater', {
     // Start WebRTC connection
     this.initWebRTC();
 
-    // !!! IMPORTANT: Replace 'YOUR_LAPTOP_IP' with the actual IP address of your laptop !!!
-    // const websocketUrl = 'ws://YOUR_LAPTOP_IP:8442';
-    try {
-      this.websocket = new WebSocket(websocketUrl);
-      this.websocket.onopen = (event) => {
-        console.log(`WebSocket connected to ${websocketUrl}`);
-        this.reportVRStatus(true);
-      };
-      this.websocket.onerror = (event) => {
-        // More detailed error logging
-        console.error(`WebSocket Error: Event type: ${event.type}`, event);
-        this.reportVRStatus(false);
-      };
-      this.websocket.onclose = (event) => {
-        console.log(`WebSocket disconnected from ${websocketUrl}. Clean close: ${event.wasClean}, Code: ${event.code}, Reason: '${event.reason}'`);
-        // Attempt to log specific error if available (might be limited by browser security)
-        if (!event.wasClean) {
-          console.error('WebSocket closed unexpectedly.');
+    // --- WebSocket Connection Function with Auto-Reconnect ---
+    this.connectWebSocket = (url) => {
+      // Clear any existing reconnect timer
+      if (this.websocketReconnectTimer) {
+        clearTimeout(this.websocketReconnectTimer);
+        this.websocketReconnectTimer = null;
+      }
+      
+      // Clear any existing keepalive
+      if (this.keepAliveInterval) {
+        clearInterval(this.keepAliveInterval);
+        this.keepAliveInterval = null;
+      }
+      
+      // Close existing connection if any
+      if (this.websocket) {
+        try {
+          this.websocket.close();
+        } catch (e) {
+          console.error('Error closing existing WebSocket:', e);
         }
-        this.websocket = null; // Clear the reference
+        this.websocket = null;
+      }
+      
+      try {
+        console.log(`Connecting to WebSocket: ${url}`);
+        this.websocket = new WebSocket(url);
+        
+        this.websocket.onopen = (event) => {
+          console.log(`✅ WebSocket connected to ${url}`);
+          this.reportVRStatus(true);
+          
+          // Start keepalive ping interval
+          this.keepAliveInterval = setInterval(() => {
+            if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+              try {
+                // Send a ping message (empty object as keepalive)
+                this.websocket.send(JSON.stringify({ type: 'ping' }));
+              } catch (e) {
+                console.error('Failed to send keepalive ping:', e);
+              }
+            }
+          }, this.keepAliveDelay);
+        };
+        
+        this.websocket.onerror = (event) => {
+          console.error(`❌ WebSocket Error: Event type: ${event.type}`, event);
+          this.reportVRStatus(false);
+        };
+        
+        this.websocket.onclose = (event) => {
+          console.log(`🔌 WebSocket disconnected. Clean: ${event.wasClean}, Code: ${event.code}, Reason: '${event.reason}'`);
+          
+          // Clear keepalive interval
+          if (this.keepAliveInterval) {
+            clearInterval(this.keepAliveInterval);
+            this.keepAliveInterval = null;
+          }
+          
+          this.websocket = null;
+          this.reportVRStatus(false);
+          
+          // Auto-reconnect unless it was a clean close initiated by us
+          if (!event.wasClean || event.code !== 1000) {
+            console.log(`🔄 Scheduling reconnection in ${this.websocketReconnectDelay}ms...`);
+            this.websocketReconnectTimer = setTimeout(() => {
+              console.log('Attempting to reconnect...');
+              this.connectWebSocket(url);
+            }, this.websocketReconnectDelay);
+          }
+        };
+        
+        this.websocket.onmessage = (event) => {
+          // Handle pong or other server messages
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'pong') {
+              // Keepalive pong received
+              return;
+            }
+            console.log(`WebSocket message received:`, data);
+          } catch (e) {
+            // Not JSON, just log it
+            console.log(`WebSocket message received: ${event.data}`);
+          }
+        };
+        
+      } catch (error) {
+        console.error(`Failed to create WebSocket connection to ${url}:`, error);
         this.reportVRStatus(false);
-      };
-      this.websocket.onmessage = (event) => {
-        console.log(`WebSocket message received: ${event.data}`); // Log any messages from server
-      };
-    } catch (error) {
-        console.error(`Failed to create WebSocket connection to ${websocketUrl}:`, error);
-        this.reportVRStatus(false);
-    }
+        
+        // Schedule reconnection
+        this.websocketReconnectTimer = setTimeout(() => {
+          this.connectWebSocket(url);
+        }, this.websocketReconnectDelay);
+      }
+    };
+    
+    // Initial connection
+    this.connectWebSocket(websocketUrl);
     // --- End WebSocket Setup ---
 
     // --- VR Status Reporting Function ---

@@ -299,6 +299,11 @@ class VRMonitor:
         self.headset_goal = None  # Add headset goal
         self._goal_lock = threading.Lock()  # Add thread lock
         self.debug_logs = debug_logs  # Debug logging flag
+        
+        # Watchdog tracking
+        self.last_headset_time = None  # Track last time we received headset data
+        self.watchdog_timeout = 0.2  # 200ms timeout
+        self.watchdog_task = None  # Async task for watchdog
     
     def initialize(self):
         """Initialize VR monitor"""
@@ -370,6 +375,9 @@ class VRMonitor:
             print("🎯 Press Ctrl+C to stop monitoring")
             print()
             
+            # Start watchdog task
+            self.watchdog_task = asyncio.create_task(self.watchdog_loop())
+            
             # Monitor command queue
             await self.monitor_commands()
             
@@ -404,6 +412,8 @@ class VRMonitor:
                         self.right_goal = goal
                     elif goal.arm == "headset":  # Add headset data processing
                         self.headset_goal = goal
+                        # Update watchdog timer when we receive headset data
+                        self.last_headset_time = asyncio.get_event_loop().time()
                     
                     # Maintain backward compatibility, save latest goal
                     self.latest_goal = goal
@@ -489,9 +499,57 @@ class VRMonitor:
         """Return the latest right arm goal if available, else None."""
         return self.get_latest_goal_nowait("right")
     
+    async def watchdog_loop(self):
+        """Watchdog loop that clears inputs if headset data stops."""
+        print("🐕 Watchdog started - will clear inputs after 200ms of no headset data")
+        
+        while self.is_running:
+            try:
+                await asyncio.sleep(0.05)  # Check every 50ms
+                
+                current_time = asyncio.get_event_loop().time()
+                
+                # Check if we have a last headset time and if it's been too long
+                if self.last_headset_time is not None:
+                    time_since_last = current_time - self.last_headset_time
+                    
+                    if time_since_last > self.watchdog_timeout:
+                        # Timeout exceeded - clear all inputs
+                        with self._goal_lock:
+                            # Only clear if there's actually something to clear
+                            if (self.left_goal is not None or 
+                                self.right_goal is not None or 
+                                self.headset_goal is not None):
+                                
+                                if self.debug_logs:
+                                    print(f"⚠️ Watchdog timeout: No headset data for {time_since_last:.3f}s - clearing inputs")
+                                
+                                self.left_goal = None
+                                self.right_goal = None
+                                self.headset_goal = None
+                                self.latest_goal = None
+                                
+                        # Reset the timer so we don't spam clear messages
+                        self.last_headset_time = None
+                        
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"❌ Error in watchdog loop: {e}")
+                import traceback
+                print(f"Traceback: {traceback.format_exc()}")
+    
     async def stop_monitoring(self):
         """Stop monitoring"""
         self.is_running = False
+        
+        # Cancel watchdog task
+        if self.watchdog_task:
+            self.watchdog_task.cancel()
+            try:
+                await self.watchdog_task
+            except asyncio.CancelledError:
+                pass
         
         if self.vr_server:
             await self.vr_server.stop()
