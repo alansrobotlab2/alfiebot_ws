@@ -87,6 +87,9 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
         if self.path == '/' or self.path == '/index.html':
             # Serve main page from web-ui directory
             self.serve_file('web-ui/index.html', 'text/html')
+        elif self.path == '/api/status':
+            # Serve system status as JSON
+            self.serve_status()
         elif self.path == '/foxglove-cert':
             # Serve a page to help accept the Foxglove Bridge certificate
             self.serve_foxglove_cert_page()
@@ -96,6 +99,9 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
         elif self.path.endswith('.js'):
             # Serve JS files from web-ui directory
             self.serve_file(f'web-ui{self.path}', 'application/javascript')
+        elif self.path.endswith('.json'):
+            # Serve JSON files from web-ui directory
+            self.serve_file(f'web-ui{self.path}', 'application/json')
         elif self.path.endswith('.ico'):
             self.serve_file(self.path[1:], 'image/x-icon')
         elif self.path.endswith(('.jpg', '.jpeg', '.png', '.gif')):
@@ -170,6 +176,23 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'text/html')
         self.end_headers()
         self.wfile.write(html.encode('utf-8'))
+    
+    def serve_status(self):
+        """Serve system status as JSON."""
+        import json
+        import os
+        
+        # Check if device files exist (simple check for arm connectivity)
+        status = {
+            'left_arm_connected': os.path.exists('/dev/ttyACM0'),
+            'right_arm_connected': os.path.exists('/dev/ttyACM1'),
+            'vrConnected': True,  # If we're serving this, server is running
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(status).encode('utf-8'))
     
     def serve_file(self, filename, content_type):
         """Serve a file with the given content type."""

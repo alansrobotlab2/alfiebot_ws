@@ -22,6 +22,7 @@ setup(
             'web-ui/*.js',
             'web-ui/*.css',
             'web-ui/media/*',
+            'web-ui/libs/*',
             'cert.pem',
             'key.pem',
             'config.yaml',

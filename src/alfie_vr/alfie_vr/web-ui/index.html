@@ -5,10 +5,10 @@
     <title>AlfieVR - Robot Arm Teleoperation</title>
     <meta name="description" content="AlfieVR - Robot Arm Teleoperation">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://aframe.io/releases/1.7.1/aframe.min.js"></script>
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="libs/aframe.min.js"></script>
+    <script src="libs/socket.io.min.js"></script>
     <!-- Three.js OBJLoader for URDF viewer (uses A-Frame's bundled THREE) -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/OBJLoader.js"></script>
+    <script src="libs/OBJLoader.js"></script>
     <script src="vr_app.js" defer></script>
     <script src="interface.js" defer></script>
     <script src="urdf_viewer.js" defer></script>
@@ -144,6 +144,12 @@
 
     <!-- A-Frame VR Scene -->
     <a-scene vr-mode-ui="enabled: true;">
+      <!-- Assets -->
+      <a-assets>
+        <a-asset-item id="roboto-font" src="libs/roboto-msdf.json"></a-asset-item>
+        <img id="roboto-font-image" src="libs/Roboto-msdf.png">
+      </a-assets>
+      
       <!-- Passthrough setup -->
       <a-entity webxr-passthrough="referenceSpaceType: local-floor"></a-entity>
 
@@ -154,7 +160,7 @@
 
       <!-- Headset tracking entity -->
       <a-entity id="headset" camera>
-        <a-text id="headsetInfo" value="Headset: ..." position="0 -0.60 -2.0" rotation="0 0 0" scale="0.2 0.2 0.2" color="yellow" align="center"></a-text>
+        <a-text id="headsetInfo" value="Headset: ..." position="0 -0.60 -2.0" rotation="0 0 0" scale="0.2 0.2 0.2" color="yellow" align="center" font="libs/roboto-msdf.json"></a-text>
         <!-- Video Screen (Head Locked - follows headset view) -->
         <a-plane id="videoScreen" position="0 -0.4 -3.0" width="1.8" height="1.2" material="shader: flat; src: #videoCanvas" visible="false"></a-plane>
         
@@ -172,13 +178,13 @@
           <a-plane position="0 0.41 0.002" width="0.58" height="0.06" color="#667eea" 
                    material="shader: flat"></a-plane>
           <a-text value="🤖 Robot State" position="0 0.41 0.003" align="center" 
-                  color="white" scale="0.07 0.07 0.07"></a-text>
+                  color="white" scale="0.07 0.07 0.07" font="libs/roboto-msdf.json"></a-text>
           
           <!-- Status bar below header -->
           <a-plane position="0 0.34 0.001" width="0.58" height="0.04" color="#000000" opacity="0.4"
                    material="shader: flat"></a-plane>
           <a-text id="vrRobotStatus" value="Initializing..." position="-0.27 0.34 0.002" 
-                  align="left" color="#a0a0a0" scale="0.035 0.035 0.035"></a-text>
+                  align="left" color="#a0a0a0" scale="0.035 0.035 0.035" font="libs/roboto-msdf.json"></a-text>
           
           <!-- Robot model container -->
           <a-entity id="vrRobotModel" position="0 -0.25 0.10" scale="0.55 0.55 0.55" rotation="0 180 0">
@@ -191,25 +197,25 @@
           
           <!-- Foxglove status row (4x larger text) -->
           <a-text value="Foxglove:" position="-0.27 -0.39 0.002" 
-                  align="left" color="#888888" scale="0.14 0.14 0.14"></a-text>
+                  align="left" color="#888888" scale="0.14 0.14 0.14" font="libs/roboto-msdf.json"></a-text>
           <a-text id="vrFoxgloveStatus" value="Disconnected" position="0.27 -0.39 0.002" 
-                  align="right" color="#f44336" scale="0.14 0.14 0.14"></a-text>
+                  align="right" color="#f44336" scale="0.14 0.14 0.14" font="libs/roboto-msdf.json"></a-text>
           
           <!-- TF Rate row (4x larger text) -->
           <a-text value="TF Rate:" position="-0.27 -0.44 0.002" 
-                  align="left" color="#888888" scale="0.14 0.14 0.14"></a-text>
+                  align="left" color="#888888" scale="0.14 0.14 0.14" font="libs/roboto-msdf.json"></a-text>
           <a-text id="vrTFCount" value="0 Hz" position="0.27 -0.44 0.002" 
-                  align="right" color="white" scale="0.14 0.14 0.14"></a-text>
+                  align="right" color="white" scale="0.14 0.14 0.14" font="libs/roboto-msdf.json"></a-text>
           
         </a-entity>
       </a-entity>
 
       <!-- Controllers -->
       <a-entity id="leftHand" oculus-touch-controls="hand: left">
-        <a-text id="leftHandInfo" value="Pos: ...\nRot: ..." position="0 0.04 -0.05" rotation="0 0 0" scale="0.05 0.05 0.05" color="white" align="center"></a-text>
+        <a-text id="leftHandInfo" value="Pos: ...\nRot: ..." position="0 0.04 -0.05" rotation="0 0 0" scale="0.05 0.05 0.05" color="white" align="center" font="libs/roboto-msdf.json"></a-text>
       </a-entity>
       <a-entity id="rightHand" oculus-touch-controls="hand: right">
-        <a-text id="rightHandInfo" value="Pos: ...\nRot: ..." position="0 0.04 -0.05" rotation="0 0 0" scale="0.05 0.05 0.05" color="white" align="center"></a-text>
+        <a-text id="rightHandInfo" value="Pos: ...\nRot: ..." position="0 0.04 -0.05" rotation="0 0 0" scale="0.05 0.05 0.05" color="white" align="center" font="libs/roboto-msdf.json"></a-text>
       </a-entity>
     </a-scene>
 

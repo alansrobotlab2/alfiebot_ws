@@ -158,9 +158,9 @@ function updateStatus() {
       const rightIndicator = document.getElementById('rightArmStatus');
       const vrIndicator = document.getElementById('vrStatus');
       
-      leftIndicator.className = 'status-indicator' + (data.left_arm_connected ? ' connected' : '');
-      rightIndicator.className = 'status-indicator' + (data.right_arm_connected ? ' connected' : '');
-      vrIndicator.className = 'status-indicator' + (data.vrConnected ? ' connected' : '');
+      if (leftIndicator) leftIndicator.className = 'status-indicator' + (data.left_arm_connected ? ' connected' : '');
+      if (rightIndicator) rightIndicator.className = 'status-indicator' + (data.right_arm_connected ? ' connected' : '');
+      if (vrIndicator) vrIndicator.className = 'status-indicator' + (data.vrConnected ? ' connected' : '');
       
       // Update keyboard control status
       isKeyboardEnabled = data.keyboardEnabled;
@@ -269,30 +269,30 @@ function updateUIForDevice() {
   const vrContent = document.getElementById('vrContent');
   
   if (isVRMode()) {
-    desktopInterface.style.display = 'none';
-    vrContent.style.display = 'none';
+    if (desktopInterface) desktopInterface.style.display = 'none';
+    if (vrContent) vrContent.style.display = 'none';
   } else {
     // Check if this is a VR-capable device
     if (navigator.xr) {
       navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
         if (supported) {
           // VR-capable device - show VR interface
-          desktopInterface.style.display = 'none';
-          vrContent.style.display = 'block';
+          if (desktopInterface) desktopInterface.style.display = 'none';
+          if (vrContent) vrContent.style.display = 'block';
         } else {
           // Not VR-capable - show desktop interface
-          desktopInterface.style.display = 'block';
-          vrContent.style.display = 'none';
+          if (desktopInterface) desktopInterface.style.display = 'block';
+          if (vrContent) vrContent.style.display = 'none';
         }
       }).catch(() => {
         // Fallback to desktop interface if XR check fails
-        desktopInterface.style.display = 'block';
-        vrContent.style.display = 'none';
+        if (desktopInterface) desktopInterface.style.display = 'block';
+        if (vrContent) vrContent.style.display = 'none';
       });
     } else {
       // No XR support - show desktop interface
-      desktopInterface.style.display = 'block';
-      vrContent.style.display = 'none';
+      if (desktopInterface) desktopInterface.style.display = 'block';
+      if (vrContent) vrContent.style.display = 'none';
     }
   }
 }
