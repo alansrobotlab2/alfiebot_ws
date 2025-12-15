@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>AlfieVR - Stereo 3D Vision</title>
+    <meta name="description" content="Stereo 3D Vision for Meta Quest 3">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #000;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+        }
+        
+        #status {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 1000;
+            border: 1px solid #333;
+        }
+        
+        #status.connected {
+            border-color: #4CAF50;
+            color: #4CAF50;
+        }
+        
+        #status.error {
+            border-color: #f44336;
+            color: #f44336;
+        }
+        
+        #vrButton {
+            position: fixed;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 16px 48px;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 12px;
+            cursor: pointer;
+            z-index: 1000;
+            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+            transition: all 0.3s ease;
+        }
+        
+        #vrButton:hover {
+            transform: translateX(-50%) scale(1.05);
+            box-shadow: 0 6px 30px rgba(102, 126, 234, 0.6);
+        }
+        
+        #vrButton:disabled {
+            background: #444;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        
+        #preview {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 90%;
+            max-height: 80%;
+            border: 2px solid #333;
+            border-radius: 8px;
+        }
+        
+        .hidden {
+            display: none !important;
+        }
+        
+        #info {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            font-size: 12px;
+            color: #888;
+            z-index: 1000;
+        }
+        
+        #controls {
+            position: fixed;
+            top: 70px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid #444;
+            z-index: 1000;
+            font-size: 12px;
+            min-width: 220px;
+        }
+        
+        #controls h3 {
+            margin: 0 0 10px 0;
+            color: #4CAF50;
+            font-size: 14px;
+        }
+        
+        .control-row {
+            display: flex;
+            align-items: center;
+            margin: 8px 0;
+            gap: 8px;
+        }
+        
+        .control-row label {
+            flex: 0 0 100px;
+            color: #aaa;
+        }
+        
+        .control-row input[type="range"] {
+            flex: 1;
+            min-width: 80px;
+        }
+        
+        .control-row .value {
+            flex: 0 0 50px;
+            text-align: right;
+            color: #fff;
+            font-family: monospace;
+        }
+        
+        .control-btn {
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 2px;
+        }
+        
+        .control-btn:hover {
+            background: #444;
+        }
+
+        canvas {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="status">Initializing...</div>
+    <video id="stereoVideo" autoplay playsinline muted style="display: none;"></video>
+    <canvas id="leftCanvas"></canvas>
+    <canvas id="rightCanvas"></canvas>
+    <img id="preview" class="hidden" alt="Stereo preview">
+    
+    <!-- Stereo adjustment controls -->
+    <div id="controls">
+        <h3>🎯 Stereo Adjustments</h3>
+        <div class="control-row">
+            <label>Vertical Offset</label>
+            <input type="range" id="verticalOffset" min="-0.5" max="0.5" step="0.01" value="0">
+            <span class="value" id="verticalOffsetVal">0.00</span>
+        </div>
+        <div class="control-row">
+            <label>IPD Offset</label>
+            <input type="range" id="ipdOffset" min="-0.05" max="0.05" step="0.001" value="0">
+            <span class="value" id="ipdOffsetVal">0.000</span>
+        </div>
+        <div class="control-row">
+            <label>Screen Distance</label>
+            <input type="range" id="screenDistance" min="0.5" max="5" step="0.1" value="2">
+            <span class="value" id="screenDistanceVal">2.0</span>
+        </div>
+        <div class="control-row">
+            <label>Screen Scale</label>
+            <input type="range" id="screenScale" min="0.5" max="3" step="0.1" value="1.5">
+            <span class="value" id="screenScaleVal">1.5</span>
+        </div>
+        <div class="control-row">
+            <button class="control-btn" onclick="resetSettings()">Reset</button>
+            <button class="control-btn" onclick="saveSettings()">Save</button>
+        </div>
+    </div>
+    
+    <div id="info">
+        Put on your Meta Quest 3 and click "Enter VR" for immersive 3D vision<br>
+        Use thumbsticks in VR: Left stick = vertical, Right stick = IPD | Triggers = distance
+    </div>
+    <button id="vrButton" disabled>🥽 Enter VR</button>
+    <button id="certButton" style="position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); background: #f39c12; color: #000; border: none; padding: 12px 24px; font-size: 14px; border-radius: 8px; cursor: pointer; z-index: 1000; display: none;">🔐 Accept Stereo Stream Certificate</button>
+
+    <script type="module">
+        // WebXR Stereo Vision for Meta Quest 3
+        // Displays side-by-side stereo video as immersive VR
+        
+        const SIGNALING_PORT = 8084;
+        
+        let pc = null;
+        let xrSession = null;
+        let xrRefSpace = null;
+        let gl = null;
+        let leftTexture = null;
+        let rightTexture = null;
+        let videoElement = null;
+        let leftCanvas, rightCanvas, leftCtx, rightCtx;
+        let retryCount = 0;
+        const MAX_RETRIES = 3;
+        
+        // Stereo adjustment settings
+        let stereoSettings = {
+            verticalOffset: 0,      // Meters - positive = up
+            ipdOffset: 0,           // Meters - adjustment to convergence
+            screenDistance: 2.0,    // Meters - distance to virtual screen
+            screenScale: 1.5        // Multiplier for screen size
+        };
+        
+        // Load saved settings
+        function loadSettings() {
+            try {
+                const saved = localStorage.getItem('stereoVRSettings');
+                if (saved) {
+                    stereoSettings = { ...stereoSettings, ...JSON.parse(saved) };
+                }
+            } catch (e) {}
+            updateControlsFromSettings();
+        }
+        
+        // Save settings to localStorage
+        window.saveSettings = function() {
+            localStorage.setItem('stereoVRSettings', JSON.stringify(stereoSettings));
+            setStatus('Settings saved!', 'connected');
+            setTimeout(() => setStatus('VR Active - Stereo 3D Vision', 'connected'), 1000);
+        };
+        
+        // Reset settings to defaults
+        window.resetSettings = function() {
+            stereoSettings = {
+                verticalOffset: 0,
+                ipdOffset: 0,
+                screenDistance: 2.0,
+                screenScale: 1.5
+            };
+            updateControlsFromSettings();
+            reinitQuadBuffers();
+        };
+        
+        // Update HTML controls to match settings
+        function updateControlsFromSettings() {
+            document.getElementById('verticalOffset').value = stereoSettings.verticalOffset;
+            document.getElementById('verticalOffsetVal').textContent = stereoSettings.verticalOffset.toFixed(2);
+            document.getElementById('ipdOffset').value = stereoSettings.ipdOffset;
+            document.getElementById('ipdOffsetVal').textContent = stereoSettings.ipdOffset.toFixed(3);
+            document.getElementById('screenDistance').value = stereoSettings.screenDistance;
+            document.getElementById('screenDistanceVal').textContent = stereoSettings.screenDistance.toFixed(1);
+            document.getElementById('screenScale').value = stereoSettings.screenScale;
+            document.getElementById('screenScaleVal').textContent = stereoSettings.screenScale.toFixed(1);
+        }
+        
+        // Set up control event listeners
+        function setupControls() {
+            document.getElementById('verticalOffset').addEventListener('input', (e) => {
+                stereoSettings.verticalOffset = parseFloat(e.target.value);
+                document.getElementById('verticalOffsetVal').textContent = stereoSettings.verticalOffset.toFixed(2);
+                reinitQuadBuffers();
+            });
+            document.getElementById('ipdOffset').addEventListener('input', (e) => {
+                stereoSettings.ipdOffset = parseFloat(e.target.value);
+                document.getElementById('ipdOffsetVal').textContent = stereoSettings.ipdOffset.toFixed(3);
+            });
+            document.getElementById('screenDistance').addEventListener('input', (e) => {
+                stereoSettings.screenDistance = parseFloat(e.target.value);
+                document.getElementById('screenDistanceVal').textContent = stereoSettings.screenDistance.toFixed(1);
+            });
+            document.getElementById('screenScale').addEventListener('input', (e) => {
+                stereoSettings.screenScale = parseFloat(e.target.value);
+                document.getElementById('screenScaleVal').textContent = stereoSettings.screenScale.toFixed(1);
+                reinitQuadBuffers();
+            });
+        }
+        
+        // Reinitialize quad buffers when size changes
+        function reinitQuadBuffers() {
+            if (gl && positionBuffer) {
+                const aspect = 16 / 9;
+                const height = stereoSettings.screenScale;
+                const width = height * aspect;
+                const yOffset = stereoSettings.verticalOffset;
+                
+                gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                    -width/2, -height/2 + yOffset,
+                     width/2, -height/2 + yOffset,
+                    -width/2,  height/2 + yOffset,
+                     width/2,  height/2 + yOffset,
+                ]), gl.STATIC_DRAW);
+            }
+        }
+        
+        // Status display
+        function setStatus(text, type = '') {
+            const status = document.getElementById('status');
+            status.textContent = text;
+            status.className = type;
+        }
+        
+        // Show certificate button for user to accept SSL cert
+        function showCertButton() {
+            const btn = document.getElementById('certButton');
+            btn.style.display = 'block';
+            btn.onclick = () => {
+                // Open the stereo signaling URL in a new tab so user can accept cert
+                window.open(`https://${window.location.hostname}:${SIGNALING_PORT}/`, '_blank');
+                setStatus('Accept the certificate in the new tab, then reload this page', 'error');
+            };
+        }
+        
+        // Initialize WebRTC connection to stereo stream
+        async function initWebRTC() {
+            setStatus('Connecting to stereo stream...');
+            
+            const signalingUrl = `https://${window.location.hostname}:${SIGNALING_PORT}/offer`;
+            
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+            
+            pc.ontrack = (event) => {
+                console.log('Track received:', event.track.kind);
+                if (event.track.kind === 'video') {
+                    videoElement = document.getElementById('stereoVideo');
+                    videoElement.srcObject = event.streams[0];
+                    videoElement.play().then(() => {
+                        setStatus('Stereo stream connected', 'connected');
+                        document.getElementById('vrButton').disabled = false;
+                        document.getElementById('certButton').style.display = 'none';
+                        startPreview();
+                    }).catch(err => {
+                        console.error('Video play error:', err);
+                        setStatus('Video play error: ' + err.message, 'error');
+                    });
+                }
+            };
+            
+            pc.oniceconnectionstatechange = () => {
+                console.log('ICE state:', pc.iceConnectionState);
+                if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+                    setStatus('Connection lost, reconnecting...', 'error');
+                    setTimeout(initWebRTC, 2000);
+                }
+            };
+            
+            // Add transceiver for video
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                
+                // Wait for ICE gathering
+                await new Promise((resolve) => {
+                    if (pc.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const checkState = () => {
+                            if (pc.iceGatheringState === 'complete') {
+                                pc.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        };
+                        pc.addEventListener('icegatheringstatechange', checkState);
+                        // Timeout after 3 seconds
+                        setTimeout(resolve, 3000);
+                    }
+                });
+                
+                const response = await fetch(signalingUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sdp: pc.localDescription.sdp,
+                        type: pc.localDescription.type
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Signaling failed: ${response.status}`);
+                }
+                
+                const answer = await response.json();
+                await pc.setRemoteDescription(new RTCSessionDescription(answer));
+                
+                console.log('WebRTC connection established');
+                retryCount = 0;  // Reset retry count on success
+                
+            } catch (err) {
+                console.error('WebRTC error:', err);
+                retryCount++;
+                
+                // Check if it's likely a certificate error
+                if (err.message.includes('fetch') || err.message.includes('Failed') || err.name === 'TypeError') {
+                    setStatus('Connection error - SSL certificate may need to be accepted', 'error');
+                    showCertButton();
+                    
+                    if (retryCount <= MAX_RETRIES) {
+                        setTimeout(initWebRTC, 5000);
+                    }
+                } else {
+                    setStatus('Connection error: ' + err.message, 'error');
+                    setTimeout(initWebRTC, 3000);
+                }
+            }
+        }
+        
+        // Show preview of stereo stream (non-VR mode)
+        function startPreview() {
+            const video = document.getElementById('stereoVideo');
+            const preview = document.getElementById('preview');
+            
+            // Create canvas for preview
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            function updatePreview() {
+                if (video.readyState >= 2) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    ctx.drawImage(video, 0, 0);
+                    preview.src = canvas.toDataURL('image/jpeg', 0.8);
+                    preview.classList.remove('hidden');
+                }
+                if (!xrSession) {
+                    requestAnimationFrame(updatePreview);
+                }
+            }
+            
+            updatePreview();
+        }
+        
+        // Initialize WebXR for VR display
+        async function initXR() {
+            if (!navigator.xr) {
+                setStatus('WebXR not supported', 'error');
+                return;
+            }
+            
+            const supported = await navigator.xr.isSessionSupported('immersive-vr');
+            if (!supported) {
+                setStatus('Immersive VR not supported', 'error');
+                document.getElementById('vrButton').disabled = true;
+                return;
+            }
+            
+            document.getElementById('vrButton').addEventListener('click', startVRSession);
+        }
+        
+        // Start immersive VR session
+        async function startVRSession() {
+            try {
+                setStatus('Starting VR session...');
+                
+                // Request immersive VR session with local-floor reference space
+                xrSession = await navigator.xr.requestSession('immersive-vr', {
+                    requiredFeatures: ['local-floor'],
+                    optionalFeatures: ['hand-tracking']
+                });
+                
+                xrSession.addEventListener('end', onSessionEnd);
+                
+                // Set up WebGL context for XR
+                const canvas = document.createElement('canvas');
+                gl = canvas.getContext('webgl2', { xrCompatible: true });
+                
+                if (!gl) {
+                    gl = canvas.getContext('webgl', { xrCompatible: true });
+                }
+                
+                await xrSession.updateRenderState({
+                    baseLayer: new XRWebGLLayer(xrSession, gl)
+                });
+                
+                xrRefSpace = await xrSession.requestReferenceSpace('local-floor');
+                
+                // Create textures for left and right eye views
+                leftTexture = gl.createTexture();
+                rightTexture = gl.createTexture();
+                
+                // Set up canvases for extracting left/right from video
+                leftCanvas = document.getElementById('leftCanvas');
+                rightCanvas = document.getElementById('rightCanvas');
+                leftCtx = leftCanvas.getContext('2d');
+                rightCtx = rightCanvas.getContext('2d');
+                
+                document.getElementById('preview').classList.add('hidden');
+                document.getElementById('vrButton').textContent = '🛑 Exit VR';
+                document.getElementById('vrButton').onclick = () => xrSession.end();
+                
+                setStatus('VR Active - Stereo 3D Vision', 'connected');
+                
+                // Start XR render loop
+                xrSession.requestAnimationFrame(onXRFrame);
+                
+            } catch (err) {
+                console.error('VR session error:', err);
+                setStatus('VR error: ' + err.message, 'error');
+            }
+        }
+        
+        // XR render loop
+        function onXRFrame(time, frame) {
+            if (!xrSession) return;
+            
+            xrSession.requestAnimationFrame(onXRFrame);
+            
+            const pose = frame.getViewerPose(xrRefSpace);
+            if (!pose) return;
+            
+            const glLayer = xrSession.renderState.baseLayer;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
+            gl.clearColor(0, 0, 0, 1);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            
+            const video = document.getElementById('stereoVideo');
+            if (video.readyState < 2) return;
+            
+            const videoWidth = video.videoWidth;
+            const videoHeight = video.videoHeight;
+            const halfWidth = videoWidth / 2;
+            
+            // Update canvas sizes
+            if (leftCanvas.width !== halfWidth || leftCanvas.height !== videoHeight) {
+                leftCanvas.width = halfWidth;
+                leftCanvas.height = videoHeight;
+                rightCanvas.width = halfWidth;
+                rightCanvas.height = videoHeight;
+            }
+            
+            // Extract left and right images from side-by-side video
+            leftCtx.drawImage(video, 0, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
+            rightCtx.drawImage(video, halfWidth, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
+            
+            // Render to each eye
+            for (const view of pose.views) {
+                const viewport = glLayer.getViewport(view);
+                gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+                
+                // Select texture based on eye
+                const sourceCanvas = view.eye === 'left' ? leftCanvas : rightCanvas;
+                const texture = view.eye === 'left' ? leftTexture : rightTexture;
+                
+                // Update texture from canvas
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                
+                // Draw fullscreen quad with texture
+                drawTexturedQuad(view, viewport);
+            }
+        }
+        
+        // Simple shader program for rendering video texture
+        let shaderProgram = null;
+        let positionBuffer = null;
+        let texCoordBuffer = null;
+        
+        function initShaders() {
+            const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(vertexShader, `
+                attribute vec2 a_position;
+                attribute vec2 a_texCoord;
+                varying vec2 v_texCoord;
+                uniform mat4 u_projection;
+                uniform mat4 u_view;
+                uniform mat4 u_model;
+                uniform float u_distance;
+                uniform float u_ipdOffset;
+                uniform float u_isLeftEye;
+                
+                void main() {
+                    // Apply IPD offset (inward for each eye to adjust convergence)
+                    float xOffset = u_ipdOffset * (u_isLeftEye > 0.5 ? 1.0 : -1.0);
+                    vec4 pos = vec4(a_position.x + xOffset, a_position.y, -u_distance, 1.0);
+                    gl_Position = u_projection * u_view * u_model * pos;
+                    v_texCoord = a_texCoord;
+                }
+            `);
+            gl.compileShader(vertexShader);
+            
+            const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(fragmentShader, `
+                precision mediump float;
+                varying vec2 v_texCoord;
+                uniform sampler2D u_texture;
+                
+                void main() {
+                    gl_FragColor = texture2D(u_texture, v_texCoord);
+                }
+            `);
+            gl.compileShader(fragmentShader);
+            
+            shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.linkProgram(shaderProgram);
+            
+            // Create quad vertices (screen-sized quad positioned in front of viewer)
+            const aspect = 16 / 9;  // Assume 16:9 aspect ratio per eye
+            const height = stereoSettings.screenScale;
+            const width = height * aspect;
+            const yOffset = stereoSettings.verticalOffset;
+            
+            positionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                -width/2, -height/2 + yOffset,
+                 width/2, -height/2 + yOffset,
+                -width/2,  height/2 + yOffset,
+                 width/2,  height/2 + yOffset,
+            ]), gl.STATIC_DRAW);
+            
+            texCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                0, 1,
+                1, 1,
+                0, 0,
+                1, 0,
+            ]), gl.STATIC_DRAW);
+        }
+        
+        function drawTexturedQuad(view, viewport) {
+            if (!shaderProgram) {
+                initShaders();
+            }
+            
+            gl.useProgram(shaderProgram);
+            
+            // Set up attributes
+            const positionLoc = gl.getAttribLocation(shaderProgram, 'a_position');
+            const texCoordLoc = gl.getAttribLocation(shaderProgram, 'a_texCoord');
+            
+            // Rebuild position buffer with current settings
+            const aspect = 16 / 9;
+            const height = stereoSettings.screenScale;
+            const width = height * aspect;
+            const yOffset = stereoSettings.verticalOffset;
+            
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                -width/2, -height/2 + yOffset,
+                 width/2, -height/2 + yOffset,
+                -width/2,  height/2 + yOffset,
+                 width/2,  height/2 + yOffset,
+            ]), gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(positionLoc);
+            gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+            
+            gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+            gl.enableVertexAttribArray(texCoordLoc);
+            gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
+            
+            // Set uniforms
+            const projectionLoc = gl.getUniformLocation(shaderProgram, 'u_projection');
+            const viewLoc = gl.getUniformLocation(shaderProgram, 'u_view');
+            const modelLoc = gl.getUniformLocation(shaderProgram, 'u_model');
+            const textureLoc = gl.getUniformLocation(shaderProgram, 'u_texture');
+            const distanceLoc = gl.getUniformLocation(shaderProgram, 'u_distance');
+            const ipdOffsetLoc = gl.getUniformLocation(shaderProgram, 'u_ipdOffset');
+            const isLeftEyeLoc = gl.getUniformLocation(shaderProgram, 'u_isLeftEye');
+            
+            gl.uniformMatrix4fv(projectionLoc, false, view.projectionMatrix);
+            gl.uniform1f(distanceLoc, stereoSettings.screenDistance);
+            gl.uniform1f(ipdOffsetLoc, stereoSettings.ipdOffset);
+            gl.uniform1f(isLeftEyeLoc, view.eye === 'left' ? 1.0 : 0.0);
+            
+            // Invert view transform (view.transform is viewer pose, we need inverse)
+            const viewMatrix = new Float32Array(16);
+            invertMatrix(view.transform.matrix, viewMatrix);
+            gl.uniformMatrix4fv(viewLoc, false, viewMatrix);
+            
+            // Model matrix - identity (screen at origin, facing -Z)
+            gl.uniformMatrix4fv(modelLoc, false, new Float32Array([
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]));
+            
+            gl.uniform1i(textureLoc, 0);
+            
+            // Draw quad
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+        
+        // Matrix inversion helper
+        function invertMatrix(m, out) {
+            const m00 = m[0], m01 = m[1], m02 = m[2], m03 = m[3];
+            const m10 = m[4], m11 = m[5], m12 = m[6], m13 = m[7];
+            const m20 = m[8], m21 = m[9], m22 = m[10], m23 = m[11];
+            const m30 = m[12], m31 = m[13], m32 = m[14], m33 = m[15];
+            
+            const tmp0 = m22 * m33 - m32 * m23;
+            const tmp1 = m21 * m33 - m31 * m23;
+            const tmp2 = m21 * m32 - m31 * m22;
+            const tmp3 = m20 * m33 - m30 * m23;
+            const tmp4 = m20 * m32 - m30 * m22;
+            const tmp5 = m20 * m31 - m30 * m21;
+            
+            const t0 = m11 * tmp0 - m12 * tmp1 + m13 * tmp2;
+            const t1 = -(m10 * tmp0 - m12 * tmp3 + m13 * tmp4);
+            const t2 = m10 * tmp1 - m11 * tmp3 + m13 * tmp5;
+            const t3 = -(m10 * tmp2 - m11 * tmp4 + m12 * tmp5);
+            
+            const det = 1.0 / (m00 * t0 + m01 * t1 + m02 * t2 + m03 * t3);
+            
+            out[0] = t0 * det;
+            out[1] = (-(m01 * tmp0 - m02 * tmp1 + m03 * tmp2)) * det;
+            out[2] = (m01 * (m12 * m33 - m32 * m13) - m02 * (m11 * m33 - m31 * m13) + m03 * (m11 * m32 - m31 * m12)) * det;
+            out[3] = (-(m01 * (m12 * m23 - m22 * m13) - m02 * (m11 * m23 - m21 * m13) + m03 * (m11 * m22 - m21 * m12))) * det;
+            out[4] = t1 * det;
+            out[5] = (m00 * tmp0 - m02 * tmp3 + m03 * tmp4) * det;
+            out[6] = (-(m00 * (m12 * m33 - m32 * m13) - m02 * (m10 * m33 - m30 * m13) + m03 * (m10 * m32 - m30 * m12))) * det;
+            out[7] = (m00 * (m12 * m23 - m22 * m13) - m02 * (m10 * m23 - m20 * m13) + m03 * (m10 * m22 - m20 * m12)) * det;
+            out[8] = t2 * det;
+            out[9] = (-(m00 * tmp1 - m01 * tmp3 + m03 * tmp5)) * det;
+            out[10] = (m00 * (m11 * m33 - m31 * m13) - m01 * (m10 * m33 - m30 * m13) + m03 * (m10 * m31 - m30 * m11)) * det;
+            out[11] = (-(m00 * (m11 * m23 - m21 * m13) - m01 * (m10 * m23 - m20 * m13) + m03 * (m10 * m21 - m20 * m11))) * det;
+            out[12] = t3 * det;
+            out[13] = (m00 * tmp2 - m01 * tmp4 + m02 * tmp5) * det;
+            out[14] = (-(m00 * (m11 * m32 - m31 * m12) - m01 * (m10 * m32 - m30 * m12) + m02 * (m10 * m31 - m30 * m11))) * det;
+            out[15] = (m00 * (m11 * m22 - m21 * m12) - m01 * (m10 * m22 - m20 * m12) + m02 * (m10 * m21 - m20 * m11)) * det;
+        }
+        
+        function onSessionEnd() {
+            xrSession = null;
+            gl = null;
+            setStatus('VR session ended', '');
+            document.getElementById('vrButton').textContent = '🥽 Enter VR';
+            document.getElementById('vrButton').onclick = startVRSession;
+            document.getElementById('preview').classList.remove('hidden');
+            startPreview();
+        }
+        
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', async () => {
+            console.log('Stereo VR Vision - Initializing...');
+            loadSettings();
+            setupControls();
+            await initWebRTC();
+            await initXR();
+        });
+    </script>
+</body>
+</html>

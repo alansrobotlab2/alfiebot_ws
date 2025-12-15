@@ -87,6 +87,12 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
         if self.path == '/' or self.path == '/index.html':
             # Serve main page from web-ui directory
             self.serve_file('web-ui/index.html', 'text/html')
+        elif self.path == '/stereo' or self.path == '/stereo_vr.html':
+            # Serve stereo VR 3D vision page
+            self.serve_file('web-ui/stereo_vr.html', 'text/html')
+        elif self.path.endswith('.html'):
+            # Serve other HTML files from web-ui directory
+            self.serve_file(f'web-ui{self.path}', 'text/html')
         elif self.path == '/api/status':
             # Serve system status as JSON
             self.serve_status()

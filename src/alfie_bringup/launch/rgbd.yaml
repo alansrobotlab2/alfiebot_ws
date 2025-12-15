@@ -2,15 +2,18 @@
   ros__parameters:
     camera:
       i_nn_type: none
+      i_pipeline_type: RGBD
     stereo:
       i_subpixel: true
+      i_left_rect_publish_topic: true
+      i_right_rect_publish_topic: true
+      i_left_rect_low_bandwidth: true
+      i_right_rect_low_bandwidth: true
+      i_left_rect_low_bandwidth_quality: 80
+      i_right_rect_low_bandwidth_quality: 80
     rgb:
       i_fps: 10.0
     depth:
-      i_fps: 10.0
-    infra1:
-      i_fps: 10.0
-    infra2:
       i_fps: 10.0
     left:
       i_fps: 10.0
