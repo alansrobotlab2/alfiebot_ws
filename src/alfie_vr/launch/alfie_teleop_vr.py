@@ -22,7 +22,20 @@ def generate_launch_description():
             respawn=True
         ),
 
-        # Stereo video streamer for VR 3D vision (left/right cameras)
+        # Stereo colorizer - colorizes mono left/right images using RGB camera
+        Node(
+            package='alfie_vr',
+            namespace='alfie',
+            executable='stereo_colorizer',
+            name='stereo_colorizer_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
+        ),
+
+        # Stereo video streamer for VR 3D vision (colorized left/right cameras)
         Node(
             package='alfie_vr',
             namespace='alfie',

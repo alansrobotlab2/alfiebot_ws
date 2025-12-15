@@ -57,6 +57,7 @@ setup(
             'ros_video_webrtc = alfie_vr.ros_video_webrtc:main',
             'ros_video_webrtc_hw = alfie_vr.ros_video_webrtc_hw:main',
             'ros_video_webrtc_stereo = alfie_vr.ros_video_webrtc_stereo:main',
+            'stereo_colorizer = alfie_vr.stereo_colorizer:main',
         ],
     },
 )

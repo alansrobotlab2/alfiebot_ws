@@ -110,8 +110,9 @@ class StereoVideoNode(Node):
         super().__init__('webrtc_stereo_video')
         
         # Declare parameters
-        self.declare_parameter('left_image_topic', '/alfie/oak/left/image_rect/compressed')
-        self.declare_parameter('right_image_topic', '/alfie/oak/right/image_rect/compressed')
+        # Use colorized stereo images from stereo_colorizer node
+        self.declare_parameter('left_image_topic', '/alfie/oak/left/image_color/compressed')
+        self.declare_parameter('right_image_topic', '/alfie/oak/right/image_color/compressed')
         self.declare_parameter('port', VIDEO_PORT)
         self.declare_parameter('output_width', 2560)  # 1280 per eye
         self.declare_parameter('output_height', 720)
