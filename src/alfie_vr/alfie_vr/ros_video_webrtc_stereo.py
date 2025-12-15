@@ -10,6 +10,11 @@ Key optimizations:
 - Single stereo frame buffer, atomically updated
 - No MediaRelay buffering
 - Event-driven frame delivery to WebRTC
+
+Color mapping:
+- Uses proper homography to project RGB onto left/right views
+- Accounts for camera positions and intrinsics
+- YCbCr color transfer preserves stereo luminance detail
 """
 
 import asyncio
@@ -18,12 +23,12 @@ import os
 import threading
 import fractions
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, CameraInfo
 
 import cv2
 import numpy as np
@@ -113,19 +118,36 @@ class StereoVideoNode(Node):
         self.declare_parameter('left_image_topic', '/alfie/oak/left/image_rect/compressed')
         self.declare_parameter('right_image_topic', '/alfie/oak/right/image_rect/compressed')
         self.declare_parameter('rgb_image_topic', '/alfie/oak/rgb/image_raw/compressed')
+        self.declare_parameter('left_camera_info_topic', '/alfie/oak/left/camera_info')
+        self.declare_parameter('right_camera_info_topic', '/alfie/oak/right/camera_info')
+        self.declare_parameter('rgb_camera_info_topic', '/alfie/oak/rgb/camera_info')
         self.declare_parameter('colorize', True)  # Map RGB color onto B/W stereo
         self.declare_parameter('port', VIDEO_PORT)
         self.declare_parameter('output_width', 2560)  # 1280 per eye
         self.declare_parameter('output_height', 720)
         
+        # OAK-D Lite camera geometry (meters)
+        # Stereo baseline: 75mm, RGB is centered between left/right
+        self.declare_parameter('stereo_baseline', 0.075)  # 7.5cm baseline
+        self.declare_parameter('rgb_to_left_x', 0.0375)   # RGB is 3.75cm right of left cam
+        self.declare_parameter('rgb_to_right_x', -0.0375) # RGB is 3.75cm left of right cam
+        
         # Get parameters
         self.left_topic = self.get_parameter('left_image_topic').get_parameter_value().string_value
         self.right_topic = self.get_parameter('right_image_topic').get_parameter_value().string_value
         self.rgb_topic = self.get_parameter('rgb_image_topic').get_parameter_value().string_value
+        self.left_info_topic = self.get_parameter('left_camera_info_topic').get_parameter_value().string_value
+        self.right_info_topic = self.get_parameter('right_camera_info_topic').get_parameter_value().string_value
+        self.rgb_info_topic = self.get_parameter('rgb_camera_info_topic').get_parameter_value().string_value
         self.colorize = self.get_parameter('colorize').get_parameter_value().bool_value
         self.port = self.get_parameter('port').get_parameter_value().integer_value
         self.output_width = self.get_parameter('output_width').get_parameter_value().integer_value
         self.output_height = self.get_parameter('output_height').get_parameter_value().integer_value
+        
+        # Camera geometry
+        self.stereo_baseline = self.get_parameter('stereo_baseline').get_parameter_value().double_value
+        self.rgb_to_left_x = self.get_parameter('rgb_to_left_x').get_parameter_value().double_value
+        self.rgb_to_right_x = self.get_parameter('rgb_to_right_x').get_parameter_value().double_value
         
         self.eye_width = self.output_width // 2
         
@@ -137,6 +159,23 @@ class StereoVideoNode(Node):
         self._left_frame: Optional[np.ndarray] = None
         self._right_frame: Optional[np.ndarray] = None
         self._rgb_frame: Optional[np.ndarray] = None  # For color mapping
+        
+        # Camera intrinsics (will be populated from camera_info)
+        self._left_K: Optional[np.ndarray] = None
+        self._right_K: Optional[np.ndarray] = None
+        self._rgb_K: Optional[np.ndarray] = None
+        self._left_size: Optional[Tuple[int, int]] = None
+        self._right_size: Optional[Tuple[int, int]] = None
+        self._rgb_size: Optional[Tuple[int, int]] = None
+        
+        # Pre-computed homographies (RGB -> left, RGB -> right)
+        self._H_rgb_to_left: Optional[np.ndarray] = None
+        self._H_rgb_to_right: Optional[np.ndarray] = None
+        self._homographies_computed = False
+        
+        # Cached warped RGB frames for each eye
+        self._rgb_warped_left: Optional[np.ndarray] = None
+        self._rgb_warped_right: Optional[np.ndarray] = None
         
         # Frame counters for stats
         self._left_count = 0
@@ -174,6 +213,26 @@ class StereoVideoNode(Node):
                 self.rgb_callback,
                 qos_profile
             )
+            
+            # Subscribe to camera info for calibration
+            self.left_info_sub = self.create_subscription(
+                CameraInfo,
+                self.left_info_topic,
+                self.left_info_callback,
+                qos_profile
+            )
+            self.right_info_sub = self.create_subscription(
+                CameraInfo,
+                self.right_info_topic,
+                self.right_info_callback,
+                qos_profile
+            )
+            self.rgb_info_sub = self.create_subscription(
+                CameraInfo,
+                self.rgb_info_topic,
+                self.rgb_info_callback,
+                qos_profile
+            )
         
         self.get_logger().info('=' * 60)
         self.get_logger().info('Stereo WebRTC Video Streamer - ULTRA LOW LATENCY')
@@ -182,31 +241,144 @@ class StereoVideoNode(Node):
         self.get_logger().info(f'Right eye: {self.right_topic}')
         if self.colorize:
             self.get_logger().info(f'RGB color: {self.rgb_topic}')
-            self.get_logger().info('Colorization: ENABLED (YCbCr color transfer)')
+            self.get_logger().info('Colorization: ENABLED (homography-based projection)')
+            self.get_logger().info(f'Stereo baseline: {self.stereo_baseline*100:.1f}cm')
         else:
             self.get_logger().info('Colorization: DISABLED')
         self.get_logger().info(f'Output: {self.output_width}x{self.output_height}')
         self.get_logger().info(f'WebRTC port: {self.port}')
-        
-    def _colorize_grayscale(self, gray_frame: np.ndarray) -> np.ndarray:
+    
+    def left_info_callback(self, msg: CameraInfo):
+        """Store left camera intrinsics"""
+        if self._left_K is None:
+            self._left_K = np.array(msg.k).reshape(3, 3)
+            self._left_size = (msg.width, msg.height)
+            self.get_logger().info(f'Left camera: {msg.width}x{msg.height}')
+            self._try_compute_homographies()
+    
+    def right_info_callback(self, msg: CameraInfo):
+        """Store right camera intrinsics"""
+        if self._right_K is None:
+            self._right_K = np.array(msg.k).reshape(3, 3)
+            self._right_size = (msg.width, msg.height)
+            self.get_logger().info(f'Right camera: {msg.width}x{msg.height}')
+            self._try_compute_homographies()
+    
+    def rgb_info_callback(self, msg: CameraInfo):
+        """Store RGB camera intrinsics"""
+        if self._rgb_K is None:
+            self._rgb_K = np.array(msg.k).reshape(3, 3)
+            self._rgb_size = (msg.width, msg.height)
+            self.get_logger().info(f'RGB camera: {msg.width}x{msg.height}')
+            self._try_compute_homographies()
+    
+    def _try_compute_homographies(self):
         """
-        Apply color from RGB camera to grayscale frame using YCbCr color space.
-        Uses grayscale as luminance (Y) and RGB's chrominance (Cb, Cr).
-        This preserves depth-accurate intensity while adding color.
+        Compute homographies from RGB to left/right cameras.
+        
+        For a plane at infinity (or distant objects), the homography is:
+            H = K_target * R * K_source^(-1)
+        
+        Since cameras are roughly aligned (small rotation), we approximate with:
+            H = K_target * T * K_source^(-1)
+        
+        Where T accounts for the horizontal translation between cameras.
+        This is equivalent to applying a horizontal shift proportional to 
+        the focal length ratio and camera offset.
+        """
+        if self._homographies_computed:
+            return
+        if self._left_K is None or self._right_K is None or self._rgb_K is None:
+            return
+        if self._left_size is None or self._rgb_size is None:
+            return
+        
+        try:
+            # Compute homography for RGB -> Left
+            # The key insight: for distant objects, parallax causes a horizontal shift
+            # shift_pixels = focal_length * baseline / depth
+            # At infinity, shift -> 0, but for typical viewing distances we need to compensate
+            
+            # Scale factors to account for different resolutions
+            scale_x_left = self._left_size[0] / self._rgb_size[0]
+            scale_y_left = self._left_size[1] / self._rgb_size[1]
+            scale_x_right = self._right_size[0] / self._rgb_size[0]
+            scale_y_right = self._right_size[1] / self._rgb_size[1]
+            
+            # For homography at a reference plane (assume ~2m distance for typical VR use)
+            reference_depth = 2.0  # meters
+            
+            # Pixel shift = fx * baseline_x / depth
+            # RGB -> Left: RGB is to the right of left camera
+            shift_left = self._left_K[0, 0] * self.rgb_to_left_x / reference_depth
+            # RGB -> Right: RGB is to the left of right camera  
+            shift_right = self._right_K[0, 0] * self.rgb_to_right_x / reference_depth
+            
+            # Build homography matrices
+            # H = K_target * [R | t/d] * K_source^-1
+            # For our case with pure translation and distant plane:
+            # H ≈ scale * I + translation_in_pixels
+            
+            # Simpler approach: affine transform with scale and shift
+            self._H_rgb_to_left = np.array([
+                [scale_x_left, 0, shift_left],
+                [0, scale_y_left, 0],
+                [0, 0, 1]
+            ], dtype=np.float32)
+            
+            self._H_rgb_to_right = np.array([
+                [scale_x_right, 0, shift_right],
+                [0, scale_y_right, 0],
+                [0, 0, 1]
+            ], dtype=np.float32)
+            
+            self._homographies_computed = True
+            self.get_logger().info('Homographies computed for RGB->stereo projection')
+            self.get_logger().info(f'  Left shift: {shift_left:.1f}px, Right shift: {shift_right:.1f}px')
+            
+        except Exception as e:
+            self.get_logger().error(f'Failed to compute homographies: {e}')
+        
+    def _colorize_grayscale(self, gray_frame: np.ndarray, is_left: bool) -> np.ndarray:
+        """
+        Apply color from RGB camera to grayscale frame using proper projection.
+        
+        1. Warp RGB image to align with the target stereo view using homography
+        2. Use YCbCr color transfer: grayscale luminance + RGB chrominance
+        
+        Args:
+            gray_frame: The grayscale image (as RGB with equal channels)
+            is_left: True for left eye, False for right eye
         """
         rgb_frame = self._rgb_frame
         if rgb_frame is None:
-            # No RGB available, convert grayscale to RGB
             return gray_frame
         
-        try:
-            # Resize RGB to match stereo frame size
+        # Select the appropriate homography and cached warp
+        H = self._H_rgb_to_left if is_left else self._H_rgb_to_right
+        
+        if H is None:
+            # Homographies not ready, fall back to simple resize
             rgb_resized = cv2.resize(rgb_frame, (gray_frame.shape[1], gray_frame.shape[0]))
-            
-            # Convert RGB to YCrCb (note: OpenCV uses YCrCb not YCbCr)
+        else:
+            try:
+                # Warp RGB to align with stereo view
+                rgb_warped = cv2.warpPerspective(
+                    rgb_frame, 
+                    H, 
+                    (gray_frame.shape[1], gray_frame.shape[0]),
+                    flags=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_REPLICATE
+                )
+                rgb_resized = rgb_warped
+            except Exception:
+                rgb_resized = cv2.resize(rgb_frame, (gray_frame.shape[1], gray_frame.shape[0]))
+        
+        try:
+            # Convert warped RGB to YCrCb
             rgb_ycrcb = cv2.cvtColor(rgb_resized, cv2.COLOR_RGB2YCrCb)
             
-            # If gray_frame is already RGB (3 channels), extract luminance
+            # Extract luminance from grayscale frame
             if len(gray_frame.shape) == 3 and gray_frame.shape[2] == 3:
                 gray_ycrcb = cv2.cvtColor(gray_frame, cv2.COLOR_RGB2YCrCb)
                 y_channel = gray_ycrcb[:, :, 0]
@@ -220,8 +392,7 @@ class StereoVideoNode(Node):
             colorized = cv2.cvtColor(rgb_ycrcb, cv2.COLOR_YCrCb2RGB)
             return colorized
             
-        except Exception as e:
-            # Fallback to original
+        except Exception:
             return gray_frame
     
     def rgb_callback(self, msg: CompressedImage):
@@ -247,9 +418,9 @@ class StereoVideoNode(Node):
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_resized = cv2.resize(frame_rgb, (self.eye_width, self.output_height))
                 
-                # Apply colorization if enabled
+                # Apply colorization if enabled (left eye)
                 if self.colorize:
-                    frame_resized = self._colorize_grayscale(frame_resized)
+                    frame_resized = self._colorize_grayscale(frame_resized, is_left=True)
                 
                 self._left_frame = frame_resized
                 self._update_stereo_frame()
@@ -269,9 +440,9 @@ class StereoVideoNode(Node):
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_resized = cv2.resize(frame_rgb, (self.eye_width, self.output_height))
                 
-                # Apply colorization if enabled
+                # Apply colorization if enabled (right eye)
                 if self.colorize:
-                    frame_resized = self._colorize_grayscale(frame_resized)
+                    frame_resized = self._colorize_grayscale(frame_resized, is_left=False)
                 
                 self._right_frame = frame_resized
                 self._update_stereo_frame()

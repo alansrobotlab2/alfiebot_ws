@@ -62,7 +62,7 @@ def launch_setup(context, *args, **kwargs):
     )
     override_cam_model = LaunchConfiguration("override_cam_model", default="false")
     params_file = LaunchConfiguration("params_file")
-    camera_model = LaunchConfiguration("camera_model", default="OAK-D")
+    camera_model = LaunchConfiguration("camera_model", default="OAK-D-LITE")
     rs_compat = LaunchConfiguration("rs_compat", default="false")
     pointcloud_enable = LaunchConfiguration("pointcloud.enable", default="false")
     rectify_rgb = LaunchConfiguration("rectify_rgb", default="true")
