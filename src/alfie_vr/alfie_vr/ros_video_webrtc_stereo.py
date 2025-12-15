@@ -112,6 +112,8 @@ class StereoVideoNode(Node):
         # Declare parameters
         self.declare_parameter('left_image_topic', '/alfie/oak/left/image_rect/compressed')
         self.declare_parameter('right_image_topic', '/alfie/oak/right/image_rect/compressed')
+        self.declare_parameter('rgb_image_topic', '/alfie/oak/rgb/image_raw/compressed')
+        self.declare_parameter('colorize', True)  # Map RGB color onto B/W stereo
         self.declare_parameter('port', VIDEO_PORT)
         self.declare_parameter('output_width', 2560)  # 1280 per eye
         self.declare_parameter('output_height', 720)
@@ -119,6 +121,8 @@ class StereoVideoNode(Node):
         # Get parameters
         self.left_topic = self.get_parameter('left_image_topic').get_parameter_value().string_value
         self.right_topic = self.get_parameter('right_image_topic').get_parameter_value().string_value
+        self.rgb_topic = self.get_parameter('rgb_image_topic').get_parameter_value().string_value
+        self.colorize = self.get_parameter('colorize').get_parameter_value().bool_value
         self.port = self.get_parameter('port').get_parameter_value().integer_value
         self.output_width = self.get_parameter('output_width').get_parameter_value().integer_value
         self.output_height = self.get_parameter('output_height').get_parameter_value().integer_value
@@ -132,10 +136,12 @@ class StereoVideoNode(Node):
         # Latest decoded frames
         self._left_frame: Optional[np.ndarray] = None
         self._right_frame: Optional[np.ndarray] = None
+        self._rgb_frame: Optional[np.ndarray] = None  # For color mapping
         
         # Frame counters for stats
         self._left_count = 0
         self._right_count = 0
+        self._rgb_count = 0
         self._last_stats_time = time.time()
         
         # QoS profile - best effort, keep only latest
@@ -160,14 +166,77 @@ class StereoVideoNode(Node):
             qos_profile
         )
         
+        # Subscribe to RGB for colorization
+        if self.colorize:
+            self.rgb_sub = self.create_subscription(
+                CompressedImage,
+                self.rgb_topic,
+                self.rgb_callback,
+                qos_profile
+            )
+        
         self.get_logger().info('=' * 60)
         self.get_logger().info('Stereo WebRTC Video Streamer - ULTRA LOW LATENCY')
         self.get_logger().info('=' * 60)
         self.get_logger().info(f'Left eye:  {self.left_topic}')
         self.get_logger().info(f'Right eye: {self.right_topic}')
+        if self.colorize:
+            self.get_logger().info(f'RGB color: {self.rgb_topic}')
+            self.get_logger().info('Colorization: ENABLED (YCbCr color transfer)')
+        else:
+            self.get_logger().info('Colorization: DISABLED')
         self.get_logger().info(f'Output: {self.output_width}x{self.output_height}')
         self.get_logger().info(f'WebRTC port: {self.port}')
         
+    def _colorize_grayscale(self, gray_frame: np.ndarray) -> np.ndarray:
+        """
+        Apply color from RGB camera to grayscale frame using YCbCr color space.
+        Uses grayscale as luminance (Y) and RGB's chrominance (Cb, Cr).
+        This preserves depth-accurate intensity while adding color.
+        """
+        rgb_frame = self._rgb_frame
+        if rgb_frame is None:
+            # No RGB available, convert grayscale to RGB
+            return gray_frame
+        
+        try:
+            # Resize RGB to match stereo frame size
+            rgb_resized = cv2.resize(rgb_frame, (gray_frame.shape[1], gray_frame.shape[0]))
+            
+            # Convert RGB to YCrCb (note: OpenCV uses YCrCb not YCbCr)
+            rgb_ycrcb = cv2.cvtColor(rgb_resized, cv2.COLOR_RGB2YCrCb)
+            
+            # If gray_frame is already RGB (3 channels), extract luminance
+            if len(gray_frame.shape) == 3 and gray_frame.shape[2] == 3:
+                gray_ycrcb = cv2.cvtColor(gray_frame, cv2.COLOR_RGB2YCrCb)
+                y_channel = gray_ycrcb[:, :, 0]
+            else:
+                y_channel = gray_frame
+            
+            # Combine: grayscale luminance + RGB chrominance
+            rgb_ycrcb[:, :, 0] = y_channel
+            
+            # Convert back to RGB
+            colorized = cv2.cvtColor(rgb_ycrcb, cv2.COLOR_YCrCb2RGB)
+            return colorized
+            
+        except Exception as e:
+            # Fallback to original
+            return gray_frame
+    
+    def rgb_callback(self, msg: CompressedImage):
+        """Handle incoming RGB image for color reference"""
+        try:
+            nparr = np.frombuffer(msg.data, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is not None:
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                self._rgb_frame = frame_rgb
+                self._rgb_count += 1
+        except Exception as e:
+            self.get_logger().error(f'RGB decode error: {e}')
+    
     def left_callback(self, msg: CompressedImage):
         """Handle incoming left image - decode immediately"""
         try:
@@ -177,6 +246,11 @@ class StereoVideoNode(Node):
                 # Convert BGR to RGB and resize
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_resized = cv2.resize(frame_rgb, (self.eye_width, self.output_height))
+                
+                # Apply colorization if enabled
+                if self.colorize:
+                    frame_resized = self._colorize_grayscale(frame_resized)
+                
                 self._left_frame = frame_resized
                 self._update_stereo_frame()
                 self._left_count += 1
@@ -194,6 +268,11 @@ class StereoVideoNode(Node):
                 # Convert BGR to RGB and resize
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_resized = cv2.resize(frame_rgb, (self.eye_width, self.output_height))
+                
+                # Apply colorization if enabled
+                if self.colorize:
+                    frame_resized = self._colorize_grayscale(frame_resized)
+                
                 self._right_frame = frame_resized
                 self._update_stereo_frame()
                 self._right_count += 1
@@ -235,9 +314,14 @@ class StereoVideoNode(Node):
             elapsed = now - self._last_stats_time
             left_fps = self._left_count / elapsed
             right_fps = self._right_count / elapsed
-            self.get_logger().info(f'Stereo: L={left_fps:.1f} FPS, R={right_fps:.1f} FPS')
+            rgb_fps = self._rgb_count / elapsed
+            if self.colorize:
+                self.get_logger().info(f'Stereo: L={left_fps:.1f} R={right_fps:.1f} RGB={rgb_fps:.1f} FPS')
+            else:
+                self.get_logger().info(f'Stereo: L={left_fps:.1f} FPS, R={right_fps:.1f} FPS')
             self._left_count = 0
             self._right_count = 0
+            self._rgb_count = 0
             self._last_stats_time = now
 
 
