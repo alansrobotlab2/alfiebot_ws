@@ -341,10 +341,12 @@ class StereoVideoNode(Node):
         
     def _colorize_grayscale(self, gray_frame: np.ndarray, is_left: bool) -> np.ndarray:
         """
-        Apply color from RGB camera to grayscale frame using proper projection.
+        Colorize grayscale stereo image using RGB camera as color source.
         
-        1. Warp RGB image to align with the target stereo view using homography
-        2. Use YCbCr color transfer: grayscale luminance + RGB chrominance
+        Approach: Direct color mapping in LAB space
+        1. Convert RGB to LAB
+        2. Replace L channel with grayscale (preserves stereo detail)
+        3. Scale chrominance to match luminance range
         
         Args:
             gray_frame: The grayscale image (as RGB with equal channels)
@@ -354,45 +356,52 @@ class StereoVideoNode(Node):
         if rgb_frame is None:
             return gray_frame
         
-        # Select the appropriate homography and cached warp
-        H = self._H_rgb_to_left if is_left else self._H_rgb_to_right
-        
-        if H is None:
-            # Homographies not ready, fall back to simple resize
-            rgb_resized = cv2.resize(rgb_frame, (gray_frame.shape[1], gray_frame.shape[0]))
-        else:
-            try:
-                # Warp RGB to align with stereo view
-                rgb_warped = cv2.warpPerspective(
-                    rgb_frame, 
-                    H, 
-                    (gray_frame.shape[1], gray_frame.shape[0]),
-                    flags=cv2.INTER_LINEAR,
-                    borderMode=cv2.BORDER_REPLICATE
-                )
-                rgb_resized = rgb_warped
-            except Exception:
-                rgb_resized = cv2.resize(rgb_frame, (gray_frame.shape[1], gray_frame.shape[0]))
-        
         try:
-            # Convert warped RGB to YCrCb
-            rgb_ycrcb = cv2.cvtColor(rgb_resized, cv2.COLOR_RGB2YCrCb)
+            # Resize RGB to match stereo frame
+            rgb_resized = cv2.resize(rgb_frame, (gray_frame.shape[1], gray_frame.shape[0]))
             
-            # Extract luminance from grayscale frame
-            if len(gray_frame.shape) == 3 and gray_frame.shape[2] == 3:
-                gray_ycrcb = cv2.cvtColor(gray_frame, cv2.COLOR_RGB2YCrCb)
-                y_channel = gray_ycrcb[:, :, 0]
+            # Convert RGB to LAB color space (better for color manipulation)
+            rgb_lab = cv2.cvtColor(rgb_resized, cv2.COLOR_RGB2LAB).astype(np.float32)
+            
+            # Get grayscale luminance
+            if len(gray_frame.shape) == 3:
+                gray_l = gray_frame[:, :, 0].astype(np.float32)
             else:
-                y_channel = gray_frame
+                gray_l = gray_frame.astype(np.float32)
             
-            # Combine: grayscale luminance + RGB chrominance
-            rgb_ycrcb[:, :, 0] = y_channel
+            # Scale grayscale to LAB L range (0-255 in OpenCV's LAB)
+            # The stereo cameras may have different exposure than RGB
+            # Match the histogram/range of the RGB L channel
+            rgb_l = rgb_lab[:, :, 0]
+            
+            # Normalize grayscale to match RGB luminance distribution
+            gray_mean, gray_std = np.mean(gray_l), np.std(gray_l) + 1e-6
+            rgb_l_mean, rgb_l_std = np.mean(rgb_l), np.std(rgb_l) + 1e-6
+            
+            # Scale grayscale to have same mean/std as RGB luminance
+            # This helps match exposure differences
+            gray_l_matched = (gray_l - gray_mean) * (rgb_l_std / gray_std) + rgb_l_mean
+            gray_l_matched = np.clip(gray_l_matched, 0, 255)
+            
+            # Get A and B channels (color) from RGB, with slight blur
+            a_channel = cv2.GaussianBlur(rgb_lab[:, :, 1], (15, 15), 0)
+            b_channel = cv2.GaussianBlur(rgb_lab[:, :, 2], (15, 15), 0)
+            
+            # Debug logging
+            if self._rgb_count % 300 == 1 and is_left:
+                a_std = np.std(a_channel)
+                b_std = np.std(b_channel)
+                self.get_logger().info(f'LAB: L_gray={gray_mean:.0f} L_rgb={rgb_l_mean:.0f} | a_std={a_std:.1f} b_std={b_std:.1f}')
+            
+            # Combine: matched grayscale luminance + RGB color channels
+            result_lab = np.stack([gray_l_matched, a_channel, b_channel], axis=2).astype(np.uint8)
             
             # Convert back to RGB
-            colorized = cv2.cvtColor(rgb_ycrcb, cv2.COLOR_YCrCb2RGB)
+            colorized = cv2.cvtColor(result_lab, cv2.COLOR_LAB2RGB)
             return colorized
             
-        except Exception:
+        except Exception as e:
+            self.get_logger().error(f'Colorize error: {e}')
             return gray_frame
     
     def rgb_callback(self, msg: CompressedImage):
