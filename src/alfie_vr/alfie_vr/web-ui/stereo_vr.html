@@ -467,9 +467,9 @@
                 return;
             }
             
-            const supported = await navigator.xr.isSessionSupported('immersive-vr');
+            const supported = await navigator.xr.isSessionSupported('immersive-ar');
             if (!supported) {
-                setStatus('Immersive VR not supported', 'error');
+                setStatus('Immersive AR (passthrough) not supported', 'error');
                 document.getElementById('vrButton').disabled = true;
                 return;
             }
@@ -482,20 +482,20 @@
             try {
                 setStatus('Starting VR session...');
                 
-                // Request immersive VR session with local-floor reference space
-                xrSession = await navigator.xr.requestSession('immersive-vr', {
+                // Request immersive AR session for passthrough with stereo overlay
+                xrSession = await navigator.xr.requestSession('immersive-ar', {
                     requiredFeatures: ['local-floor'],
                     optionalFeatures: ['hand-tracking']
                 });
                 
                 xrSession.addEventListener('end', onSessionEnd);
                 
-                // Set up WebGL context for XR
+                // Set up WebGL context for XR with alpha for passthrough
                 const canvas = document.createElement('canvas');
-                gl = canvas.getContext('webgl2', { xrCompatible: true });
+                gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: true });
                 
                 if (!gl) {
-                    gl = canvas.getContext('webgl', { xrCompatible: true });
+                    gl = canvas.getContext('webgl', { xrCompatible: true, alpha: true });
                 }
                 
                 await xrSession.updateRenderState({
@@ -540,7 +540,7 @@
             
             const glLayer = xrSession.renderState.baseLayer;
             gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
-            gl.clearColor(0, 0, 0, 1);
+            gl.clearColor(0, 0, 0, 0.95);  // 95% opacity for passthrough visibility
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             
             const video = document.getElementById('stereoVideo');
