@@ -71,14 +71,51 @@
             box-shadow: none;
         }
         
-        #preview {
+        #previewContainer {
             position: fixed;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            max-width: 90%;
-            max-height: 95%;
-            border: 2px solid #333;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            z-index: 100;
+        }
+        
+        #rgbPreview {
+            max-width: 35%;
+            max-height: 80vh;
+            border: 2px solid #3498db;
+            border-radius: 8px;
+            background: #111;
+        }
+        
+        #rgbPreview.disconnected {
+            opacity: 0.3;
+            border-color: #666;
+        }
+        
+        .preview-wrapper {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .preview-label {
+            position: absolute;
+            top: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 12px;
+            color: #888;
+            white-space: nowrap;
+        }
+        
+        #preview {
+            max-width: 55%;
+            max-height: 80vh;
+            border: 2px solid #4CAF50;
             border-radius: 8px;
         }
         
@@ -168,14 +205,54 @@
         canvas {
             display: none;
         }
+        
+        #rgbControls {
+            position: fixed;
+            top: 70px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #3498db;
+            z-index: 1000;
+            font-size: 16px;
+            min-width: 286px;
+        }
+        
+        #rgbControls h3 {
+            margin: 0 0 13px 0;
+            color: #3498db;
+            font-size: 18px;
+            cursor: move;
+            user-select: none;
+            padding: 5px;
+            margin: -5px -5px 13px -5px;
+            border-radius: 5px;
+        }
+        
+        #rgbControls h3:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
     </style>
 </head>
 <body>
     <div id="status">Initializing...</div>
     <video id="stereoVideo" autoplay playsinline muted style="display: none;"></video>
+    <video id="rgbVideo" autoplay playsinline muted style="display: none;"></video>
     <canvas id="leftCanvas"></canvas>
     <canvas id="rightCanvas"></canvas>
-    <img id="preview" class="hidden" alt="Stereo preview">
+    
+    <!-- Desktop preview container -->
+    <div id="previewContainer" class="hidden">
+        <div class="preview-wrapper">
+            <span class="preview-label">🎥 RGB Camera</span>
+            <img id="rgbPreview" class="disconnected" alt="RGB preview">
+        </div>
+        <div class="preview-wrapper">
+            <span class="preview-label">👁️ Stereo 3D</span>
+            <img id="preview" alt="Stereo preview">
+        </div>
+    </div>
     
     <!-- Stereo adjustment controls -->
     <div id="controls">
@@ -201,8 +278,47 @@
             <span class="value" id="screenScaleVal">1.5</span>
         </div>
         <div class="control-row">
+            <label>Curvature</label>
+            <input type="range" id="curvature" min="0" max="1" step="0.05" value="0">
+            <span class="value" id="curvatureVal">0.00</span>
+        </div>
+        <div class="control-row">
             <button class="control-btn" onclick="resetSettings()">Reset</button>
             <button class="control-btn" onclick="saveSettings()">Save</button>
+        </div>
+    </div>
+    
+    <!-- RGB Panel controls -->
+    <div id="rgbControls">
+        <h3>🎥 RGB Panel (VR)</h3>
+        <div class="control-row">
+            <label>Enabled</label>
+            <input type="checkbox" id="rgbEnabled" checked style="width: 20px; height: 20px;">
+            <span class="value"></span>
+        </div>
+        <div class="control-row">
+            <label>Angle (°)</label>
+            <input type="range" id="rgbXOffset" min="-90" max="90" step="5" value="45">
+            <span class="value" id="rgbXOffsetVal">45°</span>
+        </div>
+        <div class="control-row">
+            <label>Vertical Pos</label>
+            <input type="range" id="rgbYOffset" min="-2" max="2" step="0.05" value="-0.5">
+            <span class="value" id="rgbYOffsetVal">-0.50</span>
+        </div>
+        <div class="control-row">
+            <label>Scale</label>
+            <input type="range" id="rgbScale" min="0.1" max="1" step="0.05" value="0.4">
+            <span class="value" id="rgbScaleVal">0.40</span>
+        </div>
+        <div class="control-row">
+            <label>Distance</label>
+            <input type="range" id="rgbDistance" min="0.5" max="3" step="0.1" value="1.5">
+            <span class="value" id="rgbDistanceVal">1.5</span>
+        </div>
+        <div class="control-row">
+            <button class="control-btn" onclick="resetRGBSettings()">Reset</button>
+            <button class="control-btn" onclick="saveRGBSettings()">Save</button>
         </div>
     </div>
     
@@ -212,13 +328,16 @@
     </div>
     <button id="vrButton" disabled>🥽 Enter VR</button>
     <button id="certButton" style="position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); background: #f39c12; color: #000; border: none; padding: 12px 24px; font-size: 14px; border-radius: 8px; cursor: pointer; z-index: 1000; display: none;">🔐 Accept Stereo Stream Certificate</button>
+    <button id="rgbCertButton" style="position: fixed; bottom: 150px; left: 50%; transform: translateX(-50%); background: #3498db; color: #fff; border: none; padding: 12px 24px; font-size: 14px; border-radius: 8px; cursor: pointer; z-index: 1000; display: none;">🔐 Accept RGB Stream Certificate</button>
 
     <script type="module">
         // WebXR Stereo Vision for Meta Quest 3
         // Displays side-by-side stereo video as immersive VR
         
-        const SIGNALING_PORT = 8084;
+        const STEREO_SIGNALING_PORT = 8084;
+        const RGB_SIGNALING_PORT = 8083;
         
+        // Stereo stream state
         let pc = null;
         let xrSession = null;
         let xrRefSpace = null;
@@ -230,12 +349,36 @@
         let retryCount = 0;
         const MAX_RETRIES = 3;
         
+        // RGB stream state
+        let rgbPc = null;
+        let rgbVideoElement = null;
+        let rgbRetryCount = 0;
+        let rgbConnected = false;
+        
+        // RGB VR panel state
+        let rgbTexture = null;
+        let rgbCanvas = null;
+        let rgbCtx = null;
+        let rgbPanelShader = null;
+        let rgbPositionBuffer = null;
+        let rgbTexCoordBuffer = null;
+        
+        // RGB VR panel settings (head-locked corner panel)
+        let rgbPanelSettings = {
+            enabled: true,          // Show RGB panel in VR
+            scale: 0.4,             // Size relative to main screen
+            angle: 45,              // Angle in degrees (positive = right, negative = left)
+            yOffset: -0.5,          // Offset down (meters)
+            distance: 1.5           // Distance from viewer (meters)
+        };
+        
         // Stereo adjustment settings
         let stereoSettings = {
             verticalOffset: 0,      // Meters - positive = up
             ipdOffset: 0,           // Meters - adjustment to convergence
             screenDistance: 2.0,    // Meters - distance to virtual screen
-            screenScale: 1.5        // Multiplier for screen size
+            screenScale: 1.5,       // Multiplier for screen size
+            curvature: 0            // 0 = flat, 1 = fully curved (cylindrical)
         };
         
         // Load saved settings
@@ -262,7 +405,8 @@
                 verticalOffset: 0,
                 ipdOffset: 0,
                 screenDistance: 2.0,
-                screenScale: 1.5
+                screenScale: 1.5,
+                curvature: 0
             };
             updateControlsFromSettings();
             reinitQuadBuffers();
@@ -278,6 +422,8 @@
             document.getElementById('screenDistanceVal').textContent = stereoSettings.screenDistance.toFixed(1);
             document.getElementById('screenScale').value = stereoSettings.screenScale;
             document.getElementById('screenScaleVal').textContent = stereoSettings.screenScale.toFixed(1);
+            document.getElementById('curvature').value = stereoSettings.curvature;
+            document.getElementById('curvatureVal').textContent = stereoSettings.curvature.toFixed(2);
         }
         
         // Set up control event listeners
@@ -299,6 +445,77 @@
                 stereoSettings.screenScale = parseFloat(e.target.value);
                 document.getElementById('screenScaleVal').textContent = stereoSettings.screenScale.toFixed(1);
                 reinitQuadBuffers();
+            });
+            document.getElementById('curvature').addEventListener('input', (e) => {
+                stereoSettings.curvature = parseFloat(e.target.value);
+                document.getElementById('curvatureVal').textContent = stereoSettings.curvature.toFixed(2);
+                reinitQuadBuffers();
+            });
+        }
+        
+        // Load saved RGB panel settings
+        function loadRGBSettings() {
+            try {
+                const saved = localStorage.getItem('rgbPanelSettings');
+                if (saved) {
+                    rgbPanelSettings = { ...rgbPanelSettings, ...JSON.parse(saved) };
+                }
+            } catch (e) {}
+            updateRGBControlsFromSettings();
+        }
+        
+        // Save RGB panel settings to localStorage
+        window.saveRGBSettings = function() {
+            localStorage.setItem('rgbPanelSettings', JSON.stringify(rgbPanelSettings));
+            setStatus('RGB panel settings saved!', 'connected');
+            setTimeout(() => setStatus('Stereo stream connected', 'connected'), 1000);
+        };
+        
+        // Reset RGB panel settings to defaults
+        window.resetRGBSettings = function() {
+            rgbPanelSettings = {
+                enabled: true,
+                scale: 0.4,
+                angle: 45,
+                yOffset: -0.5,
+                distance: 1.5
+            };
+            updateRGBControlsFromSettings();
+        };
+        
+        // Update RGB panel HTML controls to match settings
+        function updateRGBControlsFromSettings() {
+            document.getElementById('rgbEnabled').checked = rgbPanelSettings.enabled;
+            document.getElementById('rgbXOffset').value = rgbPanelSettings.angle;
+            document.getElementById('rgbXOffsetVal').textContent = rgbPanelSettings.angle + '°';
+            document.getElementById('rgbYOffset').value = rgbPanelSettings.yOffset;
+            document.getElementById('rgbYOffsetVal').textContent = rgbPanelSettings.yOffset.toFixed(2);
+            document.getElementById('rgbScale').value = rgbPanelSettings.scale;
+            document.getElementById('rgbScaleVal').textContent = rgbPanelSettings.scale.toFixed(2);
+            document.getElementById('rgbDistance').value = rgbPanelSettings.distance;
+            document.getElementById('rgbDistanceVal').textContent = rgbPanelSettings.distance.toFixed(1);
+        }
+        
+        // Set up RGB panel control event listeners
+        function setupRGBControls() {
+            document.getElementById('rgbEnabled').addEventListener('change', (e) => {
+                rgbPanelSettings.enabled = e.target.checked;
+            });
+            document.getElementById('rgbXOffset').addEventListener('input', (e) => {
+                rgbPanelSettings.angle = parseFloat(e.target.value);
+                document.getElementById('rgbXOffsetVal').textContent = rgbPanelSettings.angle + '°';
+            });
+            document.getElementById('rgbYOffset').addEventListener('input', (e) => {
+                rgbPanelSettings.yOffset = parseFloat(e.target.value);
+                document.getElementById('rgbYOffsetVal').textContent = rgbPanelSettings.yOffset.toFixed(2);
+            });
+            document.getElementById('rgbScale').addEventListener('input', (e) => {
+                rgbPanelSettings.scale = parseFloat(e.target.value);
+                document.getElementById('rgbScaleVal').textContent = rgbPanelSettings.scale.toFixed(2);
+            });
+            document.getElementById('rgbDistance').addEventListener('input', (e) => {
+                rgbPanelSettings.distance = parseFloat(e.target.value);
+                document.getElementById('rgbDistanceVal').textContent = rgbPanelSettings.distance.toFixed(1);
             });
         }
         
@@ -327,22 +544,33 @@
             status.className = type;
         }
         
-        // Show certificate button for user to accept SSL cert
-        function showCertButton() {
+        // Show certificate button for user to accept SSL cert (stereo stream)
+        function showStereoCertButton() {
             const btn = document.getElementById('certButton');
             btn.style.display = 'block';
             btn.onclick = () => {
                 // Open the stereo signaling URL in a new tab so user can accept cert
-                window.open(`https://${window.location.hostname}:${SIGNALING_PORT}/`, '_blank');
+                window.open(`https://${window.location.hostname}:${STEREO_SIGNALING_PORT}/`, '_blank');
                 setStatus('Accept the certificate in the new tab, then reload this page', 'error');
             };
         }
         
+        // Show certificate button for user to accept SSL cert (RGB stream)
+        function showRGBCertButton() {
+            const btn = document.getElementById('rgbCertButton');
+            btn.style.display = 'block';
+            btn.onclick = () => {
+                // Open the RGB signaling URL in a new tab so user can accept cert
+                window.open(`https://${window.location.hostname}:${RGB_SIGNALING_PORT}/`, '_blank');
+                setStatus('Accept the RGB certificate in the new tab, then reload this page', 'error');
+            };
+        }
+        
         // Initialize WebRTC connection to stereo stream
-        async function initWebRTC() {
+        async function initStereoWebRTC() {
             setStatus('Connecting to stereo stream...');
             
-            const signalingUrl = `https://${window.location.hostname}:${SIGNALING_PORT}/offer`;
+            const signalingUrl = `https://${window.location.hostname}:${STEREO_SIGNALING_PORT}/offer`;
             
             pc = new RTCPeerConnection({
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
@@ -366,10 +594,10 @@
             };
             
             pc.oniceconnectionstatechange = () => {
-                console.log('ICE state:', pc.iceConnectionState);
+                console.log('Stereo ICE state:', pc.iceConnectionState);
                 if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-                    setStatus('Connection lost, reconnecting...', 'error');
-                    setTimeout(initWebRTC, 2000);
+                    setStatus('Stereo connection lost, reconnecting...', 'error');
+                    setTimeout(initStereoWebRTC, 2000);
                 }
             };
             
@@ -417,41 +645,160 @@
                 retryCount = 0;  // Reset retry count on success
                 
             } catch (err) {
-                console.error('WebRTC error:', err);
+                console.error('Stereo WebRTC error:', err);
                 retryCount++;
                 
                 // Check if it's likely a certificate error
                 if (err.message.includes('fetch') || err.message.includes('Failed') || err.name === 'TypeError') {
-                    setStatus('Connection error - SSL certificate may need to be accepted', 'error');
-                    showCertButton();
+                    setStatus('Stereo connection error - SSL certificate may need to be accepted', 'error');
+                    showStereoCertButton();
                     
                     if (retryCount <= MAX_RETRIES) {
-                        setTimeout(initWebRTC, 5000);
+                        setTimeout(initStereoWebRTC, 5000);
                     }
                 } else {
-                    setStatus('Connection error: ' + err.message, 'error');
-                    setTimeout(initWebRTC, 3000);
+                    setStatus('Stereo connection error: ' + err.message, 'error');
+                    setTimeout(initStereoWebRTC, 3000);
                 }
             }
         }
         
-        // Show preview of stereo stream (non-VR mode)
-        function startPreview() {
-            const video = document.getElementById('stereoVideo');
-            const preview = document.getElementById('preview');
+        // Initialize WebRTC connection to RGB stream (port 8083)
+        async function initRGBWebRTC() {
+            console.log('Connecting to RGB stream...');
             
-            // Create canvas for preview
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
+            const signalingUrl = `https://${window.location.hostname}:${RGB_SIGNALING_PORT}/offer`;
+            
+            rgbPc = new RTCPeerConnection({
+                iceServers: [], // Direct connection, no STUN/TURN needed on LAN
+                sdpSemantics: 'unified-plan',
+                bundlePolicy: 'max-bundle',
+                rtcpMuxPolicy: 'require'
+            });
+            
+            rgbPc.ontrack = (event) => {
+                console.log('RGB track received:', event.track.kind);
+                if (event.track.kind === 'video') {
+                    rgbVideoElement = document.getElementById('rgbVideo');
+                    rgbVideoElement.srcObject = event.streams[0];
+                    rgbVideoElement.play().then(() => {
+                        console.log('RGB stream connected');
+                        rgbConnected = true;
+                        document.getElementById('rgbCertButton').style.display = 'none';
+                    }).catch(err => {
+                        console.error('RGB video play error:', err);
+                    });
+                }
+            };
+            
+            rgbPc.oniceconnectionstatechange = () => {
+                console.log('RGB ICE state:', rgbPc.iceConnectionState);
+                if (rgbPc.iceConnectionState === 'failed' || rgbPc.iceConnectionState === 'disconnected') {
+                    console.log('RGB connection lost, reconnecting...');
+                    rgbConnected = false;
+                    setTimeout(initRGBWebRTC, 2000);
+                }
+            };
+            
+            // Add transceiver for video
+            rgbPc.addTransceiver('video', { direction: 'recvonly' });
+            
+            try {
+                const offer = await rgbPc.createOffer();
+                await rgbPc.setLocalDescription(offer);
+                
+                // Wait for ICE gathering
+                await new Promise((resolve) => {
+                    if (rgbPc.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const checkState = () => {
+                            if (rgbPc.iceGatheringState === 'complete') {
+                                rgbPc.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        };
+                        rgbPc.addEventListener('icegatheringstatechange', checkState);
+                        // Timeout after 3 seconds
+                        setTimeout(resolve, 3000);
+                    }
+                });
+                
+                const response = await fetch(signalingUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sdp: rgbPc.localDescription.sdp,
+                        type: rgbPc.localDescription.type
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`RGB signaling failed: ${response.status}`);
+                }
+                
+                const answer = await response.json();
+                await rgbPc.setRemoteDescription(new RTCSessionDescription(answer));
+                
+                console.log('RGB WebRTC connection established');
+                rgbRetryCount = 0;  // Reset retry count on success
+                
+            } catch (err) {
+                console.error('RGB WebRTC error:', err);
+                rgbRetryCount++;
+                
+                // Check if it's likely a certificate error
+                if (err.message.includes('fetch') || err.message.includes('Failed') || err.name === 'TypeError') {
+                    console.log('RGB connection error - SSL certificate may need to be accepted');
+                    showRGBCertButton();
+                    
+                    if (rgbRetryCount <= MAX_RETRIES) {
+                        setTimeout(initRGBWebRTC, 5000);
+                    }
+                } else {
+                    console.log('RGB connection error:', err.message);
+                    setTimeout(initRGBWebRTC, 3000);
+                }
+            }
+        }
+        
+        // Show preview of stereo and RGB streams (non-VR mode)
+        function startPreview() {
+            const stereoVideo = document.getElementById('stereoVideo');
+            const rgbVideo = document.getElementById('rgbVideo');
+            const previewContainer = document.getElementById('previewContainer');
+            const stereoPreview = document.getElementById('preview');
+            const rgbPreview = document.getElementById('rgbPreview');
+            
+            // Create canvases for preview rendering
+            const stereoCanvas = document.createElement('canvas');
+            const stereoCtx = stereoCanvas.getContext('2d');
+            const rgbCanvas = document.createElement('canvas');
+            const rgbCtx = rgbCanvas.getContext('2d');
             
             function updatePreview() {
-                if (video.readyState >= 2) {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    ctx.drawImage(video, 0, 0);
-                    preview.src = canvas.toDataURL('image/jpeg', 0.8);
-                    preview.classList.remove('hidden');
+                // Update stereo preview
+                if (stereoVideo.readyState >= 2) {
+                    stereoCanvas.width = stereoVideo.videoWidth;
+                    stereoCanvas.height = stereoVideo.videoHeight;
+                    stereoCtx.drawImage(stereoVideo, 0, 0);
+                    stereoPreview.src = stereoCanvas.toDataURL('image/jpeg', 0.8);
                 }
+                
+                // Update RGB preview
+                if (rgbVideo.readyState >= 2 && rgbConnected) {
+                    rgbCanvas.width = rgbVideo.videoWidth;
+                    rgbCanvas.height = rgbVideo.videoHeight;
+                    rgbCtx.drawImage(rgbVideo, 0, 0);
+                    rgbPreview.src = rgbCanvas.toDataURL('image/jpeg', 0.8);
+                    rgbPreview.classList.remove('disconnected');
+                } else {
+                    rgbPreview.classList.add('disconnected');
+                }
+                
+                // Show the container
+                previewContainer.classList.remove('hidden');
+                
                 if (!xrSession) {
                     requestAnimationFrame(updatePreview);
                 }
@@ -508,13 +855,20 @@
                 leftTexture = gl.createTexture();
                 rightTexture = gl.createTexture();
                 
+                // Create texture for RGB panel in VR
+                rgbTexture = gl.createTexture();
+                
                 // Set up canvases for extracting left/right from video
                 leftCanvas = document.getElementById('leftCanvas');
                 rightCanvas = document.getElementById('rightCanvas');
                 leftCtx = leftCanvas.getContext('2d');
                 rightCtx = rightCanvas.getContext('2d');
                 
-                document.getElementById('preview').classList.add('hidden');
+                // Set up canvas for RGB video in VR
+                rgbCanvas = document.createElement('canvas');
+                rgbCtx = rgbCanvas.getContext('2d');
+                
+                document.getElementById('previewContainer').classList.add('hidden');
                 document.getElementById('vrButton').textContent = '🛑 Exit VR';
                 document.getElementById('vrButton').onclick = () => xrSession.end();
                 
@@ -581,15 +935,116 @@
                 
                 // Draw fullscreen quad with texture
                 drawTexturedQuad(view, viewport);
+                
+                // Draw RGB panel if connected and enabled
+                if (rgbConnected && rgbPanelSettings.enabled) {
+                    drawRGBPanel(view, viewport);
+                }
             }
         }
         
-        // Simple shader program for rendering video texture
-        let shaderProgram = null;
-        let positionBuffer = null;
-        let texCoordBuffer = null;
+        // Draw RGB panel in VR (head-locked corner panel)
+        function drawRGBPanel(view, viewport) {
+            const rgbVideo = document.getElementById('rgbVideo');
+            if (!rgbVideo || rgbVideo.readyState < 2) return;
+            
+            // Update RGB canvas from video
+            const vw = rgbVideo.videoWidth;
+            const vh = rgbVideo.videoHeight;
+            if (vw === 0 || vh === 0) return;
+            
+            if (rgbCanvas.width !== vw || rgbCanvas.height !== vh) {
+                rgbCanvas.width = vw;
+                rgbCanvas.height = vh;
+            }
+            rgbCtx.drawImage(rgbVideo, 0, 0);
+            
+            // Update RGB texture
+            gl.bindTexture(gl.TEXTURE_2D, rgbTexture);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rgbCanvas);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            
+            // Initialize RGB panel shader if needed
+            if (!rgbPanelShader) {
+                initRGBPanelShader();
+            }
+            
+            gl.useProgram(rgbPanelShader);
+            
+            // Set up attributes
+            const positionLoc = gl.getAttribLocation(rgbPanelShader, 'a_position');
+            const texCoordLoc = gl.getAttribLocation(rgbPanelShader, 'a_texCoord');
+            
+            // Calculate panel dimensions
+            const aspect = vw / vh;
+            const height = rgbPanelSettings.scale;
+            const width = height * aspect;
+            const yOff = rgbPanelSettings.yOffset;
+            
+            // Convert angle to radians for radial positioning
+            const angleRad = rgbPanelSettings.angle * Math.PI / 180;
+            const dist = rgbPanelSettings.distance;
+            
+            // Calculate position on cylinder around viewer
+            // Panel is at (sin(angle) * distance, yOffset, -cos(angle) * distance)
+            // and rotated to face the center
+            const xPos = Math.sin(angleRad) * dist;
+            const zPos = -Math.cos(angleRad) * dist;
+            
+            // Update position buffer (panel centered at origin, will be transformed by model matrix)
+            gl.bindBuffer(gl.ARRAY_BUFFER, rgbPositionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                -width/2, -height/2 + yOff,
+                 width/2, -height/2 + yOff,
+                -width/2,  height/2 + yOff,
+                 width/2,  height/2 + yOff,
+            ]), gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(positionLoc);
+            gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+            
+            gl.bindBuffer(gl.ARRAY_BUFFER, rgbTexCoordBuffer);
+            gl.enableVertexAttribArray(texCoordLoc);
+            gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
+            
+            // Set uniforms
+            const projectionLoc = gl.getUniformLocation(rgbPanelShader, 'u_projection');
+            const viewLoc = gl.getUniformLocation(rgbPanelShader, 'u_view');
+            const modelLoc = gl.getUniformLocation(rgbPanelShader, 'u_model');
+            const textureLoc = gl.getUniformLocation(rgbPanelShader, 'u_texture');
+            
+            gl.uniformMatrix4fv(projectionLoc, false, view.projectionMatrix);
+            
+            // Use identity view matrix for head-locked display
+            // This keeps the RGB panel fixed relative to the viewer's head
+            gl.uniformMatrix4fv(viewLoc, false, new Float32Array([
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]));
+            
+            // Model matrix: rotate around Y axis by angle, then translate to position
+            // This places the panel on a cylinder around the viewer, always facing center
+            const cosA = Math.cos(angleRad);
+            const sinA = Math.sin(angleRad);
+            gl.uniformMatrix4fv(modelLoc, false, new Float32Array([
+                cosA,  0, sinA, 0,
+                0,     1, 0,    0,
+                -sinA, 0, cosA, 0,
+                xPos,  0, zPos, 1
+            ]));
+            
+            gl.uniform1i(textureLoc, 0);
+            
+            // Draw quad
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
         
-        function initShaders() {
+        // Initialize shader for RGB panel (radially positioned, always facing viewer)
+        function initRGBPanelShader() {
             const vertexShader = gl.createShader(gl.VERTEX_SHADER);
             gl.shaderSource(vertexShader, `
                 attribute vec2 a_position;
@@ -598,14 +1053,69 @@
                 uniform mat4 u_projection;
                 uniform mat4 u_view;
                 uniform mat4 u_model;
-                uniform float u_distance;
+                
+                void main() {
+                    // Position is in local space, model matrix handles world placement and rotation
+                    vec4 pos = vec4(a_position.x, a_position.y, 0.0, 1.0);
+                    gl_Position = u_projection * u_view * u_model * pos;
+                    v_texCoord = a_texCoord;
+                }
+            `);
+            gl.compileShader(vertexShader);
+            
+            const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(fragmentShader, `
+                precision mediump float;
+                varying vec2 v_texCoord;
+                uniform sampler2D u_texture;
+                
+                void main() {
+                    gl_FragColor = texture2D(u_texture, v_texCoord);
+                }
+            `);
+            gl.compileShader(fragmentShader);
+            
+            rgbPanelShader = gl.createProgram();
+            gl.attachShader(rgbPanelShader, vertexShader);
+            gl.attachShader(rgbPanelShader, fragmentShader);
+            gl.linkProgram(rgbPanelShader);
+            
+            // Create buffers
+            rgbPositionBuffer = gl.createBuffer();
+            rgbTexCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, rgbTexCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                0, 1,
+                1, 1,
+                0, 0,
+                1, 0,
+            ]), gl.STATIC_DRAW);
+        }
+        
+        // Simple shader program for rendering video texture (supports curved mesh)
+        let shaderProgram = null;
+        let positionBuffer = null;
+        let texCoordBuffer = null;
+        let indexBuffer = null;
+        let indexCount = 0;
+        const CURVE_SEGMENTS = 32;  // Number of horizontal segments for curved screen
+        
+        function initShaders() {
+            const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(vertexShader, `
+                attribute vec3 a_position;
+                attribute vec2 a_texCoord;
+                varying vec2 v_texCoord;
+                uniform mat4 u_projection;
+                uniform mat4 u_view;
+                uniform mat4 u_model;
                 uniform float u_ipdOffset;
                 uniform float u_isLeftEye;
                 
                 void main() {
                     // Apply IPD offset (inward for each eye to adjust convergence)
                     float xOffset = u_ipdOffset * (u_isLeftEye > 0.5 ? 1.0 : -1.0);
-                    vec4 pos = vec4(a_position.x + xOffset, a_position.y, -u_distance, 1.0);
+                    vec4 pos = vec4(a_position.x + xOffset, a_position.y, a_position.z, 1.0);
                     gl_Position = u_projection * u_view * u_model * pos;
                     v_texCoord = a_texCoord;
                 }
@@ -629,29 +1139,93 @@
             gl.attachShader(shaderProgram, fragmentShader);
             gl.linkProgram(shaderProgram);
             
-            // Create quad vertices (screen-sized quad positioned in front of viewer)
-            const aspect = 16 / 9;  // Assume 16:9 aspect ratio per eye
+            // Create buffers
+            positionBuffer = gl.createBuffer();
+            texCoordBuffer = gl.createBuffer();
+            indexBuffer = gl.createBuffer();
+            
+            // Initialize mesh
+            reinitQuadBuffers();
+        }
+        
+        // Generate curved screen mesh
+        function generateCurvedMesh(width, height, yOffset, distance, curvature) {
+            const positions = [];
+            const texCoords = [];
+            const indices = [];
+            
+            const segments = CURVE_SEGMENTS;
+            const rows = 2;  // Top and bottom rows
+            
+            // Calculate the angular span based on width and distance
+            // At curvature=1, the screen wraps as if on a cylinder at 'distance' radius
+            const arcAngle = (width / distance) * curvature;
+            
+            for (let row = 0; row <= rows - 1; row++) {
+                const v = row / (rows - 1);
+                const y = -height/2 + height * v + yOffset;
+                
+                for (let col = 0; col <= segments; col++) {
+                    const u = col / segments;
+                    const t = u - 0.5;  // -0.5 to 0.5
+                    
+                    let x, z;
+                    if (curvature < 0.001) {
+                        // Flat screen
+                        x = t * width;
+                        z = -distance;
+                    } else {
+                        // Curved screen - wrap around cylinder
+                        const angle = t * arcAngle;
+                        x = Math.sin(angle) * distance;
+                        z = -Math.cos(angle) * distance;
+                    }
+                    
+                    positions.push(x, y, z);
+                    texCoords.push(u, 1 - v);
+                }
+            }
+            
+            // Generate indices for triangle strip converted to triangles
+            for (let row = 0; row < rows - 1; row++) {
+                for (let col = 0; col < segments; col++) {
+                    const topLeft = row * (segments + 1) + col;
+                    const topRight = topLeft + 1;
+                    const bottomLeft = (row + 1) * (segments + 1) + col;
+                    const bottomRight = bottomLeft + 1;
+                    
+                    // Two triangles per quad
+                    indices.push(topLeft, bottomLeft, topRight);
+                    indices.push(topRight, bottomLeft, bottomRight);
+                }
+            }
+            
+            return { positions, texCoords, indices };
+        }
+        
+        // Reinitialize mesh buffers when settings change
+        function reinitQuadBuffers() {
+            if (!gl || !positionBuffer) return;
+            
+            const aspect = 16 / 9;
             const height = stereoSettings.screenScale;
             const width = height * aspect;
             const yOffset = stereoSettings.verticalOffset;
+            const distance = stereoSettings.screenDistance;
+            const curvature = stereoSettings.curvature;
             
-            positionBuffer = gl.createBuffer();
+            const mesh = generateCurvedMesh(width, height, yOffset, distance, curvature);
+            
             gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-                -width/2, -height/2 + yOffset,
-                 width/2, -height/2 + yOffset,
-                -width/2,  height/2 + yOffset,
-                 width/2,  height/2 + yOffset,
-            ]), gl.STATIC_DRAW);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(mesh.positions), gl.STATIC_DRAW);
             
-            texCoordBuffer = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-                0, 1,
-                1, 1,
-                0, 0,
-                1, 0,
-            ]), gl.STATIC_DRAW);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(mesh.texCoords), gl.STATIC_DRAW);
+            
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(mesh.indices), gl.STATIC_DRAW);
+            
+            indexCount = mesh.indices.length;
         }
         
         function drawTexturedQuad(view, viewport) {
@@ -665,44 +1239,39 @@
             const positionLoc = gl.getAttribLocation(shaderProgram, 'a_position');
             const texCoordLoc = gl.getAttribLocation(shaderProgram, 'a_texCoord');
             
-            // Rebuild position buffer with current settings
-            const aspect = 16 / 9;
-            const height = stereoSettings.screenScale;
-            const width = height * aspect;
-            const yOffset = stereoSettings.verticalOffset;
-            
+            // Bind position buffer (3D vertices for curved mesh)
             gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-                -width/2, -height/2 + yOffset,
-                 width/2, -height/2 + yOffset,
-                -width/2,  height/2 + yOffset,
-                 width/2,  height/2 + yOffset,
-            ]), gl.STATIC_DRAW);
             gl.enableVertexAttribArray(positionLoc);
-            gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+            gl.vertexAttribPointer(positionLoc, 3, gl.FLOAT, false, 0, 0);
             
+            // Bind texture coordinate buffer
             gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
             gl.enableVertexAttribArray(texCoordLoc);
             gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
+            
+            // Bind index buffer
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
             
             // Set uniforms
             const projectionLoc = gl.getUniformLocation(shaderProgram, 'u_projection');
             const viewLoc = gl.getUniformLocation(shaderProgram, 'u_view');
             const modelLoc = gl.getUniformLocation(shaderProgram, 'u_model');
             const textureLoc = gl.getUniformLocation(shaderProgram, 'u_texture');
-            const distanceLoc = gl.getUniformLocation(shaderProgram, 'u_distance');
             const ipdOffsetLoc = gl.getUniformLocation(shaderProgram, 'u_ipdOffset');
             const isLeftEyeLoc = gl.getUniformLocation(shaderProgram, 'u_isLeftEye');
             
             gl.uniformMatrix4fv(projectionLoc, false, view.projectionMatrix);
-            gl.uniform1f(distanceLoc, stereoSettings.screenDistance);
             gl.uniform1f(ipdOffsetLoc, stereoSettings.ipdOffset);
             gl.uniform1f(isLeftEyeLoc, view.eye === 'left' ? 1.0 : 0.0);
             
-            // Invert view transform (view.transform is viewer pose, we need inverse)
-            const viewMatrix = new Float32Array(16);
-            invertMatrix(view.transform.matrix, viewMatrix);
-            gl.uniformMatrix4fv(viewLoc, false, viewMatrix);
+            // Use identity view matrix for head-locked display
+            // This keeps the screen fixed relative to the viewer's head
+            gl.uniformMatrix4fv(viewLoc, false, new Float32Array([
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]));
             
             // Model matrix - identity (screen at origin, facing -Z)
             gl.uniformMatrix4fv(modelLoc, false, new Float32Array([
@@ -714,8 +1283,8 @@
             
             gl.uniform1i(textureLoc, 0);
             
-            // Draw quad
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            // Draw curved mesh using indexed triangles
+            gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_SHORT, 0);
         }
         
         // Matrix inversion helper
@@ -763,23 +1332,23 @@
             setStatus('VR session ended', '');
             document.getElementById('vrButton').textContent = '🥽 Enter VR';
             document.getElementById('vrButton').onclick = startVRSession;
-            document.getElementById('preview').classList.remove('hidden');
+            document.getElementById('previewContainer').classList.remove('hidden');
             startPreview();
         }
         
-        // Make settings panel draggable
-        function initDraggable() {
-            const controls = document.getElementById('controls');
-            const header = controls.querySelector('h3');
+        // Make a panel draggable by its header
+        function makeDraggable(panelId) {
+            const panel = document.getElementById(panelId);
+            const header = panel.querySelector('h3');
             let isDragging = false;
             let offsetX, offsetY;
             
             header.addEventListener('mousedown', (e) => {
                 isDragging = true;
-                offsetX = e.clientX - controls.offsetLeft;
-                offsetY = e.clientY - controls.offsetTop;
-                controls.style.right = 'auto';
-                controls.style.left = controls.offsetLeft + 'px';
+                offsetX = e.clientX - panel.offsetLeft;
+                offsetY = e.clientY - panel.offsetTop;
+                panel.style.right = 'auto';
+                panel.style.left = panel.offsetLeft + 'px';
             });
             
             document.addEventListener('mousemove', (e) => {
@@ -789,11 +1358,11 @@
                 let newY = e.clientY - offsetY;
                 
                 // Keep within viewport bounds
-                newX = Math.max(0, Math.min(newX, window.innerWidth - controls.offsetWidth));
-                newY = Math.max(0, Math.min(newY, window.innerHeight - controls.offsetHeight));
+                newX = Math.max(0, Math.min(newX, window.innerWidth - panel.offsetWidth));
+                newY = Math.max(0, Math.min(newY, window.innerHeight - panel.offsetHeight));
                 
-                controls.style.left = newX + 'px';
-                controls.style.top = newY + 'px';
+                panel.style.left = newX + 'px';
+                panel.style.top = newY + 'px';
             });
             
             document.addEventListener('mouseup', () => {
@@ -804,10 +1373,10 @@
             header.addEventListener('touchstart', (e) => {
                 isDragging = true;
                 const touch = e.touches[0];
-                offsetX = touch.clientX - controls.offsetLeft;
-                offsetY = touch.clientY - controls.offsetTop;
-                controls.style.right = 'auto';
-                controls.style.left = controls.offsetLeft + 'px';
+                offsetX = touch.clientX - panel.offsetLeft;
+                offsetY = touch.clientY - panel.offsetTop;
+                panel.style.right = 'auto';
+                panel.style.left = panel.offsetLeft + 'px';
             });
             
             document.addEventListener('touchmove', (e) => {
@@ -817,11 +1386,11 @@
                 let newX = touch.clientX - offsetX;
                 let newY = touch.clientY - offsetY;
                 
-                newX = Math.max(0, Math.min(newX, window.innerWidth - controls.offsetWidth));
-                newY = Math.max(0, Math.min(newY, window.innerHeight - controls.offsetHeight));
+                newX = Math.max(0, Math.min(newX, window.innerWidth - panel.offsetWidth));
+                newY = Math.max(0, Math.min(newY, window.innerHeight - panel.offsetHeight));
                 
-                controls.style.left = newX + 'px';
-                controls.style.top = newY + 'px';
+                panel.style.left = newX + 'px';
+                panel.style.top = newY + 'px';
             }, { passive: false });
             
             document.addEventListener('touchend', () => {
@@ -829,13 +1398,27 @@
             });
         }
         
+        // Make settings panels draggable
+        function initDraggable() {
+            makeDraggable('controls');
+            makeDraggable('rgbControls');
+        }
+        
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', async () => {
             console.log('Stereo VR Vision - Initializing...');
             loadSettings();
+            loadRGBSettings();
             setupControls();
+            setupRGBControls();
             initDraggable();
-            await initWebRTC();
+            
+            // Initialize both WebRTC streams in parallel
+            await Promise.all([
+                initStereoWebRTC(),
+                initRGBWebRTC()
+            ]);
+            
             await initXR();
         });
     </script>

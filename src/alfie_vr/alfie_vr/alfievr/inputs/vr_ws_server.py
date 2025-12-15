@@ -99,9 +99,16 @@ class VRWebSocketServer(BaseInputProvider):
                 return None
         
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3
+        # Broad cipher support for Android Chrome and Meta Quest browser
+        ssl_context.set_ciphers(
+            "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:"
+            "ECDH+AESGCM:DH+AESGCM:ECDH+AES:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!eNULL:!MD5"
+        )
         try:
             ssl_context.load_cert_chain(certfile=self.config.certfile, keyfile=self.config.keyfile)
-            logger.info("SSL certificate and key loaded successfully for WebSocket server")
+            logger.info("SSL certificate and key loaded successfully for WebSocket server (TLS 1.2-1.3, mobile-compatible)")
             return ssl_context
         except ssl.SSLError as e:
             logger.error(f"Error loading SSL cert/key: {e}")

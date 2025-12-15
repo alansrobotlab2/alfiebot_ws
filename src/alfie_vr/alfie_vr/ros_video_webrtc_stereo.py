@@ -652,7 +652,7 @@ async def on_shutdown(app):
 
 
 def create_ssl_context():
-    """Create SSL context for HTTPS"""
+    """Create SSL context for HTTPS with broad mobile browser compatibility"""
     import ssl
     
     ssl_keyfile = "key.pem"
@@ -665,8 +665,20 @@ def create_ssl_context():
     
     if os.path.exists(ssl_keyfile) and os.path.exists(ssl_certfile):
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        
+        # Set minimum TLS version for security but allow TLS 1.2 for compatibility
+        ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3
+        
+        # Use a broad set of ciphers for mobile browser compatibility
+        # This includes ciphers supported by Android Chrome and Meta Quest browser
+        ssl_context.set_ciphers(
+            "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:"
+            "ECDH+AESGCM:DH+AESGCM:ECDH+AES:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!eNULL:!MD5"
+        )
+        
         ssl_context.load_cert_chain(ssl_certfile, ssl_keyfile)
-        print(f"Using SSL: {ssl_certfile}")
+        print(f"Using SSL: {ssl_certfile} (TLS 1.2-1.3, mobile-compatible ciphers)")
         return ssl_context
     else:
         print("Warning: SSL certificates not found")

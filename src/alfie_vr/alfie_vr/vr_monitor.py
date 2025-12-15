@@ -268,8 +268,15 @@ class SimpleHTTPSServer:
             # Set web root path for file serving
             self.httpd.web_root_path = self.web_root_path
             
-            # Setup SSL
+            # Setup SSL with mobile browser compatibility
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.maximum_version = ssl.TLSVersion.TLSv1_3
+            # Broad cipher support for Android Chrome and Meta Quest browser
+            context.set_ciphers(
+                "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:"
+                "ECDH+AESGCM:DH+AESGCM:ECDH+AES:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!eNULL:!MD5"
+            )
             context.load_cert_chain('cert.pem', 'key.pem')
             self.httpd.socket = context.wrap_socket(self.httpd.socket, server_side=True)
             
