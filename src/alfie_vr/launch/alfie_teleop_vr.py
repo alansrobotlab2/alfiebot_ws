@@ -9,18 +9,6 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     return LaunchDescription([
 
-        # Hardware-accelerated WebRTC video streamer (uses Jetson nvjpegdec)
-        Node(
-            package='alfie_vr',
-            namespace='alfie',
-            executable='ros_video_webrtc_hw',
-            name='ros_video_streamer_node',
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',
-            sigkill_timeout='10',
-            respawn=True
-        ),
 
         # Stereo video streamer for VR 3D vision (left/right cameras)
         Node(

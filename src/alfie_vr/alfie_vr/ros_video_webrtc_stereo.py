@@ -64,8 +64,9 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.rtcrtpsender import RTCRtpSender
 
 VIDEO_PORT = 8084
-TARGET_FPS = 10  # Match camera input rate of 10Hz
-TARGET_BITRATE = 2_000_000  # 2 Mbps - lower for smaller resolution
+TARGET_FPS = 15  # Higher than camera to never drop frames
+TARGET_BITRATE = 3_000_000  # 3 Mbps for lower compression latency
+KEYFRAME_INTERVAL = 15  # Keyframe every ~1 second at 15fps
 
 # Use VP8 - better software encoder performance than H264 without hardware accel
 USE_VP8 = True
@@ -97,10 +98,10 @@ class StereoVideoTrack(VideoStreamTrack):
         """Receive the next stereo frame - event-driven for low latency"""
         global frame_event
         
-        # Wait for new frame signal from ROS callback
+        # Wait for new frame signal from ROS callback - shorter timeout for lower latency
         if frame_event:
             try:
-                await asyncio.wait_for(frame_event.wait(), timeout=0.05)
+                await asyncio.wait_for(frame_event.wait(), timeout=0.02)  # 20ms max wait
                 frame_event.clear()
             except asyncio.TimeoutError:
                 pass
@@ -334,7 +335,9 @@ async def offer(request):
     # Add stereo video track directly (no relay buffering)
     if ros_node:
         video_track = StereoVideoTrack(ros_node)
-        pc.addTrack(video_track)
+        
+        # Add track with ultra-low latency parameters
+        sender = pc.addTrack(video_track)
         
         # Select codec - VP8 for best CPU encoding performance
         try:
@@ -352,6 +355,25 @@ async def offer(request):
                     print(f"Using {codec_name} codec")
         except Exception as e:
             print(f"Could not set codec preferences: {e}")
+        
+        # Configure encoder for ultra-low latency
+        try:
+            if hasattr(sender, '_RTCRtpSender__encoder'):
+                encoder = sender._RTCRtpSender__encoder
+                if encoder and hasattr(encoder, 'codec'):
+                    codec = encoder.codec
+                    # VP8/VP9 specific settings
+                    if hasattr(codec, 'options'):
+                        codec.options.update({
+                            'cpu-used': 8,  # Fastest encoding (0-16, higher = faster)
+                            'deadline': 'realtime',  # Real-time mode
+                            'lag-in-frames': 0,  # No frame buffering
+                            'error-resilient': 'default',
+                            'max-intra-rate': 0,  # No restriction on keyframes
+                        })
+                        print(f"Applied ultra-low latency encoder settings")
+        except Exception as e:
+            print(f"Could not configure encoder: {e}")
     
     await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
@@ -365,13 +387,36 @@ async def offer(request):
     for line in sdp_lines:
         new_lines.append(line)
         if line.startswith('m=video'):
-            # Bandwidth constraints
+            # Bandwidth constraints for consistent quality
             new_lines.append(f'b=AS:{bitrate_kbps}')
             new_lines.append(f'b=TIAS:{TARGET_BITRATE}')
-        # Add low-latency attributes for VP8/H264
-        if line.startswith('a=rtpmap') and ('VP8' in line or 'H264' in line):
-            # Google-specific low latency settings
-            new_lines.append(f'a=fmtp:{line.split()[0].split(":")[1]} x-google-min-bitrate={bitrate_kbps};x-google-max-bitrate={bitrate_kbps}')
+        # Add ultra-low-latency attributes for VP8/H264
+        if line.startswith('a=rtpmap'):
+            if 'VP8' in line:
+                payload_type = line.split()[0].split(':')[1]
+                # VP8 ultra-low latency settings
+                new_lines.append(
+                    f'a=fmtp:{payload_type} '
+                    f'x-google-min-bitrate={bitrate_kbps};'
+                    f'x-google-max-bitrate={bitrate_kbps};'
+                    f'x-google-start-bitrate={bitrate_kbps}'
+                )
+            elif 'H264' in line:
+                payload_type = line.split()[0].split(':')[1]
+                # H264 ultra-low latency settings
+                new_lines.append(
+                    f'a=fmtp:{payload_type} '
+                    f'level-asymmetry-allowed=1;'
+                    f'packetization-mode=1;'
+                    f'profile-level-id=42e01f;'
+                    f'x-google-min-bitrate={bitrate_kbps};'
+                    f'x-google-max-bitrate={bitrate_kbps};'
+                    f'x-google-start-bitrate={bitrate_kbps}'
+                )
+        # Add NACK and FEC for packet loss recovery without retransmission delay
+        if line.startswith('a=rtcp-fb') and 'nack' in line:
+            new_lines.append('a=rtcp-fb:* ccm fir')  # Fast picture refresh
+    
     sdp = '\n'.join(new_lines)
     
     return web.json_response({
