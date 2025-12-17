@@ -100,12 +100,13 @@ class GStreamerCameraNode(Node):
         self.declare_parameter('device', '/dev/video0')
         self.declare_parameter('width', 2560)
         self.declare_parameter('height', 720)
-        self.declare_parameter('framerate', 30)
+        self.declare_parameter('framerate', 15)  # Reduced from 30 to save CPU
         self.declare_parameter('flip_vertical', True)
         self.declare_parameter('camera_frame_id', 'stereo_camera_link')
         self.declare_parameter('enable_webrtc', True)
         self.declare_parameter('webrtc_port', 8084)
         self.declare_parameter('webrtc_bitrate', 3000000)  # 3 Mbps
+        self.declare_parameter('use_hardware_accel', True)  # Use Jetson hardware encoder/decoder
         
         # Get parameters
         self.device = self.get_parameter('device').get_parameter_value().string_value
@@ -117,6 +118,7 @@ class GStreamerCameraNode(Node):
         self.enable_webrtc = self.get_parameter('enable_webrtc').get_parameter_value().bool_value
         self.webrtc_port = self.get_parameter('webrtc_port').get_parameter_value().integer_value
         self.webrtc_bitrate = self.get_parameter('webrtc_bitrate').get_parameter_value().integer_value
+        self.use_hardware_accel = self.get_parameter('use_hardware_accel').get_parameter_value().bool_value
         
         # WebRTC frame buffer (RGB for WebRTC)
         self._webrtc_frame = None
@@ -141,6 +143,15 @@ class GStreamerCameraNode(Node):
         
         # Initialize GStreamer
         Gst.init(None)
+        
+        # Check for hardware acceleration support
+        self.get_logger().info(f'Hardware acceleration requested: {self.use_hardware_accel}')
+        self.hardware_available = self._check_hardware_support()
+        if self.use_hardware_accel and not self.hardware_available:
+            self.get_logger().warning('⚠️  Hardware acceleration requested but not available, falling back to CPU')
+            self.use_hardware_accel = False
+        elif self.use_hardware_accel and self.hardware_available:
+            self.get_logger().info('🚀 Using hardware acceleration')
         
         # Build GStreamer pipeline
         self.pipeline = self._create_pipeline()
@@ -167,16 +178,33 @@ class GStreamerCameraNode(Node):
         else:
             self.get_logger().info('WebRTC server disabled')
     
+    def _check_hardware_support(self):
+        """Check if Nvidia hardware acceleration plugins are available"""
+        required_elements = ['nvv4l2decoder', 'nvvidconv', 'nvjpegenc']
+        
+        for elem_name in required_elements:
+            elem = Gst.ElementFactory.find(elem_name)
+            if elem is None:
+                self.get_logger().warning(f'Missing GStreamer element: {elem_name}')
+                return False
+        
+        self.get_logger().info('✅ Hardware acceleration elements available')
+        return True
+    
     def _create_pipeline(self):
         """Create GStreamer pipeline for low-latency MJPEG capture"""
         
+        if self.use_hardware_accel:
+            return self._create_hardware_pipeline()
+        else:
+            return self._create_software_pipeline()
+    
+    def _create_software_pipeline(self):
+        """Create CPU-based pipeline (fallback)"""
         # Pipeline elements:
         # v4l2src: Capture from camera with minimal buffering
         # image/jpeg: Force MJPEG format (no decode!)
         # appsink: Pull frames into our application
-        
-        # Note: Can't flip JPEG directly, would need to decode/re-encode
-        # So we skip flip in pipeline and do it in OpenCV if needed
         
         pipeline_str = (
             f'v4l2src device={self.device} ! '
@@ -184,18 +212,78 @@ class GStreamerCameraNode(Node):
             f'appsink name=sink emit-signals=true max-buffers=1 drop=true sync=false'
         )
         
-        self.get_logger().info(f'Pipeline: {pipeline_str}')
+        self.get_logger().info(f'🖥️  CPU Pipeline: {pipeline_str}')
         
         pipeline = Gst.parse_launch(pipeline_str)
-        
-        # Get appsink and connect callback
         appsink = pipeline.get_by_name('sink')
-        appsink.connect('new-sample', self._on_new_sample)
+        appsink.connect('new-sample', self._on_new_sample_software)
         
         return pipeline
     
-    def _on_new_sample(self, sink):
-        """Callback when new frame is available"""
+    def _create_hardware_pipeline(self):
+        """Create hardware-accelerated pipeline using Jetson NVDEC"""
+        # Smart hardware pipeline:
+        # - If NO flip needed: Pass JPEG directly (zero-copy, fastest)
+        # - If flip needed: Use nvv4l2decoder + nvvidconv (hardware flip)
+        # - Always: Use tee to split for WebRTC when needed
+        
+        if not self.flip_vertical:
+            # No flip needed - pass JPEG directly for ROS, decode only for WebRTC
+            # This is the FASTEST path - zero decode/encode for ROS!
+            pipeline_str = (
+                f'v4l2src device={self.device} ! '
+                f'image/jpeg,width={self.width},height={self.height},framerate={self.framerate}/1 ! '
+                f'tee name=t ! '
+                # ROS branch: Direct JPEG passthrough (zero copy!)
+                f'queue max-size-buffers=1 leaky=downstream ! '
+                f'appsink name=ros_sink emit-signals=true max-buffers=1 drop=true sync=false '
+                # WebRTC branch: Decode to RGB only when needed
+                f't. ! queue max-size-buffers=1 leaky=downstream ! '
+                f'nvv4l2decoder mjpeg=1 ! '
+                f'nvvidconv ! '
+                f'video/x-raw,format=I420 ! '
+                f'appsink name=webrtc_sink emit-signals=true max-buffers=1 drop=true sync=false'
+            )
+            self.get_logger().info(f'🚀 Hardware Pipeline (No-Flip, Zero-Copy JPEG): {pipeline_str}')
+        else:
+            # Flip needed - use hardware decode/flip
+            flip_method = 2  # vertical flip in nvvidconv
+            
+            pipeline_str = (
+                f'v4l2src device={self.device} ! '
+                f'image/jpeg,width={self.width},height={self.height},framerate={self.framerate}/1 ! '
+                f'nvv4l2decoder mjpeg=1 ! '
+                f'nvvidconv flip-method={flip_method} ! '
+                f'video/x-raw,format=I420 ! '
+                f'appsink name=sink emit-signals=true max-buffers=1 drop=true sync=false'
+            )
+            self.get_logger().info(f'🚀 Hardware Pipeline (With Flip): {pipeline_str}')
+        
+        try:
+            pipeline = Gst.parse_launch(pipeline_str)
+            
+            if not self.flip_vertical:
+                # Two sinks: ROS (JPEG) and WebRTC (I420)
+                ros_sink = pipeline.get_by_name('ros_sink')
+                ros_sink.connect('new-sample', self._on_new_sample_hardware_jpeg)
+                
+                webrtc_sink = pipeline.get_by_name('webrtc_sink')
+                webrtc_sink.connect('new-sample', self._on_new_sample_hardware_webrtc_i420)
+            else:
+                # Single sink: I420 (need to re-encode)
+                appsink = pipeline.get_by_name('sink')
+                appsink.connect('new-sample', self._on_new_sample_hardware)
+            
+            return pipeline
+            
+        except Exception as e:
+            self.get_logger().error(f'Failed to create hardware pipeline: {e}')
+            self.get_logger().warning('Falling back to CPU pipeline')
+            self.use_hardware_accel = False
+            return self._create_software_pipeline()
+    
+    def _on_new_sample_software(self, sink):
+        """Callback for CPU pipeline - decode and process"""
         global webrtc_frame_event, webrtc_frame_loop
         
         sample = sink.emit('pull-sample')
@@ -232,8 +320,8 @@ class GStreamerCameraNode(Node):
             _, encoded = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
             jpeg_data_final = encoded.tobytes()
             
-            # Convert to RGB for WebRTC (if enabled)
-            if self.enable_webrtc:
+            # Convert to RGB for WebRTC (only if enabled AND clients connected)
+            if self.enable_webrtc and len(webrtc_pcs) > 0:
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 with self._webrtc_lock:
                     self._webrtc_frame = img_rgb.copy()
@@ -273,6 +361,200 @@ class GStreamerCameraNode(Node):
                 self.frame_count = 0
                 self.last_log_time = now
             
+        finally:
+            buf.unmap(map_info)
+        
+        return Gst.FlowReturn.OK
+    
+    def _on_new_sample_hardware_jpeg(self, sink):
+        """Callback for hardware pipeline JPEG passthrough (no flip) - ZERO COPY!"""
+        sample = sink.emit('pull-sample')
+        if sample is None:
+            return Gst.FlowReturn.OK
+        
+        buf = sample.get_buffer()
+        receive_time = self.get_clock().now()
+        
+        success, map_info = buf.map(Gst.MapFlags.READ)
+        if not success:
+            return Gst.FlowReturn.OK
+        
+        try:
+            # Direct JPEG passthrough - no decode/encode!
+            jpeg_data = bytes(map_info.data)
+            
+            # Create ROS message
+            msg = CompressedImage()
+            msg.header = Header()
+            msg.header.stamp = receive_time.to_msg()
+            msg.header.frame_id = self.frame_id
+            msg.format = 'jpeg'
+            msg.data = jpeg_data
+            
+            # Publish to ROS
+            self.image_pub.publish(msg)
+            
+            # Publish camera info
+            info_msg = CameraInfo()
+            info_msg.header = msg.header
+            info_msg.width = self.width
+            info_msg.height = self.height
+            self.info_pub.publish(info_msg)
+            
+            # Stats
+            self.frame_count += 1
+            now = self.get_clock().now()
+            elapsed = (now - self.last_log_time).nanoseconds / 1e9
+            if elapsed >= 5.0:
+                fps = self.frame_count / elapsed
+                self.get_logger().info(f'[HW-ZeroCopy] Publishing at {fps:.1f} FPS')
+                self.frame_count = 0
+                self.last_log_time = now
+        
+        finally:
+            buf.unmap(map_info)
+        
+        return Gst.FlowReturn.OK
+    
+    def _on_new_sample_hardware_webrtc_i420(self, sink):
+        """Callback for hardware pipeline WebRTC branch - I420 decoded by hardware"""
+        global webrtc_frame_event, webrtc_frame_loop
+        
+        # Only process if WebRTC is enabled and clients are connected
+        if not self.enable_webrtc or len(webrtc_pcs) == 0:
+            # Drop frame - don't even pull it
+            sample = sink.emit('pull-sample')
+            return Gst.FlowReturn.OK
+        
+        sample = sink.emit('pull-sample')
+        if sample is None:
+            return Gst.FlowReturn.OK
+        
+        buf = sample.get_buffer()
+        caps = sample.get_caps()
+        struct = caps.get_structure(0)
+        width = struct.get_value('width')
+        height = struct.get_value('height')
+        
+        success, map_info = buf.map(Gst.MapFlags.READ)
+        if not success:
+            return Gst.FlowReturn.OK
+        
+        try:
+            # I420 to RGB conversion
+            y_size = width * height
+            uv_size = y_size // 4
+            
+            yuv_data = np.frombuffer(map_info.data, dtype=np.uint8)
+            
+            yuv_img = np.zeros((height * 3 // 2, width), dtype=np.uint8)
+            yuv_img[:height, :] = yuv_data[:y_size].reshape(height, width)
+            yuv_img[height:height + height//4, :] = yuv_data[y_size:y_size + uv_size].reshape(height//4, width)
+            yuv_img[height + height//4:, :] = yuv_data[y_size + uv_size:].reshape(height//4, width)
+            
+            img_rgb = cv2.cvtColor(yuv_img, cv2.COLOR_YUV2RGB_I420)
+            
+            with self._webrtc_lock:
+                self._webrtc_frame = img_rgb.copy()
+            
+            # Signal WebRTC
+            if webrtc_frame_event and webrtc_frame_loop:
+                try:
+                    webrtc_frame_loop.call_soon_threadsafe(webrtc_frame_event.set)
+                except RuntimeError:
+                    pass
+        
+        finally:
+            buf.unmap(map_info)
+        
+        return Gst.FlowReturn.OK
+    
+    def _on_new_sample_hardware(self, sink):
+        """Callback for hardware pipeline - receives I420 from nvvidconv (already decoded and flipped)"""
+        global webrtc_frame_event, webrtc_frame_loop
+        
+        sample = sink.emit('pull-sample')
+        if sample is None:
+            return Gst.FlowReturn.OK
+        
+        buf = sample.get_buffer()
+        receive_time = self.get_clock().now()
+        
+        # Get caps to determine format
+        caps = sample.get_caps()
+        struct = caps.get_structure(0)
+        width = struct.get_value('width')
+        height = struct.get_value('height')
+        format_str = struct.get_value('format')
+        
+        success, map_info = buf.map(Gst.MapFlags.READ)
+        if not success:
+            return Gst.FlowReturn.OK
+        
+        try:
+            # I420 format: Y plane (width*height) + U plane (width*height/4) + V plane (width*height/4)
+            # Convert I420 to BGR for encoding (OpenCV)
+            # Using numpy and cv2 for conversion
+            y_size = width * height
+            uv_size = y_size // 4
+            
+            yuv_data = np.frombuffer(map_info.data, dtype=np.uint8)
+            
+            # Reshape I420 to YUV format OpenCV can understand
+            yuv_img = np.zeros((height * 3 // 2, width), dtype=np.uint8)
+            yuv_img[:height, :] = yuv_data[:y_size].reshape(height, width)
+            yuv_img[height:height + height//4, :] = yuv_data[y_size:y_size + uv_size].reshape(height//4, width)
+            yuv_img[height + height//4:, :] = yuv_data[y_size + uv_size:].reshape(height//4, width)
+            
+            # Convert YUV to BGR
+            img_bgr = cv2.cvtColor(yuv_img, cv2.COLOR_YUV2BGR_I420)
+            
+            # Encode to JPEG for ROS (much faster than software decode->flip->encode)
+            _, encoded = cv2.imencode('.jpg', img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            jpeg_data = encoded.tobytes()
+            
+            # Create ROS message
+            msg = CompressedImage()
+            msg.header = Header()
+            msg.header.stamp = receive_time.to_msg()
+            msg.header.frame_id = self.frame_id
+            msg.format = 'jpeg'
+            msg.data = jpeg_data
+            
+            # Publish to ROS
+            self.image_pub.publish(msg)
+            
+            # Publish camera info
+            info_msg = CameraInfo()
+            info_msg.header = msg.header
+            info_msg.width = self.width
+            info_msg.height = self.height
+            self.info_pub.publish(info_msg)
+            
+            # Convert to RGB for WebRTC (only if enabled AND clients connected)
+            if self.enable_webrtc and len(webrtc_pcs) > 0:
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                with self._webrtc_lock:
+                    self._webrtc_frame = img_rgb.copy()
+                
+                # Signal WebRTC
+                if webrtc_frame_event and webrtc_frame_loop:
+                    try:
+                        webrtc_frame_loop.call_soon_threadsafe(webrtc_frame_event.set)
+                    except RuntimeError:
+                        pass
+            
+            # Stats
+            self.frame_count += 1
+            now = self.get_clock().now()
+            elapsed = (now - self.last_log_time).nanoseconds / 1e9
+            if elapsed >= 5.0:
+                fps = self.frame_count / elapsed
+                mode = "HW" if self.use_hardware_accel else "CPU"
+                self.get_logger().info(f'[{mode}] Publishing at {fps:.1f} FPS')
+                self.frame_count = 0
+                self.last_log_time = now
+        
         finally:
             buf.unmap(map_info)
         
