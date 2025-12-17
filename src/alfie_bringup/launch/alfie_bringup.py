@@ -172,25 +172,21 @@ def generate_launch_description():
 
 
 
-        # Stereo USB camera - publishes side-by-side stereo images (ultra low latency config)
+        # Stereo USB camera - GStreamer pipeline for ultra-low latency
         Node(
-            package='usb_cam',
+            package='alfie_bringup',
             namespace='alfie',
-            executable='usb_cam_node_exe',
+            executable='gstreamer_camera_node',
             name='stereo_camera',
             parameters=[{
-                'video_device': '/dev/video0',
-                'image_width': 2560,
-                'image_height': 720,
-                'framerate': 30.0,  # Higher framerate = fresher frames even with buffering
-                'pixel_format': 'mjpeg2rgb',
-                'camera_frame_id': 'stereo_camera_link',
-                'io_method': 'mmap',
+                'device': '/dev/video0',
+                'width': 1600,
+                'height': 600,
+                'framerate': 15,
                 'flip_vertical': True,
-                'time_per_frame': 1,  # Force immediate frame grab
+                'camera_frame_id': 'stereo_camera_link',
             }],
             remappings=[
-                ('image_raw', '/alfie/stereo_camera/image_raw'),
                 ('image_raw/compressed', '/alfie/stereo_camera/image_raw/compressed'),
                 ('camera_info', '/alfie/stereo_camera/camera_info'),
             ],

@@ -65,7 +65,7 @@ from aiortc.rtcrtpsender import RTCRtpSender
 
 VIDEO_PORT = 8084
 TARGET_FPS = 10  # Match camera input rate of 10Hz
-TARGET_BITRATE = 3_000_000  # 3 Mbps - balanced quality/performance
+TARGET_BITRATE = 2_000_000  # 2 Mbps - lower for smaller resolution
 
 # Use VP8 - better software encoder performance than H264 without hardware accel
 USE_VP8 = True
@@ -142,8 +142,8 @@ class StereoVideoNode(Node):
         # Declare parameters
         self.declare_parameter('stereo_image_topic', '/alfie/stereo_camera/image_raw/compressed')
         self.declare_parameter('port', VIDEO_PORT)
-        self.declare_parameter('output_width', 2560)  # Side-by-side: 1280 per eye
-        self.declare_parameter('output_height', 720)
+        self.declare_parameter('output_width', 1600)  # Side-by-side: 800 per eye
+        self.declare_parameter('output_height', 600)
         
         # Get parameters
         self.stereo_topic = self.get_parameter('stereo_image_topic').get_parameter_value().string_value
@@ -213,10 +213,10 @@ class StereoVideoNode(Node):
             if frame is None:
                 return
             
-            # Verify expected size (2560x720)
-            if frame.shape[1] != 2560 or frame.shape[0] != 720:
+            # Verify expected size
+            if frame.shape[1] != self.output_width or frame.shape[0] != self.output_height:
                 self.get_logger().warn(
-                    f'Unexpected stereo image size: {frame.shape[1]}x{frame.shape[0]}, expected 2560x720'
+                    f'Unexpected stereo image size: {frame.shape[1]}x{frame.shape[0]}, expected {self.output_width}x{self.output_height}'
                 )
             
             process_start = time.time()
