@@ -172,7 +172,7 @@ def generate_launch_description():
 
 
 
-        # Stereo USB camera - publishes side-by-side stereo images (1600x600 @ 60fps for lower CPU)
+        # Stereo USB camera - publishes side-by-side stereo images (ultra low latency config)
         Node(
             package='usb_cam',
             namespace='alfie',
@@ -182,11 +182,12 @@ def generate_launch_description():
                 'video_device': '/dev/video0',
                 'image_width': 2560,
                 'image_height': 720,
-                'framerate': 10.0,
-                'pixel_format': 'mjpeg2rgb',  # MJPEG decoded to RGB (smaller res = faster)
+                'framerate': 30.0,  # Higher framerate = fresher frames even with buffering
+                'pixel_format': 'mjpeg2rgb',
                 'camera_frame_id': 'stereo_camera_link',
                 'io_method': 'mmap',
-                'flip_vertical': True,  # Flip image upside down
+                'flip_vertical': True,
+                'time_per_frame': 1,  # Force immediate frame grab
             }],
             remappings=[
                 ('image_raw', '/alfie/stereo_camera/image_raw'),

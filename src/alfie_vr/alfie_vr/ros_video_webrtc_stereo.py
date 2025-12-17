@@ -64,11 +64,11 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.rtcrtpsender import RTCRtpSender
 
 VIDEO_PORT = 8084
-TARGET_FPS = 30
-TARGET_BITRATE = 4_000_000  # 4 Mbps - H264 is more efficient than VP8
+TARGET_FPS = 10  # Match camera input rate of 10Hz
+TARGET_BITRATE = 3_000_000  # 3 Mbps - balanced quality/performance
 
-# Use H.264 - hardware accelerated on Jetson, better compression than VP8
-USE_VP8 = False
+# Use VP8 - better software encoder performance than H264 without hardware accel
+USE_VP8 = True
 
 # Global references
 ros_node: Optional['StereoVideoNode'] = None
@@ -336,7 +336,7 @@ async def offer(request):
         video_track = StereoVideoTrack(ros_node)
         pc.addTrack(video_track)
         
-        # Select codec - H.264 with hardware acceleration on Jetson
+        # Select codec - VP8 for best CPU encoding performance
         try:
             capabilities = RTCRtpSender.getCapabilities("video")
             if capabilities:
@@ -344,17 +344,12 @@ async def offer(request):
                     preferred_codecs = [c for c in capabilities.codecs if c.mimeType == "video/VP8"]
                     codec_name = "VP8"
                 else:
-                    # Prefer H.264 with specific profile for hardware encoding
-                    preferred_codecs = [c for c in capabilities.codecs 
-                                       if c.mimeType == "video/H264" and 
-                                       c.parameters.get("profile-level-id", "").startswith("42")]  # Baseline profile
-                    if not preferred_codecs:
-                        preferred_codecs = [c for c in capabilities.codecs if c.mimeType == "video/H264"]
+                    preferred_codecs = [c for c in capabilities.codecs if c.mimeType == "video/H264"]
                     codec_name = "H264"
                 if preferred_codecs:
                     transceiver = pc.getTransceivers()[0]
                     transceiver.setCodecPreferences(preferred_codecs)
-                    print(f"Using {codec_name} codec (hardware accelerated on Jetson)")
+                    print(f"Using {codec_name} codec")
         except Exception as e:
             print(f"Could not set codec preferences: {e}")
     
