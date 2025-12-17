@@ -4,15 +4,6 @@ Integrate features from `index.html` into `stereo_vr.html` to create a unified s
 
 ---
 
-## Phase 1: Video Streams
-
-- [X] **1.1 Add RGB video stream WebRTC connection** – Connect to port `8083` for mono RGB camera feed alongside existing stereo stream (port `8084`)
-- [X] **1.2 Create RGB video preview panel** – Display RGB feed on the left side of the desktop preview
-- [X] **1.3 Add RGB video panel in VR** – Render RGB feed as a head-locked or corner-positioned panel visible in immersive mode
-- [X] **1.4 Add RGB panel settings UI** – Expose rgbPanelSettings in a draggable control panel with horizontal/vertical position, scale, and distance adjustments
-
----
-
 ## Phase 2: VR Controller Tracking
 
 - [ ] **2.1 Add WebSocket connection for controller data** – Connect to WSS port `8442` for streaming controller telemetry

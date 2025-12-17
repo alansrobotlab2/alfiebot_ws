@@ -302,22 +302,10 @@
             });
         }
         
-        // Reinitialize quad buffers when size changes
+        // Reinitialize quad buffers when size changes - now invalidates hash to trigger update
         function reinitQuadBuffers() {
-            if (gl && positionBuffer) {
-                const aspect = 16 / 9;
-                const height = stereoSettings.screenScale;
-                const width = height * aspect;
-                const yOffset = stereoSettings.verticalOffset;
-                
-                gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-                    -width/2, -height/2 + yOffset,
-                     width/2, -height/2 + yOffset,
-                    -width/2,  height/2 + yOffset,
-                     width/2,  height/2 + yOffset,
-                ]), gl.STATIC_DRAW);
-            }
+            // Invalidate the hash so updatePositionBufferIfNeeded() will rebuild
+            lastSettingsHash = '';
         }
         
         // Status display
@@ -490,16 +478,29 @@
                 
                 xrSession.addEventListener('end', onSessionEnd);
                 
-                // Set up WebGL context for XR
+                // Set up WebGL context for XR - optimized for performance
                 const canvas = document.createElement('canvas');
-                gl = canvas.getContext('webgl2', { xrCompatible: true });
+                const glOptions = { 
+                    xrCompatible: true,
+                    antialias: false,           // Disable AA for performance
+                    depth: false,               // No depth buffer needed for 2D quad
+                    stencil: false,             // No stencil needed
+                    powerPreference: 'high-performance',
+                    preserveDrawingBuffer: false,
+                    desynchronized: true        // Allow async presentation
+                };
+                gl = canvas.getContext('webgl2', glOptions);
                 
                 if (!gl) {
-                    gl = canvas.getContext('webgl', { xrCompatible: true });
+                    gl = canvas.getContext('webgl', glOptions);
                 }
                 
                 await xrSession.updateRenderState({
-                    baseLayer: new XRWebGLLayer(xrSession, gl)
+                    baseLayer: new XRWebGLLayer(xrSession, gl, {
+                        antialias: false,       // Faster rendering
+                        depth: false,           // No depth buffer needed
+                        stencil: false          // No stencil needed
+                    })
                 });
                 
                 xrRefSpace = await xrSession.requestReferenceSpace('local-floor');
@@ -509,10 +510,11 @@
                 rightTexture = gl.createTexture();
                 
                 // Set up canvases for extracting left/right from video
+                // Use willReadFrequently for GPU-accelerated canvas operations
                 leftCanvas = document.getElementById('leftCanvas');
                 rightCanvas = document.getElementById('rightCanvas');
-                leftCtx = leftCanvas.getContext('2d');
-                rightCtx = rightCanvas.getContext('2d');
+                leftCtx = leftCanvas.getContext('2d', { willReadFrequently: false, desynchronized: true });
+                rightCtx = rightCanvas.getContext('2d', { willReadFrequently: false, desynchronized: true });
                 
                 document.getElementById('preview').classList.add('hidden');
                 document.getElementById('vrButton').textContent = '🛑 Exit VR';
@@ -529,7 +531,23 @@
             }
         }
         
-        // XR render loop
+        // Pre-allocated view matrix to avoid per-frame allocation
+        const viewMatrixBuffer = new Float32Array(16);
+        
+        // Initialize textures once with proper parameters
+        function initTexture(texture) {
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        }
+        
+        let texturesInitialized = false;
+        let lastVideoWidth = 0;
+        let lastVideoHeight = 0;
+        
+        // XR render loop - optimized for low latency
         function onXRFrame(time, frame) {
             if (!xrSession) return;
             
@@ -550,15 +568,25 @@
             const videoHeight = video.videoHeight;
             const halfWidth = videoWidth / 2;
             
-            // Update canvas sizes
+            // Initialize textures once and set parameters
+            if (!texturesInitialized) {
+                initTexture(leftTexture);
+                initTexture(rightTexture);
+                texturesInitialized = true;
+            }
+            
+            // Update canvas sizes only when video dimensions change
             if (leftCanvas.width !== halfWidth || leftCanvas.height !== videoHeight) {
                 leftCanvas.width = halfWidth;
                 leftCanvas.height = videoHeight;
                 rightCanvas.width = halfWidth;
                 rightCanvas.height = videoHeight;
+                lastVideoWidth = videoWidth;
+                lastVideoHeight = videoHeight;
             }
             
             // Extract left and right images from side-by-side video
+            // Use willReadFrequently hint and batch canvas operations
             leftCtx.drawImage(video, 0, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
             rightCtx.drawImage(video, halfWidth, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
             
@@ -571,13 +599,9 @@
                 const sourceCanvas = view.eye === 'left' ? leftCanvas : rightCanvas;
                 const texture = view.eye === 'left' ? leftTexture : rightTexture;
                 
-                // Update texture from canvas
+                // Update texture from canvas (parameters already set)
                 gl.bindTexture(gl.TEXTURE_2D, texture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                 
                 // Draw fullscreen quad with texture
                 drawTexturedQuad(view, viewport);
@@ -588,6 +612,15 @@
         let shaderProgram = null;
         let positionBuffer = null;
         let texCoordBuffer = null;
+        
+        // Cached shader locations for performance
+        let cachedLocations = null;
+        let lastSettingsHash = '';
+        
+        // Video frame callback for optimal sync
+        let lastVideoTime = -1;
+        let videoFrameCallbackId = null;
+        let newVideoFrameAvailable = false;
         
         function initShaders() {
             const vertexShader = gl.createShader(gl.VERTEX_SHADER);
@@ -652,6 +685,47 @@
                 0, 0,
                 1, 0,
             ]), gl.STATIC_DRAW);
+            
+            // Cache all uniform and attribute locations (avoid per-frame lookups)
+            cachedLocations = {
+                position: gl.getAttribLocation(shaderProgram, 'a_position'),
+                texCoord: gl.getAttribLocation(shaderProgram, 'a_texCoord'),
+                projection: gl.getUniformLocation(shaderProgram, 'u_projection'),
+                view: gl.getUniformLocation(shaderProgram, 'u_view'),
+                model: gl.getUniformLocation(shaderProgram, 'u_model'),
+                texture: gl.getUniformLocation(shaderProgram, 'u_texture'),
+                distance: gl.getUniformLocation(shaderProgram, 'u_distance'),
+                ipdOffset: gl.getUniformLocation(shaderProgram, 'u_ipdOffset'),
+                isLeftEye: gl.getUniformLocation(shaderProgram, 'u_isLeftEye')
+            };
+            
+            // Identity model matrix (never changes)
+            cachedLocations.identityMatrix = new Float32Array([
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]);
+        }
+        
+        // Check if position buffer needs rebuild (only when settings change)
+        function updatePositionBufferIfNeeded() {
+            const hash = `${stereoSettings.screenScale}_${stereoSettings.verticalOffset}`;
+            if (hash !== lastSettingsHash && positionBuffer) {
+                lastSettingsHash = hash;
+                const aspect = 16 / 9;
+                const height = stereoSettings.screenScale;
+                const width = height * aspect;
+                const yOffset = stereoSettings.verticalOffset;
+                
+                gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                    -width/2, -height/2 + yOffset,
+                     width/2, -height/2 + yOffset,
+                    -width/2,  height/2 + yOffset,
+                     width/2,  height/2 + yOffset,
+                ]), gl.STATIC_DRAW);
+            }
         }
         
         function drawTexturedQuad(view, viewport) {
@@ -661,58 +735,32 @@
             
             gl.useProgram(shaderProgram);
             
-            // Set up attributes
-            const positionLoc = gl.getAttribLocation(shaderProgram, 'a_position');
-            const texCoordLoc = gl.getAttribLocation(shaderProgram, 'a_texCoord');
+            // Only rebuild position buffer when settings actually change
+            updatePositionBufferIfNeeded();
             
-            // Rebuild position buffer with current settings
-            const aspect = 16 / 9;
-            const height = stereoSettings.screenScale;
-            const width = height * aspect;
-            const yOffset = stereoSettings.verticalOffset;
-            
+            // Set up attributes using cached locations
             gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-                -width/2, -height/2 + yOffset,
-                 width/2, -height/2 + yOffset,
-                -width/2,  height/2 + yOffset,
-                 width/2,  height/2 + yOffset,
-            ]), gl.STATIC_DRAW);
-            gl.enableVertexAttribArray(positionLoc);
-            gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(cachedLocations.position);
+            gl.vertexAttribPointer(cachedLocations.position, 2, gl.FLOAT, false, 0, 0);
             
             gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-            gl.enableVertexAttribArray(texCoordLoc);
-            gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(cachedLocations.texCoord);
+            gl.vertexAttribPointer(cachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
             
-            // Set uniforms
-            const projectionLoc = gl.getUniformLocation(shaderProgram, 'u_projection');
-            const viewLoc = gl.getUniformLocation(shaderProgram, 'u_view');
-            const modelLoc = gl.getUniformLocation(shaderProgram, 'u_model');
-            const textureLoc = gl.getUniformLocation(shaderProgram, 'u_texture');
-            const distanceLoc = gl.getUniformLocation(shaderProgram, 'u_distance');
-            const ipdOffsetLoc = gl.getUniformLocation(shaderProgram, 'u_ipdOffset');
-            const isLeftEyeLoc = gl.getUniformLocation(shaderProgram, 'u_isLeftEye');
-            
-            gl.uniformMatrix4fv(projectionLoc, false, view.projectionMatrix);
-            gl.uniform1f(distanceLoc, stereoSettings.screenDistance);
-            gl.uniform1f(ipdOffsetLoc, stereoSettings.ipdOffset);
-            gl.uniform1f(isLeftEyeLoc, view.eye === 'left' ? 1.0 : 0.0);
+            // Set uniforms using cached locations
+            gl.uniformMatrix4fv(cachedLocations.projection, false, view.projectionMatrix);
+            gl.uniform1f(cachedLocations.distance, stereoSettings.screenDistance);
+            gl.uniform1f(cachedLocations.ipdOffset, stereoSettings.ipdOffset);
+            gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
             
             // Invert view transform (view.transform is viewer pose, we need inverse)
-            const viewMatrix = new Float32Array(16);
-            invertMatrix(view.transform.matrix, viewMatrix);
-            gl.uniformMatrix4fv(viewLoc, false, viewMatrix);
+            invertMatrix(view.transform.matrix, viewMatrixBuffer);
+            gl.uniformMatrix4fv(cachedLocations.view, false, viewMatrixBuffer);
             
             // Model matrix - identity (screen at origin, facing -Z)
-            gl.uniformMatrix4fv(modelLoc, false, new Float32Array([
-                1, 0, 0, 0,
-                0, 1, 0, 0,
-                0, 0, 1, 0,
-                0, 0, 0, 1
-            ]));
+            gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
             
-            gl.uniform1i(textureLoc, 0);
+            gl.uniform1i(cachedLocations.texture, 0);
             
             // Draw quad
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
