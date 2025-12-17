@@ -50,8 +50,16 @@ Integrate features from `index.html` into `stereo_vr.html` to create a unified s
 
 ---
 
+## Hardware Configuration
+
+- **Stereo Camera**: USB-C stereo camera (replaced OAK-D Lite)
+- **Video Format**: Single frame with left/right images side-by-side (SBS)
+- **Processing**: WebGL shader splits the SBS frame and renders each half to the corresponding eye
+
+---
+
 ## Notes
 
 - **Keeping raw WebXR/WebGL** for stereo rendering (not switching to A-Frame)
-- **RGB video placement options**: Head-locked corner panel recommended for VR
+- **SBS video handling**: The stereo camera publishes a single combined frame; the WebGL shader samples the left half for the left eye and the right half for the right eye
 - **URDF rendering** can be simplified to joint-state text display initially

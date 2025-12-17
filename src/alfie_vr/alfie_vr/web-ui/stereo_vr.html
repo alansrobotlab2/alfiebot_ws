@@ -172,7 +172,7 @@
 </head>
 <body>
     <div id="status">Initializing...</div>
-    <video id="stereoVideo" autoplay playsinline muted style="display: none;"></video>
+    <video id="stereoVideo" autoplay playsinline muted preload="none" style="display: none;"></video>
     <canvas id="leftCanvas"></canvas>
     <canvas id="rightCanvas"></canvas>
     <img id="preview" class="hidden" alt="Stereo preview">
@@ -229,6 +229,11 @@
         let leftCanvas, rightCanvas, leftCtx, rightCtx;
         let retryCount = 0;
         const MAX_RETRIES = 3;
+        
+        // Latency tracking
+        let lastFrameTime = 0;
+        let frameCount = 0;
+        let totalLatency = 0;
         
         // Stereo adjustment settings
         let stereoSettings = {
@@ -341,8 +346,28 @@
                 if (event.track.kind === 'video') {
                     videoElement = document.getElementById('stereoVideo');
                     videoElement.srcObject = event.streams[0];
+                    // Ultra-low latency settings
+                    videoElement.playsInline = true;
+                    
+                    // Track video latency
+                    if ('requestVideoFrameCallback' in videoElement) {
+                        const measureLatency = (now, metadata) => {
+                            const currentTime = performance.now();
+                            if (lastFrameTime > 0) {
+                                const frameDelta = currentTime - lastFrameTime;
+                                frameCount++;
+                                if (frameCount % 50 === 0) {
+                                    console.log(`[Client] Frame interval: ${frameDelta.toFixed(1)}ms (${(1000/frameDelta).toFixed(1)} fps)`);
+                                }
+                            }
+                            lastFrameTime = currentTime;
+                            videoElement.requestVideoFrameCallback(measureLatency);
+                        };
+                        videoElement.requestVideoFrameCallback(measureLatency);
+                    }
+                    
                     videoElement.play().then(() => {
-                        setStatus('Stereo stream connected', 'connected');
+                        setStatus('Stereo stream connected - Measuring latency...', 'connected');
                         document.getElementById('vrButton').disabled = false;
                         document.getElementById('certButton').style.display = 'none';
                         startPreview();

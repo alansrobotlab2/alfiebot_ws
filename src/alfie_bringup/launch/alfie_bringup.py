@@ -170,14 +170,34 @@ def generate_launch_description():
             respawn=True
         ),
 
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([
-                os.path.join(
-                    get_package_share_directory('alfie_bringup'),
-                    'launch',
-                    'alfie_rgbd_pcl.launch.py'
-                )
-            ]),
+
+
+        # Stereo USB camera - publishes side-by-side stereo images (1600x600 @ 60fps for lower CPU)
+        Node(
+            package='usb_cam',
+            namespace='alfie',
+            executable='usb_cam_node_exe',
+            name='stereo_camera',
+            parameters=[{
+                'video_device': '/dev/video0',
+                'image_width': 2560,
+                'image_height': 720,
+                'framerate': 10.0,
+                'pixel_format': 'mjpeg2rgb',  # MJPEG decoded to RGB (smaller res = faster)
+                'camera_frame_id': 'stereo_camera_link',
+                'io_method': 'mmap',
+                'flip_vertical': True,  # Flip image upside down
+            }],
+            remappings=[
+                ('image_raw', '/alfie/stereo_camera/image_raw'),
+                ('image_raw/compressed', '/alfie/stereo_camera/image_raw/compressed'),
+                ('camera_info', '/alfie/stereo_camera/camera_info'),
+            ],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
         ),
 
         Node(
