@@ -48,6 +48,29 @@ body {
     pointer-events: none;
 }
 
+#battery {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.8);
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: monospace;
+    z-index: 1000;
+    border: 1px solid #333;
+}
+
+#battery.charging {
+    border-color: #4CAF50;
+    color: #4CAF50;
+}
+
+#battery.low {
+    border-color: #f44336;
+    color: #f44336;
+}
+
 #vrButton {
     position: fixed;
     bottom: 40px;
@@ -94,10 +117,10 @@ body {
 
 #info {
     position: fixed;
-    bottom: 100px;
-    left: 50%;
-    transform: translateX(-50%);
-    text-align: center;
+    top: 50%;
+    left: 20px;
+    transform: translateY(-50%);
+    text-align: left;
     font-size: 12px;
     color: #888;
     z-index: 1000;

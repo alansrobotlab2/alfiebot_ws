@@ -305,6 +305,10 @@
         let fpsOverlayTexCoordBuffer = null;
         let fpsOverlayCachedLocations = null;
         
+        // Battery state for VR overlay
+        let currentBatteryLevel = null;
+        let currentBatteryCharging = false;
+        
         // Received frame FPS tracking
         let receivedFrameCount = 0;
         let lastReceivedFpsTime = performance.now();
@@ -317,10 +321,10 @@
         
         // Stereo adjustment settings (optimized defaults)
         let stereoSettings = {
-            verticalOffset: -0.19,  // Meters - positive = up
+            verticalOffset: -0.17,  // Meters - positive = up
             ipdOffset: -0.018,      // Meters - adjustment to convergence
-            screenDistance: 0.5,    // Meters - distance to virtual screen
-            screenScale: 0.25        // Multiplier for screen size
+            screenDistance: 0.6,    // Meters - distance to virtual screen
+            screenScale: 0.5        // Multiplier for screen size
         };
         
         // Reinitialize quad buffers when size changes - now invalidates hash to trigger update
@@ -977,7 +981,14 @@
             fpsOverlayCtx.font = 'bold 24px monospace';
             fpsOverlayCtx.textBaseline = 'middle';
             fpsOverlayCtx.textAlign = 'center';
-            fpsOverlayCtx.fillText(`FPS: ${currentVrFps.toFixed(1)}`, fpsOverlayCanvas.width / 2, fpsOverlayCanvas.height / 2);
+            
+            // Build display text with FPS and battery
+            let displayText = `FPS: ${currentVrFps.toFixed(1)}`;
+            if (currentBatteryLevel !== null) {
+                const batteryIcon = currentBatteryCharging ? 'CHG' : 'BAT';
+                displayText += ` | ${batteryIcon}: ${currentBatteryLevel}%`;
+            }
+            fpsOverlayCtx.fillText(displayText, fpsOverlayCanvas.width / 2, fpsOverlayCanvas.height / 2);
             
             // Update texture if GL context is available
             if (gl && fpsOverlayTexture) {
@@ -1467,72 +1478,40 @@
             startPreview();
         }
         
-        // Make settings panel draggable
-        function initDraggable() {
-            const controls = document.getElementById('controls');
-            const header = controls.querySelector('h3');
-            let isDragging = false;
-            let offsetX, offsetY;
+        // Battery level monitoring
+        function initBatteryMonitor() {
+            if ('getBattery' in navigator) {
+                navigator.getBattery().then((battery) => {
+                    updateBatteryDisplay(battery);
+                    battery.addEventListener('levelchange', () => updateBatteryDisplay(battery));
+                    battery.addEventListener('chargingchange', () => updateBatteryDisplay(battery));
+                });
+            } else {
+                document.getElementById('battery').textContent = '🔋 N/A';
+            }
+        }
+        
+        function updateBatteryDisplay(battery) {
+            const batteryEl = document.getElementById('battery');
+            const level = Math.round(battery.level * 100);
+            const icon = battery.charging ? '⚡' : '🔋';
+            batteryEl.textContent = `${icon} ${level}%`;
+            batteryEl.className = '';
+            if (battery.charging) {
+                batteryEl.classList.add('charging');
+            } else if (level <= 20) {
+                batteryEl.classList.add('low');
+            }
             
-            header.addEventListener('mousedown', (e) => {
-                isDragging = true;
-                offsetX = e.clientX - controls.offsetLeft;
-                offsetY = e.clientY - controls.offsetTop;
-                controls.style.right = 'auto';
-                controls.style.left = controls.offsetLeft + 'px';
-            });
-            
-            document.addEventListener('mousemove', (e) => {
-                if (!isDragging) return;
-                e.preventDefault();
-                let newX = e.clientX - offsetX;
-                let newY = e.clientY - offsetY;
-                
-                // Keep within viewport bounds
-                newX = Math.max(0, Math.min(newX, window.innerWidth - controls.offsetWidth));
-                newY = Math.max(0, Math.min(newY, window.innerHeight - controls.offsetHeight));
-                
-                controls.style.left = newX + 'px';
-                controls.style.top = newY + 'px';
-            });
-            
-            document.addEventListener('mouseup', () => {
-                isDragging = false;
-            });
-            
-            // Touch support for VR headset
-            header.addEventListener('touchstart', (e) => {
-                isDragging = true;
-                const touch = e.touches[0];
-                offsetX = touch.clientX - controls.offsetLeft;
-                offsetY = touch.clientY - controls.offsetTop;
-                controls.style.right = 'auto';
-                controls.style.left = controls.offsetLeft + 'px';
-            });
-            
-            document.addEventListener('touchmove', (e) => {
-                if (!isDragging) return;
-                e.preventDefault();
-                const touch = e.touches[0];
-                let newX = touch.clientX - offsetX;
-                let newY = touch.clientY - offsetY;
-                
-                newX = Math.max(0, Math.min(newX, window.innerWidth - controls.offsetWidth));
-                newY = Math.max(0, Math.min(newY, window.innerHeight - controls.offsetHeight));
-                
-                controls.style.left = newX + 'px';
-                controls.style.top = newY + 'px';
-            }, { passive: false });
-            
-            document.addEventListener('touchend', () => {
-                isDragging = false;
-            });
+            // Store for VR overlay
+            currentBatteryLevel = level;
+            currentBatteryCharging = battery.charging;
         }
         
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', async () => {
             console.log('Stereo VR Vision - Initializing...');
-            initDraggable();
+            initBatteryMonitor();
             initControllerWebSocket();  // Initialize controller tracking WebSocket
             initFoxgloveConnection();
             await initXR();
