@@ -2,12 +2,23 @@
         // Displays side-by-side stereo video as immersive VR
         // With VR Controller Tracking support
         
-        const FOXGLOVE_PORT = 8082;
+        import { FoxgloveConnection, FOXGLOVE_PORT } from './foxglove_conn.js';
+        
         const CONTROLLER_WS_PORT = 8442;
         
-        let foxgloveClient = null;
+        let foxgloveConn = null;
         let compressedImageSubscriptionId = null;
+        let robotDescriptionSubscriptionId = null;
+        let tfSubscriptionId = null;
+        let tfStaticSubscriptionId = null;
         let currentFrameBitmap = null;
+        
+        // Robot state tracking
+        let urdfString = null;
+        let linkNames = [];
+        let tfCount = 0;
+        let lastTfTime = performance.now();
+        let currentTfRate = 0;  // Hz - updated every 5 seconds
         let xrSession = null;
         let xrRefSpace = null;
         let gl = null;
@@ -309,6 +320,22 @@
         let currentBatteryLevel = null;
         let currentBatteryCharging = false;
         
+        // Status panel for VR mode (head-locked, right side of 3D view)
+        let statusPanelCanvas = null;
+        let statusPanelCtx = null;
+        let statusPanelTexture = null;
+        let statusPanelPositionBuffer = null;
+        let statusPanelTexCoordBuffer = null;
+        let statusPanelInitialized = false;
+        
+        // Left status panel for VR mode (head-locked, left side of 3D view)
+        let leftStatusPanelCanvas = null;
+        let leftStatusPanelCtx = null;
+        let leftStatusPanelTexture = null;
+        let leftStatusPanelPositionBuffer = null;
+        let leftStatusPanelTexCoordBuffer = null;
+        let leftStatusPanelInitialized = false;
+        
         // Received frame FPS tracking
         let receivedFrameCount = 0;
         let lastReceivedFpsTime = performance.now();
@@ -363,77 +390,40 @@
             }
         }
         
-        // Initialize Foxglove WebSocket connection
+        // Initialize Foxglove WebSocket connection using FoxgloveConnection class
         function initFoxgloveConnection() {
-            const url = `wss://${window.location.hostname}:${FOXGLOVE_PORT}`;
-            console.log(`Connecting to Foxglove at ${url}`);
             setStatus('Connecting to stereo stream...');
             
-            try {
-                foxgloveClient = new WebSocket(url, ['foxglove.sdk.v1']);
-                foxgloveClient.binaryType = 'arraybuffer';
-                
-                foxgloveClient.onopen = () => {
-                    console.log('Foxglove WebSocket connected');
+            foxgloveConn = new FoxgloveConnection({
+                reconnectInterval: 2000,
+                onConnect: () => {
                     setStatus('Connected to bridge, waiting for topics...', 'connected');
-                };
-                
-                foxgloveClient.onmessage = async (event) => {
-                    if (typeof event.data === 'string') {
-                        handleFoxgloveJsonMessage(event.data);
-                    } else if (event.data instanceof ArrayBuffer) {
-                        handleFoxgloveBinaryMessage(event.data);
-                    }
-                };
-                
-                foxgloveClient.onerror = (error) => {
-                    console.error('Foxglove WebSocket error:', error);
-                    setStatus('Connection error - SSL certificate may need to be accepted', 'error');
-                    showCertButton();
-                };
-                
-                foxgloveClient.onclose = (event) => {
-                    console.log('Foxglove WebSocket closed', event);
+                },
+                onDisconnect: (event) => {
                     setStatus('Connection closed, reconnecting...', 'error');
-                    setTimeout(initFoxgloveConnection, 2000);
-                };
-                
-            } catch (error) {
-                console.error('Failed to create Foxglove WebSocket:', error);
-                setStatus('Connection failed', 'error');
-                setTimeout(initFoxgloveConnection, 2000);
-            }
-        }
-
-        function handleFoxgloveJsonMessage(data) {
-            try {
-                const message = JSON.parse(data);
-                console.log('Foxglove JSON message, op:', message.op);
-                
-                if (message.op === 'serverInfo') {
-                    console.log('Server info:', message.name);
-                } else if (message.op === 'advertise') {
-                    console.log('Advertise received, channels:', message.channels?.length);
-                    subscribeToCompressedImage(message.channels);
+                    if (event.code === 1006) {
+                        showCertButton();
+                    }
+                },
+                onAdvertise: (channels) => {
+                    subscribeToCompressedImage(channels);
+                    subscribeToRobotTopics(channels);
                 }
-            } catch (error) {
-                console.error('Failed to parse JSON message:', error);
-            }
+            });
+            
+            foxgloveConn.connect();
         }
 
         function subscribeToCompressedImage(channels) {
-            const subscriptions = [];
+            const topic = '/alfie/stereo_camera/image_raw/compressed';
             
-            for (const channel of channels) {
-                if (channel.topic === '/alfie/stereo_camera/image_raw/compressed') {
-                    compressedImageSubscriptionId = subscriptions.length + 1;
-                    subscriptions.push({ id: compressedImageSubscriptionId, channelId: channel.id });
-                    console.log('Found compressed image topic, channelId:', channel.id, 'subId:', compressedImageSubscriptionId);
-                }
-            }
+            // Use the FoxgloveConnection's subscribe with custom handler
+            compressedImageSubscriptionId = foxgloveConn.subscribe(topic, (messageData) => {
+                const view = new DataView(messageData.buffer, messageData.byteOffset, messageData.byteLength);
+                processCompressedImage(view);
+            });
             
-            if (subscriptions.length > 0) {
-                foxgloveClient.send(JSON.stringify({ op: 'subscribe', subscriptions }));
+            if (compressedImageSubscriptionId) {
                 setStatus('Subscribed to stereo stream', 'connected');
             } else {
                 console.log('Compressed image topic not found in advertised channels');
@@ -442,19 +432,189 @@
             }
         }
 
-        function handleFoxgloveBinaryMessage(data) {
-            const view = new DataView(data);
-            const opCode = view.getUint8(0);
+        // ========================================
+        // Robot Topic Subscriptions (3.3)
+        // ========================================
+        
+        function subscribeToRobotTopics(channels) {
+            let subscribedCount = 0;
             
-            if (opCode === 1) { // Message data
-                const subscriptionId = view.getUint32(1, true);
+            // Subscribe to robot_description (3.3.1)
+            robotDescriptionSubscriptionId = foxgloveConn.subscribe('/alfie/robot_description', (messageData) => {
+                handleRobotDescriptionMessage(messageData);
+            });
+            if (robotDescriptionSubscriptionId) {
+                console.log('Subscribed to /alfie/robot_description');
+                subscribedCount++;
+            }
+            
+            // Subscribe to TF (3.3.2)
+            tfSubscriptionId = foxgloveConn.subscribe('/alfie/tf', (messageData) => {
+                handleTFMessage(messageData);
+            });
+            if (tfSubscriptionId) {
+                console.log('Subscribed to /alfie/tf');
+                subscribedCount++;
+            }
+            
+            // Subscribe to TF static
+            tfStaticSubscriptionId = foxgloveConn.subscribe('/alfie/tf_static', (messageData) => {
+                handleTFMessage(messageData);
+            });
+            if (tfStaticSubscriptionId) {
+                console.log('Subscribed to /alfie/tf_static');
+                subscribedCount++;
+            }
+            
+            console.log(`Subscribed to ${subscribedCount} robot topics`);
+            updateURDFStatus('Waiting for URDF...');
+        }
+        
+        // ========================================
+        // CDR Binary Message Decoders (3.3.3)
+        // ========================================
+        
+        // Decode robot_description (std_msgs/msg/String) CDR message
+        function handleRobotDescriptionMessage(data) {
+            try {
+                // CDR format for std_msgs/msg/String:
+                // - 4 bytes: CDR encapsulation header (00 01 00 00 for little-endian)
+                // - 4 bytes: string length (uint32, little-endian, includes null terminator)
+                // - N bytes: string data (UTF-8)
+                const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
                 
-                if (subscriptionId === compressedImageSubscriptionId) {
-                    // Skip header (1 byte op + 4 bytes subId + 8 bytes timestamp) = 13 bytes
-                    const messageData = new DataView(data, 13);
-                    processCompressedImage(messageData);
+                // Skip 4-byte CDR encapsulation header, then read string length
+                const stringLength = view.getUint32(4, true);
+                
+                // Extract the string (skip 8 bytes header, exclude null terminator)
+                const stringData = new Uint8Array(data.buffer, data.byteOffset + 8, stringLength - 1);
+                const decoder = new TextDecoder();
+                urdfString = decoder.decode(stringData);
+                
+                console.log('Received robot_description, length:', stringLength);
+                
+                if (urdfString.includes('<robot')) {
+                    // Parse URDF to extract link names
+                    parseURDFLinks(urdfString);
+                } else {
+                    console.log('robot_description does not contain URDF XML');
+                    updateURDFStatus('Invalid URDF');
+                }
+            } catch (error) {
+                console.error('Failed to decode robot_description CDR:', error);
+                updateURDFStatus('Decode error');
+            }
+        }
+        
+        // Parse URDF XML to extract link names
+        function parseURDFLinks(urdfXml) {
+            try {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(urdfXml, 'text/xml');
+                const robotEl = doc.querySelector('robot');
+                
+                if (!robotEl) {
+                    console.error('No robot element in URDF');
+                    updateURDFStatus('Parse error');
+                    return;
+                }
+                
+                const robotName = robotEl.getAttribute('name') || 'robot';
+                const links = doc.querySelectorAll('link');
+                const joints = doc.querySelectorAll('joint');
+                
+                linkNames = Array.from(links).map(link => link.getAttribute('name'));
+                
+                console.log(`Parsed URDF: ${robotName} - ${linkNames.length} links, ${joints.length} joints`);
+                updateURDFStatus('Loaded');
+                updateLinkCount(linkNames.length);
+            } catch (error) {
+                console.error('Error parsing URDF:', error);
+                updateURDFStatus('Parse error');
+            }
+        }
+        
+        // Decode TF message (tf2_msgs/TFMessage) CDR format
+        function handleTFMessage(data) {
+            try {
+                let offset = 4;  // Skip CDR header
+                const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+                
+                const readString = () => {
+                    const len = view.getUint32(offset, true);
+                    offset += 4;
+                    // len includes null terminator, so read len-1 bytes
+                    const strBytes = new Uint8Array(data.buffer, data.byteOffset + offset, len > 0 ? len - 1 : 0);
+                    offset += len;
+                    // Align to 4 bytes after string
+                    if (offset % 4 !== 0) offset += 4 - (offset % 4);
+                    return new TextDecoder().decode(strBytes);
+                };
+                
+                // TFMessage: TransformStamped[] transforms
+                const transformCount = view.getUint32(offset, true);
+                offset += 4;
+                
+                for (let i = 0; i < transformCount; i++) {
+                    // Header: stamp (sec, nanosec) + frame_id
+                    const stampSec = view.getUint32(offset, true); offset += 4;
+                    const stampNsec = view.getUint32(offset, true); offset += 4;
+                    const frameId = readString();
+                    const childFrameId = readString();
+                    
+                    // Transform: translation (Vector3 float64), rotation (Quaternion float64)
+                    // CDR alignment: after child_frame_id, ensure offset % 8 === 4
+                    if (offset % 8 === 0) offset += 4;
+                    const tx = view.getFloat64(offset, true); offset += 8;
+                    const ty = view.getFloat64(offset, true); offset += 8;
+                    const tz = view.getFloat64(offset, true); offset += 8;
+                    const qx = view.getFloat64(offset, true); offset += 8;
+                    const qy = view.getFloat64(offset, true); offset += 8;
+                    const qz = view.getFloat64(offset, true); offset += 8;
+                    const qw = view.getFloat64(offset, true); offset += 8;
+                    
+                    // Log first few TF messages for debugging
+                    if (tfCount < 3) {
+                        console.log(`TF: ${frameId} -> ${childFrameId}, pos: (${tx.toFixed(3)}, ${ty.toFixed(3)}, ${tz.toFixed(3)})`);
+                    }
+                }
+                
+                tfCount++;
+                
+                // Update TF rate every 5 seconds (3.4.1)
+                const now = performance.now();
+                const elapsed = (now - lastTfTime) / 1000;
+                if (elapsed >= 5.0) {
+                    currentTfRate = tfCount / elapsed;
+                    tfCount = 0;
+                    lastTfTime = now;
+                    // Update desktop panel (3.4.2)
+                    const tfRateEl = document.getElementById('tfRate');
+                    if (tfRateEl) tfRateEl.textContent = currentTfRate.toFixed(1);
+                }
+                
+            } catch (error) {
+                // Silently ignore TF decode errors after first few
+                if (tfCount < 5) {
+                    console.warn('TF decode error:', error);
                 }
             }
+        }
+        
+        // Get current TF rate (for VR status panel)
+        function getTfRate() {
+            return currentTfRate;
+        }
+        
+        // Update UI elements
+        function updateURDFStatus(status) {
+            const el = document.getElementById('urdfStatus');
+            if (el) el.textContent = status;
+        }
+        
+        function updateLinkCount(count) {
+            const el = document.getElementById('linkCount');
+            if (el) el.textContent = count.toString();
         }
 
         async function processCompressedImage(view) {
@@ -750,11 +910,13 @@
                     vrLog('Wait video');
                 }
                 frameCounter++;
-                // Still render FPS overlay while waiting for video
+                // Still render FPS overlay and status panels while waiting for video
                 for (const view of pose.views) {
                     const viewport = glLayer.getViewport(view);
                     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
                     drawFpsOverlay(view, viewport);
+                    drawStatusPanel(view, viewport, pose.transform.matrix);
+                    drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                 }
                 return;
             }
@@ -804,6 +966,10 @@
                     
                     // Draw FPS overlay in upper left corner
                     drawFpsOverlay(view, viewport);
+                    
+                    // Draw status panels (head-locked)
+                    drawStatusPanel(view, viewport, pose.transform.matrix);
+                    drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                 }
             } else {
                 // FALLBACK: Use canvas-based splitting (higher latency)
@@ -922,6 +1088,10 @@
                     
                     // Draw FPS overlay in upper left corner
                     drawFpsOverlay(view, viewport);
+                    
+                    // Draw status panels (head-locked)
+                    drawStatusPanel(view, viewport, pose.transform.matrix);
+                    drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                 }
             }
         }
@@ -1156,6 +1326,467 @@
         // End FPS Overlay Functions
         // ========================================
         
+        // ========================================
+        // Status Panel Functions (Head-Locked 3D Quad)
+        // ========================================
+        
+        function initStatusPanel() {
+            if (!gl) {
+                vrLog('Status panel: no GL context');
+                return;
+            }
+            
+            vrLog('Init status panel...');
+            
+            // Create canvas for status text
+            statusPanelCanvas = document.createElement('canvas');
+            statusPanelCanvas.width = 256;
+            statusPanelCanvas.height = 128;
+            statusPanelCtx = statusPanelCanvas.getContext('2d');
+            
+            // Create texture
+            statusPanelTexture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, statusPanelTexture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            
+            // Create position buffer for 3D quad
+            // Position with right edge aligned to right edge of main view
+            const mainHeight = stereoSettings.screenScale;
+            const mainWidth = mainHeight * (16/9);
+            const mainRightEdge = mainWidth / 2;
+            
+            // Status panel size
+            const panelHeight = 0.12;  // 12cm tall in world space
+            const panelWidth = 0.20;   // 20cm wide
+            
+            // Position: right edge aligned with main view right edge, vertically centered
+            const panelLeft = mainRightEdge - panelWidth;  // Right edges align
+            const panelCenterY = stereoSettings.verticalOffset;  // Same vertical center as main view
+            
+            statusPanelPositionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, statusPanelPositionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                panelLeft, panelCenterY - panelHeight/2,
+                panelLeft + panelWidth, panelCenterY - panelHeight/2,
+                panelLeft, panelCenterY + panelHeight/2,
+                panelLeft + panelWidth, panelCenterY + panelHeight/2,
+            ]), gl.STATIC_DRAW);
+            
+            statusPanelTexCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, statusPanelTexCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                0, 1,
+                1, 1,
+                0, 0,
+                1, 0,
+            ]), gl.STATIC_DRAW);
+            
+            // Initial update
+            updateStatusPanelCanvas();
+            
+            statusPanelInitialized = true;
+            vrLog('Status panel: OK');
+        }
+        
+        function updateStatusPanelCanvas() {
+            if (!statusPanelCtx) return;
+            
+            const canvas = statusPanelCanvas;
+            const ctx = statusPanelCtx;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Semi-transparent dark background (80% opaque)
+            ctx.fillStyle = 'rgba(20, 20, 30, 0.8)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Border
+            ctx.strokeStyle = 'rgba(100, 150, 255, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+            
+            // Title
+            ctx.fillStyle = '#88ccff';
+            ctx.font = 'bold 18px monospace';
+            ctx.textBaseline = 'top';
+            ctx.fillText('Robot Status', 10, 8);
+            
+            // Foxglove connection status
+            const foxgloveStatus = foxgloveConn && foxgloveConn.isConnected ? 'Connected' : 'Disconnected';
+            const foxgloveColor = foxgloveConn && foxgloveConn.isConnected ? '#44ff44' : '#ff4444';
+            ctx.fillStyle = '#cccccc';
+            ctx.font = '14px monospace';
+            ctx.fillText('Foxglove:', 10, 35);
+            ctx.fillStyle = foxgloveColor;
+            ctx.fillText(foxgloveStatus, 100, 35);
+            
+            // TF Rate
+            const tfRate = getTfRate();
+            const tfColor = tfRate > 10 ? '#44ff44' : (tfRate > 0 ? '#ffff00' : '#ff4444');
+            ctx.fillStyle = '#cccccc';
+            ctx.fillText('TF Rate:', 10, 55);
+            ctx.fillStyle = tfColor;
+            ctx.fillText(`${tfRate.toFixed(1)} Hz`, 100, 55);
+            
+            // Link count
+            ctx.fillStyle = '#cccccc';
+            ctx.fillText('Links:', 10, 75);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(`${linkNames.length}`, 100, 75);
+            
+            // URDF status
+            ctx.fillStyle = '#cccccc';
+            ctx.fillText('URDF:', 10, 95);
+            ctx.fillStyle = urdfString ? '#44ff44' : '#888888';
+            ctx.fillText(urdfString ? 'Loaded' : 'Waiting...', 100, 95);
+            
+            // Update texture
+            if (gl && statusPanelTexture) {
+                gl.bindTexture(gl.TEXTURE_2D, statusPanelTexture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+            }
+        }
+        
+        function drawStatusPanel(view, viewport, modelMatrix) {
+            // Initialize on first call
+            if (!statusPanelInitialized) {
+                initStatusPanel();
+            }
+            
+            if (!statusPanelInitialized || !shaderProgram || !statusPanelTexture || !cachedLocations) {
+                if (frameCounter < 20 && frameCounter % 5 === 0) {
+                    vrLog(`Status panel skip: init=${statusPanelInitialized}, shader=${!!shaderProgram}, tex=${!!statusPanelTexture}, locs=${!!cachedLocations}`);
+                }
+                return;
+            }
+            
+            if (frameCounter === 15) {
+                vrLog('Drawing status panel');
+            }
+            
+            // Update canvas content periodically (every 30 frames ~ 0.5 sec at 60fps)
+            if (frameCounter % 30 === 0) {
+                updateStatusPanelCanvas();
+            }
+            
+            // Save current state
+            const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
+            
+            // Enable blending for transparency
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            
+            // Disable depth test so panel is always visible on top
+            gl.disable(gl.DEPTH_TEST);
+            
+            // Use the main 3D shader (same as video quad)
+            gl.useProgram(shaderProgram);
+            
+            // Set up position buffer (status panel geometry)
+            if (cachedLocations.position !== -1 && cachedLocations.position !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, statusPanelPositionBuffer);
+                gl.enableVertexAttribArray(cachedLocations.position);
+                gl.vertexAttribPointer(cachedLocations.position, 2, gl.FLOAT, false, 0, 0);
+            }
+            
+            // Set up tex coord buffer
+            if (cachedLocations.texCoord !== -1 && cachedLocations.texCoord !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, statusPanelTexCoordBuffer);
+                gl.enableVertexAttribArray(cachedLocations.texCoord);
+                gl.vertexAttribPointer(cachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+            }
+            
+            // Set uniforms
+            if (cachedLocations.projection !== null) {
+                gl.uniformMatrix4fv(cachedLocations.projection, false, view.projectionMatrix);
+            }
+            
+            if (cachedLocations.view !== null) {
+                invertMatrix(view.transform.matrix, viewMatrixBuffer);
+                gl.uniformMatrix4fv(cachedLocations.view, false, viewMatrixBuffer);
+            }
+            
+            if (cachedLocations.model !== null) {
+                // Use head pose matrix so panel is head-locked
+                gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix || cachedLocations.identityMatrix);
+            }
+            
+            // Position closer than main view (0.5m vs 0.6m)
+            if (cachedLocations.distance !== null) {
+                gl.uniform1f(cachedLocations.distance, stereoSettings.screenDistance - 0.1);
+            }
+            
+            if (cachedLocations.ipdOffset !== null) {
+                gl.uniform1f(cachedLocations.ipdOffset, 0);  // No IPD offset for UI elements
+            }
+            
+            if (cachedLocations.isLeftEye !== null) {
+                gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
+            }
+            
+            if (cachedLocations.useDirectVideo !== null) {
+                gl.uniform1f(cachedLocations.useDirectVideo, 0.0);  // Not using video splitting
+            }
+            
+            if (cachedLocations.texture !== null) {
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, statusPanelTexture);
+                gl.uniform1i(cachedLocations.texture, 0);
+            }
+            
+            // Draw the panel
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            
+            if (frameCounter === 15) {
+                vrLog('Status panel draw complete');
+            }
+            
+            // Restore state
+            gl.disable(gl.BLEND);
+            gl.enable(gl.DEPTH_TEST);
+            
+            if (prevProgram) {
+                gl.useProgram(prevProgram);
+            }
+        }
+        
+        // ========================================
+        // End Status Panel Functions
+        // ========================================
+        
+        // ========================================
+        // Left Status Panel Functions (Head-Locked 3D Quad)
+        // ========================================
+        
+        function initLeftStatusPanel() {
+            if (!gl) {
+                vrLog('Left status panel: no GL context');
+                return;
+            }
+            
+            vrLog('Init left status panel...');
+            
+            // Create canvas for status text
+            leftStatusPanelCanvas = document.createElement('canvas');
+            leftStatusPanelCanvas.width = 256;
+            leftStatusPanelCanvas.height = 128;
+            leftStatusPanelCtx = leftStatusPanelCanvas.getContext('2d');
+            
+            // Create texture
+            leftStatusPanelTexture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, leftStatusPanelTexture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            
+            // Create position buffer for 3D quad
+            // Position with left edge aligned to left edge of main view
+            const mainHeight = stereoSettings.screenScale;
+            const mainWidth = mainHeight * (16/9);
+            const mainLeftEdge = -mainWidth / 2;
+            
+            // Left status panel size (same as right panel)
+            const panelHeight = 0.12;  // 12cm tall in world space
+            const panelWidth = 0.20;   // 20cm wide
+            
+            // Position: left edge aligned with main view left edge, vertically centered
+            const panelLeft = mainLeftEdge;  // Left edges align
+            const panelCenterY = stereoSettings.verticalOffset;  // Same vertical center as main view
+            
+            leftStatusPanelPositionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, leftStatusPanelPositionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                panelLeft, panelCenterY - panelHeight/2,
+                panelLeft + panelWidth, panelCenterY - panelHeight/2,
+                panelLeft, panelCenterY + panelHeight/2,
+                panelLeft + panelWidth, panelCenterY + panelHeight/2,
+            ]), gl.STATIC_DRAW);
+            
+            leftStatusPanelTexCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, leftStatusPanelTexCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                0, 1,
+                1, 1,
+                0, 0,
+                1, 0,
+            ]), gl.STATIC_DRAW);
+            
+            // Initial update
+            updateLeftStatusPanelCanvas();
+            
+            leftStatusPanelInitialized = true;
+            vrLog('Left status panel: OK');
+        }
+        
+        function updateLeftStatusPanelCanvas() {
+            if (!leftStatusPanelCtx) return;
+            
+            const canvas = leftStatusPanelCanvas;
+            const ctx = leftStatusPanelCtx;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Semi-transparent dark background (80% opaque)
+            ctx.fillStyle = 'rgba(20, 20, 30, 0.8)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Border
+            ctx.strokeStyle = 'rgba(100, 150, 255, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+            
+            // Title
+            ctx.fillStyle = '#88ccff';
+            ctx.font = 'bold 18px monospace';
+            ctx.textBaseline = 'top';
+            ctx.fillText('Stream Info', 10, 8);
+            
+            // FPS
+            ctx.fillStyle = '#cccccc';
+            ctx.font = '14px monospace';
+            ctx.fillText('FPS:', 10, 35);
+            const fpsColor = currentVrFps >= 25 ? '#44ff44' : (currentVrFps >= 15 ? '#ffff00' : '#ff4444');
+            ctx.fillStyle = fpsColor;
+            ctx.fillText(`${currentVrFps.toFixed(1)}`, 100, 35);
+            
+            // Frame latency
+            const frameAge = performance.now() - lastFrameReceivedTimestamp;
+            const lagColor = frameAge > 150 ? '#ff4444' : '#44ff44';
+            ctx.fillStyle = '#cccccc';
+            ctx.fillText('Latency:', 10, 55);
+            ctx.fillStyle = lagColor;
+            ctx.fillText(`${frameAge.toFixed(0)} ms`, 100, 55);
+            
+            // Battery status
+            ctx.fillStyle = '#cccccc';
+            ctx.fillText('Battery:', 10, 75);
+            if (currentBatteryLevel !== null) {
+                const batteryColor = currentBatteryLevel > 20 ? '#44ff44' : '#ff4444';
+                ctx.fillStyle = batteryColor;
+                const chargingIcon = currentBatteryCharging ? ' ⚡' : '';
+                ctx.fillText(`${currentBatteryLevel}%${chargingIcon}`, 100, 75);
+            } else {
+                ctx.fillStyle = '#888888';
+                ctx.fillText('N/A', 100, 75);
+            }
+            
+            // Controller WS status
+            ctx.fillStyle = '#cccccc';
+            ctx.fillText('Ctrl WS:', 10, 95);
+            const ctrlStatus = controllerWS && controllerWS.readyState === WebSocket.OPEN ? 'Connected' : 'Disconnected';
+            const ctrlColor = controllerWS && controllerWS.readyState === WebSocket.OPEN ? '#44ff44' : '#ff4444';
+            ctx.fillStyle = ctrlColor;
+            ctx.fillText(ctrlStatus, 100, 95);
+            
+            // Update texture
+            if (gl && leftStatusPanelTexture) {
+                gl.bindTexture(gl.TEXTURE_2D, leftStatusPanelTexture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+            }
+        }
+        
+        function drawLeftStatusPanel(view, viewport, modelMatrix) {
+            // Initialize on first call
+            if (!leftStatusPanelInitialized) {
+                initLeftStatusPanel();
+            }
+            
+            if (!leftStatusPanelInitialized || !shaderProgram || !leftStatusPanelTexture || !cachedLocations) {
+                return;
+            }
+            
+            // Update canvas content periodically (every 30 frames ~ 0.5 sec at 60fps)
+            if (frameCounter % 30 === 0) {
+                updateLeftStatusPanelCanvas();
+            }
+            
+            // Save current state
+            const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
+            
+            // Enable blending for transparency
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            
+            // Disable depth test so panel is always visible on top
+            gl.disable(gl.DEPTH_TEST);
+            
+            // Use the main 3D shader (same as video quad)
+            gl.useProgram(shaderProgram);
+            
+            // Set up position buffer (left status panel geometry)
+            if (cachedLocations.position !== -1 && cachedLocations.position !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, leftStatusPanelPositionBuffer);
+                gl.enableVertexAttribArray(cachedLocations.position);
+                gl.vertexAttribPointer(cachedLocations.position, 2, gl.FLOAT, false, 0, 0);
+            }
+            
+            // Set up tex coord buffer
+            if (cachedLocations.texCoord !== -1 && cachedLocations.texCoord !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, leftStatusPanelTexCoordBuffer);
+                gl.enableVertexAttribArray(cachedLocations.texCoord);
+                gl.vertexAttribPointer(cachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+            }
+            
+            // Set uniforms
+            if (cachedLocations.projection !== null) {
+                gl.uniformMatrix4fv(cachedLocations.projection, false, view.projectionMatrix);
+            }
+            
+            if (cachedLocations.view !== null) {
+                invertMatrix(view.transform.matrix, viewMatrixBuffer);
+                gl.uniformMatrix4fv(cachedLocations.view, false, viewMatrixBuffer);
+            }
+            
+            if (cachedLocations.model !== null) {
+                // Use head pose matrix so panel is head-locked
+                gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix || cachedLocations.identityMatrix);
+            }
+            
+            // Position closer than main view (same as right panel)
+            if (cachedLocations.distance !== null) {
+                gl.uniform1f(cachedLocations.distance, stereoSettings.screenDistance - 0.1);
+            }
+            
+            if (cachedLocations.ipdOffset !== null) {
+                gl.uniform1f(cachedLocations.ipdOffset, 0);  // No IPD offset for UI elements
+            }
+            
+            if (cachedLocations.isLeftEye !== null) {
+                gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
+            }
+            
+            if (cachedLocations.useDirectVideo !== null) {
+                gl.uniform1f(cachedLocations.useDirectVideo, 0.0);  // Not using video splitting
+            }
+            
+            if (cachedLocations.texture !== null) {
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, leftStatusPanelTexture);
+                gl.uniform1i(cachedLocations.texture, 0);
+            }
+            
+            // Draw the panel
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            
+            // Restore state
+            gl.disable(gl.BLEND);
+            gl.enable(gl.DEPTH_TEST);
+            
+            if (prevProgram) {
+                gl.useProgram(prevProgram);
+            }
+        }
+        
+        // ========================================
+        // End Left Status Panel Functions
+        // ========================================
+
         // Simple shader program for rendering video texture
         let shaderProgram = null;
         let positionBuffer = null;
@@ -1508,10 +2139,55 @@
             currentBatteryCharging = battery.charging;
         }
         
+        // ========================================
+        // Robot Panel Functions
+        // ========================================
+        
+        function initRobotPanel() {
+            const panel = document.getElementById('robotPanel');
+            const toggle = document.getElementById('robotPanelToggle');
+            const header = document.getElementById('robotPanelHeader');
+            
+            if (!panel || !toggle) return;
+            
+            // Toggle collapse/expand
+            toggle.addEventListener('click', () => {
+                panel.classList.toggle('collapsed');
+                toggle.textContent = panel.classList.contains('collapsed') ? '+' : '−';
+            });
+            
+            // Make panel draggable
+            let isDragging = false;
+            let offsetX = 0;
+            let offsetY = 0;
+            
+            header.addEventListener('mousedown', (e) => {
+                if (e.target === toggle) return;
+                isDragging = true;
+                offsetX = e.clientX - panel.offsetLeft;
+                offsetY = e.clientY - panel.offsetTop;
+                panel.style.transition = 'none';
+            });
+            
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                panel.style.left = (e.clientX - offsetX) + 'px';
+                panel.style.top = (e.clientY - offsetY) + 'px';
+            });
+            
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+                panel.style.transition = '';
+            });
+            
+            console.log('Robot panel initialized');
+        }
+        
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', async () => {
             console.log('Stereo VR Vision - Initializing...');
             initBatteryMonitor();
+            initRobotPanel();  // Initialize robot status panel
             initControllerWebSocket();  // Initialize controller tracking WebSocket
             initFoxgloveConnection();
             await initXR();

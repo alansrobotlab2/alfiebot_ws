@@ -1,8 +1,10 @@
 # Stereo VR Integration Gameplan
 
-Integrate features from `index_old.html` into `index.html` to create a unified stereo VR teleoperation interface.
+Integrate features into `index.html` to create a unified stereo VR teleoperation interface.
 
 Don't check anything off on your own.  I will check them off when I confirm the task is complete.
+
+leverage the existing implementation of key features from vr_app.js and urdf_viewer.js for reference.
 
 ---
 
@@ -17,11 +19,74 @@ Don't check anything off on your own.  I will check them off when I confirm the 
 
 ## Phase 3: Robot State Visualization (Foxglove)
 
-- [ ] **3.1 Add Foxglove WebSocket connection** – Connect to WSS port `8082` for ROS bridge
-- [ ] **3.2 Subscribe to robot topics** – `/robot_description` (URDF) and `/tf` (transforms)
-- [ ] **3.3 Create robot status panel (desktop)** – Display Foxglove connection status, TF rate, joint states
-- [ ] **3.4 Create robot status panel (VR)** – Head-locked panel showing robot state in immersive mode
-- [ ] **3.5 (Optional) URDF mesh rendering** – Parse URDF and load OBJ meshes for 3D robot visualization
+### Analysis of Existing Code
+
+**`urdf_viewer.js`** (1075 lines) - Desktop Three.js URDF viewer:
+- `URDFViewer` class with full Foxglove WebSocket integration
+- Connects via `wss://hostname:8082` using `foxglove.sdk.v1` subprotocol
+- Subscribes to `/alfie/tf`, `/alfie/tf_static`, `/alfie/joint_states`, `/alfie/robot_description`
+- Handles binary CDR-encoded messages for TF and robot_description
+- Parses URDF XML, builds link hierarchy, loads OBJ meshes
+- TF rate tracking (updates every 5 seconds)
+- Auto-reconnect on disconnect
+
+**`vr_app.js`** (1573 lines) - A-Frame VR robot viewer component:
+- `vr-robot-viewer` A-Frame component
+- Same Foxglove connection pattern as urdf_viewer.js
+- URDF parsing creates A-Frame entities instead of Three.js objects
+- Batched/throttled updates (100ms interval) to prevent VR jitter
+- Pending update queues applied in `tick()` function
+
+**`stereo_vr.js`** (1518 lines) - Current stereo VR system:
+- Raw WebXR/WebGL for stereo video rendering
+- Already has controller WebSocket on port 8442
+- Uses Foxglove for compressed image subscription
+- No robot visualization yet
+
+### Step-by-Step Integration Plan
+
+**3.1 Desktop Status Panel (HTML/CSS only)**
+- [X] **3.1.1** Add robot viewer panel HTML to `index.html` (container div, status elements)
+- [X] **3.1.2** Add CSS for panel styling in `stereo_styles.css` (collapsible, semi-transparent)
+- [X] **3.1.3** Test: Panel appears on page, shows placeholder text
+
+**3.2 Foxglove Connection (stereo_vr.js)**
+- [X] **3.2.1** Add Foxglove connection function to foxglove_conn.js (reuse pattern from existing code)
+- [X] **3.2.2** Add connection status indicator update function
+- [X] **3.2.3** Test: Status indicator shows "Connected" when Foxglove bridge is running
+
+**3.3 Topic Subscription (stereo_vr.js)**
+- [X] **3.3.1** Subscribe to `/alfie/robot_description` on advertise
+- [X] **3.3.2** Subscribe to `/alfie/tf` for transform updates
+- [X] **3.3.3** Add CDR binary message decoder (copy from urdf_viewer.js)
+- [X] **3.3.4** Test: Console logs show "Subscribed to N topics" and TF messages arriving
+
+**3.4 TF Rate Display (desktop panel)**
+- [X] **3.4.1** Add TF rate counter variable and 5-second update interval
+- [X] **3.4.2** Update DOM element with Hz rate
+- [X] **3.4.3** Test: Panel shows live TF rate (e.g., "50.0 Hz")
+
+**3.5 VR Status Panel (WebXR overlay)**
+- [ ] **3.5.1** Create head-locked WebGL quad for status text in VR
+- [ ] **3.5.2** Render Foxglove connection status on quad
+- [ ] **3.5.3** Render TF rate on quad
+- [ ] **3.5.4** Test: In VR, status panel visible near bottom of view
+
+**3.6 URDF Text Display (simplified first)**
+- [ ] **3.6.1** Parse robot_description to extract link names
+- [ ] **3.6.2** Display link count in desktop panel
+- [ ] **3.6.3** Display link count in VR panel
+- [ ] **3.6.4** Test: Shows "12 links" (or actual count) when URDF received
+
+**3.7 URDF 3D Visualization (desktop only first)**
+- [ ] **3.7.1** Add Three.js canvas to desktop panel
+- [ ] **3.7.2** Initialize URDFViewer class in stereo_vr.js
+- [ ] **3.7.3** Test: 3D robot model appears in desktop panel
+
+**3.8 URDF in VR (optional stretch goal)**
+- [ ] **3.8.1** Add WebGL robot rendering to VR scene (position in world space)
+- [ ] **3.8.2** Apply TF transforms to update robot pose
+- [ ] **3.8.3** Test: 3D robot model visible in VR, moves with TF updates
 
 ---
 
