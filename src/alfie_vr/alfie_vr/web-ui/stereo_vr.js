@@ -1028,39 +1028,7 @@
                 const yaw = headsetPose.rotation ? Math.round(headsetPose.rotation.y) : 0;
                 const roll = headsetPose.rotation ? Math.round(headsetPose.rotation.z) : 0;
                 
-                // Draw FPS, latency, and orientation overlay directly on left canvas (guaranteed to be visible!)
-                leftCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                leftCtx.fillRect(10, 10, 220, 170);
-                leftCtx.fillStyle = fpsColor;
-                leftCtx.font = 'bold 28px monospace';
-                leftCtx.fillText(`FPS: ${currentVrFps.toFixed(1)}`, 20, 40);
-                leftCtx.fillStyle = lagColor;
-                leftCtx.fillText(`Lag: ${frameAge.toFixed(0)}ms`, 20, 75);
-                leftCtx.fillStyle = '#88ccff';  // Light blue for orientation
-                leftCtx.font = 'bold 24px monospace';
-                leftCtx.fillText(`Pitch: ${pitch}°`, 20, 108);
-                leftCtx.fillText(`Roll:  ${roll}°`, 20, 136);
-                // Yaw: red if outside +/- 10 degrees
-                leftCtx.fillStyle = (Math.abs(yaw) > 10) ? '#ff4444' : '#88ccff';
-                leftCtx.fillText(`Yaw:   ${yaw}°`, 20, 164);
-                
-                // Also on right canvas so both eyes see it
-                rightCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                rightCtx.fillRect(10, 10, 220, 170);
-                rightCtx.fillStyle = fpsColor;
-                rightCtx.font = 'bold 28px monospace';
-                rightCtx.fillText(`FPS: ${currentVrFps.toFixed(1)}`, 20, 40);
-                rightCtx.fillStyle = lagColor;
-                rightCtx.fillText(`Lag: ${frameAge.toFixed(0)}ms`, 20, 75);
-                rightCtx.fillStyle = '#88ccff';  // Light blue for orientation
-                rightCtx.font = 'bold 24px monospace';
-                rightCtx.fillText(`Pitch: ${pitch}°`, 20, 108);
-                rightCtx.fillText(`Roll:  ${roll}°`, 20, 136);
-                // Yaw: red if outside +/- 10 degrees
-                rightCtx.fillStyle = (Math.abs(yaw) > 10) ? '#ff4444' : '#88ccff';
-                rightCtx.fillText(`Yaw:   ${yaw}°`, 20, 164);
-                
-                // Upload to WebGL textures
+                // Upload to WebGL textures (no overlay - using floating panels instead)
                 gl.bindTexture(gl.TEXTURE_2D, leftTexture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, leftCanvas);
                 
@@ -1570,10 +1538,10 @@
             
             vrLog('Init left status panel...');
             
-            // Create canvas for status text
+            // Create canvas for status text (taller for more info)
             leftStatusPanelCanvas = document.createElement('canvas');
             leftStatusPanelCanvas.width = 256;
-            leftStatusPanelCanvas.height = 128;
+            leftStatusPanelCanvas.height = 192;
             leftStatusPanelCtx = leftStatusPanelCanvas.getContext('2d');
             
             // Create texture
@@ -1590,8 +1558,8 @@
             const mainWidth = mainHeight * (16/9);
             const mainLeftEdge = -mainWidth / 2;
             
-            // Left status panel size (same as right panel)
-            const panelHeight = 0.12;  // 12cm tall in world space
+            // Left status panel size (taller than right panel for more info)
+            const panelHeight = 0.18;  // 18cm tall in world space
             const panelWidth = 0.20;   // 20cm wide
             
             // Position: left edge aligned with main view left edge, vertically centered
@@ -1683,6 +1651,23 @@
             const ctrlColor = controllerWS && controllerWS.readyState === WebSocket.OPEN ? '#44ff44' : '#ff4444';
             ctx.fillStyle = ctrlColor;
             ctx.fillText(ctrlStatus, 100, 95);
+            
+            // Headset orientation (pitch/roll/yaw)
+            const pitch = headsetPose.rotation ? Math.round(headsetPose.rotation.x) : 0;
+            const roll = headsetPose.rotation ? Math.round(headsetPose.rotation.z) : 0;
+            const yaw = headsetPose.rotation ? Math.round(headsetPose.rotation.y) : 0;
+            
+            ctx.fillStyle = '#88ccff';
+            ctx.fillText('Pitch:', 10, 115);
+            ctx.fillText(`${pitch}°`, 100, 115);
+            
+            ctx.fillText('Roll:', 10, 135);
+            ctx.fillText(`${roll}°`, 100, 135);
+            
+            // Yaw: red if outside +/- 10 degrees
+            ctx.fillText('Yaw:', 10, 155);
+            ctx.fillStyle = (Math.abs(yaw) > 10) ? '#ff4444' : '#88ccff';
+            ctx.fillText(`${yaw}°`, 100, 155);
             
             // Update texture
             if (gl && leftStatusPanelTexture) {
