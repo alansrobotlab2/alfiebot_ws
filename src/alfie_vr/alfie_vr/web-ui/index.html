@@ -14,40 +14,6 @@
     <canvas id="rightCanvas" style="display: none;"></canvas>
     <img id="preview" class="hidden" alt="Stereo preview">
     
-    <!-- Stereo adjustment controls -->
-    <div id="controls">
-        <h3>🎯 Stereo Adjustments</h3>
-        <div class="control-row">
-            <label>Vertical Offset</label>
-            <input type="range" id="verticalOffset" min="-1" max="1" step="0.01" value="0">
-            <span class="value" id="verticalOffsetVal">0.00</span>
-        </div>
-        <div class="control-row">
-            <label>IPD Offset</label>
-            <input type="range" id="ipdOffset" min="-0.05" max="0.05" step="0.001" value="0">
-            <span class="value" id="ipdOffsetVal">0.000</span>
-        </div>
-        <div class="control-row">
-            <label>Screen Distance</label>
-            <input type="range" id="screenDistance" min="0.5" max="5" step="0.1" value="2">
-            <span class="value" id="screenDistanceVal">2.0</span>
-        </div>
-        <div class="control-row">
-            <label>Screen Scale</label>
-            <input type="range" id="screenScale" min="0.5" max="3" step="0.1" value="1.5">
-            <span class="value" id="screenScaleVal">1.5</span>
-        </div>
-        <div class="control-row">
-            <button class="control-btn" onclick="resetSettings()">Reset</button>
-            <button class="control-btn" onclick="saveSettings()">Save</button>
-        </div>
-        <div class="control-row" style="margin-top: 15px; border-top: 1px solid #444; padding-top: 10px;">
-            <label>Controller WS</label>
-            <span id="controllerWSStatus" style="color: #f44336;">●</span>
-            <span class="value" id="controllerWSStatusText">Disconnected</span>
-        </div>
-    </div>
-    
     <div id="info">
         Put on your Meta Quest 3 and click "Enter VR" for immersive 3D vision<br>
         Use thumbsticks in VR: Left stick = vertical, Right stick = IPD | Triggers = distance<br>

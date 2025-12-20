@@ -62,17 +62,6 @@
         // Controller WebSocket Functions
         // ========================================
         
-        function updateControllerWSStatus(connected) {
-            const statusDot = document.getElementById('controllerWSStatus');
-            const statusText = document.getElementById('controllerWSStatusText');
-            if (statusDot) {
-                statusDot.style.color = connected ? '#4CAF50' : '#f44336';
-            }
-            if (statusText) {
-                statusText.textContent = connected ? 'Connected' : 'Disconnected';
-            }
-        }
-        
         function initControllerWebSocket() {
             const wsUrl = `wss://${window.location.hostname}:${CONTROLLER_WS_PORT}`;
             console.log(`Connecting to controller WebSocket: ${wsUrl}`);
@@ -84,20 +73,17 @@
                     console.log('Controller WebSocket connected');
                     controllerWSRetryCount = 0;
                     vrLog('Controller WS: Connected');
-                    updateControllerWSStatus(true);
                 };
                 
                 controllerWS.onerror = (error) => {
                     console.error('Controller WebSocket error:', error);
                     vrLog('Controller WS: Error');
-                    updateControllerWSStatus(false);
                 };
                 
                 controllerWS.onclose = (event) => {
                     console.log(`Controller WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`);
                     controllerWS = null;
                     vrLog('Controller WS: Disconnected');
-                    updateControllerWSStatus(false);
                     
                     // Retry connection
                     if (controllerWSRetryCount < CONTROLLER_WS_MAX_RETRIES) {
@@ -112,7 +98,6 @@
                 };
             } catch (error) {
                 console.error('Failed to create controller WebSocket:', error);
-                updateControllerWSStatus(false);
                 if (controllerWSRetryCount < CONTROLLER_WS_MAX_RETRIES) {
                     controllerWSRetryCount++;
                     setTimeout(initControllerWebSocket, 3000);
@@ -330,77 +315,13 @@
         let frameCount = 0;
         let totalLatency = 0;
         
-        // Stereo adjustment settings
+        // Stereo adjustment settings (optimized defaults)
         let stereoSettings = {
-            verticalOffset: 0,      // Meters - positive = up
-            ipdOffset: 0,           // Meters - adjustment to convergence
-            screenDistance: 2.0,    // Meters - distance to virtual screen
-            screenScale: 1.5        // Multiplier for screen size
+            verticalOffset: -0.19,  // Meters - positive = up
+            ipdOffset: -0.018,      // Meters - adjustment to convergence
+            screenDistance: 0.5,    // Meters - distance to virtual screen
+            screenScale: 0.25        // Multiplier for screen size
         };
-        
-        // Load saved settings
-        function loadSettings() {
-            try {
-                const saved = localStorage.getItem('stereoVRSettings');
-                if (saved) {
-                    stereoSettings = { ...stereoSettings, ...JSON.parse(saved) };
-                }
-            } catch (e) {}
-            updateControlsFromSettings();
-        }
-        
-        // Save settings to localStorage
-        window.saveSettings = function() {
-            localStorage.setItem('stereoVRSettings', JSON.stringify(stereoSettings));
-            setStatus('Settings saved!', 'connected');
-            setTimeout(() => setStatus('VR Active - Stereo 3D Vision', 'connected'), 1000);
-        };
-        
-        // Reset settings to defaults
-        window.resetSettings = function() {
-            stereoSettings = {
-                verticalOffset: 0,
-                ipdOffset: 0,
-                screenDistance: 2.0,
-                screenScale: 1.5
-            };
-            updateControlsFromSettings();
-            reinitQuadBuffers();
-        };
-        
-        // Update HTML controls to match settings
-        function updateControlsFromSettings() {
-            document.getElementById('verticalOffset').value = stereoSettings.verticalOffset;
-            document.getElementById('verticalOffsetVal').textContent = stereoSettings.verticalOffset.toFixed(2);
-            document.getElementById('ipdOffset').value = stereoSettings.ipdOffset;
-            document.getElementById('ipdOffsetVal').textContent = stereoSettings.ipdOffset.toFixed(3);
-            document.getElementById('screenDistance').value = stereoSettings.screenDistance;
-            document.getElementById('screenDistanceVal').textContent = stereoSettings.screenDistance.toFixed(1);
-            document.getElementById('screenScale').value = stereoSettings.screenScale;
-            document.getElementById('screenScaleVal').textContent = stereoSettings.screenScale.toFixed(1);
-        }
-        
-        // Set up control event listeners
-        function setupControls() {
-            document.getElementById('verticalOffset').addEventListener('input', (e) => {
-                stereoSettings.verticalOffset = parseFloat(e.target.value);
-                document.getElementById('verticalOffsetVal').textContent = stereoSettings.verticalOffset.toFixed(2);
-                reinitQuadBuffers();
-            });
-            document.getElementById('ipdOffset').addEventListener('input', (e) => {
-                stereoSettings.ipdOffset = parseFloat(e.target.value);
-                document.getElementById('ipdOffsetVal').textContent = stereoSettings.ipdOffset.toFixed(3);
-            });
-            document.getElementById('screenDistance').addEventListener('input', (e) => {
-                stereoSettings.screenDistance = parseFloat(e.target.value);
-                document.getElementById('screenDistanceVal').textContent = stereoSettings.screenDistance.toFixed(1);
-            });
-            document.getElementById('screenScale').addEventListener('input', (e) => {
-                stereoSettings.screenScale = parseFloat(e.target.value);
-                document.getElementById('screenScaleVal').textContent = stereoSettings.screenScale.toFixed(1);
-                reinitQuadBuffers();
-            });
-        }
         
         // Reinitialize quad buffers when size changes - now invalidates hash to trigger update
         function reinitQuadBuffers() {
@@ -653,9 +574,9 @@
                 return;
             }
             
-            const supported = await navigator.xr.isSessionSupported('immersive-vr');
+            const supported = await navigator.xr.isSessionSupported('immersive-ar');
             if (!supported) {
-                setStatus('Immersive VR not supported', 'error');
+                setStatus('Immersive AR not supported', 'error');
                 document.getElementById('vrButton').disabled = true;
                 return;
             }
@@ -669,8 +590,8 @@
                 setStatus('Starting VR session...');
                 vrLog('Starting VR session...');
                 
-                // Request immersive VR session with local-floor reference space
-                xrSession = await navigator.xr.requestSession('immersive-vr', {
+                // Request immersive AR session with local-floor reference space and passthrough
+                xrSession = await navigator.xr.requestSession('immersive-ar', {
                     requiredFeatures: ['local-floor'],
                     optionalFeatures: ['hand-tracking', 'dom-overlay'],
                     domOverlay: { root: document.body }
@@ -750,10 +671,10 @@
                 }
                 
                 document.getElementById('preview').classList.add('hidden');
-                document.getElementById('vrButton').textContent = '🛑 Exit VR';
+                document.getElementById('vrButton').textContent = '🛑 Exit AR';
                 document.getElementById('vrButton').onclick = () => xrSession.end();
                 
-                setStatus('VR Active - Stereo 3D Vision', 'connected');
+                setStatus('AR Active - Stereo 3D Vision (95% opacity)', 'connected');
                 
                 // Start XR render loop
                 xrSession.requestAnimationFrame(onXRFrame);
@@ -815,8 +736,8 @@
             const glLayer = xrSession.renderState.baseLayer;
             gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
             
-            // Clear to a visible color to test if rendering is working at all
-            gl.clearColor(0.1, 0.1, 0.1, 1.0);  // Dark gray instead of black
+            // Clear with 95% opacity black to dim passthrough (5% passthrough visible)
+            gl.clearColor(0.0, 0.0, 0.0, 0.95);  // 95% opacity for immersive AR dimming
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             
             if (!currentFrameBitmap) {
@@ -1539,8 +1460,8 @@
         function onSessionEnd() {
             xrSession = null;
             gl = null;
-            setStatus('VR session ended', '');
-            document.getElementById('vrButton').textContent = '🥽 Enter VR';
+            setStatus('AR session ended', '');
+            document.getElementById('vrButton').textContent = '🥽 Enter AR';
             document.getElementById('vrButton').onclick = startVRSession;
             document.getElementById('preview').classList.remove('hidden');
             startPreview();
@@ -1611,8 +1532,6 @@
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', async () => {
             console.log('Stereo VR Vision - Initializing...');
-            loadSettings();
-            setupControls();
             initDraggable();
             initControllerWebSocket();  // Initialize controller tracking WebSocket
             initFoxgloveConnection();
