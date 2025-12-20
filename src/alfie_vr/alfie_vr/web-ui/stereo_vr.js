@@ -1456,8 +1456,13 @@
             const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
             
             // Enable blending for transparency
+            // Use blendFuncSeparate to preserve destination alpha (video's alpha=1.0)
+            // This prevents AR passthrough from showing through the panel
             gl.enable(gl.BLEND);
-            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.blendFuncSeparate(
+                gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA,  // RGB: standard alpha blend
+                gl.ZERO, gl.ONE                        // Alpha: preserve destination alpha
+            );
             
             // Disable depth test so panel is always visible on top
             gl.disable(gl.DEPTH_TEST);
@@ -1701,8 +1706,13 @@
             const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
             
             // Enable blending for transparency
+            // Use blendFuncSeparate to preserve destination alpha (video's alpha=1.0)
+            // This prevents AR passthrough from showing through the panel
             gl.enable(gl.BLEND);
-            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.blendFuncSeparate(
+                gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA,  // RGB: standard alpha blend
+                gl.ZERO, gl.ONE                        // Alpha: preserve destination alpha
+            );
             
             // Disable depth test so panel is always visible on top
             gl.disable(gl.DEPTH_TEST);
