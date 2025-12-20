@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>AlfieVR - Robot Arm Teleoperation</title>
+    <meta name="description" content="AlfieVR - Robot Arm Teleoperation">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="libs/aframe.min.js"></script>
+    <script src="libs/socket.io.min.js"></script>
+    <!-- Three.js OBJLoader for URDF viewer (uses A-Frame's bundled THREE) -->
+    <script src="libs/OBJLoader.js"></script>
+    <script src="vr_app.js" defer></script>
+    <script src="interface.js" defer></script>
+    <script src="urdf_viewer.js" defer></script>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <!-- Hidden video element for WebRTC stream - low latency hints -->
+    <video id="webrtcVideo" autoplay playsinline muted disablePictureInPicture style="display: none;"></video>
+    <!-- Hidden canvas for video texture (fallback) -->
+    <canvas id="videoCanvas" width="640" height="480" style="display: none;"></canvas>
+
+    <!-- Settings Button -->
+    <div class="settings-button" onclick="openSettings()">
+      ⚙️
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="settings-modal" id="settingsModal">
+      <div class="settings-content">
+        <div class="settings-header">
+          <div class="settings-title">System Configuration</div>
+          <button class="close-button" onclick="closeSettings()">×</button>
+        </div>
+        
+        <form id="settingsForm">
+          <div class="settings-section">
+            <h3>🤖 Robot Arms</h3>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="leftArmName">Left Arm Name</label>
+                <input type="text" id="leftArmName" name="leftArmName">
+              </div>
+              <div class="form-group">
+                <label for="leftArmPort">Left Arm Port</label>
+                <input type="text" id="leftArmPort" name="leftArmPort" placeholder="/dev/ttyACM0">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="rightArmName">Right Arm Name</label>
+                <input type="text" id="rightArmName" name="rightArmName">
+              </div>
+              <div class="form-group">
+                <label for="rightArmPort">Right Arm Port</label>
+                <input type="text" id="rightArmPort" name="rightArmPort" placeholder="/dev/ttyACM1">
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>🌐 Network Settings</h3>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="httpsPort">HTTPS Port</label>
+                <input type="number" id="httpsPort" name="httpsPort" min="1024" max="65535">
+              </div>
+              <div class="form-group">
+                <label for="websocketPort">WebSocket Port</label>
+                <input type="number" id="websocketPort" name="websocketPort" min="1024" max="65535">
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="hostIp">Host IP Address</label>
+              <input type="text" id="hostIp" name="hostIp" placeholder="0.0.0.0">
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>🎮 Control Parameters</h3>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="vrScale">VR Scale Factor</label>
+                <input type="number" id="vrScale" name="vrScale" step="0.1" min="0.1" max="5.0">
+              </div>
+              <div class="form-group">
+                <label for="sendInterval">Send Interval (ms)</label>
+                <input type="number" id="sendInterval" name="sendInterval" step="1" min="10" max="200">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="posStep">Position Step (m)</label>
+                <input type="number" id="posStep" name="posStep" step="0.001" min="0.001" max="0.1">
+              </div>
+              <div class="form-group">
+                <label for="angleStep">Angle Step (degrees)</label>
+                <input type="number" id="angleStep" name="angleStep" step="0.5" min="0.5" max="45">
+              </div>
+            </div>
+          </div>
+
+          <div class="button-row">
+            <button type="submit" class="save-button" id="saveButton">
+              💾 Save Configuration
+            </button>
+            <button type="button" class="restart-button" id="restartButton" onclick="restartSystem()">
+              🔄 Restart System
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    
+
+    <!-- Robot Viewer Panel (right side) -->
+    <div class="robot-viewer-panel" id="robotViewerPanel">
+      <div class="robot-viewer-header">
+        <div class="robot-viewer-title">🤖 Robot State</div>
+        <div class="robot-viewer-controls">
+          <button class="viewer-btn" id="resetViewBtn" title="Reset View">↻</button>
+          <button class="viewer-btn" id="toggleViewerBtn" title="Minimize">−</button>
+        </div>
+      </div>
+      <div class="robot-viewer-status" id="urdfViewerStatus">Initializing...</div>
+      <div class="robot-viewer-container" id="urdfViewerContainer"></div>
+      <div class="robot-viewer-info">
+        <div class="viewer-info-row">
+          <span class="info-label">Foxglove:</span>
+          <span class="info-value" id="foxgloveStatus">Disconnected</span>
+        </div>
+        <div class="viewer-info-row">
+          <span class="info-label">TF Rate:</span>
+          <span class="info-value" id="tfUpdateCount">0 Hz</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- VR-only content -->
+    <div class="vr-content" id="vrContent">
+      <div class="vr-title">VR Teleoperation</div>
+    </div>
+
+    <!-- A-Frame VR Scene -->
+    <a-scene vr-mode-ui="enabled: true;">
+      <!-- Assets -->
+      <a-assets>
+        <a-asset-item id="roboto-font" src="libs/roboto-msdf.json"></a-asset-item>
+        <img id="roboto-font-image" src="libs/Roboto-msdf.png">
+      </a-assets>
+      
+      <!-- Passthrough setup -->
+      <a-entity webxr-passthrough="referenceSpaceType: local-floor"></a-entity>
+
+      <!-- Passthrough dimmer - 20% darker overlay -->
+      <a-entity id="passthroughDimmer" visible="false">
+        <a-sphere radius="100" material="shader: flat; color: #000000; opacity: 0.9; side: back"></a-sphere>
+      </a-entity>
+
+      <!-- Headset tracking entity -->
+      <a-entity id="headset" camera>
+        <a-text id="headsetInfo" value="Headset: ..." position="0 -0.60 -2.0" rotation="0 0 0" scale="0.2 0.2 0.2" color="yellow" align="center" font="libs/roboto-msdf.json"></a-text>
+        <!-- Video Screen (Head Locked - follows headset view) -->
+        <a-plane id="videoScreen" position="0 -0.4 -3.0" width="1.8" height="1.2" material="shader: flat; src: #videoCanvas" visible="false"></a-plane>
+        
+        <!-- VR Robot Viewer Panel (Head Locked - follows headset view) -->
+        <a-entity id="vrRobotViewer" position="1.5 -0.45 -3.25" rotation="0 -20 0" scale="1.5 1.5 1.5" vr-robot-viewer>
+          <!-- Panel background with border effect -->
+          <a-plane id="vrRobotPanel" width="0.62" height="0.9" color="#4a5568" opacity="0.95" 
+                   material="shader: flat; side: double" position="0 -0.02 -0.001"></a-plane>
+          <a-plane width="0.6" height="0.88" color="#303030" opacity="0.8" 
+                   material="shader: flat; side: double" position="0 -0.02 0"></a-plane>
+          
+          <!-- Panel header bar (gradient effect with two layers) -->
+          <a-plane position="0 0.40 0.001" width="0.6" height="0.08" color="#764ba2" 
+                   material="shader: flat"></a-plane>
+          <a-plane position="0 0.41 0.002" width="0.58" height="0.06" color="#667eea" 
+                   material="shader: flat"></a-plane>
+          <a-text value="🤖 Robot State" position="0 0.41 0.003" align="center" 
+                  color="white" scale="0.07 0.07 0.07" font="libs/roboto-msdf.json"></a-text>
+          
+          <!-- Status bar below header -->
+          <a-plane position="0 0.34 0.001" width="0.58" height="0.04" color="#000000" opacity="0.4"
+                   material="shader: flat"></a-plane>
+          <a-text id="vrRobotStatus" value="Initializing..." position="-0.27 0.34 0.002" 
+                  align="left" color="#a0a0a0" scale="0.035 0.035 0.035" font="libs/roboto-msdf.json"></a-text>
+          
+          <!-- Robot model container -->
+          <a-entity id="vrRobotModel" position="0 -0.25 0.10" scale="0.55 0.55 0.55" rotation="0 180 0">
+            <!-- Robot model will be dynamically added here -->
+          </a-entity>
+          
+          <!-- Footer info panel -->
+          <a-plane position="0 -0.42 0.001" width="0.58" height="0.1" color="#000000" opacity="0.4"
+                   material="shader: flat"></a-plane>
+          
+          <!-- Foxglove status row (4x larger text) -->
+          <a-text value="Foxglove:" position="-0.27 -0.39 0.002" 
+                  align="left" color="#888888" scale="0.14 0.14 0.14" font="libs/roboto-msdf.json"></a-text>
+          <a-text id="vrFoxgloveStatus" value="Disconnected" position="0.27 -0.39 0.002" 
+                  align="right" color="#f44336" scale="0.14 0.14 0.14" font="libs/roboto-msdf.json"></a-text>
+          
+          <!-- TF Rate row (4x larger text) -->
+          <a-text value="TF Rate:" position="-0.27 -0.44 0.002" 
+                  align="left" color="#888888" scale="0.14 0.14 0.14" font="libs/roboto-msdf.json"></a-text>
+          <a-text id="vrTFCount" value="0 Hz" position="0.27 -0.44 0.002" 
+                  align="right" color="white" scale="0.14 0.14 0.14" font="libs/roboto-msdf.json"></a-text>
+          
+        </a-entity>
+      </a-entity>
+
+      <!-- Controllers -->
+      <a-entity id="leftHand" oculus-touch-controls="hand: left">
+        <a-text id="leftHandInfo" value="Pos: ...\nRot: ..." position="0 0.04 -0.05" rotation="0 0 0" scale="0.05 0.05 0.05" color="white" align="center" font="libs/roboto-msdf.json"></a-text>
+      </a-entity>
+      <a-entity id="rightHand" oculus-touch-controls="hand: right">
+        <a-text id="rightHandInfo" value="Pos: ...\nRot: ..." position="0 0.04 -0.05" rotation="0 0 0" scale="0.05 0.05 0.05" color="white" align="center" font="libs/roboto-msdf.json"></a-text>
+      </a-entity>
+    </a-scene>
+
+    <script>
+      // Update VR server URL dynamically
+      document.addEventListener('DOMContentLoaded', function() {
+        const vrUrlElement = document.getElementById('vrServerUrl');
+        if (vrUrlElement) {
+          const currentUrl = window.location.origin;
+          vrUrlElement.textContent = currentUrl + '/';
+        }
+      });
+    </script>
+  </body>
+</html> 

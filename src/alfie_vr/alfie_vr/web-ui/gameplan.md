@@ -1,15 +1,17 @@
 # Stereo VR Integration Gameplan
 
-Integrate features from `index.html` into `stereo_vr.html` to create a unified stereo VR teleoperation interface.
+Integrate features from `index_old.html` into `index.html` to create a unified stereo VR teleoperation interface.
+
+Don't check anything off on your own.  I will check them off when I confirm the task is complete.
 
 ---
 
 ## Phase 2: VR Controller Tracking
 
-- [ ] **2.1 Add WebSocket connection for controller data** – Connect to WSS port `8442` for streaming controller telemetry
-- [ ] **2.2 Implement XR input source tracking** – Use WebXR gamepad API to read controller position, rotation, buttons, triggers, thumbsticks
-- [ ] **2.3 Stream controller data to WebSocket** – Send left/right hand poses, grip, trigger, thumbstick, and button states
-- [ ] **2.4 Add headset pose tracking** – Include head position/rotation in the data stream
+- [X] **2.1 Add WebSocket connection for controller data** – Connect to WSS port `8442` for streaming controller telemetry
+- [X] **2.2 Implement XR input source tracking** – Use WebXR gamepad API to read controller position, rotation, buttons, triggers, thumbsticks
+- [X] **2.3 Stream controller data to WebSocket** – Send left/right hand poses, grip, trigger, thumbstick, and button states
+- [X] **2.4 Add headset pose tracking** – Include head position/rotation in the data stream
 
 ---
 
