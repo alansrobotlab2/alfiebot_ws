@@ -15,6 +15,9 @@ setup(
         ('share/' + package_name + '/launch', glob('launch/*')),
         # install SSL certificates for Foxglove Bridge TLS
         ('share/' + package_name + '/certs', glob('certs/*.pem')),
+        # install SSL certificates for WebRTC streaming into package directory
+        ('lib/python3.10/site-packages/' + package_name, 
+            [package_name + '/key.pem', package_name + '/cert.pem']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -29,6 +32,8 @@ setup(
             'master_cmd = alfie_bringup.master_cmd:main',
             'master_watchdog = alfie_bringup.master_watchdog:main',
             'jetson_stats = alfie_bringup.jetson_stats:main',
+            'gstreamer_camera_node = alfie_bringup.gstreamer_camera_node:main',
+            'gstreamer_camera_node_hw = alfie_bringup.gstreamer_camera_node_hw:main',
         ],
     },
 )

@@ -170,14 +170,37 @@ def generate_launch_description():
             respawn=True
         ),
 
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([
-                os.path.join(
-                    get_package_share_directory('alfie_bringup'),
-                    'launch',
-                    'alfie_rgbd_pcl.launch.py'
-                )
-            ]),
+
+
+        # Stereo USB camera - GStreamer pipeline for ultra-low latency
+        Node(
+            package='alfie_bringup',
+            namespace='alfie',
+            executable='gstreamer_camera_node',
+            name='stereo_camera',
+            parameters=[{
+                'device': '/dev/video0',
+                #'width': 3200,
+                #'height': 1200,
+                'width': 2560,
+                'height': 720,
+                #'width': 1600,
+                #'height': 600,
+                'use_hardware_accel': True,
+                'framerate': 20,
+                'jpeg_quality': 70,
+                'flip_vertical': True,
+                'camera_frame_id': 'stereo_camera_link',
+            }],
+            remappings=[
+                ('image_raw/compressed', '/alfie/stereo_camera/image_raw/compressed'),
+                ('camera_info', '/alfie/stereo_camera/camera_info'),
+            ],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
         ),
 
         Node(

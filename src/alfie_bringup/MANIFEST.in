@@ -1,0 +1,2 @@
+include alfie_bringup/key.pem
+include alfie_bringup/cert.pem
