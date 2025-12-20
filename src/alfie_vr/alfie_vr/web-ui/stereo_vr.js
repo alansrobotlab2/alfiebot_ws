@@ -2,10 +2,12 @@
         // Displays side-by-side stereo video as immersive VR
         // With VR Controller Tracking support
         
-        const SIGNALING_PORT = 8084;
+        const FOXGLOVE_PORT = 8082;
         const CONTROLLER_WS_PORT = 8442;
         
-        let pc = null;
+        let foxgloveClient = null;
+        let compressedImageSubscriptionId = null;
+        let currentFrameBitmap = null;
         let xrSession = null;
         let xrRefSpace = null;
         let gl = null;
@@ -308,6 +310,21 @@
         let useDirectVideoTexture = false;  // TEMPORARILY DISABLED - use canvas mode for debugging
         let videoTexture = null;  // Single texture for entire video
         
+        // FPS overlay for immersive VR mode
+        let fpsOverlayCanvas = null;
+        let fpsOverlayCtx = null;
+        let fpsOverlayTexture = null;
+        let currentVrFps = 0;  // This now tracks RECEIVED frame rate
+        let fpsOverlayShader = null;
+        let fpsOverlayPositionBuffer = null;
+        let fpsOverlayTexCoordBuffer = null;
+        let fpsOverlayCachedLocations = null;
+        
+        // Received frame FPS tracking
+        let receivedFrameCount = 0;
+        let lastReceivedFpsTime = performance.now();
+        let lastFrameReceivedTimestamp = 0;  // When the current frame was received
+        
         // Latency tracking
         let lastFrameTime = 0;
         let frameCount = 0;
@@ -404,7 +421,7 @@
             btn.style.display = 'block';
             btn.onclick = () => {
                 // Open the stereo signaling URL in a new tab so user can accept cert
-                window.open(`https://${window.location.hostname}:${SIGNALING_PORT}/`, '_blank');
+                window.open(`https://${window.location.hostname}:${FOXGLOVE_PORT}/`, '_blank');
                 setStatus('Accept the certificate in the new tab, then reload this page', 'error');
             };
         }
@@ -421,170 +438,174 @@
             }
         }
         
-        // Initialize WebRTC connection to stereo stream
-        async function initWebRTC() {
+        // Initialize Foxglove WebSocket connection
+        function initFoxgloveConnection() {
+            const url = `wss://${window.location.hostname}:${FOXGLOVE_PORT}`;
+            console.log(`Connecting to Foxglove at ${url}`);
             setStatus('Connecting to stereo stream...');
             
-            const signalingUrl = `https://${window.location.hostname}:${SIGNALING_PORT}/offer`;
-            
-            pc = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-                // Ultra-low latency configuration
-                bundlePolicy: 'max-bundle',
-                rtcpMuxPolicy: 'require',
-                iceTransportPolicy: 'all'
-            });
-            
-            pc.ontrack = (event) => {
-                console.log('Track received:', event.track.kind);
-                if (event.track.kind === 'video') {
-                    videoElement = document.getElementById('stereoVideo');
-                    videoElement.srcObject = event.streams[0];
-                    // ULTRA-low latency settings
-                    videoElement.playsInline = true;
-                    videoElement.muted = true;
-                    
-                    // Disable all buffering for minimum latency
-                    if ('getSettings' in event.track) {
-                        const settings = event.track.getSettings();
-                        console.log('Video track settings:', settings);
-                    }
-                    
-                    // Track video latency
-                    if ('requestVideoFrameCallback' in videoElement) {
-                        const measureLatency = (now, metadata) => {
-                            const currentTime = performance.now();
-                            if (lastFrameTime > 0) {
-                                const frameDelta = currentTime - lastFrameTime;
-                                frameCount++;
-                                
-                                // Calculate presentation to render latency
-                                if (metadata.presentationTime && metadata.expectedDisplayTime) {
-                                    const presentationLatency = (metadata.expectedDisplayTime - metadata.presentationTime) * 1000;
-                                    totalLatency += presentationLatency;
-                                }
-                                
-                                if (frameCount % 50 === 0) {
-                                    const avgLatency = totalLatency / frameCount;
-                                    console.log(
-                                        `[Client] Frame interval: ${frameDelta.toFixed(1)}ms ` +
-                                        `(${(1000/frameDelta).toFixed(1)} fps) | ` +
-                                        `Presentation latency: ${avgLatency.toFixed(1)}ms`
-                                    );
-                                }
-                            }
-                            lastFrameTime = currentTime;
-                            videoElement.requestVideoFrameCallback(measureLatency);
-                        };
-                        videoElement.requestVideoFrameCallback(measureLatency);
-                    }
-                    
-                    videoElement.play().then(() => {
-                        setStatus('Stereo stream connected - Ultra-low latency mode', 'connected');
-                        document.getElementById('vrButton').disabled = false;
-                        document.getElementById('certButton').style.display = 'none';
-                        startPreview();
-                    }).catch(err => {
-                        console.error('Video play error:', err);
-                        setStatus('Video play error: ' + err.message, 'error');
-                    });
-                }
-            };
-            
-            pc.oniceconnectionstatechange = () => {
-                console.log('ICE state:', pc.iceConnectionState);
-                if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-                    setStatus('Connection lost, reconnecting...', 'error');
-                    setTimeout(initWebRTC, 2000);
-                }
-            };
-            
-            // Add transceiver for video with low-latency hint
-            pc.addTransceiver('video', { 
-                direction: 'recvonly'
-            });
-            
             try {
-                const offer = await pc.createOffer({
-                    offerToReceiveVideo: true,
-                    offerToReceiveAudio: false
-                });
+                foxgloveClient = new WebSocket(url, ['foxglove.sdk.v1']);
+                foxgloveClient.binaryType = 'arraybuffer';
                 
-                // Modify SDP for ultra-low latency before setting
-                let sdp = offer.sdp;
+                foxgloveClient.onopen = () => {
+                    console.log('Foxglove WebSocket connected');
+                    setStatus('Connected to bridge, waiting for topics...', 'connected');
+                };
                 
-                // Add receive-only bandwidth constraints and latency hints
-                sdp = sdp.replace(/(m=video.*\r\n)/g, 
-                    '$1b=AS:3000\r\n' +  // 3 Mbps receive bandwidth
-                    'b=TIAS:3000000\r\n'
-                );
-                
-                // Request minimal latency in WebRTC receive pipeline
-                sdp = sdp.replace(/(a=rtcp-fb:.*\r\n)/g, 
-                    '$1a=x-google-flag:conference\r\n'  // Hint for low-latency mode
-                );
-                
-                offer.sdp = sdp;
-                await pc.setLocalDescription(offer);
-                
-                // Wait for ICE gathering
-                await new Promise((resolve) => {
-                    if (pc.iceGatheringState === 'complete') {
-                        resolve();
-                    } else {
-                        const checkState = () => {
-                            if (pc.iceGatheringState === 'complete') {
-                                pc.removeEventListener('icegatheringstatechange', checkState);
-                                resolve();
-                            }
-                        };
-                        pc.addEventListener('icegatheringstatechange', checkState);
-                        // Timeout after 3 seconds
-                        setTimeout(resolve, 3000);
+                foxgloveClient.onmessage = async (event) => {
+                    if (typeof event.data === 'string') {
+                        handleFoxgloveJsonMessage(event.data);
+                    } else if (event.data instanceof ArrayBuffer) {
+                        handleFoxgloveBinaryMessage(event.data);
                     }
-                });
+                };
                 
-                const response = await fetch(signalingUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        sdp: pc.localDescription.sdp,
-                        type: pc.localDescription.type
-                    })
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`Signaling failed: ${response.status}`);
-                }
-                
-                const answer = await response.json();
-                await pc.setRemoteDescription(new RTCSessionDescription(answer));
-                
-                console.log('WebRTC connection established');
-                retryCount = 0;  // Reset retry count on success
-                
-            } catch (err) {
-                console.error('WebRTC error:', err);
-                retryCount++;
-                
-                // Check if it's likely a certificate error
-                if (err.message.includes('fetch') || err.message.includes('Failed') || err.name === 'TypeError') {
+                foxgloveClient.onerror = (error) => {
+                    console.error('Foxglove WebSocket error:', error);
                     setStatus('Connection error - SSL certificate may need to be accepted', 'error');
                     showCertButton();
-                    
-                    if (retryCount <= MAX_RETRIES) {
-                        setTimeout(initWebRTC, 5000);
-                    }
-                } else {
-                    setStatus('Connection error: ' + err.message, 'error');
-                    setTimeout(initWebRTC, 3000);
+                };
+                
+                foxgloveClient.onclose = (event) => {
+                    console.log('Foxglove WebSocket closed', event);
+                    setStatus('Connection closed, reconnecting...', 'error');
+                    setTimeout(initFoxgloveConnection, 2000);
+                };
+                
+            } catch (error) {
+                console.error('Failed to create Foxglove WebSocket:', error);
+                setStatus('Connection failed', 'error');
+                setTimeout(initFoxgloveConnection, 2000);
+            }
+        }
+
+        function handleFoxgloveJsonMessage(data) {
+            try {
+                const message = JSON.parse(data);
+                console.log('Foxglove JSON message, op:', message.op);
+                
+                if (message.op === 'serverInfo') {
+                    console.log('Server info:', message.name);
+                } else if (message.op === 'advertise') {
+                    console.log('Advertise received, channels:', message.channels?.length);
+                    subscribeToCompressedImage(message.channels);
                 }
+            } catch (error) {
+                console.error('Failed to parse JSON message:', error);
+            }
+        }
+
+        function subscribeToCompressedImage(channels) {
+            const subscriptions = [];
+            
+            for (const channel of channels) {
+                if (channel.topic === '/alfie/stereo_camera/image_raw/compressed') {
+                    compressedImageSubscriptionId = subscriptions.length + 1;
+                    subscriptions.push({ id: compressedImageSubscriptionId, channelId: channel.id });
+                    console.log('Found compressed image topic, channelId:', channel.id, 'subId:', compressedImageSubscriptionId);
+                }
+            }
+            
+            if (subscriptions.length > 0) {
+                foxgloveClient.send(JSON.stringify({ op: 'subscribe', subscriptions }));
+                setStatus('Subscribed to stereo stream', 'connected');
+            } else {
+                console.log('Compressed image topic not found in advertised channels');
+                console.log('Available topics:', channels.map(c => c.topic).join(', '));
+                setStatus('Topic not found - is camera running?', 'error');
+            }
+        }
+
+        function handleFoxgloveBinaryMessage(data) {
+            const view = new DataView(data);
+            const opCode = view.getUint8(0);
+            
+            if (opCode === 1) { // Message data
+                const subscriptionId = view.getUint32(1, true);
+                
+                if (subscriptionId === compressedImageSubscriptionId) {
+                    // Skip header (1 byte op + 4 bytes subId + 8 bytes timestamp) = 13 bytes
+                    const messageData = new DataView(data, 13);
+                    processCompressedImage(messageData);
+                }
+            }
+        }
+
+        async function processCompressedImage(view) {
+            try {
+                let offset = 4; // Skip CDR encapsulation header (4 bytes)
+                
+                // Helper to align offset
+                const align = (n) => {
+                    offset = (offset + n - 1) & ~(n - 1);
+                };
+
+                // Header
+                // stamp (8 bytes)
+                align(4); // Time is struct of 2 int32/uint32, so 4 byte alignment
+                offset += 8;
+                
+                // frame_id (string)
+                align(4);
+                const frameIdLen = view.getUint32(offset, true);
+                offset += 4 + frameIdLen;
+                
+                // format (string)
+                align(4);
+                const formatLen = view.getUint32(offset, true);
+                offset += 4 + formatLen;
+                
+                // data (uint8[])
+                align(4);
+                const dataLen = view.getUint32(offset, true);
+                offset += 4;
+                
+                // Extract image data
+                const imageBytes = new Uint8Array(view.buffer, view.byteOffset + offset, dataLen);
+                
+                // Create blob and bitmap
+                const blob = new Blob([imageBytes], { type: 'image/jpeg' });
+                const bitmap = await createImageBitmap(blob);
+                
+                // Update current frame
+                if (currentFrameBitmap) {
+                    currentFrameBitmap.close(); // Release old bitmap
+                }
+                currentFrameBitmap = bitmap;
+                lastFrameReceivedTimestamp = performance.now();  // Record when this frame arrived
+                
+                // Track received frame FPS
+                receivedFrameCount++;
+                const now = performance.now();
+                const elapsed = now - lastReceivedFpsTime;
+                if (elapsed >= 1000) {
+                    currentVrFps = (receivedFrameCount / elapsed) * 1000;
+                    receivedFrameCount = 0;
+                    lastReceivedFpsTime = now;
+                    
+                    // Update HTML FPS counter too
+                    const fpsElement = document.getElementById('fpsCounter');
+                    if (fpsElement) {
+                        fpsElement.textContent = `FPS: ${currentVrFps.toFixed(1)}`;
+                    }
+                }
+                
+                // Update status if this is the first frame
+                if (document.getElementById('vrButton').disabled) {
+                    setStatus('Stereo stream received', 'connected');
+                    document.getElementById('vrButton').disabled = false;
+                    document.getElementById('certButton').style.display = 'none';
+                    startPreview();
+                }
+                
+            } catch (error) {
+                console.error('Error processing compressed image:', error);
             }
         }
         
         // Show preview of stereo stream (non-VR mode)
         function startPreview() {
-            const video = document.getElementById('stereoVideo');
             const preview = document.getElementById('preview');
             
             // Create canvas for preview
@@ -608,10 +629,12 @@
                     frames = 0;
                 }
 
-                if (video.readyState >= 2) {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    ctx.drawImage(video, 0, 0);
+                if (currentFrameBitmap) {
+                    if (canvas.width !== currentFrameBitmap.width || canvas.height !== currentFrameBitmap.height) {
+                        canvas.width = currentFrameBitmap.width;
+                        canvas.height = currentFrameBitmap.height;
+                    }
+                    ctx.drawImage(currentFrameBitmap, 0, 0);
                     preview.src = canvas.toDataURL('image/jpeg', 0.8);
                     preview.classList.remove('hidden');
                 }
@@ -721,10 +744,9 @@
                 console.log('Using direct video texture mode:', useDirectVideoTexture);
                 vrLog('Canvas mode: ' + (!useDirectVideoTexture ? 'YES' : 'NO'));
                 
-                const video = document.getElementById('stereoVideo');
-                vrLog('Video ready: ' + (video.readyState >= 2 ? 'YES' : 'NO'));
-                if (video.readyState >= 2) {
-                    vrLog('Video: ' + video.videoWidth + 'x' + video.videoHeight);
+                vrLog('Video ready: ' + (currentFrameBitmap ? 'YES' : 'NO'));
+                if (currentFrameBitmap) {
+                    vrLog('Video: ' + currentFrameBitmap.width + 'x' + currentFrameBitmap.height);
                 }
                 
                 document.getElementById('preview').classList.add('hidden');
@@ -760,27 +782,11 @@
         
         // XR render loop - optimized for low latency
         let frameCounter = 0;
-        let lastFpsTime = 0;
-        let fpsFrameCount = 0;
 
         function onXRFrame(time, frame) {
             if (!xrSession) return;
             
             xrSession.requestAnimationFrame(onXRFrame);
-
-            // Calculate FPS
-            if (lastFpsTime === 0) lastFpsTime = time;
-            fpsFrameCount++;
-            const elapsed = time - lastFpsTime;
-            if (elapsed >= 1000) {
-                const fps = (fpsFrameCount / elapsed) * 1000;
-                const fpsElement = document.getElementById('fpsCounter');
-                if (fpsElement) {
-                    fpsElement.textContent = `FPS: ${fps.toFixed(1)}`;
-                }
-                lastFpsTime = time;
-                fpsFrameCount = 0;
-            }
             
             const pose = frame.getViewerPose(xrRefSpace);
             if (!pose) {
@@ -813,22 +819,26 @@
             gl.clearColor(0.1, 0.1, 0.1, 1.0);  // Dark gray instead of black
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             
-            const video = document.getElementById('stereoVideo');
-            if (video.readyState < 2) {
+            if (!currentFrameBitmap) {
                 if (frameCounter % 60 === 0) {
-                    console.log('Waiting for video readyState:', video.readyState);
-                    vrLog('Wait video: ' + video.readyState);
+                    console.log('Waiting for video frame');
+                    vrLog('Wait video');
                 }
                 frameCounter++;
-                // Still render something so user knows VR is working
+                // Still render FPS overlay while waiting for video
+                for (const view of pose.views) {
+                    const viewport = glLayer.getViewport(view);
+                    gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+                    drawFpsOverlay(view, viewport);
+                }
                 return;
             }
             
             frameCounter++;
             if (frameCounter === 10) {
-                console.log('Video ready, rendering. Size:', video.videoWidth, 'x', video.videoHeight);
+                console.log('Video ready, rendering. Size:', currentFrameBitmap.width, 'x', currentFrameBitmap.height);
                 console.log('Pose views:', pose.views.length);
-                vrLog('Rendering video: ' + video.videoWidth + 'x' + video.videoHeight);
+                vrLog('Rendering video: ' + currentFrameBitmap.width + 'x' + currentFrameBitmap.height);
             }
             
             // ULTRA-LOW LATENCY MODE: Use video element directly as texture
@@ -847,10 +857,10 @@
                 // Upload video texture once per frame (shared by both eyes)
                 gl.bindTexture(gl.TEXTURE_2D, videoTexture);
                 try {
-                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, currentFrameBitmap);
                     
                     if (frameCounter === 10) {
-                        console.log('Video texture upload successful, size:', video.videoWidth, 'x', video.videoHeight);
+                        console.log('Video texture upload successful, size:', currentFrameBitmap.width, 'x', currentFrameBitmap.height);
                     }
                 } catch (e) {
                     console.error('Failed to upload video texture:', e);
@@ -866,11 +876,14 @@
                     // Use the same video texture for both eyes, shader will split it
                     gl.bindTexture(gl.TEXTURE_2D, videoTexture);
                     drawTexturedQuad(view, viewport, true, pose.transform.matrix);  // true = use direct video mode
+                    
+                    // Draw FPS overlay in upper left corner
+                    drawFpsOverlay(view, viewport);
                 }
             } else {
                 // FALLBACK: Use canvas-based splitting (higher latency)
-                const videoWidth = video.videoWidth;
-                const videoHeight = video.videoHeight;
+                const videoWidth = currentFrameBitmap.width;
+                const videoHeight = currentFrameBitmap.height;
                 const halfWidth = videoWidth / 2;
                 
                 if (frameCounter === 10) {
@@ -899,8 +912,62 @@
                 }
                 
                 // Draw left and right halves to canvases
-                leftCtx.drawImage(video, 0, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
-                rightCtx.drawImage(video, halfWidth, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
+                leftCtx.drawImage(currentFrameBitmap, 0, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
+                rightCtx.drawImage(currentFrameBitmap, halfWidth, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
+                
+                // Calculate frame age (how old is the current frame)
+                const frameAge = performance.now() - lastFrameReceivedTimestamp;
+                const lagColor = frameAge > 150 ? '#ff4444' : '#00ff00';  // Red if > 150ms, green otherwise
+                
+                // FPS color coding: green >= 25, yellow 15-25, red < 15
+                let fpsColor;
+                if (currentVrFps >= 25) {
+                    fpsColor = '#00ff00';  // Green
+                } else if (currentVrFps >= 15) {
+                    fpsColor = '#ffff00';  // Yellow
+                } else {
+                    fpsColor = '#ff4444';  // Red
+                }
+                
+                // Get headset rotation values (default to 0 if not available)
+                // WebXR coordinate system with right-hand rule:
+                // X-axis = right, Y-axis = up, Z-axis = back
+                // Pitch = rotation around X (nodding), Yaw = rotation around Y (turning), Roll = rotation around Z (tilting)
+                const pitch = headsetPose.rotation ? Math.round(headsetPose.rotation.x) : 0;
+                const yaw = headsetPose.rotation ? Math.round(headsetPose.rotation.y) : 0;
+                const roll = headsetPose.rotation ? Math.round(headsetPose.rotation.z) : 0;
+                
+                // Draw FPS, latency, and orientation overlay directly on left canvas (guaranteed to be visible!)
+                leftCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                leftCtx.fillRect(10, 10, 220, 170);
+                leftCtx.fillStyle = fpsColor;
+                leftCtx.font = 'bold 28px monospace';
+                leftCtx.fillText(`FPS: ${currentVrFps.toFixed(1)}`, 20, 40);
+                leftCtx.fillStyle = lagColor;
+                leftCtx.fillText(`Lag: ${frameAge.toFixed(0)}ms`, 20, 75);
+                leftCtx.fillStyle = '#88ccff';  // Light blue for orientation
+                leftCtx.font = 'bold 24px monospace';
+                leftCtx.fillText(`Pitch: ${pitch}°`, 20, 108);
+                leftCtx.fillText(`Roll:  ${roll}°`, 20, 136);
+                // Yaw: red if outside +/- 10 degrees
+                leftCtx.fillStyle = (Math.abs(yaw) > 10) ? '#ff4444' : '#88ccff';
+                leftCtx.fillText(`Yaw:   ${yaw}°`, 20, 164);
+                
+                // Also on right canvas so both eyes see it
+                rightCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                rightCtx.fillRect(10, 10, 220, 170);
+                rightCtx.fillStyle = fpsColor;
+                rightCtx.font = 'bold 28px monospace';
+                rightCtx.fillText(`FPS: ${currentVrFps.toFixed(1)}`, 20, 40);
+                rightCtx.fillStyle = lagColor;
+                rightCtx.fillText(`Lag: ${frameAge.toFixed(0)}ms`, 20, 75);
+                rightCtx.fillStyle = '#88ccff';  // Light blue for orientation
+                rightCtx.font = 'bold 24px monospace';
+                rightCtx.fillText(`Pitch: ${pitch}°`, 20, 108);
+                rightCtx.fillText(`Roll:  ${roll}°`, 20, 136);
+                // Yaw: red if outside +/- 10 degrees
+                rightCtx.fillStyle = (Math.abs(yaw) > 10) ? '#ff4444' : '#88ccff';
+                rightCtx.fillText(`Yaw:   ${yaw}°`, 20, 164);
                 
                 // Upload to WebGL textures
                 gl.bindTexture(gl.TEXTURE_2D, leftTexture);
@@ -927,9 +994,235 @@
                     const texture = view.eye === 'left' ? leftTexture : rightTexture;
                     gl.bindTexture(gl.TEXTURE_2D, texture);
                     drawTexturedQuad(view, viewport, false, pose.transform.matrix);  // false = use canvas mode
+                    
+                    // Draw FPS overlay in upper left corner
+                    drawFpsOverlay(view, viewport);
                 }
             }
         }
+        
+        // ========================================
+        // FPS Overlay Functions for Immersive VR
+        // ========================================
+        
+        function initFpsOverlay() {
+            if (!gl) {
+                vrLog('FPS overlay: no GL context');
+                return;
+            }
+            
+            vrLog('Init FPS overlay...');
+            
+            // Create canvas for FPS text (larger for better visibility)
+            fpsOverlayCanvas = document.createElement('canvas');
+            fpsOverlayCanvas.width = 256;
+            fpsOverlayCanvas.height = 64;
+            fpsOverlayCtx = fpsOverlayCanvas.getContext('2d');
+            
+            // Create texture
+            fpsOverlayTexture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, fpsOverlayTexture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            
+            // Initial update
+            updateFpsOverlayCanvas();
+            
+            // Initialize overlay shader
+            initFpsOverlayShader();
+            
+            vrLog('FPS overlay: ' + (fpsOverlayShader ? 'OK' : 'FAIL'));
+        }
+        
+        function updateFpsOverlayCanvas() {
+            if (!fpsOverlayCtx) return;
+            
+            // Clear canvas
+            fpsOverlayCtx.clearRect(0, 0, fpsOverlayCanvas.width, fpsOverlayCanvas.height);
+            
+            // Bright red background for high visibility (testing)
+            fpsOverlayCtx.fillStyle = 'rgba(200, 0, 0, 0.8)';
+            fpsOverlayCtx.fillRect(0, 0, fpsOverlayCanvas.width, fpsOverlayCanvas.height);
+            
+            // White border
+            fpsOverlayCtx.strokeStyle = '#ffffff';
+            fpsOverlayCtx.lineWidth = 3;
+            fpsOverlayCtx.strokeRect(2, 2, fpsOverlayCanvas.width - 4, fpsOverlayCanvas.height - 4);
+            
+            // Draw FPS text in white
+            fpsOverlayCtx.fillStyle = '#ffffff';
+            fpsOverlayCtx.font = 'bold 24px monospace';
+            fpsOverlayCtx.textBaseline = 'middle';
+            fpsOverlayCtx.textAlign = 'center';
+            fpsOverlayCtx.fillText(`FPS: ${currentVrFps.toFixed(1)}`, fpsOverlayCanvas.width / 2, fpsOverlayCanvas.height / 2);
+            
+            // Update texture if GL context is available
+            if (gl && fpsOverlayTexture) {
+                gl.bindTexture(gl.TEXTURE_2D, fpsOverlayTexture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, fpsOverlayCanvas);
+            }
+        }
+        
+        function initFpsOverlayShader() {
+            if (!gl) return;
+            
+            // Simple 2D overlay shader (screen-space, no 3D transforms)
+            const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(vertexShader, `
+                attribute vec2 a_position;
+                attribute vec2 a_texCoord;
+                varying vec2 v_texCoord;
+                
+                void main() {
+                    gl_Position = vec4(a_position, 0.0, 1.0);
+                    v_texCoord = a_texCoord;
+                }
+            `);
+            gl.compileShader(vertexShader);
+            
+            if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
+                console.error('FPS overlay vertex shader error:', gl.getShaderInfoLog(vertexShader));
+                return;
+            }
+            
+            const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(fragmentShader, `
+                precision mediump float;
+                varying vec2 v_texCoord;
+                uniform sampler2D u_texture;
+                
+                void main() {
+                    gl_FragColor = texture2D(u_texture, v_texCoord);
+                }
+            `);
+            gl.compileShader(fragmentShader);
+            
+            if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
+                console.error('FPS overlay fragment shader error:', gl.getShaderInfoLog(fragmentShader));
+                return;
+            }
+            
+            fpsOverlayShader = gl.createProgram();
+            gl.attachShader(fpsOverlayShader, vertexShader);
+            gl.attachShader(fpsOverlayShader, fragmentShader);
+            gl.linkProgram(fpsOverlayShader);
+            
+            if (!gl.getProgramParameter(fpsOverlayShader, gl.LINK_STATUS)) {
+                vrLog('FPS shader link FAIL');
+                fpsOverlayShader = null;
+                return;
+            }
+            
+            vrLog('FPS shader linked');
+            
+            // Create buffers for overlay quad (upper left corner, screen space coords)
+            // Screen space: -1 to 1, so upper left is around (-1, 1)
+            // Make it LARGE for testing visibility
+            const overlayWidth = 0.5;    // 25% of screen width (increased)
+            const overlayHeight = 0.15;  // 7.5% of screen height (increased)
+            const marginX = -0.95;       // Left margin
+            const marginY = 0.95;        // Top margin
+            
+            fpsOverlayPositionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayPositionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                marginX, marginY - overlayHeight,
+                marginX + overlayWidth, marginY - overlayHeight,
+                marginX, marginY,
+                marginX + overlayWidth, marginY,
+            ]), gl.STATIC_DRAW);
+            
+            console.log('FPS overlay position buffer created, bounds:', marginX, marginY - overlayHeight, 'to', marginX + overlayWidth, marginY);
+            
+            fpsOverlayTexCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayTexCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                0, 1,
+                1, 1,
+                0, 0,
+                1, 0,
+            ]), gl.STATIC_DRAW);
+            
+            // Cache locations
+            fpsOverlayCachedLocations = {
+                position: gl.getAttribLocation(fpsOverlayShader, 'a_position'),
+                texCoord: gl.getAttribLocation(fpsOverlayShader, 'a_texCoord'),
+                texture: gl.getUniformLocation(fpsOverlayShader, 'u_texture')
+            };
+        }
+        
+        function drawFpsOverlay(view, viewport) {
+            // Initialize on first call
+            if (!fpsOverlayCanvas) {
+                initFpsOverlay();
+            }
+            
+            // Check if initialization succeeded
+            if (!fpsOverlayShader || !fpsOverlayTexture || !fpsOverlayCachedLocations) {
+                if (frameCounter < 20 && frameCounter % 5 === 0) {
+                    vrLog('FPS ovl not ready');
+                }
+                return;
+            }
+            
+            if (frameCounter === 15) {
+                vrLog('Drawing FPS overlay');
+            }
+            
+            // Save current WebGL state
+            const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
+            
+            // Enable blending for transparency
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            
+            // Disable depth test so overlay is always visible
+            gl.disable(gl.DEPTH_TEST);
+            
+            gl.useProgram(fpsOverlayShader);
+            
+            // Disable any previously enabled vertex attrib arrays that might interfere
+            for (let i = 0; i < 8; i++) {
+                gl.disableVertexAttribArray(i);
+            }
+            
+            // Bind position buffer
+            gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayPositionBuffer);
+            gl.enableVertexAttribArray(fpsOverlayCachedLocations.position);
+            gl.vertexAttribPointer(fpsOverlayCachedLocations.position, 2, gl.FLOAT, false, 0, 0);
+            
+            // Bind texcoord buffer
+            gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayTexCoordBuffer);
+            gl.enableVertexAttribArray(fpsOverlayCachedLocations.texCoord);
+            gl.vertexAttribPointer(fpsOverlayCachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+            
+            // Bind texture
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, fpsOverlayTexture);
+            gl.uniform1i(fpsOverlayCachedLocations.texture, 0);
+            
+            // Draw overlay
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            
+            if (frameCounter === 15) {
+                console.log('FPS overlay draw complete');
+            }
+            
+            // Restore state
+            gl.disable(gl.BLEND);
+            gl.enable(gl.DEPTH_TEST);
+            
+            // Restore previous program
+            if (prevProgram) {
+                gl.useProgram(prevProgram);
+            }
+        }
+        
+        // ========================================
+        // End FPS Overlay Functions
+        // ========================================
         
         // Simple shader program for rendering video texture
         let shaderProgram = null;
@@ -1322,6 +1615,6 @@
             setupControls();
             initDraggable();
             initControllerWebSocket();  // Initialize controller tracking WebSocket
-            await initWebRTC();
+            initFoxgloveConnection();
             await initXR();
         });
