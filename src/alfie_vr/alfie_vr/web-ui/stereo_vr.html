@@ -752,7 +752,7 @@
                     
                     // Use the same video texture for both eyes, shader will split it
                     gl.bindTexture(gl.TEXTURE_2D, videoTexture);
-                    drawTexturedQuad(view, viewport, true);  // true = use direct video mode
+                    drawTexturedQuad(view, viewport, true, pose.transform.matrix);  // true = use direct video mode
                 }
             } else {
                 // FALLBACK: Use canvas-based splitting (higher latency)
@@ -813,7 +813,7 @@
                     
                     const texture = view.eye === 'left' ? leftTexture : rightTexture;
                     gl.bindTexture(gl.TEXTURE_2D, texture);
-                    drawTexturedQuad(view, viewport, false);  // false = use canvas mode
+                    drawTexturedQuad(view, viewport, false, pose.transform.matrix);  // false = use canvas mode
                 }
             }
         }
@@ -1003,7 +1003,7 @@
             }
         }
         
-        function drawTexturedQuad(view, viewport, useDirectVideo = false) {
+        function drawTexturedQuad(view, viewport, useDirectVideo = false, modelMatrix = null) {
             if (!shaderProgram) {
                 initShaders();
             }
@@ -1049,8 +1049,8 @@
             }
             
             if (cachedLocations.model !== null) {
-                // Model matrix - identity (screen at origin, facing -Z)
-                gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
+                // Model matrix - use provided matrix (head pose) or identity
+                gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix || cachedLocations.identityMatrix);
             }
             
             if (cachedLocations.distance !== null) {

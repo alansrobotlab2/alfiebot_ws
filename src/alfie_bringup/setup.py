@@ -33,6 +33,7 @@ setup(
             'master_watchdog = alfie_bringup.master_watchdog:main',
             'jetson_stats = alfie_bringup.jetson_stats:main',
             'gstreamer_camera_node = alfie_bringup.gstreamer_camera_node:main',
+            'gstreamer_camera_node_hw = alfie_bringup.gstreamer_camera_node_hw:main',
         ],
     },
 )

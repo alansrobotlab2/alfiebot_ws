@@ -180,8 +180,10 @@ def generate_launch_description():
             name='stereo_camera',
             parameters=[{
                 'device': '/dev/video0',
-                'width': 1600,
-                'height': 600,
+                'width': 2560,
+                'height': 720,
+                #'width': 1600,
+                #'height': 600,
                 'framerate': 15,
                 'flip_vertical': True,
                 'camera_frame_id': 'stereo_camera_link',
