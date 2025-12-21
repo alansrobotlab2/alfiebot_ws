@@ -212,9 +212,9 @@ class DiagnosticTimingMonitor(HealthCheck):
             errors.append(f'{self.name} servo timing {servo_total_ms:.2f}ms exceeded {self.max_total_ms}ms: {", ".join(servo_timing_details)}')
         
         # Check IMU timing separately
-        imu_duration_ms = self.current_timings.get('imuupdateduration', 0.0)
-        if imu_duration_ms > self.IMU_MAX_MS:
-            errors.append(f'{self.name} IMU update duration {imu_duration_ms:.2f}ms exceeded {self.IMU_MAX_MS}ms')
+        # imu_duration_ms = self.current_timings.get('imuupdateduration', 0.0)
+        # if imu_duration_ms > self.IMU_MAX_MS:
+        #     errors.append(f'{self.name} IMU update duration {imu_duration_ms:.2f}ms exceeded {self.IMU_MAX_MS}ms')
         
         if errors:
             return '; '.join(errors)

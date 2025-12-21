@@ -494,6 +494,11 @@ function updateStatusPanelCanvas() {
 }
 
 export function drawStatusPanel(view, viewport, modelMatrix) {
+    // Only render right status panel to the right eye
+    if (view.eye !== 'right') {
+        return;
+    }
+    
     const frameCounter = getFrameCounterFn();
     const shaderProgram = getShaderProgramFn();
     const cachedLocations = getCachedLocationsFn();
@@ -749,6 +754,11 @@ function updateLeftStatusPanelCanvas() {
 }
 
 export function drawLeftStatusPanel(view, viewport, modelMatrix) {
+    // Only render left status panel to the left eye
+    if (view.eye !== 'left') {
+        return;
+    }
+    
     const frameCounter = getFrameCounterFn();
     const shaderProgram = getShaderProgramFn();
     const cachedLocations = getCachedLocationsFn();

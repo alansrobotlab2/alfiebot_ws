@@ -59,6 +59,10 @@ class GStreamerCameraNode(Node):
         self.frame_count = 0
         self.last_log_time = self.get_clock().now()
         
+        # GLib main loop and bus (for cleanup)
+        self.main_loop = None
+        self.bus = None
+        
         # Initialize GStreamer
         Gst.init(None)
         
@@ -186,14 +190,12 @@ class GStreamerCameraNode(Node):
         if not success:
             return Gst.FlowReturn.OK
         
+        jpeg_data_final = None
         try:
-            # Get JPEG bytes
-            jpeg_data = map_info.data
-            
             # Handle vertical flip if needed
             if self.flip_vertical:
-                # Decode, flip, re-encode
-                nparr = np.frombuffer(jpeg_data, np.uint8)
+                # Decode, flip, re-encode - use memoryview to avoid copy
+                nparr = np.frombuffer(map_info.data, np.uint8)
                 img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 
                 if img is None:
@@ -202,40 +204,44 @@ class GStreamerCameraNode(Node):
                 img = cv2.flip(img, 0)  # Vertical flip
                 _, encoded = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
                 jpeg_data_final = encoded.tobytes()
+                # Explicitly delete intermediate arrays
+                del nparr, img, encoded
             else:
-                # No flip - use original JPEG data directly
-                jpeg_data_final = bytes(jpeg_data)
-            
-            # Create ROS message - use receive_time (NOW) for freshest timestamp
-            msg = CompressedImage()
-            msg.header = Header()
-            msg.header.stamp = receive_time.to_msg()
-            msg.header.frame_id = self.frame_id
-            msg.format = 'jpeg'
-            msg.data = jpeg_data_final
-            
-            # Publish to ROS
-            self.image_pub.publish(msg)
-            
-            # Publish camera info (basic)
-            info_msg = CameraInfo()
-            info_msg.header = msg.header
-            info_msg.width = self.width
-            info_msg.height = self.height
-            self.info_pub.publish(info_msg)
-            
-            # Stats
-            self.frame_count += 1
-            now = self.get_clock().now()
-            elapsed = (now - self.last_log_time).nanoseconds / 1e9
-            if elapsed >= 5.0:
-                fps = self.frame_count / elapsed
-                self.get_logger().info(f'Publishing at {fps:.1f} FPS')
-                self.frame_count = 0
-                self.last_log_time = now
-            
+                # No flip - copy JPEG data (must copy before unmap)
+                jpeg_data_final = bytes(map_info.data)
         finally:
             buf.unmap(map_info)
+        
+        if jpeg_data_final is None:
+            return Gst.FlowReturn.OK
+        
+        # Create ROS message - use receive_time (NOW) for freshest timestamp
+        msg = CompressedImage()
+        msg.header = Header()
+        msg.header.stamp = receive_time.to_msg()
+        msg.header.frame_id = self.frame_id
+        msg.format = 'jpeg'
+        msg.data = jpeg_data_final
+        
+        # Publish to ROS
+        self.image_pub.publish(msg)
+        
+        # Publish camera info (basic)
+        info_msg = CameraInfo()
+        info_msg.header = msg.header
+        info_msg.width = self.width
+        info_msg.height = self.height
+        self.info_pub.publish(info_msg)
+        
+        # Stats
+        # self.frame_count += 1
+        # now = self.get_clock().now()
+        # elapsed = (now - self.last_log_time).nanoseconds / 1e9
+        # if elapsed >= 5.0:
+        #     fps = self.frame_count / elapsed
+        #     self.get_logger().info(f'Publishing at {fps:.1f} FPS')
+        #     self.frame_count = 0
+        #     self.last_log_time = now
         
         return Gst.FlowReturn.OK
     
@@ -252,41 +258,38 @@ class GStreamerCameraNode(Node):
         if not success:
             return Gst.FlowReturn.OK
         
-        try:
-            # Direct JPEG passthrough - no decode/encode!
-            jpeg_data = bytes(map_info.data)
-            
-            # Create ROS message
-            msg = CompressedImage()
-            msg.header = Header()
-            msg.header.stamp = receive_time.to_msg()
-            msg.header.frame_id = self.frame_id
-            msg.format = 'jpeg'
-            msg.data = jpeg_data
-            
-            # Publish to ROS
-            self.image_pub.publish(msg)
-            
-            # Publish camera info
-            info_msg = CameraInfo()
-            info_msg.header = msg.header
-            info_msg.width = self.width
-            info_msg.height = self.height
-            self.info_pub.publish(info_msg)
-            
-            # Stats
-            self.frame_count += 1
-            now = self.get_clock().now()
-            elapsed = (now - self.last_log_time).nanoseconds / 1e9
-            if elapsed >= 5.0:
-                fps = self.frame_count / elapsed
-                mode = "HW-JPEG" if self.use_hardware_accel and self.flip_vertical else "HW-ZeroCopy"
-                self.get_logger().info(f'[{mode}] Publishing at {fps:.1f} FPS')
-                self.frame_count = 0
-                self.last_log_time = now
+        # Copy data before unmapping (must copy - buffer is reused by GStreamer)
+        jpeg_data = bytes(map_info.data)
+        buf.unmap(map_info)
         
-        finally:
-            buf.unmap(map_info)
+        # Create ROS message
+        msg = CompressedImage()
+        msg.header = Header()
+        msg.header.stamp = receive_time.to_msg()
+        msg.header.frame_id = self.frame_id
+        msg.format = 'jpeg'
+        msg.data = jpeg_data
+        
+        # Publish to ROS
+        self.image_pub.publish(msg)
+        
+        # Publish camera info
+        info_msg = CameraInfo()
+        info_msg.header = msg.header
+        info_msg.width = self.width
+        info_msg.height = self.height
+        self.info_pub.publish(info_msg)
+        
+        # Stats
+        # self.frame_count += 1
+        # now = self.get_clock().now()
+        # elapsed = (now - self.last_log_time).nanoseconds / 1e9
+        # if elapsed >= 5.0:
+        #     fps = self.frame_count / elapsed
+        #     mode = "HW-JPEG" if self.use_hardware_accel and self.flip_vertical else "HW-ZeroCopy"
+        #     self.get_logger().info(f'[{mode}] Publishing at {fps:.1f} FPS')
+        #     self.frame_count = 0
+        #     self.last_log_time = now
         
         return Gst.FlowReturn.OK
     
@@ -295,22 +298,25 @@ class GStreamerCameraNode(Node):
         # Set to playing
         self.pipeline.set_state(Gst.State.PLAYING)
         
-        # Create main loop
-        loop = GLib.MainLoop()
+        # Create main loop (store as instance for cleanup)
+        self.main_loop = GLib.MainLoop()
         
         # Handle bus messages
-        bus = self.pipeline.get_bus()
-        bus.add_signal_watch()
-        bus.connect('message', self._on_bus_message, loop)
+        self.bus = self.pipeline.get_bus()
+        self.bus.add_signal_watch()
+        self.bus.connect('message', self._on_bus_message, self.main_loop)
         
         # Run loop
         try:
-            loop.run()
+            self.main_loop.run()
         except KeyboardInterrupt:
             pass
-        
-        # Cleanup
-        self.pipeline.set_state(Gst.State.NULL)
+        finally:
+            # Cleanup bus watch
+            if self.bus:
+                self.bus.remove_signal_watch()
+            # Set pipeline to NULL
+            self.pipeline.set_state(Gst.State.NULL)
     
     def _on_bus_message(self, bus, message, loop):
         """Handle GStreamer bus messages"""
@@ -330,8 +336,22 @@ class GStreamerCameraNode(Node):
     
     def destroy_node(self):
         """Cleanup on shutdown"""
-        if hasattr(self, 'pipeline'):
+        # Quit main loop first to stop the pipeline thread
+        if self.main_loop and self.main_loop.is_running():
+            self.main_loop.quit()
+        
+        # Remove bus signal watch
+        if self.bus:
+            try:
+                self.bus.remove_signal_watch()
+            except Exception:
+                pass
+            self.bus = None
+        
+        # Stop pipeline
+        if hasattr(self, 'pipeline') and self.pipeline:
             self.pipeline.set_state(Gst.State.NULL)
+        
         super().destroy_node()
 
 
