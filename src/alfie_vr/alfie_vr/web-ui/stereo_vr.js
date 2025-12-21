@@ -1314,6 +1314,46 @@
             ctx.fill();
         }
         
+        // Pre-allocated buffers for panel rotation matrices
+        const rightPanelModelMatrix = new Float32Array(16);
+        const leftPanelModelMatrix = new Float32Array(16);
+        
+        // Helper function to create a rotated model matrix (yaw rotation around Y axis)
+        function createRotatedModelMatrix(baseMatrix, yawDegrees, outMatrix) {
+            const yawRad = yawDegrees * Math.PI / 180;
+            const cosY = Math.cos(yawRad);
+            const sinY = Math.sin(yawRad);
+            
+            // Rotation matrix around Y axis
+            // [cosY  0  sinY  0]
+            // [0     1  0     0]
+            // [-sinY 0  cosY  0]
+            // [0     0  0     1]
+            
+            // Multiply baseMatrix * rotationMatrix
+            const m = baseMatrix;
+            
+            outMatrix[0] = m[0] * cosY + m[2] * (-sinY);
+            outMatrix[1] = m[1] * cosY + m[3] * (-sinY);
+            outMatrix[2] = m[0] * sinY + m[2] * cosY;
+            outMatrix[3] = m[3];
+            
+            outMatrix[4] = m[4] * cosY + m[6] * (-sinY);
+            outMatrix[5] = m[5] * cosY + m[7] * (-sinY);
+            outMatrix[6] = m[4] * sinY + m[6] * cosY;
+            outMatrix[7] = m[7];
+            
+            outMatrix[8] = m[8] * cosY + m[10] * (-sinY);
+            outMatrix[9] = m[9] * cosY + m[11] * (-sinY);
+            outMatrix[10] = m[8] * sinY + m[10] * cosY;
+            outMatrix[11] = m[11];
+            
+            outMatrix[12] = m[12] * cosY + m[14] * (-sinY);
+            outMatrix[13] = m[13] * cosY + m[15] * (-sinY);
+            outMatrix[14] = m[12] * sinY + m[14] * cosY;
+            outMatrix[15] = m[15];
+        }
+        
         function initStatusPanel() {
             if (!gl) {
                 vrLog('Status panel: no GL context');
@@ -1325,7 +1365,7 @@
             // Create canvas for status text
             statusPanelCanvas = document.createElement('canvas');
             statusPanelCanvas.width = 256;
-            statusPanelCanvas.height = 128;
+            statusPanelCanvas.height = 96;
             statusPanelCtx = statusPanelCanvas.getContext('2d');
             
             // Create texture
@@ -1343,12 +1383,12 @@
             const mainRightEdge = mainWidth / 2;
             
             // Status panel size
-            const panelHeight = 0.12;  // 12cm tall in world space
+            const panelHeight = 0.09;  // 9cm tall in world space
             const panelWidth = 0.20;   // 20cm wide
             
-            // Position: right edge aligned with main view right edge, vertically centered
-            const panelLeft = mainRightEdge - panelWidth;  // Right edges align
-            const panelCenterY = stereoSettings.verticalOffset;  // Same vertical center as main view
+            // Position: nudged left to stay inside 3D view, vertically centered
+            const panelLeft = mainRightEdge - panelWidth - 0.175;  // 5cm inward from right edge
+            const panelCenterY = stereoSettings.verticalOffset + 0.30;  // Raised significantly to compensate for rotation
             
             statusPanelPositionBuffer = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, statusPanelPositionBuffer);
@@ -1384,13 +1424,13 @@
             // Clear canvas
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Semi-transparent dark background with rounded corners (80% opaque)
-            ctx.fillStyle = 'rgba(20, 20, 30, 0.8)';
+            // Semi-transparent dark background with rounded corners (50% opaque)
+            ctx.fillStyle = 'rgba(20, 20, 30, 0.5)';
             drawRoundedRect(ctx, 0, 0, canvas.width, canvas.height, 12);
             
             // Title
             ctx.fillStyle = '#88ccff';
-            ctx.font = 'bold 18px monospace';
+            ctx.font = 'bold 14px monospace';
             ctx.textBaseline = 'top';
             ctx.fillText('Robot Status', 10, 8);
             
@@ -1398,30 +1438,30 @@
             const foxgloveStatus = foxgloveConn && foxgloveConn.isConnected ? 'Connected' : 'Disconnected';
             const foxgloveColor = foxgloveConn && foxgloveConn.isConnected ? '#44ff44' : '#ff4444';
             ctx.fillStyle = '#cccccc';
-            ctx.font = '14px monospace';
-            ctx.fillText('Foxglove:', 10, 35);
+            ctx.font = '11px monospace';
+            ctx.fillText('Foxglove:', 10, 28);
             ctx.fillStyle = foxgloveColor;
-            ctx.fillText(foxgloveStatus, 100, 35);
+            ctx.fillText(foxgloveStatus, 80, 28);
             
             // TF Rate
             const tfRate = getTfRate();
             const tfColor = tfRate > 10 ? '#44ff44' : (tfRate > 0 ? '#ffff00' : '#ff4444');
             ctx.fillStyle = '#cccccc';
-            ctx.fillText('TF Rate:', 10, 55);
+            ctx.fillText('TF Rate:', 10, 43);
             ctx.fillStyle = tfColor;
-            ctx.fillText(`${tfRate.toFixed(1)} Hz`, 100, 55);
+            ctx.fillText(`${tfRate.toFixed(1)} Hz`, 80, 43);
             
             // Link count
             ctx.fillStyle = '#cccccc';
-            ctx.fillText('Links:', 10, 75);
+            ctx.fillText('Links:', 10, 58);
             ctx.fillStyle = '#ffffff';
-            ctx.fillText(`${linkNames.length}`, 100, 75);
+            ctx.fillText(`${linkNames.length}`, 80, 58);
             
             // URDF status
             ctx.fillStyle = '#cccccc';
-            ctx.fillText('URDF:', 10, 95);
+            ctx.fillText('URDF:', 10, 73);
             ctx.fillStyle = urdfString ? '#44ff44' : '#888888';
-            ctx.fillText(urdfString ? 'Loaded' : 'Waiting...', 100, 95);
+            ctx.fillText(urdfString ? 'Loaded' : 'Waiting...', 80, 73);
             
             // Update texture
             if (gl && statusPanelTexture) {
@@ -1495,8 +1535,13 @@
             }
             
             if (cachedLocations.model !== null) {
-                // Use head pose matrix so panel is head-locked
-                gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix || cachedLocations.identityMatrix);
+                // Apply yaw rotation to face viewer (Quest 3 coordinate system)
+                if (modelMatrix) {
+                    createRotatedModelMatrix(modelMatrix, 15, rightPanelModelMatrix);
+                    gl.uniformMatrix4fv(cachedLocations.model, false, rightPanelModelMatrix);
+                } else {
+                    gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
+                }
             }
             
             // Position at same distance as main view so transparency works
@@ -1557,7 +1602,7 @@
             // Create canvas for status text (taller for more info)
             leftStatusPanelCanvas = document.createElement('canvas');
             leftStatusPanelCanvas.width = 256;
-            leftStatusPanelCanvas.height = 192;
+            leftStatusPanelCanvas.height = 144;
             leftStatusPanelCtx = leftStatusPanelCanvas.getContext('2d');
             
             // Create texture
@@ -1575,12 +1620,12 @@
             const mainLeftEdge = -mainWidth / 2;
             
             // Left status panel size (taller than right panel for more info)
-            const panelHeight = 0.18;  // 18cm tall in world space
+            const panelHeight = 0.135;  // 13.5cm tall in world space
             const panelWidth = 0.20;   // 20cm wide
             
             // Position: left edge aligned with main view left edge, vertically centered
-            const panelLeft = mainLeftEdge;  // Left edges align
-            const panelCenterY = stereoSettings.verticalOffset;  // Same vertical center as main view
+            const panelLeft = mainLeftEdge + 0.24;  // Left edges align
+            const panelCenterY = stereoSettings.verticalOffset - 0.175;  // Lowered significantly to compensate for rotation
             
             leftStatusPanelPositionBuffer = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, leftStatusPanelPositionBuffer);
@@ -1616,52 +1661,52 @@
             // Clear canvas
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Semi-transparent dark background with rounded corners (80% opaque)
-            ctx.fillStyle = 'rgba(20, 20, 30, 0.8)';
+            // Semi-transparent dark background with rounded corners (50% opaque)
+            ctx.fillStyle = 'rgba(20, 20, 30, 0.5)';
             drawRoundedRect(ctx, 0, 0, canvas.width, canvas.height, 12);
             
             // Title
             ctx.fillStyle = '#88ccff';
-            ctx.font = 'bold 18px monospace';
+            ctx.font = 'bold 14px monospace';
             ctx.textBaseline = 'top';
             ctx.fillText('Stream Info', 10, 8);
             
             // FPS
             ctx.fillStyle = '#cccccc';
-            ctx.font = '14px monospace';
-            ctx.fillText('FPS:', 10, 35);
+            ctx.font = '11px monospace';
+            ctx.fillText('FPS:', 10, 28);
             const fpsColor = currentVrFps >= 25 ? '#44ff44' : (currentVrFps >= 15 ? '#ffff00' : '#ff4444');
             ctx.fillStyle = fpsColor;
-            ctx.fillText(`${currentVrFps.toFixed(1)}`, 100, 35);
+            ctx.fillText(`${currentVrFps.toFixed(1)}`, 80, 28);
             
             // Frame latency
             const frameAge = performance.now() - lastFrameReceivedTimestamp;
             const lagColor = frameAge > 150 ? '#ff4444' : '#44ff44';
             ctx.fillStyle = '#cccccc';
-            ctx.fillText('Latency:', 10, 55);
+            ctx.fillText('Latency:', 10, 43);
             ctx.fillStyle = lagColor;
-            ctx.fillText(`${frameAge.toFixed(0)} ms`, 100, 55);
+            ctx.fillText(`${frameAge.toFixed(0)} ms`, 80, 43);
             
             // Battery status
             ctx.fillStyle = '#cccccc';
-            ctx.fillText('Battery:', 10, 75);
+            ctx.fillText('Battery:', 10, 58);
             if (currentBatteryLevel !== null) {
                 const batteryColor = currentBatteryLevel > 20 ? '#44ff44' : '#ff4444';
                 ctx.fillStyle = batteryColor;
                 const chargingIcon = currentBatteryCharging ? ' ⚡' : '';
-                ctx.fillText(`${currentBatteryLevel}%${chargingIcon}`, 100, 75);
+                ctx.fillText(`${currentBatteryLevel}%${chargingIcon}`, 80, 58);
             } else {
                 ctx.fillStyle = '#888888';
-                ctx.fillText('N/A', 100, 75);
+                ctx.fillText('N/A', 80, 58);
             }
             
             // Controller WS status
             ctx.fillStyle = '#cccccc';
-            ctx.fillText('Ctrl WS:', 10, 95);
+            ctx.fillText('Ctrl WS:', 10, 73);
             const ctrlStatus = controllerWS && controllerWS.readyState === WebSocket.OPEN ? 'Connected' : 'Disconnected';
             const ctrlColor = controllerWS && controllerWS.readyState === WebSocket.OPEN ? '#44ff44' : '#ff4444';
             ctx.fillStyle = ctrlColor;
-            ctx.fillText(ctrlStatus, 100, 95);
+            ctx.fillText(ctrlStatus, 80, 73);
             
             // Headset orientation (pitch/roll/yaw)
             const pitch = headsetPose.rotation ? Math.round(headsetPose.rotation.x) : 0;
@@ -1669,16 +1714,16 @@
             const yaw = headsetPose.rotation ? Math.round(headsetPose.rotation.y) : 0;
             
             ctx.fillStyle = '#88ccff';
-            ctx.fillText('Pitch:', 10, 115);
-            ctx.fillText(`${pitch}°`, 100, 115);
+            ctx.fillText('Pitch:', 10, 88);
+            ctx.fillText(`${pitch}°`, 80, 88);
             
-            ctx.fillText('Roll:', 10, 135);
-            ctx.fillText(`${roll}°`, 100, 135);
+            ctx.fillText('Roll:', 10, 103);
+            ctx.fillText(`${roll}°`, 80, 103);
             
             // Yaw: red if outside +/- 10 degrees
-            ctx.fillText('Yaw:', 10, 155);
+            ctx.fillText('Yaw:', 10, 118);
             ctx.fillStyle = (Math.abs(yaw) > 10) ? '#ff4444' : '#88ccff';
-            ctx.fillText(`${yaw}°`, 100, 155);
+            ctx.fillText(`${yaw}°`, 80, 118);
             
             // Update texture
             if (gl && leftStatusPanelTexture) {
@@ -1745,8 +1790,13 @@
             }
             
             if (cachedLocations.model !== null) {
-                // Use head pose matrix so panel is head-locked
-                gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix || cachedLocations.identityMatrix);
+                // Apply yaw rotation to face viewer (Quest 3 coordinate system)
+                if (modelMatrix) {
+                    createRotatedModelMatrix(modelMatrix, -15, leftPanelModelMatrix);
+                    gl.uniformMatrix4fv(cachedLocations.model, false, leftPanelModelMatrix);
+                } else {
+                    gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
+                }
             }
             
             // Position at same distance as main view so transparency works
