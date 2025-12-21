@@ -67,23 +67,23 @@ leverage the existing implementation of key features from vr_app.js and urdf_vie
 - [X] **3.4.3** Test: Panel shows live TF rate (e.g., "50.0 Hz")
 
 **3.5 VR Status Panel (WebXR overlay)**
-- [ ] **3.5.1** Create head-locked WebGL quad for status text in VR
-- [ ] **3.5.2** Render Foxglove connection status on quad
-- [ ] **3.5.3** Render TF rate on quad
-- [ ] **3.5.4** Test: In VR, status panel visible near bottom of view
+- [X] **3.5.1** Create head-locked WebGL quad for status text in VR
+- [X] **3.5.2** Render Foxglove connection status on quad
+- [X] **3.5.3** Render TF rate on quad
+- [X] **3.5.4** Test: In VR, status panel visible near bottom of view
 
 **3.6 URDF Text Display (simplified first)**
-- [ ] **3.6.1** Parse robot_description to extract link names
-- [ ] **3.6.2** Display link count in desktop panel
-- [ ] **3.6.3** Display link count in VR panel
-- [ ] **3.6.4** Test: Shows "12 links" (or actual count) when URDF received
+- [X] **3.6.1** Parse robot_description to extract link names
+- [X] **3.6.2** Display link count in desktop panel
+- [X] **3.6.3** Display link count in VR panel
+- [X] **3.6.4** Test: Shows "12 links" (or actual count) when URDF received
 
 **3.7 URDF 3D Visualization (desktop only first)**
-- [ ] **3.7.1** Add Three.js canvas to desktop panel
-- [ ] **3.7.2** Initialize URDFViewer class in stereo_vr.js
-- [ ] **3.7.3** Test: 3D robot model appears in desktop panel
+- [X] **3.7.1** Add Three.js canvas to desktop panel
+- [X] **3.7.2** Initialize URDFViewer class in stereo_vr.js
+- [X] **3.7.3** Test: 3D robot model appears in desktop panel
 
-**3.8 URDF in VR (optional stretch goal)**
+**3.8 URDF in VR**
 - [ ] **3.8.1** Add WebGL robot rendering to VR scene (position in world space)
 - [ ] **3.8.2** Apply TF transforms to update robot pose
 - [ ] **3.8.3** Test: 3D robot model visible in VR, moves with TF updates

@@ -48,7 +48,21 @@
             getUrdfString,
             getLinkNames,
             getTfRate,
+            setTfUpdateCallback,
         } from './robot_state.js';
+        import {
+            initRobotViewer,
+            loadURDF,
+            isLoaded as isRobotViewerLoaded,
+        } from './robot_viewer.js';
+        import {
+            initVRRobot,
+            loadVRURDF,
+            renderVRRobotForView,
+            isVRRobotLoaded,
+            disposeVRRobot,
+            applyVRTransform,
+        } from './vr_robot.js';
         
         // ========================================
         // Local Aliases for Backward Compatibility
@@ -320,6 +334,28 @@
                 });
                 updateGlContext(gl);
                 
+                // TODO: VR Robot disabled - Three.js WebGL state conflicts with custom shaders
+                // Initialize VR Robot renderer for 3D robot visualization
+                // const vrRobotReady = initVRRobot(gl, xrSession);
+                // if (vrRobotReady) {
+                //     vrLog('VR Robot initialized');
+                //     // Load URDF if already available
+                //     const urdf = getUrdfString();
+                //     if (urdf) {
+                //         loadVRURDF(urdf);
+                //         vrLog('VR Robot URDF loaded');
+                //     }
+                //     // Set up TF update callback to update robot pose
+                //     setTfUpdateCallback((childFrameId, transform) => {
+                //         if (isVRRobotLoaded()) {
+                //             applyVRTransform(childFrameId, transform);
+                //         }
+                //     });
+                //     vrLog('VR Robot TF callback set');
+                // } else {
+                //     vrLog('VR Robot init skipped');
+                // }
+                
                 // Start XR render loop
                 xrSession.requestAnimationFrame(onXRFrame);
                 
@@ -440,6 +476,17 @@
                     gl.bindTexture(gl.TEXTURE_2D, videoTexture);
                     drawTexturedQuad(view, viewport, true, pose.transform.matrix);  // true = use direct video mode
                     
+                    // TODO: VR robot rendering disabled - Three.js breaks WebGL state
+                    // Need to use a different approach (custom WebGL shaders for robot)
+                    // if (isVRRobotLoaded()) {
+                    //     if (frameCounter === 15) {
+                    //         vrLog('Rendering VR robot');
+                    //     }
+                    //     renderVRRobotForView(view, glLayer.framebuffer, glLayer);
+                    // } else if (frameCounter === 15) {
+                    //     vrLog('VR robot not loaded yet');
+                    // }
+                    
                     // Draw FPS overlay in upper left corner
                     drawFpsOverlay(view, viewport);
                     
@@ -531,6 +578,17 @@
                     const texture = view.eye === 'left' ? leftTexture : rightTexture;
                     gl.bindTexture(gl.TEXTURE_2D, texture);
                     drawTexturedQuad(view, viewport, false, pose.transform.matrix);  // false = use canvas mode
+                    
+                    // TODO: VR robot rendering disabled - Three.js breaks WebGL state
+                    // Need to use a different approach (custom WebGL shaders for robot)
+                    // if (isVRRobotLoaded()) {
+                    //     if (frameCounter === 15) {
+                    //         vrLog('Rendering VR robot (canvas mode)');
+                    //     }
+                    //     renderVRRobotForView(view, glLayer.framebuffer, glLayer);
+                    // } else if (frameCounter === 15) {
+                    //     vrLog('VR robot not loaded yet (canvas mode)');
+                    // }
                     
                     // Draw FPS overlay in upper left corner
                     drawFpsOverlay(view, viewport);
@@ -873,6 +931,11 @@
             document.getElementById('vrButton').textContent = '🥽 Enter AR';
             document.getElementById('vrButton').onclick = startVRSession;
             document.getElementById('preview').classList.remove('hidden');
+            
+            // Clear TF callback and dispose VR robot resources
+            setTfUpdateCallback(null);
+            disposeVRRobot();
+            
             startPreview();
         }
         
@@ -950,11 +1013,46 @@
             console.log('Robot panel initialized');
         }
         
+        // Initialize 3D robot viewer and watch for URDF data
+        function initRobotViewer3D() {
+            // Initialize the Three.js viewer
+            const viewerReady = initRobotViewer('robotViewerContainer');
+            if (!viewerReady) {
+                console.log('Robot 3D viewer initialization deferred (container or Three.js not ready)');
+                return;
+            }
+            
+            // Poll for URDF string from robot_state.js and load when available
+            const checkForURDF = setInterval(() => {
+                const urdf = getUrdfString();
+                if (urdf) {
+                    // Load into desktop viewer
+                    if (!isRobotViewerLoaded()) {
+                        console.log('URDF available, loading into 3D viewer...');
+                        loadURDF(urdf);
+                    }
+                    // Also load into VR robot if VR session is active
+                    if (!isVRRobotLoaded() && xrSession) {
+                        console.log('URDF available, loading into VR robot...');
+                        loadVRURDF(urdf);
+                    }
+                    // Stop polling once both are loaded (or VR not active)
+                    if (isRobotViewerLoaded() && (!xrSession || isVRRobotLoaded())) {
+                        clearInterval(checkForURDF);
+                    }
+                }
+            }, 500);
+            
+            // Stop polling after 60 seconds
+            setTimeout(() => clearInterval(checkForURDF), 60000);
+        }
+        
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', async () => {
             console.log('Stereo VR Vision - Initializing...');
             initBatteryMonitor();
             initRobotPanel();  // Initialize robot status panel
+            initRobotViewer3D();  // Initialize 3D robot viewer
             initControllerWebSocket();  // Initialize controller tracking WebSocket
             initFoxgloveConnection();
             await initXR();

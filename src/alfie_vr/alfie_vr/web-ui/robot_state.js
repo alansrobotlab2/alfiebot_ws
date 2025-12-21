@@ -28,6 +28,12 @@ let tfCount = 0;
 let lastTfTime = performance.now();
 let currentTfRate = 0;
 
+// TF transform storage - stores latest transform for each frame
+let tfTransforms = {};
+
+// TF callback - allows external modules to receive TF updates
+let onTfUpdateFn = null;
+
 // ========================================
 // Callback References
 // ========================================
@@ -80,6 +86,22 @@ export function getLinkNames() {
 
 export function getTfRate() {
     return currentTfRate;
+}
+
+export function getTfTransforms() {
+    return tfTransforms;
+}
+
+export function getTfTransform(frameId) {
+    return tfTransforms[frameId] || null;
+}
+
+/**
+ * Set a callback to receive TF updates
+ * @param {Function} callback - Called with (childFrameId, transform) for each TF update
+ */
+export function setTfUpdateCallback(callback) {
+    onTfUpdateFn = callback;
 }
 
 // ========================================
@@ -267,6 +289,20 @@ function handleTFMessage(data) {
             const qy = view.getFloat64(offset, true); offset += 8;
             const qz = view.getFloat64(offset, true); offset += 8;
             const qw = view.getFloat64(offset, true); offset += 8;
+            
+            // Store transform for this frame
+            const transform = {
+                frameId: frameId,
+                childFrameId: childFrameId,
+                position: { x: tx, y: ty, z: tz },
+                quaternion: { x: qx, y: qy, z: qz, w: qw }
+            };
+            tfTransforms[childFrameId] = transform;
+            
+            // Call TF update callback if registered
+            if (onTfUpdateFn) {
+                onTfUpdateFn(childFrameId, transform);
+            }
             
             // Log first few TF messages for debugging
             if (tfCount < 3) {
