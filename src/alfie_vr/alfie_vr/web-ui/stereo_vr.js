@@ -575,7 +575,7 @@
                 useDirectVideoTexture = false;  // Fall back to canvas mode
             }
             
-            // OPTIMIZED: Fragment shader that can handle both modes
+            // OPTIMIZED: Fragment shader that can handle both modes with rounded corners
             const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
             gl.shaderSource(fragmentShader, `
                 precision mediump float;
@@ -583,6 +583,13 @@
                 varying float v_isLeftEye;
                 uniform sampler2D u_texture;
                 uniform float u_useDirectVideo;
+                uniform float u_cornerRadius;
+                
+                // Signed distance function for rounded rectangle
+                float roundedBoxSDF(vec2 centerPos, vec2 halfSize, float radius) {
+                    vec2 q = abs(centerPos) - halfSize + radius;
+                    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+                }
                 
                 void main() {
                     vec2 texCoord = v_texCoord;
@@ -597,7 +604,21 @@
                         }
                     }
                     
-                    gl_FragColor = texture2D(u_texture, texCoord);
+                    // Apply rounded corners using SDF
+                    // Convert tex coords to centered coordinates (-0.5 to 0.5)
+                    vec2 centered = v_texCoord - 0.5;
+                    float dist = roundedBoxSDF(centered, vec2(0.5), u_cornerRadius);
+                    
+                    // Discard pixels outside rounded rectangle
+                    if (dist > 0.0) {
+                        discard;
+                    }
+                    
+                    // Smooth edge with anti-aliasing (optional - slight softness at edges)
+                    float alpha = 1.0 - smoothstep(-0.005, 0.0, dist);
+                    
+                    vec4 color = texture2D(u_texture, texCoord);
+                    gl_FragColor = vec4(color.rgb, color.a * alpha);
                 }
             `);
             gl.compileShader(fragmentShader);
@@ -662,7 +683,8 @@
                 distance: gl.getUniformLocation(shaderProgram, 'u_distance'),
                 ipdOffset: gl.getUniformLocation(shaderProgram, 'u_ipdOffset'),
                 isLeftEye: gl.getUniformLocation(shaderProgram, 'u_isLeftEye'),
-                useDirectVideo: gl.getUniformLocation(shaderProgram, 'u_useDirectVideo')
+                useDirectVideo: gl.getUniformLocation(shaderProgram, 'u_useDirectVideo'),
+                cornerRadius: gl.getUniformLocation(shaderProgram, 'u_cornerRadius')
             };
             
             console.log('Shader locations:', cachedLocations);
@@ -777,6 +799,10 @@
             
             if (cachedLocations.useDirectVideo !== null) {
                 gl.uniform1f(cachedLocations.useDirectVideo, useDirectVideo ? 1.0 : 0.0);
+            }
+            
+            if (cachedLocations.cornerRadius !== null) {
+                gl.uniform1f(cachedLocations.cornerRadius, stereoSettings.cornerRadius);
             }
             
             if (cachedLocations.texture !== null) {

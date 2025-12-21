@@ -19,7 +19,8 @@ export const stereoSettings = {
     verticalOffset: -0.17,  // Meters - positive = up
     ipdOffset: -0.018,      // Meters - adjustment to convergence
     screenDistance: 0.6,    // Meters - distance to virtual screen
-    screenScale: 0.5        // Multiplier for screen size
+    screenScale: 0.5,       // Multiplier for screen size
+    cornerRadius: 0.05      // Normalized 0-0.5 - corner radius for rounded corners
 };
 
 // ========================================
