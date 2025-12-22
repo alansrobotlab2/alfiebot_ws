@@ -455,10 +455,27 @@ function applyOrigin(object, origin) {
 // TF Updates
 // ========================================
 
+// Debug counter for TF updates
+let tfApplyCount = 0;
+
 export function applyTransform(childFrameId, transform) {
-    if (!links[childFrameId] || !transform) return;
+    if (!transform) return;
     
-    const link = links[childFrameId];
+    // Try exact match first, then try without leading slash
+    let link = links[childFrameId];
+    if (!link) {
+        const cleanName = childFrameId.replace(/^\//, '');
+        link = links[cleanName];
+    }
+    
+    if (!link) {
+        // Log first few misses for debugging
+        if (tfApplyCount < 5) {
+            console.log('TF frame not found in links:', childFrameId, 'Available:', Object.keys(links).slice(0, 10));
+        }
+        tfApplyCount++;
+        return;
+    }
     
     // Apply position
     if (transform.position) {
@@ -473,6 +490,12 @@ export function applyTransform(childFrameId, transform) {
             transform.quaternion.z,
             transform.quaternion.w
         );
+    }
+    
+    // Log first successful update
+    if (tfApplyCount === 0) {
+        console.log('First TF applied to link:', childFrameId);
+        tfApplyCount++;
     }
 }
 

@@ -53,6 +53,7 @@
         import {
             initRobotViewer,
             loadURDF,
+            applyTransform,
             isLoaded as isRobotViewerLoaded,
         } from './robot_viewer.js';
         import {
@@ -977,6 +978,8 @@
             const panel = document.getElementById('robotPanel');
             const toggle = document.getElementById('robotPanelToggle');
             const header = document.getElementById('robotPanelHeader');
+            const resizeHandle = document.getElementById('robotPanelResize');
+            const viewerContainer = document.getElementById('robotViewerContainer');
             
             if (!panel || !toggle) return;
             
@@ -1010,6 +1013,54 @@
                 panel.style.transition = '';
             });
             
+            // Make panel resizable
+            let isResizing = false;
+            let startWidth = 0;
+            let startHeight = 0;
+            let startX = 0;
+            let startY = 0;
+            
+            if (resizeHandle) {
+                resizeHandle.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    isResizing = true;
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    startWidth = panel.offsetWidth;
+                    startHeight = panel.offsetHeight;
+                    panel.classList.add('resizing');
+                });
+                
+                document.addEventListener('mousemove', (e) => {
+                    if (!isResizing) return;
+                    
+                    const newWidth = Math.max(220, startWidth + (e.clientX - startX));
+                    const newHeight = Math.max(150, startHeight + (e.clientY - startY));
+                    
+                    panel.style.width = newWidth + 'px';
+                    panel.style.height = newHeight + 'px';
+                    
+                    // Adjust 3D viewer height to fill available space
+                    if (viewerContainer) {
+                        const contentPadding = 24; // 12px top + 12px bottom
+                        const statusRowsHeight = 120; // Approximate height of status rows
+                        const headerHeight = header.offsetHeight;
+                        const viewerHeight = newHeight - headerHeight - contentPadding - statusRowsHeight;
+                        viewerContainer.style.height = Math.max(100, viewerHeight) + 'px';
+                    }
+                });
+                
+                document.addEventListener('mouseup', () => {
+                    if (isResizing) {
+                        isResizing = false;
+                        panel.classList.remove('resizing');
+                        // Trigger resize event for Three.js canvas to update
+                        window.dispatchEvent(new Event('resize'));
+                    }
+                });
+            }
+            
             console.log('Robot panel initialized');
         }
         
@@ -1030,6 +1081,14 @@
                     if (!isRobotViewerLoaded()) {
                         console.log('URDF available, loading into 3D viewer...');
                         loadURDF(urdf);
+                        
+                        // Set up TF callback to update robot pose in desktop viewer
+                        setTfUpdateCallback((childFrameId, transform) => {
+                            if (isRobotViewerLoaded()) {
+                                applyTransform(childFrameId, transform);
+                            }
+                        });
+                        console.log('TF callback set for 3D robot viewer');
                     }
                     // Also load into VR robot if VR session is active
                     if (!isVRRobotLoaded() && xrSession) {

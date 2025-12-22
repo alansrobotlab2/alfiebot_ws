@@ -330,3 +330,33 @@ canvas {
 .robot-panel.collapsed .robot-viewer-3d {
     display: none;
 }
+
+/* Resize handle for robot panel */
+.robot-panel-resize-handle {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 20px;
+    height: 20px;
+    cursor: nwse-resize;
+    background: linear-gradient(135deg, transparent 50%, #555 50%, #555 60%, transparent 60%, transparent 70%, #555 70%, #555 80%, transparent 80%);
+    border-radius: 0 0 10px 0;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+}
+
+.robot-panel-resize-handle:hover {
+    opacity: 1;
+}
+
+.robot-panel.collapsed .robot-panel-resize-handle {
+    display: none;
+}
+
+.robot-panel.resizing {
+    transition: none !important;
+}
+
+.robot-panel.resizing .robot-viewer-3d {
+    pointer-events: none;
+}
