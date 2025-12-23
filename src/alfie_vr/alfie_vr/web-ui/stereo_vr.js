@@ -34,7 +34,7 @@
             setOverlayContext,
             updateGlContext,
             drawFpsOverlay,
-            drawStatusPanel,
+            drawRightStatusPanel,
             drawLeftStatusPanel,
         } from './vr_overlays.js';
         import {
@@ -425,7 +425,7 @@
                     const viewport = glLayer.getViewport(view);
                     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
                     drawFpsOverlay(view, viewport);
-                    drawStatusPanel(view, viewport, pose.transform.matrix);
+                    drawRightStatusPanel(view, viewport, pose.transform.matrix);
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                 }
                 return;
@@ -492,7 +492,7 @@
                     drawFpsOverlay(view, viewport);
                     
                     // Draw status panels (head-locked)
-                    drawStatusPanel(view, viewport, pose.transform.matrix);
+                    drawRightStatusPanel(view, viewport, pose.transform.matrix);
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                 }
             } else {
@@ -595,7 +595,7 @@
                     drawFpsOverlay(view, viewport);
                     
                     // Draw status panels (head-locked)
-                    drawStatusPanel(view, viewport, pose.transform.matrix);
+                    drawRightStatusPanel(view, viewport, pose.transform.matrix);
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                 }
             }
@@ -677,7 +677,8 @@
                     float alpha = 1.0 - smoothstep(-0.005, 0.0, dist);
                     
                     vec4 color = texture2D(u_texture, texCoord);
-                    gl_FragColor = vec4(color.rgb, color.a * alpha);
+                    // Use full opacity (1.0) for the video quad - no passthrough visible behind it
+                    gl_FragColor = vec4(color.rgb, alpha);
                 }
             `);
             gl.compileShader(fragmentShader);
@@ -878,8 +879,14 @@
                 return;  // Don't draw if there's an error
             }
             
+            // Disable blending for video quad to ensure full opacity (no passthrough behind video)
+            gl.disable(gl.BLEND);
+            
             // Draw quad
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            
+            // Re-enable blending for other overlays
+            gl.enable(gl.BLEND);
             
             if (frameCounter === 15) {
                 vrLog('Draw quad OK');

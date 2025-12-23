@@ -9,6 +9,28 @@ import {
 } from './state.js';
 
 // ========================================
+// Panel Configuration (adjust these values)
+// ========================================
+
+// Right status panel configuration
+const RIGHT_PANEL_CONFIG = {
+    width: 0.20,
+    height: 0.09,
+    horizontalOffset: -0.175,  // Offset from right edge of main screen
+    verticalOffset: 0.30,      // Offset from stereoSettings.verticalOffset
+    angle: 15                  // Yaw rotation in degrees (positive = right)
+};
+
+// Left status panel configuration
+const LEFT_PANEL_CONFIG = {
+    width: 0.20,
+    height: 0.135,
+    horizontalOffset: 0.24,    // Offset from left edge of main screen
+    verticalOffset: -0.175,    // Offset from stereoSettings.verticalOffset
+    angle: -15                 // Yaw rotation in degrees (negative = left)
+};
+
+// ========================================
 // Module State
 // ========================================
 
@@ -113,38 +135,49 @@ function drawRoundedRect(ctx, x, y, width, height, radius) {
 }
 
 // Helper function to create a rotated model matrix (yaw rotation around Y axis)
+// WebGL uses column-major 4x4 matrices
+// baseMatrix is multiplied by a Y-axis rotation matrix
 function createRotatedModelMatrix(baseMatrix, yawDegrees, outMatrix) {
     const yawRad = yawDegrees * Math.PI / 180;
     const cosY = Math.cos(yawRad);
     const sinY = Math.sin(yawRad);
     
-    // Rotation matrix around Y axis
-    // [cosY  0  sinY  0]
-    // [0     1  0     0]
-    // [-sinY 0  cosY  0]
-    // [0     0  0     1]
+    // Rotation matrix around Y axis (column-major):
+    // Column 0: [cosY, 0, -sinY, 0]
+    // Column 1: [0, 1, 0, 0]
+    // Column 2: [sinY, 0, cosY, 0]
+    // Column 3: [0, 0, 0, 1]
     
-    // Multiply baseMatrix * rotationMatrix
+    // For baseMatrix * rotationMatrix:
+    // Result column 0 = baseMatrix * [cosY, 0, -sinY, 0]^T
+    // Result column 1 = baseMatrix * [0, 1, 0, 0]^T
+    // Result column 2 = baseMatrix * [sinY, 0, cosY, 0]^T
+    // Result column 3 = baseMatrix * [0, 0, 0, 1]^T
+    
     const m = baseMatrix;
     
-    outMatrix[0] = m[0] * cosY + m[2] * (-sinY);
-    outMatrix[1] = m[1] * cosY + m[3] * (-sinY);
-    outMatrix[2] = m[0] * sinY + m[2] * cosY;
-    outMatrix[3] = m[3];
+    // Column 0: m * [cosY, 0, -sinY, 0]
+    outMatrix[0] = m[0] * cosY + m[8] * (-sinY);
+    outMatrix[1] = m[1] * cosY + m[9] * (-sinY);
+    outMatrix[2] = m[2] * cosY + m[10] * (-sinY);
+    outMatrix[3] = m[3] * cosY + m[11] * (-sinY);
     
-    outMatrix[4] = m[4] * cosY + m[6] * (-sinY);
-    outMatrix[5] = m[5] * cosY + m[7] * (-sinY);
-    outMatrix[6] = m[4] * sinY + m[6] * cosY;
+    // Column 1: m * [0, 1, 0, 0] = column 1 of m
+    outMatrix[4] = m[4];
+    outMatrix[5] = m[5];
+    outMatrix[6] = m[6];
     outMatrix[7] = m[7];
     
-    outMatrix[8] = m[8] * cosY + m[10] * (-sinY);
-    outMatrix[9] = m[9] * cosY + m[11] * (-sinY);
-    outMatrix[10] = m[8] * sinY + m[10] * cosY;
-    outMatrix[11] = m[11];
+    // Column 2: m * [sinY, 0, cosY, 0]
+    outMatrix[8] = m[0] * sinY + m[8] * cosY;
+    outMatrix[9] = m[1] * sinY + m[9] * cosY;
+    outMatrix[10] = m[2] * sinY + m[10] * cosY;
+    outMatrix[11] = m[3] * sinY + m[11] * cosY;
     
-    outMatrix[12] = m[12] * cosY + m[14] * (-sinY);
-    outMatrix[13] = m[13] * cosY + m[15] * (-sinY);
-    outMatrix[14] = m[12] * sinY + m[14] * cosY;
+    // Column 3: m * [0, 0, 0, 1] = column 3 of m (translation)
+    outMatrix[12] = m[12];
+    outMatrix[13] = m[13];
+    outMatrix[14] = m[14];
     outMatrix[15] = m[15];
 }
 
@@ -375,13 +408,13 @@ export function drawFpsOverlay(view, viewport) {
 // Right Status Panel Functions
 // ========================================
 
-function initStatusPanel() {
+function initRightStatusPanel() {
     if (!gl) {
-        vrLogFn('Status panel: no GL context');
+        vrLogFn('Right status panel: no GL context');
         return;
     }
     
-    vrLogFn('Init status panel...');
+    vrLogFn('Init right status panel...');
     
     // Create canvas for status text
     statusPanelCanvas = document.createElement('canvas');
@@ -405,6 +438,8 @@ function initStatusPanel() {
     // Status panel size
     const panelHeight = 0.09;
     const panelWidth = 0.20;
+
+    const panelAngle = -15.0
     
     const panelLeft = mainRightEdge - panelWidth - 0.175;
     const panelCenterY = stereoSettings.verticalOffset + 0.30;
@@ -431,7 +466,7 @@ function initStatusPanel() {
     updateStatusPanelCanvas();
     
     statusPanelInitialized = true;
-    vrLogFn('Status panel: OK');
+    vrLogFn('Right status panel: OK');
 }
 
 function updateStatusPanelCanvas() {
@@ -493,7 +528,7 @@ function updateStatusPanelCanvas() {
     }
 }
 
-export function drawStatusPanel(view, viewport, modelMatrix) {
+export function drawRightStatusPanel(view, viewport, modelMatrix) {
     // Only render right status panel to the right eye
     if (view.eye !== 'right') {
         return;
@@ -505,7 +540,7 @@ export function drawStatusPanel(view, viewport, modelMatrix) {
     
     // Initialize on first call
     if (!statusPanelInitialized) {
-        initStatusPanel();
+        initRightStatusPanel();
     }
     
     if (!statusPanelInitialized || !shaderProgram || !statusPanelTexture || !cachedLocations) {
@@ -565,7 +600,7 @@ export function drawStatusPanel(view, viewport, modelMatrix) {
     
     if (cachedLocations.model !== null) {
         if (modelMatrix) {
-            createRotatedModelMatrix(modelMatrix, 15, rightPanelModelMatrix);
+            createRotatedModelMatrix(modelMatrix, panelAngle, rightPanelModelMatrix);
             gl.uniformMatrix4fv(cachedLocations.model, false, rightPanelModelMatrix);
         } else {
             gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
@@ -637,12 +672,12 @@ function initLeftStatusPanel() {
     const mainWidth = mainHeight * (16/9);
     const mainLeftEdge = -mainWidth / 2;
     
-    // Left status panel size
-    const panelHeight = 0.135;
-    const panelWidth = 0.20;
+    // Left status panel size and position (using config)
+    const panelHeight = LEFT_PANEL_CONFIG.height;
+    const panelWidth = LEFT_PANEL_CONFIG.width;
     
-    const panelLeft = mainLeftEdge + 0.24;
-    const panelCenterY = stereoSettings.verticalOffset - 0.175;
+    const panelLeft = mainLeftEdge + LEFT_PANEL_CONFIG.horizontalOffset;
+    const panelCenterY = stereoSettings.verticalOffset + LEFT_PANEL_CONFIG.verticalOffset;
     
     leftStatusPanelPositionBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, leftStatusPanelPositionBuffer);
@@ -818,7 +853,7 @@ export function drawLeftStatusPanel(view, viewport, modelMatrix) {
     
     if (cachedLocations.model !== null) {
         if (modelMatrix) {
-            createRotatedModelMatrix(modelMatrix, -15, leftPanelModelMatrix);
+            createRotatedModelMatrix(modelMatrix, LEFT_PANEL_CONFIG.angle, leftPanelModelMatrix);
             gl.uniformMatrix4fv(cachedLocations.model, false, leftPanelModelMatrix);
         } else {
             gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
