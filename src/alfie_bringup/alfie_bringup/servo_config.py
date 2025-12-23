@@ -18,8 +18,8 @@ SERVO_POLARITY = [
     -1,   # Servo 5:  driver1/servo06 - left wrist roll
     -1,   # Servo 6:  driver1/servo07 - left hand
      1,   # Servo 7:  driver0/servo01 - right shoulder yaw
-    -1,   # Servo 8:  driver0/servo02 - right shoulder1 pitch
-    -1,   # Servo 9:  driver0/servo03 - right shoulder2 pitch (DERIVED from index 8)
+     1,   # Servo 8:  driver0/servo02 - right shoulder1 pitch
+     1,   # Servo 9:  driver0/servo03 - right shoulder2 pitch (DERIVED from index 8)
     -1,   # Servo 10: driver0/servo04 - right elbow pitch
      1,   # Servo 11: driver0/servo05 - right wrist pitch
     -1,   # Servo 12: driver0/servo06 - right wrist roll

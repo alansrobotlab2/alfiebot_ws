@@ -33,8 +33,8 @@ class SimpleTeleopArm:
         self.vr_z_multiplier = 40  # Scale for arm reach (Z->X)
         
         # Wrist multipliers (VR controller rotation -> robot wrist rotation)
-        self.wrist_pitch_multiplier = 2.0
-        self.wrist_roll_multiplier = 2.0
+        self.wrist_pitch_multiplier = 4.0
+        self.wrist_roll_multiplier = 4.0
 
         self.joint_map = joint_map
         self.prefix = prefix

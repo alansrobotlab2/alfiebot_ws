@@ -28,6 +28,37 @@
         VR Debug Info
     </div>
 
+    <!-- Robot Viewer Panel -->
+    <div id="robotPanel" class="robot-panel">
+        <div class="robot-panel-header" id="robotPanelHeader">
+            <span class="robot-panel-title">🤖 Robot Status</span>
+            <button class="robot-panel-toggle" id="robotPanelToggle">−</button>
+        </div>
+        <div class="robot-panel-content" id="robotPanelContent">
+            <div class="robot-status-row">
+                <span class="robot-status-label">Foxglove:</span>
+                <span class="robot-status-value" id="foxgloveStatus">Disconnected</span>
+            </div>
+            <div class="robot-status-row">
+                <span class="robot-status-label">TF Rate:</span>
+                <span class="robot-status-value" id="tfRate">-- Hz</span>
+            </div>
+            <div class="robot-status-row">
+                <span class="robot-status-label">URDF:</span>
+                <span class="robot-status-value" id="urdfStatus">Not loaded</span>
+            </div>
+            <div class="robot-status-row">
+                <span class="robot-status-label">Links:</span>
+                <span class="robot-status-value" id="linkCount">--</span>
+            </div>
+            <div id="robotViewerContainer" class="robot-viewer-3d"></div>
+        </div>
+        <div class="robot-panel-resize-handle" id="robotPanelResize"></div>
+    </div>
+
+    <!-- Three.js for 3D robot visualization -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="libs/OBJLoader.js"></script>
     
     <script type="module" src="stereo_vr.js"></script>
 </body>

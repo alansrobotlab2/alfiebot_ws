@@ -197,3 +197,166 @@ body {
 canvas {
     display: none;
 }
+
+/* Robot Viewer Panel */
+.robot-panel {
+    position: fixed;
+    top: 70px;
+    left: 20px;
+    background: rgba(0, 0, 0, 0.85);
+    border: 1px solid #444;
+    border-radius: 10px;
+    min-width: 220px;
+    z-index: 1000;
+    font-size: 14px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    transition: all 0.3s ease;
+}
+
+.robot-panel.collapsed .robot-panel-content {
+    display: none;
+}
+
+.robot-panel.collapsed {
+    min-width: auto;
+}
+
+.robot-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 15px;
+    border-bottom: 1px solid #444;
+    cursor: move;
+    user-select: none;
+}
+
+.robot-panel.collapsed .robot-panel-header {
+    border-bottom: none;
+}
+
+.robot-panel-title {
+    color: #4CAF50;
+    font-weight: bold;
+    font-size: 15px;
+}
+
+.robot-panel-toggle {
+    background: transparent;
+    border: 1px solid #555;
+    color: #aaa;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.robot-panel-toggle:hover {
+    background: #333;
+    color: #fff;
+    border-color: #666;
+}
+
+.robot-panel-content {
+    padding: 12px 15px;
+}
+
+.robot-status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.robot-status-row:last-child {
+    border-bottom: none;
+}
+
+.robot-status-label {
+    color: #888;
+    font-size: 13px;
+}
+
+.robot-status-value {
+    color: #fff;
+    font-family: monospace;
+    font-size: 13px;
+}
+
+.robot-status-value.connected,
+.robot-status-value.foxglove-connected {
+    color: #4CAF50;
+}
+
+.robot-status-value.disconnected,
+.robot-status-value.foxglove-disconnected {
+    color: #f44336;
+}
+
+.robot-status-value.connecting,
+.robot-status-value.foxglove-connecting {
+    color: #f39c12;
+}
+
+.robot-status-value.foxglove-error {
+    color: #ff5722;
+}
+
+/* 3D Robot Viewer Container */
+.robot-viewer-3d {
+    width: 100%;
+    height: 200px;
+    margin-top: 10px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #1a1a1a;
+    border: 1px solid #333;
+}
+
+.robot-viewer-3d canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block;
+}
+
+.robot-panel.collapsed .robot-viewer-3d {
+    display: none;
+}
+
+/* Resize handle for robot panel */
+.robot-panel-resize-handle {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 20px;
+    height: 20px;
+    cursor: nwse-resize;
+    background: linear-gradient(135deg, transparent 50%, #555 50%, #555 60%, transparent 60%, transparent 70%, #555 70%, #555 80%, transparent 80%);
+    border-radius: 0 0 10px 0;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+}
+
+.robot-panel-resize-handle:hover {
+    opacity: 1;
+}
+
+.robot-panel.collapsed .robot-panel-resize-handle {
+    display: none;
+}
+
+.robot-panel.resizing {
+    transition: none !important;
+}
+
+.robot-panel.resizing .robot-viewer-3d {
+    pointer-events: none;
+}

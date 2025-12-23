@@ -2,335 +2,122 @@
         // Displays side-by-side stereo video as immersive VR
         // With VR Controller Tracking support
         
-        const FOXGLOVE_PORT = 8082;
-        const CONTROLLER_WS_PORT = 8442;
+        import {
+            CONFIG,
+            stereoSettings,
+            connectionState,
+            subscriptions,
+            xrState,
+            videoState,
+            robotState,
+            leftController,
+            rightController,
+            headsetPose,
+            fpsOverlayState,
+            batteryState,
+            statusPanelState,
+            leftStatusPanelState,
+            frameTracking,
+            shaderState,
+            preAllocatedBuffers,
+            invalidateSettingsHash,
+        } from './state.js';
+        import {
+            initControllerWebSocket,
+            sendControllerData,
+            processInputSources,
+            processHeadsetPose,
+            processThumbstickAdjustments,
+            setVrLogFunction,
+        } from './controller_tracking.js';
+        import {
+            setOverlayContext,
+            updateGlContext,
+            drawRightStatusPanel,
+            drawLeftStatusPanel,
+        } from './vr_overlays.js';
+        import {
+            FOXGLOVE_PORT,
+            setRobotStateContext,
+            initFoxgloveConnection,
+            getFoxgloveConn,
+            getCurrentFrameBitmap,
+            getLastFrameReceivedTimestamp,
+            getCurrentVrFps,
+            getUrdfString,
+            getLinkNames,
+            getTfRate,
+            setTfUpdateCallback,
+        } from './robot_state.js';
+        import {
+            initRobotViewer,
+            loadURDF,
+            applyTransform,
+            isLoaded as isRobotViewerLoaded,
+        } from './robot_viewer.js';
+        import {
+            initVRRobot,
+            loadVRURDF,
+            renderVRRobotForView,
+            isVRRobotLoaded,
+            disposeVRRobot,
+            applyVRTransform,
+        } from './vr_robot.js';
         
-        let foxgloveClient = null;
-        let compressedImageSubscriptionId = null;
-        let currentFrameBitmap = null;
+        // ========================================
+        // Local Aliases for Backward Compatibility
+        // These reference the shared state objects
+        // ========================================
+        
+        // Video/texture aliases (local to this module)
+        let videoElement = null;
+        let leftTexture = null;
+        let rightTexture = null;
+        let leftCanvas = null, rightCanvas = null, leftCtx = null, rightCtx = null;
+        let useDirectVideoTexture = false;
+        let videoTexture = null;
+        let texturesInitialized = false;
+        let lastVideoWidth = 0;
+        let lastVideoHeight = 0;
+        let lastVideoTime = -1;
+        let videoFrameCallbackId = null;
+        let newVideoFrameAvailable = false;
+        
+        // XR session aliases
         let xrSession = null;
         let xrRefSpace = null;
         let gl = null;
-        let leftTexture = null;
-        let rightTexture = null;
-        let videoElement = null;
-        let leftCanvas, rightCanvas, leftCtx, rightCtx;
-        let retryCount = 0;
-        const MAX_RETRIES = 3;
         
-        // Controller WebSocket connection
-        let controllerWS = null;
-        let controllerWSRetryCount = 0;
-        const CONTROLLER_WS_MAX_RETRIES = 10;
-        
-        // Controller tracking state
-        let leftController = {
-            hand: 'left',
-            position: null,
-            rotation: null,
-            quaternion: null,
-            gripActive: false,
-            trigger: 0,
-            thumbstick: { x: 0, y: 0 },
-            buttons: { squeeze: false, thumbstick: false, x: false, y: false, menu: false }
-        };
-        
-        let rightController = {
-            hand: 'right',
-            position: null,
-            rotation: null,
-            quaternion: null,
-            gripActive: false,
-            trigger: 0,
-            thumbstick: { x: 0, y: 0 },
-            buttons: { squeeze: false, thumbstick: false, a: false, b: false, menu: false }
-        };
-        
-        let headsetPose = {
-            position: null,
-            rotation: null,
-            quaternion: null
-        };
-        
-        // Grip state tracking for relative rotation
-        let leftGripInitialQuaternion = null;
-        let rightGripInitialQuaternion = null;
-        let leftGripDown = false;
-        let rightGripDown = false;
-        
-        // ========================================
-        // Controller WebSocket Functions
-        // ========================================
-        
-        function initControllerWebSocket() {
-            const wsUrl = `wss://${window.location.hostname}:${CONTROLLER_WS_PORT}`;
-            console.log(`Connecting to controller WebSocket: ${wsUrl}`);
-            
-            try {
-                controllerWS = new WebSocket(wsUrl);
-                
-                controllerWS.onopen = () => {
-                    console.log('Controller WebSocket connected');
-                    controllerWSRetryCount = 0;
-                    vrLog('Controller WS: Connected');
-                };
-                
-                controllerWS.onerror = (error) => {
-                    console.error('Controller WebSocket error:', error);
-                    vrLog('Controller WS: Error');
-                };
-                
-                controllerWS.onclose = (event) => {
-                    console.log(`Controller WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`);
-                    controllerWS = null;
-                    vrLog('Controller WS: Disconnected');
-                    
-                    // Retry connection
-                    if (controllerWSRetryCount < CONTROLLER_WS_MAX_RETRIES) {
-                        controllerWSRetryCount++;
-                        setTimeout(initControllerWebSocket, 3000);
-                    }
-                };
-                
-                controllerWS.onmessage = (event) => {
-                    // Handle any messages from the server if needed
-                    console.log('Controller WS message:', event.data);
-                };
-            } catch (error) {
-                console.error('Failed to create controller WebSocket:', error);
-                if (controllerWSRetryCount < CONTROLLER_WS_MAX_RETRIES) {
-                    controllerWSRetryCount++;
-                    setTimeout(initControllerWebSocket, 3000);
-                }
-            }
-        }
-        
-        function sendControllerData() {
-            if (!controllerWS || controllerWS.readyState !== WebSocket.OPEN) return;
-            
-            const hasValidLeft = leftController.position !== null;
-            const hasValidRight = rightController.position !== null;
-            const hasValidHeadset = headsetPose.position !== null;
-            
-            if (hasValidLeft || hasValidRight || hasValidHeadset) {
-                const data = {
-                    timestamp: Date.now(),
-                    leftController: leftController,
-                    rightController: rightController,
-                    headset: headsetPose
-                };
-                controllerWS.send(JSON.stringify(data));
-            }
-        }
-        
-        // Quaternion to Euler angles conversion (in degrees)
-        function quaternionToEuler(q) {
-            // Roll (x-axis rotation)
-            const sinr_cosp = 2 * (q.w * q.x + q.y * q.z);
-            const cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y);
-            const roll = Math.atan2(sinr_cosp, cosr_cosp);
-            
-            // Pitch (y-axis rotation)
-            const sinp = 2 * (q.w * q.y - q.z * q.x);
-            let pitch;
-            if (Math.abs(sinp) >= 1) {
-                pitch = Math.sign(sinp) * Math.PI / 2; // Use 90 degrees if out of range
-            } else {
-                pitch = Math.asin(sinp);
-            }
-            
-            // Yaw (z-axis rotation)
-            const siny_cosp = 2 * (q.w * q.z + q.x * q.y);
-            const cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
-            const yaw = Math.atan2(siny_cosp, cosy_cosp);
-            
-            return {
-                x: roll * 180 / Math.PI,
-                y: pitch * 180 / Math.PI,
-                z: yaw * 180 / Math.PI
-            };
-        }
-        
-        // Process XR input sources to extract controller data
-        function processInputSources(frame, refSpace) {
-            if (!xrSession || !xrSession.inputSources) return;
-            
-            for (const inputSource of xrSession.inputSources) {
-                if (inputSource.targetRayMode !== 'tracked-pointer') continue;
-                
-                const handedness = inputSource.handedness; // 'left' or 'right'
-                const controller = handedness === 'left' ? leftController : rightController;
-                
-                // Get grip pose (hand position/rotation)
-                const gripSpace = inputSource.gripSpace;
-                if (gripSpace) {
-                    const gripPose = frame.getPose(gripSpace, refSpace);
-                    if (gripPose) {
-                        const pos = gripPose.transform.position;
-                        const ori = gripPose.transform.orientation;
-                        
-                        controller.position = { x: pos.x, y: pos.y, z: pos.z };
-                        controller.quaternion = { x: ori.x, y: ori.y, z: ori.z, w: ori.w };
-                        controller.rotation = quaternionToEuler(controller.quaternion);
-                    }
-                }
-                
-                // Get gamepad data (buttons, triggers, thumbsticks)
-                const gamepad = inputSource.gamepad;
-                if (gamepad) {
-                    // Trigger (index 0)
-                    if (gamepad.buttons[0]) {
-                        controller.trigger = gamepad.buttons[0].value || 0;
-                    }
-                    
-                    // Squeeze/Grip (index 1)
-                    const isGripPressed = gamepad.buttons[1]?.pressed || false;
-                    
-                    // Track grip state changes
-                    if (handedness === 'left') {
-                        if (isGripPressed && !leftGripDown) {
-                            leftGripDown = true;
-                            leftGripInitialQuaternion = controller.quaternion ? { ...controller.quaternion } : null;
-                        } else if (!isGripPressed && leftGripDown) {
-                            leftGripDown = false;
-                            leftGripInitialQuaternion = null;
-                            // Send grip release message
-                            if (controllerWS && controllerWS.readyState === WebSocket.OPEN) {
-                                controllerWS.send(JSON.stringify({ hand: 'left', gripReleased: true }));
-                            }
-                        }
-                        controller.gripActive = leftGripDown;
-                    } else {
-                        if (isGripPressed && !rightGripDown) {
-                            rightGripDown = true;
-                            rightGripInitialQuaternion = controller.quaternion ? { ...controller.quaternion } : null;
-                        } else if (!isGripPressed && rightGripDown) {
-                            rightGripDown = false;
-                            rightGripInitialQuaternion = null;
-                            // Send grip release message
-                            if (controllerWS && controllerWS.readyState === WebSocket.OPEN) {
-                                controllerWS.send(JSON.stringify({ hand: 'right', gripReleased: true }));
-                            }
-                        }
-                        controller.gripActive = rightGripDown;
-                    }
-                    
-                    // Thumbstick axes (axes 2, 3)
-                    controller.thumbstick = {
-                        x: gamepad.axes[2] || 0,
-                        y: gamepad.axes[3] || 0
-                    };
-                    
-                    // Buttons
-                    if (handedness === 'left') {
-                        controller.buttons = {
-                            squeeze: isGripPressed,
-                            thumbstick: !!gamepad.buttons[3]?.pressed,
-                            x: !!gamepad.buttons[4]?.pressed,
-                            y: !!gamepad.buttons[5]?.pressed,
-                            menu: !!gamepad.buttons[6]?.pressed
-                        };
-                    } else {
-                        controller.buttons = {
-                            squeeze: isGripPressed,
-                            thumbstick: !!gamepad.buttons[3]?.pressed,
-                            a: !!gamepad.buttons[4]?.pressed,
-                            b: !!gamepad.buttons[5]?.pressed,
-                            menu: !!gamepad.buttons[6]?.pressed
-                        };
-                    }
-                }
-            }
-        }
-        
-        // Process headset pose
-        function processHeadsetPose(pose) {
-            if (!pose || !pose.transform) return;
-            
-            const pos = pose.transform.position;
-            const ori = pose.transform.orientation;
-            
-            headsetPose.position = { x: pos.x, y: pos.y, z: pos.z };
-            headsetPose.quaternion = { x: ori.x, y: ori.y, z: ori.z, w: ori.w };
-            headsetPose.rotation = quaternionToEuler(headsetPose.quaternion);
-        }
-        
-        // Use thumbsticks to adjust stereo settings in VR
-        function processThumbstickAdjustments() {
-            // Left thumbstick Y: vertical offset - DISABLED to prevent conflict with robot control
-            /*
-            if (Math.abs(leftController.thumbstick?.y || 0) > 0.1) {
-                stereoSettings.verticalOffset += leftController.thumbstick.y * 0.005;
-                stereoSettings.verticalOffset = Math.max(-1, Math.min(1, stereoSettings.verticalOffset));
-                reinitQuadBuffers();
-            }
-            */
-            
-            // Right thumbstick X: IPD offset - DISABLED
-            /*
-            if (Math.abs(rightController.thumbstick?.x || 0) > 0.1) {
-                stereoSettings.ipdOffset += rightController.thumbstick.x * 0.0005;
-                stereoSettings.ipdOffset = Math.max(-0.05, Math.min(0.05, stereoSettings.ipdOffset));
-            }
-            */
-            
-            // Triggers: screen distance - DISABLED
-            /*
-            if ((leftController.trigger || 0) > 0.5) {
-                stereoSettings.screenDistance -= 0.02;
-                stereoSettings.screenDistance = Math.max(0.5, stereoSettings.screenDistance);
-            }
-            if ((rightController.trigger || 0) > 0.5) {
-                stereoSettings.screenDistance += 0.02;
-                stereoSettings.screenDistance = Math.max(0.5, Math.min(5, stereoSettings.screenDistance));
-            }
-            */
-        }
-        
-        // ========================================
-        // End Controller WebSocket Functions
-        // ========================================
-        
-        // Advanced optimization: Use video element directly as texture source
-        let useDirectVideoTexture = false;  // TEMPORARILY DISABLED - use canvas mode for debugging
-        let videoTexture = null;  // Single texture for entire video
-        
-        // FPS overlay for immersive VR mode
-        let fpsOverlayCanvas = null;
-        let fpsOverlayCtx = null;
-        let fpsOverlayTexture = null;
-        let currentVrFps = 0;  // This now tracks RECEIVED frame rate
-        let fpsOverlayShader = null;
-        let fpsOverlayPositionBuffer = null;
-        let fpsOverlayTexCoordBuffer = null;
-        let fpsOverlayCachedLocations = null;
-        
-        // Battery state for VR overlay
+        // Battery state (local - not from robot_state)
         let currentBatteryLevel = null;
         let currentBatteryCharging = false;
         
-        // Received frame FPS tracking
-        let receivedFrameCount = 0;
-        let lastReceivedFpsTime = performance.now();
-        let lastFrameReceivedTimestamp = 0;  // When the current frame was received
-        
-        // Latency tracking
+        // Frame tracking aliases (local render loop state)
         let lastFrameTime = 0;
         let frameCount = 0;
         let totalLatency = 0;
         
-        // Stereo adjustment settings (optimized defaults)
-        let stereoSettings = {
-            verticalOffset: -0.17,  // Meters - positive = up
-            ipdOffset: -0.018,      // Meters - adjustment to convergence
-            screenDistance: 0.6,    // Meters - distance to virtual screen
-            screenScale: 0.5        // Multiplier for screen size
-        };
+        // Shader state aliases
+        let shaderProgram = null;
+        let positionBuffer = null;
+        let texCoordBuffer = null;
+        let cachedLocations = null;
+        let lastSettingsHash = '';
+        
+        // Pre-allocated buffers
+        const viewMatrixBuffer = preAllocatedBuffers.viewMatrix;
+        
+        // Retry tracking
+        let retryCount = 0;
+        const MAX_RETRIES = CONFIG.MAX_RETRIES;
+        
+        // ========================================
+        // End Local Aliases
+        // ========================================
         
         // Reinitialize quad buffers when size changes - now invalidates hash to trigger update
         function reinitQuadBuffers() {
-            // Invalidate the hash so updatePositionBufferIfNeeded() will rebuild
-            lastSettingsHash = '';
+            invalidateSettingsHash();
         }
         
         // Status display
@@ -363,171 +150,17 @@
             }
         }
         
-        // Initialize Foxglove WebSocket connection
-        function initFoxgloveConnection() {
-            const url = `wss://${window.location.hostname}:${FOXGLOVE_PORT}`;
-            console.log(`Connecting to Foxglove at ${url}`);
-            setStatus('Connecting to stereo stream...');
-            
-            try {
-                foxgloveClient = new WebSocket(url, ['foxglove.sdk.v1']);
-                foxgloveClient.binaryType = 'arraybuffer';
-                
-                foxgloveClient.onopen = () => {
-                    console.log('Foxglove WebSocket connected');
-                    setStatus('Connected to bridge, waiting for topics...', 'connected');
-                };
-                
-                foxgloveClient.onmessage = async (event) => {
-                    if (typeof event.data === 'string') {
-                        handleFoxgloveJsonMessage(event.data);
-                    } else if (event.data instanceof ArrayBuffer) {
-                        handleFoxgloveBinaryMessage(event.data);
-                    }
-                };
-                
-                foxgloveClient.onerror = (error) => {
-                    console.error('Foxglove WebSocket error:', error);
-                    setStatus('Connection error - SSL certificate may need to be accepted', 'error');
-                    showCertButton();
-                };
-                
-                foxgloveClient.onclose = (event) => {
-                    console.log('Foxglove WebSocket closed', event);
-                    setStatus('Connection closed, reconnecting...', 'error');
-                    setTimeout(initFoxgloveConnection, 2000);
-                };
-                
-            } catch (error) {
-                console.error('Failed to create Foxglove WebSocket:', error);
-                setStatus('Connection failed', 'error');
-                setTimeout(initFoxgloveConnection, 2000);
-            }
-        }
-
-        function handleFoxgloveJsonMessage(data) {
-            try {
-                const message = JSON.parse(data);
-                console.log('Foxglove JSON message, op:', message.op);
-                
-                if (message.op === 'serverInfo') {
-                    console.log('Server info:', message.name);
-                } else if (message.op === 'advertise') {
-                    console.log('Advertise received, channels:', message.channels?.length);
-                    subscribeToCompressedImage(message.channels);
-                }
-            } catch (error) {
-                console.error('Failed to parse JSON message:', error);
-            }
-        }
-
-        function subscribeToCompressedImage(channels) {
-            const subscriptions = [];
-            
-            for (const channel of channels) {
-                if (channel.topic === '/alfie/stereo_camera/image_raw/compressed') {
-                    compressedImageSubscriptionId = subscriptions.length + 1;
-                    subscriptions.push({ id: compressedImageSubscriptionId, channelId: channel.id });
-                    console.log('Found compressed image topic, channelId:', channel.id, 'subId:', compressedImageSubscriptionId);
-                }
-            }
-            
-            if (subscriptions.length > 0) {
-                foxgloveClient.send(JSON.stringify({ op: 'subscribe', subscriptions }));
-                setStatus('Subscribed to stereo stream', 'connected');
-            } else {
-                console.log('Compressed image topic not found in advertised channels');
-                console.log('Available topics:', channels.map(c => c.topic).join(', '));
-                setStatus('Topic not found - is camera running?', 'error');
-            }
-        }
-
-        function handleFoxgloveBinaryMessage(data) {
-            const view = new DataView(data);
-            const opCode = view.getUint8(0);
-            
-            if (opCode === 1) { // Message data
-                const subscriptionId = view.getUint32(1, true);
-                
-                if (subscriptionId === compressedImageSubscriptionId) {
-                    // Skip header (1 byte op + 4 bytes subId + 8 bytes timestamp) = 13 bytes
-                    const messageData = new DataView(data, 13);
-                    processCompressedImage(messageData);
-                }
-            }
-        }
-
-        async function processCompressedImage(view) {
-            try {
-                let offset = 4; // Skip CDR encapsulation header (4 bytes)
-                
-                // Helper to align offset
-                const align = (n) => {
-                    offset = (offset + n - 1) & ~(n - 1);
-                };
-
-                // Header
-                // stamp (8 bytes)
-                align(4); // Time is struct of 2 int32/uint32, so 4 byte alignment
-                offset += 8;
-                
-                // frame_id (string)
-                align(4);
-                const frameIdLen = view.getUint32(offset, true);
-                offset += 4 + frameIdLen;
-                
-                // format (string)
-                align(4);
-                const formatLen = view.getUint32(offset, true);
-                offset += 4 + formatLen;
-                
-                // data (uint8[])
-                align(4);
-                const dataLen = view.getUint32(offset, true);
-                offset += 4;
-                
-                // Extract image data
-                const imageBytes = new Uint8Array(view.buffer, view.byteOffset + offset, dataLen);
-                
-                // Create blob and bitmap
-                const blob = new Blob([imageBytes], { type: 'image/jpeg' });
-                const bitmap = await createImageBitmap(blob);
-                
-                // Update current frame
-                if (currentFrameBitmap) {
-                    currentFrameBitmap.close(); // Release old bitmap
-                }
-                currentFrameBitmap = bitmap;
-                lastFrameReceivedTimestamp = performance.now();  // Record when this frame arrived
-                
-                // Track received frame FPS
-                receivedFrameCount++;
-                const now = performance.now();
-                const elapsed = now - lastReceivedFpsTime;
-                if (elapsed >= 1000) {
-                    currentVrFps = (receivedFrameCount / elapsed) * 1000;
-                    receivedFrameCount = 0;
-                    lastReceivedFpsTime = now;
-                    
-                    // Update HTML FPS counter too
-                    const fpsElement = document.getElementById('fpsCounter');
-                    if (fpsElement) {
-                        fpsElement.textContent = `FPS: ${currentVrFps.toFixed(1)}`;
-                    }
-                }
-                
-                // Update status if this is the first frame
-                if (document.getElementById('vrButton').disabled) {
-                    setStatus('Stereo stream received', 'connected');
-                    document.getElementById('vrButton').disabled = false;
-                    document.getElementById('certButton').style.display = 'none';
-                    startPreview();
-                }
-                
-            } catch (error) {
-                console.error('Error processing compressed image:', error);
-            }
-        }
+        // Share vrLog with controller tracking module
+        setVrLogFunction(vrLog);
+        
+        // Set up robot state context with callbacks
+        setRobotStateContext({
+            setStatus: setStatus,
+            showCertButton: showCertButton,
+            enableVrButton: () => document.getElementById('vrButton').disabled = false,
+            startPreview: startPreview,
+            vrLog: vrLog,
+        });
         
         // Show preview of stereo stream (non-VR mode)
         function startPreview() {
@@ -554,12 +187,13 @@
                     frames = 0;
                 }
 
-                if (currentFrameBitmap) {
-                    if (canvas.width !== currentFrameBitmap.width || canvas.height !== currentFrameBitmap.height) {
-                        canvas.width = currentFrameBitmap.width;
-                        canvas.height = currentFrameBitmap.height;
+                if (getCurrentFrameBitmap()) {
+                    const bitmap = getCurrentFrameBitmap();
+                    if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+                        canvas.width = bitmap.width;
+                        canvas.height = bitmap.height;
                     }
-                    ctx.drawImage(currentFrameBitmap, 0, 0);
+                    ctx.drawImage(bitmap, 0, 0);
                     preview.src = canvas.toDataURL('image/jpeg', 0.8);
                     preview.classList.remove('hidden');
                 }
@@ -669,9 +303,9 @@
                 console.log('Using direct video texture mode:', useDirectVideoTexture);
                 vrLog('Canvas mode: ' + (!useDirectVideoTexture ? 'YES' : 'NO'));
                 
-                vrLog('Video ready: ' + (currentFrameBitmap ? 'YES' : 'NO'));
-                if (currentFrameBitmap) {
-                    vrLog('Video: ' + currentFrameBitmap.width + 'x' + currentFrameBitmap.height);
+                vrLog('Video ready: ' + (getCurrentFrameBitmap() ? 'YES' : 'NO'));
+                if (getCurrentFrameBitmap()) {
+                    vrLog('Video: ' + getCurrentFrameBitmap().width + 'x' + getCurrentFrameBitmap().height);
                 }
                 
                 document.getElementById('preview').classList.add('hidden');
@@ -679,6 +313,48 @@
                 document.getElementById('vrButton').onclick = () => xrSession.end();
                 
                 setStatus('AR Active - Stereo 3D Vision (95% opacity)', 'connected');
+                
+                // Set up overlay context with callbacks
+                setOverlayContext({
+                    gl: gl,
+                    vrLog: vrLog,
+                    getFrameCounter: () => frameCounter,
+                    getCurrentVrFps: getCurrentVrFps,
+                    getCurrentBatteryLevel: () => currentBatteryLevel,
+                    getCurrentBatteryCharging: () => currentBatteryCharging,
+                    getLastFrameReceivedTimestamp: getLastFrameReceivedTimestamp,
+                    getFoxgloveConn: getFoxgloveConn,
+                    getTfRate: getTfRate,
+                    getLinkNamesLength: () => getLinkNames().length,
+                    getUrdfString: getUrdfString,
+                    getShaderProgram: () => shaderProgram,
+                    getCachedLocations: () => cachedLocations,
+                    invertMatrix: invertMatrix,
+                    viewMatrixBuffer: viewMatrixBuffer,
+                });
+                updateGlContext(gl);
+                
+                // TODO: VR Robot disabled - Three.js WebGL state conflicts with custom shaders
+                // Initialize VR Robot renderer for 3D robot visualization
+                // const vrRobotReady = initVRRobot(gl, xrSession);
+                // if (vrRobotReady) {
+                //     vrLog('VR Robot initialized');
+                //     // Load URDF if already available
+                //     const urdf = getUrdfString();
+                //     if (urdf) {
+                //         loadVRURDF(urdf);
+                //         vrLog('VR Robot URDF loaded');
+                //     }
+                //     // Set up TF update callback to update robot pose
+                //     setTfUpdateCallback((childFrameId, transform) => {
+                //         if (isVRRobotLoaded()) {
+                //             applyVRTransform(childFrameId, transform);
+                //         }
+                //     });
+                //     vrLog('VR Robot TF callback set');
+                // } else {
+                //     vrLog('VR Robot init skipped');
+                // }
                 
                 // Start XR render loop
                 xrSession.requestAnimationFrame(onXRFrame);
@@ -689,9 +365,6 @@
             }
         }
         
-        // Pre-allocated view matrix to avoid per-frame allocation
-        const viewMatrixBuffer = new Float32Array(16);
-        
         // Initialize textures once with proper parameters
         function initTexture(texture) {
             gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -700,10 +373,6 @@
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         }
-        
-        let texturesInitialized = false;
-        let lastVideoWidth = 0;
-        let lastVideoHeight = 0;
         
         // XR render loop - optimized for low latency
         let frameCounter = 0;
@@ -728,7 +397,7 @@
             }
             
             // Process controller and headset tracking
-            processInputSources(frame, xrRefSpace);
+            processInputSources(frame, xrRefSpace, xrSession);
             processHeadsetPose(pose);
             processThumbstickAdjustments();
             
@@ -744,20 +413,24 @@
             gl.clearColor(0.0, 0.0, 0.0, 0.95);  // 95% opacity for immersive AR dimming
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             
-            if (!currentFrameBitmap) {
+            if (!getCurrentFrameBitmap()) {
                 if (frameCounter % 60 === 0) {
                     console.log('Waiting for video frame');
                     vrLog('Wait video');
                 }
                 frameCounter++;
-                // Still render FPS overlay while waiting for video
+                // Still render status panels while waiting for video
                 for (const view of pose.views) {
                     const viewport = glLayer.getViewport(view);
                     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-                    drawFpsOverlay(view, viewport);
+                    drawRightStatusPanel(view, viewport, pose.transform.matrix);
+                    drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                 }
                 return;
             }
+            
+            // Get current frame for rendering
+            const currentFrameBitmap = getCurrentFrameBitmap();
             
             frameCounter++;
             if (frameCounter === 10) {
@@ -802,8 +475,20 @@
                     gl.bindTexture(gl.TEXTURE_2D, videoTexture);
                     drawTexturedQuad(view, viewport, true, pose.transform.matrix);  // true = use direct video mode
                     
-                    // Draw FPS overlay in upper left corner
-                    drawFpsOverlay(view, viewport);
+                    // TODO: VR robot rendering disabled - Three.js breaks WebGL state
+                    // Need to use a different approach (custom WebGL shaders for robot)
+                    // if (isVRRobotLoaded()) {
+                    //     if (frameCounter === 15) {
+                    //         vrLog('Rendering VR robot');
+                    //     }
+                    //     renderVRRobotForView(view, glLayer.framebuffer, glLayer);
+                    // } else if (frameCounter === 15) {
+                    //     vrLog('VR robot not loaded yet');
+                    // }
+                    
+                    // Draw status panels (head-locked)
+                    drawRightStatusPanel(view, viewport, pose.transform.matrix);
+                    drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                 }
             } else {
                 // FALLBACK: Use canvas-based splitting (higher latency)
@@ -837,18 +522,20 @@
                 }
                 
                 // Draw left and right halves to canvases
-                leftCtx.drawImage(currentFrameBitmap, 0, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
-                rightCtx.drawImage(currentFrameBitmap, halfWidth, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
+                const frameBitmap = getCurrentFrameBitmap();
+                leftCtx.drawImage(frameBitmap, 0, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
+                rightCtx.drawImage(frameBitmap, halfWidth, 0, halfWidth, videoHeight, 0, 0, halfWidth, videoHeight);
                 
                 // Calculate frame age (how old is the current frame)
-                const frameAge = performance.now() - lastFrameReceivedTimestamp;
+                const frameAge = performance.now() - getLastFrameReceivedTimestamp();
                 const lagColor = frameAge > 150 ? '#ff4444' : '#00ff00';  // Red if > 150ms, green otherwise
                 
                 // FPS color coding: green >= 25, yellow 15-25, red < 15
+                const vrFps = getCurrentVrFps();
                 let fpsColor;
-                if (currentVrFps >= 25) {
+                if (vrFps >= 25) {
                     fpsColor = '#00ff00';  // Green
-                } else if (currentVrFps >= 15) {
+                } else if (vrFps >= 15) {
                     fpsColor = '#ffff00';  // Yellow
                 } else {
                     fpsColor = '#ff4444';  // Red
@@ -862,39 +549,7 @@
                 const yaw = headsetPose.rotation ? Math.round(headsetPose.rotation.y) : 0;
                 const roll = headsetPose.rotation ? Math.round(headsetPose.rotation.z) : 0;
                 
-                // Draw FPS, latency, and orientation overlay directly on left canvas (guaranteed to be visible!)
-                leftCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                leftCtx.fillRect(10, 10, 220, 170);
-                leftCtx.fillStyle = fpsColor;
-                leftCtx.font = 'bold 28px monospace';
-                leftCtx.fillText(`FPS: ${currentVrFps.toFixed(1)}`, 20, 40);
-                leftCtx.fillStyle = lagColor;
-                leftCtx.fillText(`Lag: ${frameAge.toFixed(0)}ms`, 20, 75);
-                leftCtx.fillStyle = '#88ccff';  // Light blue for orientation
-                leftCtx.font = 'bold 24px monospace';
-                leftCtx.fillText(`Pitch: ${pitch}°`, 20, 108);
-                leftCtx.fillText(`Roll:  ${roll}°`, 20, 136);
-                // Yaw: red if outside +/- 10 degrees
-                leftCtx.fillStyle = (Math.abs(yaw) > 10) ? '#ff4444' : '#88ccff';
-                leftCtx.fillText(`Yaw:   ${yaw}°`, 20, 164);
-                
-                // Also on right canvas so both eyes see it
-                rightCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                rightCtx.fillRect(10, 10, 220, 170);
-                rightCtx.fillStyle = fpsColor;
-                rightCtx.font = 'bold 28px monospace';
-                rightCtx.fillText(`FPS: ${currentVrFps.toFixed(1)}`, 20, 40);
-                rightCtx.fillStyle = lagColor;
-                rightCtx.fillText(`Lag: ${frameAge.toFixed(0)}ms`, 20, 75);
-                rightCtx.fillStyle = '#88ccff';  // Light blue for orientation
-                rightCtx.font = 'bold 24px monospace';
-                rightCtx.fillText(`Pitch: ${pitch}°`, 20, 108);
-                rightCtx.fillText(`Roll:  ${roll}°`, 20, 136);
-                // Yaw: red if outside +/- 10 degrees
-                rightCtx.fillStyle = (Math.abs(yaw) > 10) ? '#ff4444' : '#88ccff';
-                rightCtx.fillText(`Yaw:   ${yaw}°`, 20, 164);
-                
-                // Upload to WebGL textures
+                // Upload to WebGL textures (no overlay - using floating panels instead)
                 gl.bindTexture(gl.TEXTURE_2D, leftTexture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, leftCanvas);
                 
@@ -920,255 +575,23 @@
                     gl.bindTexture(gl.TEXTURE_2D, texture);
                     drawTexturedQuad(view, viewport, false, pose.transform.matrix);  // false = use canvas mode
                     
-                    // Draw FPS overlay in upper left corner
-                    drawFpsOverlay(view, viewport);
+                    // TODO: VR robot rendering disabled - Three.js breaks WebGL state
+                    // Need to use a different approach (custom WebGL shaders for robot)
+                    // if (isVRRobotLoaded()) {
+                    //     if (frameCounter === 15) {
+                    //         vrLog('Rendering VR robot (canvas mode)');
+                    //     }
+                    //     renderVRRobotForView(view, glLayer.framebuffer, glLayer);
+                    // } else if (frameCounter === 15) {
+                    //     vrLog('VR robot not loaded yet (canvas mode)');
+                    // }
+                    
+                    // Draw status panels (head-locked)
+                    drawRightStatusPanel(view, viewport, pose.transform.matrix);
+                    drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                 }
             }
         }
-        
-        // ========================================
-        // FPS Overlay Functions for Immersive VR
-        // ========================================
-        
-        function initFpsOverlay() {
-            if (!gl) {
-                vrLog('FPS overlay: no GL context');
-                return;
-            }
-            
-            vrLog('Init FPS overlay...');
-            
-            // Create canvas for FPS text (larger for better visibility)
-            fpsOverlayCanvas = document.createElement('canvas');
-            fpsOverlayCanvas.width = 256;
-            fpsOverlayCanvas.height = 64;
-            fpsOverlayCtx = fpsOverlayCanvas.getContext('2d');
-            
-            // Create texture
-            fpsOverlayTexture = gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D, fpsOverlayTexture);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-            
-            // Initial update
-            updateFpsOverlayCanvas();
-            
-            // Initialize overlay shader
-            initFpsOverlayShader();
-            
-            vrLog('FPS overlay: ' + (fpsOverlayShader ? 'OK' : 'FAIL'));
-        }
-        
-        function updateFpsOverlayCanvas() {
-            if (!fpsOverlayCtx) return;
-            
-            // Clear canvas
-            fpsOverlayCtx.clearRect(0, 0, fpsOverlayCanvas.width, fpsOverlayCanvas.height);
-            
-            // Bright red background for high visibility (testing)
-            fpsOverlayCtx.fillStyle = 'rgba(200, 0, 0, 0.8)';
-            fpsOverlayCtx.fillRect(0, 0, fpsOverlayCanvas.width, fpsOverlayCanvas.height);
-            
-            // White border
-            fpsOverlayCtx.strokeStyle = '#ffffff';
-            fpsOverlayCtx.lineWidth = 3;
-            fpsOverlayCtx.strokeRect(2, 2, fpsOverlayCanvas.width - 4, fpsOverlayCanvas.height - 4);
-            
-            // Draw FPS text in white
-            fpsOverlayCtx.fillStyle = '#ffffff';
-            fpsOverlayCtx.font = 'bold 24px monospace';
-            fpsOverlayCtx.textBaseline = 'middle';
-            fpsOverlayCtx.textAlign = 'center';
-            
-            // Build display text with FPS and battery
-            let displayText = `FPS: ${currentVrFps.toFixed(1)}`;
-            if (currentBatteryLevel !== null) {
-                const batteryIcon = currentBatteryCharging ? 'CHG' : 'BAT';
-                displayText += ` | ${batteryIcon}: ${currentBatteryLevel}%`;
-            }
-            fpsOverlayCtx.fillText(displayText, fpsOverlayCanvas.width / 2, fpsOverlayCanvas.height / 2);
-            
-            // Update texture if GL context is available
-            if (gl && fpsOverlayTexture) {
-                gl.bindTexture(gl.TEXTURE_2D, fpsOverlayTexture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, fpsOverlayCanvas);
-            }
-        }
-        
-        function initFpsOverlayShader() {
-            if (!gl) return;
-            
-            // Simple 2D overlay shader (screen-space, no 3D transforms)
-            const vertexShader = gl.createShader(gl.VERTEX_SHADER);
-            gl.shaderSource(vertexShader, `
-                attribute vec2 a_position;
-                attribute vec2 a_texCoord;
-                varying vec2 v_texCoord;
-                
-                void main() {
-                    gl_Position = vec4(a_position, 0.0, 1.0);
-                    v_texCoord = a_texCoord;
-                }
-            `);
-            gl.compileShader(vertexShader);
-            
-            if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
-                console.error('FPS overlay vertex shader error:', gl.getShaderInfoLog(vertexShader));
-                return;
-            }
-            
-            const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
-            gl.shaderSource(fragmentShader, `
-                precision mediump float;
-                varying vec2 v_texCoord;
-                uniform sampler2D u_texture;
-                
-                void main() {
-                    gl_FragColor = texture2D(u_texture, v_texCoord);
-                }
-            `);
-            gl.compileShader(fragmentShader);
-            
-            if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
-                console.error('FPS overlay fragment shader error:', gl.getShaderInfoLog(fragmentShader));
-                return;
-            }
-            
-            fpsOverlayShader = gl.createProgram();
-            gl.attachShader(fpsOverlayShader, vertexShader);
-            gl.attachShader(fpsOverlayShader, fragmentShader);
-            gl.linkProgram(fpsOverlayShader);
-            
-            if (!gl.getProgramParameter(fpsOverlayShader, gl.LINK_STATUS)) {
-                vrLog('FPS shader link FAIL');
-                fpsOverlayShader = null;
-                return;
-            }
-            
-            vrLog('FPS shader linked');
-            
-            // Create buffers for overlay quad (upper left corner, screen space coords)
-            // Screen space: -1 to 1, so upper left is around (-1, 1)
-            // Make it LARGE for testing visibility
-            const overlayWidth = 0.5;    // 25% of screen width (increased)
-            const overlayHeight = 0.15;  // 7.5% of screen height (increased)
-            const marginX = -0.95;       // Left margin
-            const marginY = 0.95;        // Top margin
-            
-            fpsOverlayPositionBuffer = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayPositionBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-                marginX, marginY - overlayHeight,
-                marginX + overlayWidth, marginY - overlayHeight,
-                marginX, marginY,
-                marginX + overlayWidth, marginY,
-            ]), gl.STATIC_DRAW);
-            
-            console.log('FPS overlay position buffer created, bounds:', marginX, marginY - overlayHeight, 'to', marginX + overlayWidth, marginY);
-            
-            fpsOverlayTexCoordBuffer = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayTexCoordBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-                0, 1,
-                1, 1,
-                0, 0,
-                1, 0,
-            ]), gl.STATIC_DRAW);
-            
-            // Cache locations
-            fpsOverlayCachedLocations = {
-                position: gl.getAttribLocation(fpsOverlayShader, 'a_position'),
-                texCoord: gl.getAttribLocation(fpsOverlayShader, 'a_texCoord'),
-                texture: gl.getUniformLocation(fpsOverlayShader, 'u_texture')
-            };
-        }
-        
-        function drawFpsOverlay(view, viewport) {
-            // Initialize on first call
-            if (!fpsOverlayCanvas) {
-                initFpsOverlay();
-            }
-            
-            // Check if initialization succeeded
-            if (!fpsOverlayShader || !fpsOverlayTexture || !fpsOverlayCachedLocations) {
-                if (frameCounter < 20 && frameCounter % 5 === 0) {
-                    vrLog('FPS ovl not ready');
-                }
-                return;
-            }
-            
-            if (frameCounter === 15) {
-                vrLog('Drawing FPS overlay');
-            }
-            
-            // Save current WebGL state
-            const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
-            
-            // Enable blending for transparency
-            gl.enable(gl.BLEND);
-            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-            
-            // Disable depth test so overlay is always visible
-            gl.disable(gl.DEPTH_TEST);
-            
-            gl.useProgram(fpsOverlayShader);
-            
-            // Disable any previously enabled vertex attrib arrays that might interfere
-            for (let i = 0; i < 8; i++) {
-                gl.disableVertexAttribArray(i);
-            }
-            
-            // Bind position buffer
-            gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayPositionBuffer);
-            gl.enableVertexAttribArray(fpsOverlayCachedLocations.position);
-            gl.vertexAttribPointer(fpsOverlayCachedLocations.position, 2, gl.FLOAT, false, 0, 0);
-            
-            // Bind texcoord buffer
-            gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayTexCoordBuffer);
-            gl.enableVertexAttribArray(fpsOverlayCachedLocations.texCoord);
-            gl.vertexAttribPointer(fpsOverlayCachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
-            
-            // Bind texture
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, fpsOverlayTexture);
-            gl.uniform1i(fpsOverlayCachedLocations.texture, 0);
-            
-            // Draw overlay
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-            
-            if (frameCounter === 15) {
-                console.log('FPS overlay draw complete');
-            }
-            
-            // Restore state
-            gl.disable(gl.BLEND);
-            gl.enable(gl.DEPTH_TEST);
-            
-            // Restore previous program
-            if (prevProgram) {
-                gl.useProgram(prevProgram);
-            }
-        }
-        
-        // ========================================
-        // End FPS Overlay Functions
-        // ========================================
-        
-        // Simple shader program for rendering video texture
-        let shaderProgram = null;
-        let positionBuffer = null;
-        let texCoordBuffer = null;
-        
-        // Cached shader locations for performance
-        let cachedLocations = null;
-        let lastSettingsHash = '';
-        
-        // Video frame callback for optimal sync
-        let lastVideoTime = -1;
-        let videoFrameCallbackId = null;
-        let newVideoFrameAvailable = false;
         
         function initShaders() {
             const vertexShader = gl.createShader(gl.VERTEX_SHADER);
@@ -1203,7 +626,7 @@
                 useDirectVideoTexture = false;  // Fall back to canvas mode
             }
             
-            // OPTIMIZED: Fragment shader that can handle both modes
+            // OPTIMIZED: Fragment shader that can handle both modes with rounded corners
             const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
             gl.shaderSource(fragmentShader, `
                 precision mediump float;
@@ -1211,6 +634,13 @@
                 varying float v_isLeftEye;
                 uniform sampler2D u_texture;
                 uniform float u_useDirectVideo;
+                uniform float u_cornerRadius;
+                
+                // Signed distance function for rounded rectangle
+                float roundedBoxSDF(vec2 centerPos, vec2 halfSize, float radius) {
+                    vec2 q = abs(centerPos) - halfSize + radius;
+                    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+                }
                 
                 void main() {
                     vec2 texCoord = v_texCoord;
@@ -1225,7 +655,21 @@
                         }
                     }
                     
-                    gl_FragColor = texture2D(u_texture, texCoord);
+                    // Apply rounded corners using SDF
+                    // Convert tex coords to centered coordinates (-0.5 to 0.5)
+                    vec2 centered = v_texCoord - 0.5;
+                    float dist = roundedBoxSDF(centered, vec2(0.5), u_cornerRadius);
+                    
+                    // Discard pixels outside rounded rectangle
+                    if (dist > 0.0) {
+                        discard;
+                    }
+                    
+                    // Smooth edge with anti-aliasing (optional - slight softness at edges)
+                    float alpha = 1.0 - smoothstep(-0.005, 0.0, dist);
+                    
+                    vec4 color = texture2D(u_texture, texCoord);
+                    gl_FragColor = vec4(color.rgb, color.a * alpha);
                 }
             `);
             gl.compileShader(fragmentShader);
@@ -1290,7 +734,8 @@
                 distance: gl.getUniformLocation(shaderProgram, 'u_distance'),
                 ipdOffset: gl.getUniformLocation(shaderProgram, 'u_ipdOffset'),
                 isLeftEye: gl.getUniformLocation(shaderProgram, 'u_isLeftEye'),
-                useDirectVideo: gl.getUniformLocation(shaderProgram, 'u_useDirectVideo')
+                useDirectVideo: gl.getUniformLocation(shaderProgram, 'u_useDirectVideo'),
+                cornerRadius: gl.getUniformLocation(shaderProgram, 'u_cornerRadius')
             };
             
             console.log('Shader locations:', cachedLocations);
@@ -1407,6 +852,10 @@
                 gl.uniform1f(cachedLocations.useDirectVideo, useDirectVideo ? 1.0 : 0.0);
             }
             
+            if (cachedLocations.cornerRadius !== null) {
+                gl.uniform1f(cachedLocations.cornerRadius, stereoSettings.cornerRadius);
+            }
+            
             if (cachedLocations.texture !== null) {
                 gl.uniform1i(cachedLocations.texture, 0);
             }
@@ -1421,8 +870,14 @@
                 return;  // Don't draw if there's an error
             }
             
+            // Disable blending for video quad to ensure full opacity (no passthrough behind video)
+            gl.disable(gl.BLEND);
+            
             // Draw quad
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            
+            // Re-enable blending for other overlays
+            gl.enable(gl.BLEND);
             
             if (frameCounter === 15) {
                 vrLog('Draw quad OK');
@@ -1475,6 +930,11 @@
             document.getElementById('vrButton').textContent = '🥽 Enter AR';
             document.getElementById('vrButton').onclick = startVRSession;
             document.getElementById('preview').classList.remove('hidden');
+            
+            // Clear TF callback and dispose VR robot resources
+            setTfUpdateCallback(null);
+            disposeVRRobot();
+            
             startPreview();
         }
         
@@ -1508,10 +968,148 @@
             currentBatteryCharging = battery.charging;
         }
         
+        // ========================================
+        // Robot Panel Functions
+        // ========================================
+        
+        function initRobotPanel() {
+            const panel = document.getElementById('robotPanel');
+            const toggle = document.getElementById('robotPanelToggle');
+            const header = document.getElementById('robotPanelHeader');
+            const resizeHandle = document.getElementById('robotPanelResize');
+            const viewerContainer = document.getElementById('robotViewerContainer');
+            
+            if (!panel || !toggle) return;
+            
+            // Toggle collapse/expand
+            toggle.addEventListener('click', () => {
+                panel.classList.toggle('collapsed');
+                toggle.textContent = panel.classList.contains('collapsed') ? '+' : '−';
+            });
+            
+            // Make panel draggable
+            let isDragging = false;
+            let offsetX = 0;
+            let offsetY = 0;
+            
+            header.addEventListener('mousedown', (e) => {
+                if (e.target === toggle) return;
+                isDragging = true;
+                offsetX = e.clientX - panel.offsetLeft;
+                offsetY = e.clientY - panel.offsetTop;
+                panel.style.transition = 'none';
+            });
+            
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                panel.style.left = (e.clientX - offsetX) + 'px';
+                panel.style.top = (e.clientY - offsetY) + 'px';
+            });
+            
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+                panel.style.transition = '';
+            });
+            
+            // Make panel resizable
+            let isResizing = false;
+            let startWidth = 0;
+            let startHeight = 0;
+            let startX = 0;
+            let startY = 0;
+            
+            if (resizeHandle) {
+                resizeHandle.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    isResizing = true;
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    startWidth = panel.offsetWidth;
+                    startHeight = panel.offsetHeight;
+                    panel.classList.add('resizing');
+                });
+                
+                document.addEventListener('mousemove', (e) => {
+                    if (!isResizing) return;
+                    
+                    const newWidth = Math.max(220, startWidth + (e.clientX - startX));
+                    const newHeight = Math.max(150, startHeight + (e.clientY - startY));
+                    
+                    panel.style.width = newWidth + 'px';
+                    panel.style.height = newHeight + 'px';
+                    
+                    // Adjust 3D viewer height to fill available space
+                    if (viewerContainer) {
+                        const contentPadding = 24; // 12px top + 12px bottom
+                        const statusRowsHeight = 120; // Approximate height of status rows
+                        const headerHeight = header.offsetHeight;
+                        const viewerHeight = newHeight - headerHeight - contentPadding - statusRowsHeight;
+                        viewerContainer.style.height = Math.max(100, viewerHeight) + 'px';
+                    }
+                });
+                
+                document.addEventListener('mouseup', () => {
+                    if (isResizing) {
+                        isResizing = false;
+                        panel.classList.remove('resizing');
+                        // Trigger resize event for Three.js canvas to update
+                        window.dispatchEvent(new Event('resize'));
+                    }
+                });
+            }
+            
+            console.log('Robot panel initialized');
+        }
+        
+        // Initialize 3D robot viewer and watch for URDF data
+        function initRobotViewer3D() {
+            // Initialize the Three.js viewer
+            const viewerReady = initRobotViewer('robotViewerContainer');
+            if (!viewerReady) {
+                console.log('Robot 3D viewer initialization deferred (container or Three.js not ready)');
+                return;
+            }
+            
+            // Poll for URDF string from robot_state.js and load when available
+            const checkForURDF = setInterval(() => {
+                const urdf = getUrdfString();
+                if (urdf) {
+                    // Load into desktop viewer
+                    if (!isRobotViewerLoaded()) {
+                        console.log('URDF available, loading into 3D viewer...');
+                        loadURDF(urdf);
+                        
+                        // Set up TF callback to update robot pose in desktop viewer
+                        setTfUpdateCallback((childFrameId, transform) => {
+                            if (isRobotViewerLoaded()) {
+                                applyTransform(childFrameId, transform);
+                            }
+                        });
+                        console.log('TF callback set for 3D robot viewer');
+                    }
+                    // Also load into VR robot if VR session is active
+                    if (!isVRRobotLoaded() && xrSession) {
+                        console.log('URDF available, loading into VR robot...');
+                        loadVRURDF(urdf);
+                    }
+                    // Stop polling once both are loaded (or VR not active)
+                    if (isRobotViewerLoaded() && (!xrSession || isVRRobotLoaded())) {
+                        clearInterval(checkForURDF);
+                    }
+                }
+            }, 500);
+            
+            // Stop polling after 60 seconds
+            setTimeout(() => clearInterval(checkForURDF), 60000);
+        }
+        
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', async () => {
             console.log('Stereo VR Vision - Initializing...');
             initBatteryMonitor();
+            initRobotPanel();  // Initialize robot status panel
+            initRobotViewer3D();  // Initialize 3D robot viewer
             initControllerWebSocket();  // Initialize controller tracking WebSocket
             initFoxgloveConnection();
             await initXR();

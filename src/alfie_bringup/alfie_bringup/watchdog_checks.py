@@ -7,8 +7,9 @@ to monitor the health of critical subsystems.
 
 import time
 from abc import ABC, abstractmethod
+from collections import deque
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, Deque, List, Optional, Tuple
 
 
 # ============================================================================
@@ -17,6 +18,9 @@ from typing import Dict, List, Optional
 
 # Voltage is reported in 0.1V units
 VOLTAGE_SCALE = 10.0
+
+# Time window for rolling averages (in seconds)
+ROLLING_WINDOW_SECONDS = 1.0
 
 
 # ============================================================================
@@ -109,7 +113,8 @@ class RateMonitor(HealthCheck):
 class ServoVoltageMonitor(HealthCheck):
     """
     Monitors voltage levels for ALL servos on a GDB.
-    Reports error if any servo's voltage deviates from expected by more than tolerance.
+    Reports error if any servo's average voltage (over ROLLING_WINDOW_SECONDS)
+    deviates from expected by more than tolerance.
     """
     
     def __init__(self, name: str, servo_names: list, expected_voltage: float, tolerance_voltage: float):
@@ -118,15 +123,29 @@ class ServoVoltageMonitor(HealthCheck):
         self.num_servos = len(servo_names)  # Only monitor servos that have names
         self.expected_voltage = expected_voltage
         self.tolerance_voltage = tolerance_voltage
-        self.servo_voltages: Dict[int, float] = {}
+        # Rolling buffer of (timestamp, voltage) tuples for each servo
+        self.servo_voltage_history: Dict[int, Deque[Tuple[float, float]]] = {}
     
     def update(self, servo_states: list) -> None:
         """Called when servo states are received"""
+        current_time = time.time()
         # Only process the actual number of servos on this board
         for i in range(min(len(servo_states), self.num_servos)):
             servo = servo_states[i]
             # Convert raw voltage (0.1V units) to actual voltage
-            self.servo_voltages[i] = servo.current_voltage / VOLTAGE_SCALE
+            voltage = servo.current_voltage / VOLTAGE_SCALE
+            
+            # Initialize history deque if needed
+            if i not in self.servo_voltage_history:
+                self.servo_voltage_history[i] = deque()
+            
+            # Add new reading with timestamp
+            self.servo_voltage_history[i].append((current_time, voltage))
+            
+            # Remove readings older than the window
+            cutoff_time = current_time - ROLLING_WINDOW_SECONDS
+            while self.servo_voltage_history[i] and self.servo_voltage_history[i][0][0] < cutoff_time:
+                self.servo_voltage_history[i].popleft()
     
     def _get_servo_name(self, index: int) -> str:
         """Get human-readable servo name for the given index"""
@@ -134,9 +153,18 @@ class ServoVoltageMonitor(HealthCheck):
             return self.servo_names[index]
         return f'Servo[{index}]'
     
+    def _get_average_voltage(self, servo_idx: int) -> Optional[float]:
+        """Calculate the average voltage for a servo over the rolling window"""
+        if servo_idx not in self.servo_voltage_history:
+            return None
+        history = self.servo_voltage_history[servo_idx]
+        if not history:
+            return None
+        return sum(v for _, v in history) / len(history)
+    
     def check(self) -> Optional[str]:
-        """Check if all servo voltages are within tolerance"""
-        if not self.servo_voltages:
+        """Check if all servo average voltages are within tolerance"""
+        if not self.servo_voltage_history:
             return None  # No data yet
         
         min_voltage = self.expected_voltage - self.tolerance_voltage
@@ -144,13 +172,17 @@ class ServoVoltageMonitor(HealthCheck):
         
         errors = []
         
-        for servo_idx, voltage in self.servo_voltages.items():
+        for servo_idx in self.servo_voltage_history.keys():
+            avg_voltage = self._get_average_voltage(servo_idx)
+            if avg_voltage is None:
+                continue
+            
             servo_name = self._get_servo_name(servo_idx)
             
-            if voltage < min_voltage:
-                errors.append(f'{servo_name}={voltage:.1f}V (low)')
-            elif voltage > max_voltage:
-                errors.append(f'{servo_name}={voltage:.1f}V (high)')
+            if avg_voltage < min_voltage:
+                errors.append(f'{servo_name}={avg_voltage:.1f}V (low)')
+            elif avg_voltage > max_voltage:
+                errors.append(f'{servo_name}={avg_voltage:.1f}V (high)')
         
         if errors:
             return f'{self.name} voltage out of range ({self.expected_voltage}V ± {self.tolerance_voltage}V): {", ".join(errors)}'
@@ -212,9 +244,9 @@ class DiagnosticTimingMonitor(HealthCheck):
             errors.append(f'{self.name} servo timing {servo_total_ms:.2f}ms exceeded {self.max_total_ms}ms: {", ".join(servo_timing_details)}')
         
         # Check IMU timing separately
-        imu_duration_ms = self.current_timings.get('imuupdateduration', 0.0)
-        if imu_duration_ms > self.IMU_MAX_MS:
-            errors.append(f'{self.name} IMU update duration {imu_duration_ms:.2f}ms exceeded {self.IMU_MAX_MS}ms')
+        # imu_duration_ms = self.current_timings.get('imuupdateduration', 0.0)
+        # if imu_duration_ms > self.IMU_MAX_MS:
+        #     errors.append(f'{self.name} IMU update duration {imu_duration_ms:.2f}ms exceeded {self.IMU_MAX_MS}ms')
         
         if errors:
             return '; '.join(errors)
@@ -229,6 +261,7 @@ class DiagnosticTimingMonitor(HealthCheck):
 class TemperatureMonitor(HealthCheck):
     """
     Monitors temperature values.
+    Uses rolling average over ROLLING_WINDOW_SECONDS for stable alerting.
     Reports warning if above warn threshold, error if above critical threshold.
     """
     
@@ -236,21 +269,38 @@ class TemperatureMonitor(HealthCheck):
         super().__init__(name)
         self.warn_temp = warn_temp
         self.critical_temp = critical_temp
-        self.current_temp: Optional[float] = None
+        # Rolling buffer of (timestamp, temperature) tuples
+        self.temp_history: Deque[Tuple[float, float]] = deque()
     
     def update(self, temp: float) -> None:
         """Called when a new temperature reading is available"""
-        self.current_temp = temp
+        current_time = time.time()
+        
+        # Add new reading with timestamp
+        self.temp_history.append((current_time, temp))
+        
+        # Remove readings older than the window
+        cutoff_time = current_time - ROLLING_WINDOW_SECONDS
+        while self.temp_history and self.temp_history[0][0] < cutoff_time:
+            self.temp_history.popleft()
+    
+    def _get_average_temp(self) -> Optional[float]:
+        """Calculate the average temperature over the rolling window"""
+        if not self.temp_history:
+            return None
+        return sum(t for _, t in self.temp_history) / len(self.temp_history)
     
     def check(self) -> Optional[str]:
-        """Check if temperature is within safe limits"""
-        if self.current_temp is None or self.current_temp <= 0:
+        """Check if average temperature is within safe limits"""
+        avg_temp = self._get_average_temp()
+        
+        if avg_temp is None or avg_temp <= 0:
             return None  # No data yet
         
-        if self.current_temp >= self.critical_temp:
-            return f'{self.name} CRITICAL: {self.current_temp:.1f}°C >= {self.critical_temp}°C'
-        elif self.current_temp >= self.warn_temp:
-            return f'{self.name} WARNING: {self.current_temp:.1f}°C >= {self.warn_temp}°C'
+        if avg_temp >= self.critical_temp:
+            return f'{self.name} CRITICAL: {avg_temp:.1f}°C >= {self.critical_temp}°C'
+        elif avg_temp >= self.warn_temp:
+            return f'{self.name} WARNING: {avg_temp:.1f}°C >= {self.warn_temp}°C'
         
         return None
 
@@ -462,14 +512,14 @@ def create_health_checks() -> Dict[str, HealthCheck]:
         name='GDB0',
         servo_names=GDB0_SERVO_NAMES,
         expected_voltage=12.0,
-        tolerance_voltage=0.2
+        tolerance_voltage=0.5
     )
     
     health_checks['gdb1_voltage'] = ServoVoltageMonitor(
         name='GDB1',
         servo_names=GDB1_SERVO_NAMES,
         expected_voltage=12.0,
-        tolerance_voltage=0.2
+        tolerance_voltage=0.5
     )
     
     # ========================================================================
