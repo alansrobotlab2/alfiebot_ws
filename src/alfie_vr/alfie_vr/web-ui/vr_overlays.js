@@ -14,20 +14,28 @@ import {
 
 // Right status panel configuration
 const RIGHT_PANEL_CONFIG = {
-    width: 0.20,
+    width: 0.15,
     height: 0.09,
-    horizontalOffset: -0.175,  // Offset from right edge of main screen
-    verticalOffset: 0.30,      // Offset from stereoSettings.verticalOffset
-    angle: 15                  // Yaw rotation in degrees (positive = right)
+    horizontalOffset: 0.25,  // Offset from right edge of main screen
+    verticalOffset: 0.0,      // Offset from stereoSettings.verticalOffset
+    angle: -15,                 // Yaw rotation in degrees (positive = right)
+    backgroundAlpha: 0.75,      // Background transparency (0-1)
+    canvasScale: 1280,          // Multiplier to convert panel size to canvas pixels
+    titleFontSize: 17,          // Title font size in pixels
+    bodyFontSize: 13            // Body text font size in pixels
 };
 
 // Left status panel configuration
 const LEFT_PANEL_CONFIG = {
-    width: 0.20,
-    height: 0.135,
+    width: 0.15,
+    height: 0.16875,
     horizontalOffset: 0.24,    // Offset from left edge of main screen
-    verticalOffset: -0.175,    // Offset from stereoSettings.verticalOffset
-    angle: -15                 // Yaw rotation in degrees (negative = left)
+    verticalOffset: 0.0,       // Offset from stereoSettings.verticalOffset
+    angle: 15,                 // Yaw rotation in degrees (negative = left)
+    backgroundAlpha: 0.75,      // Background transparency (0-1)
+    canvasScale: 1280,          // Multiplier to convert panel size to canvas pixels
+    titleFontSize: 17,          // Title font size in pixels
+    bodyFontSize: 13            // Body text font size in pixels
 };
 
 // ========================================
@@ -416,10 +424,10 @@ function initRightStatusPanel() {
     
     vrLogFn('Init right status panel...');
     
-    // Create canvas for status text
+    // Create canvas for status text (dimensions derived from panel size)
     statusPanelCanvas = document.createElement('canvas');
-    statusPanelCanvas.width = 256;
-    statusPanelCanvas.height = 96;
+    statusPanelCanvas.width = Math.round(RIGHT_PANEL_CONFIG.width * RIGHT_PANEL_CONFIG.canvasScale);
+    statusPanelCanvas.height = Math.round(RIGHT_PANEL_CONFIG.height * RIGHT_PANEL_CONFIG.canvasScale);
     statusPanelCtx = statusPanelCanvas.getContext('2d');
     
     // Create texture
@@ -435,14 +443,12 @@ function initRightStatusPanel() {
     const mainWidth = mainHeight * (16/9);
     const mainRightEdge = mainWidth / 2;
     
-    // Status panel size
-    const panelHeight = 0.09;
-    const panelWidth = 0.20;
-
-    const panelAngle = -15.0
+    // Right status panel size and position (using config)
+    const panelHeight = RIGHT_PANEL_CONFIG.height;
+    const panelWidth = RIGHT_PANEL_CONFIG.width;
     
-    const panelLeft = mainRightEdge - panelWidth - 0.175;
-    const panelCenterY = stereoSettings.verticalOffset + 0.30;
+    const panelLeft = mainRightEdge - panelWidth - RIGHT_PANEL_CONFIG.horizontalOffset;
+    const panelCenterY = stereoSettings.verticalOffset + RIGHT_PANEL_CONFIG.verticalOffset;
     
     statusPanelPositionBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, statusPanelPositionBuffer);
@@ -484,12 +490,12 @@ function updateStatusPanelCanvas() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     // Semi-transparent dark background with rounded corners
-    ctx.fillStyle = 'rgba(20, 20, 30, 0.5)';
+    ctx.fillStyle = `rgba(20, 20, 30, ${RIGHT_PANEL_CONFIG.backgroundAlpha})`;
     drawRoundedRect(ctx, 0, 0, canvas.width, canvas.height, 12);
     
     // Title
     ctx.fillStyle = '#88ccff';
-    ctx.font = 'bold 14px monospace';
+    ctx.font = `bold ${RIGHT_PANEL_CONFIG.titleFontSize}px monospace`;
     ctx.textBaseline = 'top';
     ctx.fillText('Robot Status', 10, 8);
     
@@ -497,7 +503,7 @@ function updateStatusPanelCanvas() {
     const foxgloveStatus = foxgloveConn && foxgloveConn.isConnected ? 'Connected' : 'Disconnected';
     const foxgloveColor = foxgloveConn && foxgloveConn.isConnected ? '#44ff44' : '#ff4444';
     ctx.fillStyle = '#cccccc';
-    ctx.font = '11px monospace';
+    ctx.font = `${RIGHT_PANEL_CONFIG.bodyFontSize}px monospace`;
     ctx.fillText('Foxglove:', 10, 28);
     ctx.fillStyle = foxgloveColor;
     ctx.fillText(foxgloveStatus, 80, 28);
@@ -600,7 +606,7 @@ export function drawRightStatusPanel(view, viewport, modelMatrix) {
     
     if (cachedLocations.model !== null) {
         if (modelMatrix) {
-            createRotatedModelMatrix(modelMatrix, panelAngle, rightPanelModelMatrix);
+            createRotatedModelMatrix(modelMatrix, RIGHT_PANEL_CONFIG.angle, rightPanelModelMatrix);
             gl.uniformMatrix4fv(cachedLocations.model, false, rightPanelModelMatrix);
         } else {
             gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
@@ -653,10 +659,10 @@ function initLeftStatusPanel() {
     
     vrLogFn('Init left status panel...');
     
-    // Create canvas for status text (taller for more info)
+    // Create canvas for status text (dimensions derived from panel size)
     leftStatusPanelCanvas = document.createElement('canvas');
-    leftStatusPanelCanvas.width = 256;
-    leftStatusPanelCanvas.height = 144;
+    leftStatusPanelCanvas.width = Math.round(LEFT_PANEL_CONFIG.width * LEFT_PANEL_CONFIG.canvasScale);
+    leftStatusPanelCanvas.height = Math.round(LEFT_PANEL_CONFIG.height * LEFT_PANEL_CONFIG.canvasScale);
     leftStatusPanelCtx = leftStatusPanelCanvas.getContext('2d');
     
     // Create texture
@@ -719,18 +725,18 @@ function updateLeftStatusPanelCanvas() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     // Semi-transparent dark background with rounded corners
-    ctx.fillStyle = 'rgba(20, 20, 30, 0.5)';
+    ctx.fillStyle = `rgba(20, 20, 30, ${LEFT_PANEL_CONFIG.backgroundAlpha})`;
     drawRoundedRect(ctx, 0, 0, canvas.width, canvas.height, 12);
     
     // Title
     ctx.fillStyle = '#88ccff';
-    ctx.font = 'bold 14px monospace';
+    ctx.font = `bold ${LEFT_PANEL_CONFIG.titleFontSize}px monospace`;
     ctx.textBaseline = 'top';
     ctx.fillText('Stream Info', 10, 8);
     
     // FPS
     ctx.fillStyle = '#cccccc';
-    ctx.font = '11px monospace';
+    ctx.font = `${LEFT_PANEL_CONFIG.bodyFontSize}px monospace`;
     ctx.fillText('FPS:', 10, 28);
     const fpsColor = currentVrFps >= 25 ? '#44ff44' : (currentVrFps >= 15 ? '#ffff00' : '#ff4444');
     ctx.fillStyle = fpsColor;

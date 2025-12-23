@@ -33,7 +33,6 @@
         import {
             setOverlayContext,
             updateGlContext,
-            drawFpsOverlay,
             drawRightStatusPanel,
             drawLeftStatusPanel,
         } from './vr_overlays.js';
@@ -420,11 +419,10 @@
                     vrLog('Wait video');
                 }
                 frameCounter++;
-                // Still render FPS overlay and status panels while waiting for video
+                // Still render status panels while waiting for video
                 for (const view of pose.views) {
                     const viewport = glLayer.getViewport(view);
                     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-                    drawFpsOverlay(view, viewport);
                     drawRightStatusPanel(view, viewport, pose.transform.matrix);
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                 }
@@ -487,9 +485,6 @@
                     // } else if (frameCounter === 15) {
                     //     vrLog('VR robot not loaded yet');
                     // }
-                    
-                    // Draw FPS overlay in upper left corner
-                    drawFpsOverlay(view, viewport);
                     
                     // Draw status panels (head-locked)
                     drawRightStatusPanel(view, viewport, pose.transform.matrix);
@@ -591,9 +586,6 @@
                     //     vrLog('VR robot not loaded yet (canvas mode)');
                     // }
                     
-                    // Draw FPS overlay in upper left corner
-                    drawFpsOverlay(view, viewport);
-                    
                     // Draw status panels (head-locked)
                     drawRightStatusPanel(view, viewport, pose.transform.matrix);
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
@@ -677,8 +669,7 @@
                     float alpha = 1.0 - smoothstep(-0.005, 0.0, dist);
                     
                     vec4 color = texture2D(u_texture, texCoord);
-                    // Use full opacity (1.0) for the video quad - no passthrough visible behind it
-                    gl_FragColor = vec4(color.rgb, alpha);
+                    gl_FragColor = vec4(color.rgb, color.a * alpha);
                 }
             `);
             gl.compileShader(fragmentShader);
