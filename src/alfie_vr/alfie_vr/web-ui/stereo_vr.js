@@ -69,6 +69,15 @@
             disposeVRRobot,
             applyVRTransform,
         } from './vr_robot.js';
+        import {
+            setUrdfPanelContext,
+            updateUrdfPanelGlContext,
+            loadUrdfForPanel,
+            drawUrdfPanel,
+            applyUrdfPanelTransform,
+            disposeUrdfPanel,
+            isUrdfPanelLoaded,
+        } from './vr_urdf_panel.js';
         
         // ========================================
         // Local Aliases for Backward Compatibility
@@ -344,6 +353,34 @@
                 
                 updateGlContext(gl);
                 
+                // Set up URDF panel context for offscreen Three.js rendering
+                setUrdfPanelContext({
+                    gl: gl,
+                    vrLog: vrLog,
+                    getFrameCounter: () => frameCounter,
+                    getShaderProgram: () => shaderProgram,
+                    getCachedLocations: () => cachedLocations,
+                    invertMatrix: invertMatrix,
+                    viewMatrixBuffer: viewMatrixBuffer,
+                    getUrdfString: getUrdfString,  // Pass URDF getter so panel can check for updates
+                });
+                updateUrdfPanelGlContext(gl);
+                
+                // Load URDF for the panel if already available
+                const urdf = getUrdfString();
+                if (urdf) {
+                    loadUrdfForPanel(urdf);
+                    vrLog('URDF Panel: loaded');
+                }
+                
+                // Set up TF update callback to update both 2D viewer and VR panel
+                setTfUpdateCallback((childFrameId, transform) => {
+                    if (isUrdfPanelLoaded()) {
+                        applyUrdfPanelTransform(childFrameId, transform);
+                    }
+                });
+                vrLog('URDF Panel TF callback set');
+                
                 // TODO: VR Robot disabled - Three.js WebGL state conflicts with custom shaders
                 // Initialize VR Robot renderer for 3D robot visualization
                 // const vrRobotReady = initVRRobot(gl, xrSession);
@@ -437,6 +474,7 @@
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                     drawBearingPanel(view, viewport, pose.transform.matrix);
                     drawRosoutPanel(view, viewport, pose.transform.matrix);
+                    drawUrdfPanel(view, viewport, pose.transform.matrix);
                 }
                 return;
             }
@@ -503,6 +541,7 @@
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                     drawBearingPanel(view, viewport, pose.transform.matrix);
                     drawRosoutPanel(view, viewport, pose.transform.matrix);
+                    drawUrdfPanel(view, viewport, pose.transform.matrix);
                 }
             } else {
                 // FALLBACK: Use canvas-based splitting (higher latency)
@@ -605,6 +644,7 @@
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
                     drawBearingPanel(view, viewport, pose.transform.matrix);
                     drawRosoutPanel(view, viewport, pose.transform.matrix);
+                    drawUrdfPanel(view, viewport, pose.transform.matrix);
                 }
             }
         }
@@ -950,6 +990,7 @@
             // Clear TF callback and dispose VR robot resources
             setTfUpdateCallback(null);
             disposeVRRobot();
+            disposeUrdfPanel();
             
             startPreview();
         }
