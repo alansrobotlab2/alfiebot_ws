@@ -14,14 +14,18 @@ import {
 
 export const URDF_PANEL_CONFIG = {
     width: 0.18,                // Panel width in world units
-    height: 0.18,               // Panel height in world units (square for 3D viewer)
-    horizontalOffset: -0.25,     // Small gap from right edge of main screen
-    verticalOffset: 0.15,        // Vertical offset from screen center
+    height: 0.36,               // Panel height in world units (tall for dual views)
+    horizontalOffset: -0.225,    // Small gap from right edge of main screen
+    verticalOffset: 0.00,       // Vertical offset from screen center (adjusted for taller panel)
     angle: -15,                 // Yaw rotation in degrees (negative = angled toward center)
-    backgroundAlpha: 0.5,      // Background opacity
-    canvasScale: 512,           // Canvas resolution multiplier (512x512 pixels)
+    backgroundAlpha: 0.5,       // Background opacity
+    canvasWidth: 512,           // Canvas width in pixels
+    canvasHeight: 1024,         // Canvas height in pixels (tall for dual views)
+    topViewRatio: 0.35,         // Top-down view gets 35% of height
+    topViewForwardOffset: 0.15, // Shift top-down view forward (robot appears lower, room for arms)
+    isoTargetHeight: 0.45,      // How high up the robot the isometric camera looks (head level)
     renderFps: 15,              // Target FPS for Three.js rendering
-    titleFontSize: 18,          // Title font size in pixels
+    titleFontSize: 16,          // Title font size in pixels
 };
 
 // ========================================
@@ -52,14 +56,13 @@ const urdfPanelModelMatrix = new Float32Array(16);
 
 // Animation/camera state
 // Top-down view: camera looks straight down at the robot
-// cameraPhi = 0 means looking straight down the Y axis
-// cameraTheta rotates around Y - set so robot faces "up" on screen
-let cameraTheta = Math.PI;  // Rotate 180° so robot faces up on screen
-let cameraPhi = 0.01;       // Nearly straight down (small value to avoid gimbal lock)
+// Isometric view: classic isometric angle from the side
 let cameraRadius = 0.6;     // Distance from target
 let cameraTarget = { x: 0, y: 0, z: 0 };  // Look at origin (robot base)
-let autoRotate = false;     // No spinning - fixed top-down view
 let lastRenderTime = 0;
+
+// Second camera for isometric view
+let urdfCameraIso = null;
 
 // Context references (set by main module)
 let gl = null;
@@ -107,12 +110,13 @@ function initThreeJsRenderer() {
         return false;
     }
     
-    const canvasSize = URDF_PANEL_CONFIG.canvasScale;
+    const canvasWidth = URDF_PANEL_CONFIG.canvasWidth;
+    const canvasHeight = URDF_PANEL_CONFIG.canvasHeight;
     
     // Create offscreen canvas for Three.js rendering
     threeCanvas = document.createElement('canvas');
-    threeCanvas.width = canvasSize;
-    threeCanvas.height = canvasSize;
+    threeCanvas.width = canvasWidth;
+    threeCanvas.height = canvasHeight;
     
     // Create Three.js renderer on the offscreen canvas
     urdfRenderer = new THREE.WebGLRenderer({
@@ -121,7 +125,9 @@ function initThreeJsRenderer() {
         alpha: true,  // Enable transparent background
         preserveDrawingBuffer: true,  // Needed to read pixels
     });
-    urdfRenderer.setSize(canvasSize, canvasSize);
+    urdfRenderer.setSize(canvasWidth, canvasHeight);
+    urdfRenderer.setScissorTest(true);  // Enable scissor for split-view rendering
+    urdfRenderer.autoClear = false;     // Manual clear for each viewport
     
     // Set clear color with alpha based on config
     const bgAlpha = URDF_PANEL_CONFIG.backgroundAlpha;
@@ -135,17 +141,30 @@ function initThreeJsRenderer() {
     // Create scene
     urdfScene = new THREE.Scene();
     
-    // Create orthographic camera for clean top-down view
+    // Camera 1: Top-down orthographic view (top half of canvas)
     const viewSize = 0.5;  // Half-size of the view in world units
     urdfCamera = new THREE.OrthographicCamera(-viewSize, viewSize, viewSize, -viewSize, 0.01, 10);
+    const topViewOffset = URDF_PANEL_CONFIG.topViewForwardOffset;  // Shift view forward
+    urdfCamera.position.set(0, 1, topViewOffset);
+    urdfCamera.up.set(0, 0, 1);  // Set "up" to +Z so robot faces down on screen
+    urdfCamera.lookAt(0, 0, topViewOffset);
     
-    // Position camera above the robot looking straight down
-    // Y-up coordinate system: camera at Y=1, looking down at Y=0
-    urdfCamera.position.set(0, 1, 0);
-    urdfCamera.up.set(0, 0, 1);  // Set "up" to +Z so robot faces down on screen (rotated 180°)
-    urdfCamera.lookAt(0, 0, 0);
+    // Camera 2: Isometric view (bottom portion of canvas)
+    // Classic isometric: 45° azimuth, ~35.264° elevation (arctan(1/√2))
+    urdfCameraIso = new THREE.OrthographicCamera(-viewSize, viewSize, viewSize, -viewSize, 0.01, 10);
+    const isoDistance = 1.0;
+    const isoAzimuth = Math.PI / 4;  // 45 degrees around Y
+    const isoElevation = Math.atan(1 / Math.sqrt(2));  // ~35.264 degrees up
+    const isoTargetY = URDF_PANEL_CONFIG.isoTargetHeight;  // Look at this height on robot
+    urdfCameraIso.position.set(
+        isoDistance * Math.cos(isoElevation) * Math.sin(isoAzimuth),
+        isoTargetY + isoDistance * Math.sin(isoElevation),
+        isoDistance * Math.cos(isoElevation) * Math.cos(isoAzimuth)
+    );
+    urdfCameraIso.up.set(0, 1, 0);
+    urdfCameraIso.lookAt(0, isoTargetY, 0);
     
-    // Add lighting - brighter for top-down view
+    // Add lighting - works for both views
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     urdfScene.add(ambientLight);
     
@@ -157,26 +176,32 @@ function initThreeJsRenderer() {
     hemiLight.position.set(0, 10, 0);
     urdfScene.add(hemiLight);
     
-    vrLogFn('Three.js URDF renderer initialized');
+    vrLogFn('Three.js dual-view URDF renderer initialized');
     return true;
 }
 
 /**
- * Update camera position from spherical coordinates
+ * Update camera positions (called if target changes)
  */
-function updateCameraPosition() {
-    if (!urdfCamera) return;
+function updateCameraPositions() {
+    if (!urdfCamera || !urdfCameraIso) return;
     
-    const x = cameraRadius * Math.sin(cameraPhi) * Math.sin(cameraTheta);
-    const y = cameraRadius * Math.cos(cameraPhi);
-    const z = cameraRadius * Math.sin(cameraPhi) * Math.cos(cameraTheta);
+    // Top-down camera stays fixed above robot (with forward offset for arm room)
+    const topViewOffset = URDF_PANEL_CONFIG.topViewForwardOffset;
+    urdfCamera.position.set(cameraTarget.x, cameraTarget.y + 1, cameraTarget.z + topViewOffset);
+    urdfCamera.lookAt(cameraTarget.x, cameraTarget.y, cameraTarget.z + topViewOffset);
     
-    urdfCamera.position.set(
-        cameraTarget.x + x,
-        cameraTarget.y + y,
-        cameraTarget.z + z
+    // Isometric camera maintains angle but follows target (raised by isoTargetHeight)
+    const isoDistance = 1.0;
+    const isoAzimuth = Math.PI / 4;
+    const isoElevation = Math.atan(1 / Math.sqrt(2));
+    const isoTargetY = cameraTarget.y + URDF_PANEL_CONFIG.isoTargetHeight;
+    urdfCameraIso.position.set(
+        cameraTarget.x + isoDistance * Math.cos(isoElevation) * Math.sin(isoAzimuth),
+        isoTargetY + isoDistance * Math.sin(isoElevation),
+        cameraTarget.z + isoDistance * Math.cos(isoElevation) * Math.cos(isoAzimuth)
     );
-    urdfCamera.lookAt(cameraTarget.x, cameraTarget.y, cameraTarget.z);
+    urdfCameraIso.lookAt(cameraTarget.x, isoTargetY, cameraTarget.z);
 }
 
 /**
@@ -198,10 +223,11 @@ function initUrdfPanel() {
     }
     
     // Create composite canvas for panel display
-    const canvasSize = URDF_PANEL_CONFIG.canvasScale;
+    const canvasWidth = URDF_PANEL_CONFIG.canvasWidth;
+    const canvasHeight = URDF_PANEL_CONFIG.canvasHeight;
     urdfCanvas = document.createElement('canvas');
-    urdfCanvas.width = canvasSize;
-    urdfCanvas.height = canvasSize;
+    urdfCanvas.width = canvasWidth;
+    urdfCanvas.height = canvasHeight;
     urdfCtx = urdfCanvas.getContext('2d');
     
     // Create WebGL texture
@@ -553,7 +579,7 @@ export function applyUrdfPanelTransform(childFrameId, transform) {
 // ========================================
 
 /**
- * Render the Three.js scene to the offscreen canvas
+ * Render the Three.js scene to the offscreen canvas (dual views)
  */
 function renderThreeJsToCanvas() {
     if (!urdfCanvas || !urdfCtx) return;
@@ -566,13 +592,27 @@ function renderThreeJsToCanvas() {
     }
     lastRenderTime = now;
     
-    // Clear canvas with transparency
-    urdfCtx.clearRect(0, 0, urdfCanvas.width, urdfCanvas.height);
+    const canvasWidth = URDF_PANEL_CONFIG.canvasWidth;
+    const canvasHeight = URDF_PANEL_CONFIG.canvasHeight;
+    const topViewHeight = Math.floor(canvasHeight * URDF_PANEL_CONFIG.topViewRatio);
+    const isoViewHeight = canvasHeight - topViewHeight;
     
-    // If Three.js is ready, render the 3D scene
-    if (urdfRenderer && urdfScene && urdfCamera) {
-        // Render to the Three.js canvas
+    // Clear canvas with transparency
+    urdfCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+    
+    // If Three.js is ready, render both views
+    if (urdfRenderer && urdfScene && urdfCamera && urdfCameraIso) {
+        // Top portion: Top-down view (35% of height)
+        urdfRenderer.setViewport(0, isoViewHeight, canvasWidth, topViewHeight);
+        urdfRenderer.setScissor(0, isoViewHeight, canvasWidth, topViewHeight);
+        urdfRenderer.clear();  // Clear this viewport region
         urdfRenderer.render(urdfScene, urdfCamera);
+        
+        // Bottom portion: Isometric view (65% of height)
+        urdfRenderer.setViewport(0, 0, canvasWidth, isoViewHeight);
+        urdfRenderer.setScissor(0, 0, canvasWidth, isoViewHeight);
+        urdfRenderer.clear();  // Clear this viewport region
+        urdfRenderer.render(urdfScene, urdfCameraIso);
         
         // Copy to composite canvas (preserves transparency)
         if (threeCanvas) {
@@ -582,7 +622,7 @@ function renderThreeJsToCanvas() {
         // Fallback: Draw a placeholder when Three.js isn't ready
         if (URDF_PANEL_CONFIG.backgroundAlpha > 0) {
             urdfCtx.fillStyle = `rgba(26, 26, 46, ${URDF_PANEL_CONFIG.backgroundAlpha})`;
-            urdfCtx.fillRect(0, 0, urdfCanvas.width, urdfCanvas.height);
+            urdfCtx.fillRect(0, 0, canvasWidth, canvasHeight);
         }
         
         // Draw placeholder text
@@ -590,33 +630,46 @@ function renderThreeJsToCanvas() {
         urdfCtx.font = 'bold 24px sans-serif';
         urdfCtx.textAlign = 'center';
         urdfCtx.textBaseline = 'middle';
-        urdfCtx.fillText('Initializing 3D...', urdfCanvas.width / 2, urdfCanvas.height / 2);
+        urdfCtx.fillText('Initializing 3D...', canvasWidth / 2, canvasHeight / 2);
         urdfCtx.textAlign = 'left';
     }
     
-    // Draw title bar overlay
-    urdfCtx.fillStyle = 'rgba(20, 20, 40, 0.8)';
-    urdfCtx.fillRect(0, 0, urdfCanvas.width, 32);
-    
-    // Draw title text
+    // Draw title bar for top view (top of canvas)
+    const titleHeight = 28;
+    urdfCtx.fillStyle = 'rgba(20, 20, 40, 0.85)';
+    urdfCtx.fillRect(0, 0, canvasWidth, titleHeight);
     urdfCtx.fillStyle = '#88ccff';
     urdfCtx.font = `bold ${URDF_PANEL_CONFIG.titleFontSize}px sans-serif`;
     urdfCtx.textBaseline = 'middle';
-    urdfCtx.fillText('🤖 Alfie Top View', 30, 16);  // Moved right for rounded corner
+    urdfCtx.fillText('⬇️ Top View', 10, titleHeight / 2);
     
-    // Draw status indicator
+    // Draw divider line between views (at the split point)
+    urdfCtx.strokeStyle = '#4488cc';
+    urdfCtx.lineWidth = 2;
+    urdfCtx.beginPath();
+    urdfCtx.moveTo(0, topViewHeight);
+    urdfCtx.lineTo(canvasWidth, topViewHeight);
+    urdfCtx.stroke();
+    
+    // Draw title bar for isometric view (at split point)
+    urdfCtx.fillStyle = 'rgba(20, 20, 40, 0.85)';
+    urdfCtx.fillRect(0, topViewHeight, canvasWidth, titleHeight);
+    urdfCtx.fillStyle = '#88ccff';
+    urdfCtx.fillText('📐 Isometric', 10, topViewHeight + titleHeight / 2);
+    
+    // Draw status indicator on top title bar
     const statusColor = urdfLoaded ? '#44ff44' : '#ff8844';
     const statusText = urdfLoaded ? `${Object.keys(urdfLinks).length} links` : 'Loading...';
     urdfCtx.fillStyle = statusColor;
-    urdfCtx.font = '14px sans-serif';
+    urdfCtx.font = '13px sans-serif';
     const textWidth = urdfCtx.measureText(statusText).width;
-    urdfCtx.fillText(statusText, urdfCanvas.width - textWidth - 10, 16);
+    urdfCtx.fillText(statusText, canvasWidth - textWidth - 10, titleHeight / 2);
     
     // Draw border only if background is visible
     if (URDF_PANEL_CONFIG.backgroundAlpha > 0) {
         urdfCtx.strokeStyle = '#4488cc';
         urdfCtx.lineWidth = 3;
-        urdfCtx.strokeRect(1, 1, urdfCanvas.width - 2, urdfCanvas.height - 2);
+        urdfCtx.strokeRect(1, 1, canvasWidth - 2, canvasHeight - 2);
     }
 }
 
@@ -828,6 +881,7 @@ export function disposeUrdfPanel() {
         urdfScene = null;
     }
     
+    urdfCameraIso = null;
     urdfRobot = null;
     urdfLinks = {};
     urdfJoints = {};
