@@ -15,8 +15,8 @@
             headsetPose,
             fpsOverlayState,
             batteryState,
-            statusPanelState,
-            leftStatusPanelState,
+            statePanelState,
+            streamPanelState,
             frameTracking,
             shaderState,
             preAllocatedBuffers,
@@ -33,8 +33,8 @@
         import {
             setOverlayContext,
             updateGlContext,
-            drawRightStatusPanel,
-            drawLeftStatusPanel,
+            drawStatePanel,
+            drawStreamPanel,
             drawRosoutPanel,
             drawBearingPanel,
             setRosoutMessagesCallback,
@@ -470,8 +470,8 @@
                 for (const view of pose.views) {
                     const viewport = glLayer.getViewport(view);
                     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-                    drawRightStatusPanel(view, viewport, pose.transform.matrix);
-                    drawLeftStatusPanel(view, viewport, pose.transform.matrix);
+                    drawStatePanel(view, viewport, pose.transform.matrix);
+                    drawStreamPanel(view, viewport, pose.transform.matrix);
                     drawBearingPanel(view, viewport, pose.transform.matrix);
                     drawRosoutPanel(view, viewport, pose.transform.matrix);
                     drawUrdfPanel(view, viewport, pose.transform.matrix);
@@ -537,8 +537,8 @@
                     // }
                     
                     // Draw status panels (head-locked)
-                    drawRightStatusPanel(view, viewport, pose.transform.matrix);
-                    drawLeftStatusPanel(view, viewport, pose.transform.matrix);
+                    drawStatePanel(view, viewport, pose.transform.matrix);
+                    drawStreamPanel(view, viewport, pose.transform.matrix);
                     drawBearingPanel(view, viewport, pose.transform.matrix);
                     drawRosoutPanel(view, viewport, pose.transform.matrix);
                     drawUrdfPanel(view, viewport, pose.transform.matrix);
@@ -640,8 +640,8 @@
                     // }
                     
                     // Draw status panels (head-locked)
-                    drawRightStatusPanel(view, viewport, pose.transform.matrix);
-                    drawLeftStatusPanel(view, viewport, pose.transform.matrix);
+                    drawStatePanel(view, viewport, pose.transform.matrix);
+                    drawStreamPanel(view, viewport, pose.transform.matrix);
                     drawBearingPanel(view, viewport, pose.transform.matrix);
                     drawRosoutPanel(view, viewport, pose.transform.matrix);
                     drawUrdfPanel(view, viewport, pose.transform.matrix);

@@ -156,10 +156,10 @@ export const batteryState = {
 };
 
 // ========================================
-// Status Panel State (Right)
+// State Panel State
 // ========================================
 
-export const statusPanelState = {
+export const statePanelState = {
     canvas: null,
     ctx: null,
     texture: null,
@@ -169,10 +169,10 @@ export const statusPanelState = {
 };
 
 // ========================================
-// Left Status Panel State
+// Stream Panel State
 // ========================================
 
-export const leftStatusPanelState = {
+export const streamPanelState = {
     canvas: null,
     ctx: null,
     texture: null,

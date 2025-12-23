@@ -15,8 +15,8 @@ import {
 export const URDF_PANEL_CONFIG = {
     width: 0.18,                // Panel width in world units
     height: 0.18,               // Panel height in world units (square for 3D viewer)
-    horizontalOffset: -0.2,     // Small gap from right edge of main screen
-    verticalOffset: 0.0,        // Vertical offset from screen center
+    horizontalOffset: -0.25,     // Small gap from right edge of main screen
+    verticalOffset: 0.15,        // Vertical offset from screen center
     angle: -15,                 // Yaw rotation in degrees (negative = angled toward center)
     backgroundAlpha: 0.5,      // Background opacity
     canvasScale: 512,           // Canvas resolution multiplier (512x512 pixels)
