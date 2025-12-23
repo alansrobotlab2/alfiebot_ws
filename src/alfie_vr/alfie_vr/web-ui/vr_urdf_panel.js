@@ -14,16 +14,17 @@ import {
 
 export const URDF_PANEL_CONFIG = {
     width: 0.18,                // Panel width in world units
-    height: 0.36,               // Panel height in world units (tall for dual views)
+    height: 0.38,               // Panel height in world units
     horizontalOffset: -0.225,    // Small gap from right edge of main screen
     verticalOffset: 0.00,       // Vertical offset from screen center (adjusted for taller panel)
     angle: -15,                 // Yaw rotation in degrees (negative = angled toward center)
     backgroundAlpha: 0.5,       // Background opacity
     canvasWidth: 512,           // Canvas width in pixels
-    canvasHeight: 1024,         // Canvas height in pixels (tall for dual views)
-    topViewRatio: 0.35,         // Top-down view gets 35% of height
-    topViewForwardOffset: 0.15, // Shift top-down view forward (robot appears lower, room for arms)
-    isoTargetHeight: 0.45,      // How high up the robot the isometric camera looks (head level)
+    canvasHeight: 1088,         // Canvas height in pixels
+    topViewRatio: 0.30,         // Top-down view gets 30% of height
+    forwardOffset: 0.15,         // Shift both views forward (robot appears further back)
+    viewSize: 0.6,              // Orthographic view size (same for both views, larger = see more)
+    isoTargetHeight: 0.5,      // How high up the robot the side camera looks (centered on torso)
     renderFps: 15,              // Target FPS for Three.js rendering
     titleFontSize: 16,          // Title font size in pixels
 };
@@ -141,28 +142,39 @@ function initThreeJsRenderer() {
     // Create scene
     urdfScene = new THREE.Scene();
     
-    // Camera 1: Top-down orthographic view (top half of canvas)
-    const viewSize = 0.5;  // Half-size of the view in world units
-    urdfCamera = new THREE.OrthographicCamera(-viewSize, viewSize, viewSize, -viewSize, 0.01, 10);
-    const topViewOffset = URDF_PANEL_CONFIG.topViewForwardOffset;  // Shift view forward
-    urdfCamera.position.set(0, 1, topViewOffset);
-    urdfCamera.up.set(0, 0, 1);  // Set "up" to +Z so robot faces down on screen
-    urdfCamera.lookAt(0, 0, topViewOffset);
+    // Calculate viewport dimensions for proper aspect ratios
+    const topViewHeight = Math.floor(canvasHeight * URDF_PANEL_CONFIG.topViewRatio);
+    const sideViewHeight = canvasHeight - topViewHeight;
+    const viewSize = URDF_PANEL_CONFIG.viewSize;  // Base scale (used for side view)
     
-    // Camera 2: Isometric view (bottom portion of canvas)
-    // Classic isometric: 45° azimuth, ~35.264° elevation (arctan(1/√2))
-    urdfCameraIso = new THREE.OrthographicCamera(-viewSize, viewSize, viewSize, -viewSize, 0.01, 10);
-    const isoDistance = 1.0;
-    const isoAzimuth = Math.PI / 4;  // 45 degrees around Y
-    const isoElevation = Math.atan(1 / Math.sqrt(2));  // ~35.264 degrees up
+    // Calculate aspect ratios
+    const topAspect = canvasWidth / topViewHeight;
+    const sideAspect = canvasWidth / sideViewHeight;
+    
+    // Side view camera dimensions (reference for alignment)
+    const sideHalfWidth = viewSize * sideAspect;
+    
+    // Top view: match horizontal scale with side view for alignment
+    // topHalfWidth should equal sideHalfWidth so horizontal pixels map to same world units
+    const topHalfWidth = sideHalfWidth;
+    const topViewSize = topHalfWidth / topAspect;  // Derived to match horizontal scale
+    
+    // Camera 1: Top-down orthographic view (top portion of canvas)
+    urdfCamera = new THREE.OrthographicCamera(-topHalfWidth, topHalfWidth, topViewSize, -topViewSize, 0.01, 10);
+    const forwardOffset = URDF_PANEL_CONFIG.forwardOffset;  // Shift view forward
+    urdfCamera.position.set(0, 1, forwardOffset);
+    urdfCamera.up.set(-1, 0, 0);  // Set "up" to -X for 90° CCW rotation (robot faces left)
+    urdfCamera.lookAt(0, 0, forwardOffset);
+    
+    // Camera 2: Side view from the right (bottom portion of canvas)
+    // Camera positioned on the right side (+X), looking at the robot
+    // Robot faces right (forward = -X direction in view)
+    urdfCameraIso = new THREE.OrthographicCamera(-sideHalfWidth, sideHalfWidth, viewSize, -viewSize, 0.01, 10);
+    const sideDistance = 1.0;
     const isoTargetY = URDF_PANEL_CONFIG.isoTargetHeight;  // Look at this height on robot
-    urdfCameraIso.position.set(
-        isoDistance * Math.cos(isoElevation) * Math.sin(isoAzimuth),
-        isoTargetY + isoDistance * Math.sin(isoElevation),
-        isoDistance * Math.cos(isoElevation) * Math.cos(isoAzimuth)
-    );
-    urdfCameraIso.up.set(0, 1, 0);
-    urdfCameraIso.lookAt(0, isoTargetY, 0);
+    urdfCameraIso.position.set(sideDistance, isoTargetY, forwardOffset);  // Right side of robot, with forward offset
+    urdfCameraIso.up.set(0, 1, 0);  // Y is up
+    urdfCameraIso.lookAt(0, isoTargetY, forwardOffset);
     
     // Add lighting - works for both views
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -186,22 +198,22 @@ function initThreeJsRenderer() {
 function updateCameraPositions() {
     if (!urdfCamera || !urdfCameraIso) return;
     
-    // Top-down camera stays fixed above robot (with forward offset for arm room)
-    const topViewOffset = URDF_PANEL_CONFIG.topViewForwardOffset;
-    urdfCamera.position.set(cameraTarget.x, cameraTarget.y + 1, cameraTarget.z + topViewOffset);
-    urdfCamera.lookAt(cameraTarget.x, cameraTarget.y, cameraTarget.z + topViewOffset);
+    const forwardOffset = URDF_PANEL_CONFIG.forwardOffset;
     
-    // Isometric camera maintains angle but follows target (raised by isoTargetHeight)
-    const isoDistance = 1.0;
-    const isoAzimuth = Math.PI / 4;
-    const isoElevation = Math.atan(1 / Math.sqrt(2));
+    // Top-down camera stays fixed above robot (with forward offset for arm room)
+    urdfCamera.position.set(cameraTarget.x, cameraTarget.y + 1, cameraTarget.z + forwardOffset);
+    urdfCamera.up.set(-1, 0, 0);  // Maintain 90° CCW rotation
+    urdfCamera.lookAt(cameraTarget.x, cameraTarget.y, cameraTarget.z + forwardOffset);
+    
+    // Side view camera (from the right, with forward offset)
+    const sideDistance = 1.0;
     const isoTargetY = cameraTarget.y + URDF_PANEL_CONFIG.isoTargetHeight;
     urdfCameraIso.position.set(
-        cameraTarget.x + isoDistance * Math.cos(isoElevation) * Math.sin(isoAzimuth),
-        isoTargetY + isoDistance * Math.sin(isoElevation),
-        cameraTarget.z + isoDistance * Math.cos(isoElevation) * Math.cos(isoAzimuth)
+        cameraTarget.x + sideDistance,  // Right side of robot
+        isoTargetY,
+        cameraTarget.z + forwardOffset
     );
-    urdfCameraIso.lookAt(cameraTarget.x, isoTargetY, cameraTarget.z);
+    urdfCameraIso.lookAt(cameraTarget.x, isoTargetY, cameraTarget.z + forwardOffset);
 }
 
 /**
@@ -651,11 +663,11 @@ function renderThreeJsToCanvas() {
     urdfCtx.lineTo(canvasWidth, topViewHeight);
     urdfCtx.stroke();
     
-    // Draw title bar for isometric view (at split point)
+    // Draw title bar for side view (at split point)
     urdfCtx.fillStyle = 'rgba(20, 20, 40, 0.85)';
     urdfCtx.fillRect(0, topViewHeight, canvasWidth, titleHeight);
     urdfCtx.fillStyle = '#88ccff';
-    urdfCtx.fillText('📐 Isometric', 10, topViewHeight + titleHeight / 2);
+    urdfCtx.fillText('👈 Side View', 10, topViewHeight + titleHeight / 2);
     
     // Draw status indicator on top title bar
     const statusColor = urdfLoaded ? '#44ff44' : '#ff8844';
