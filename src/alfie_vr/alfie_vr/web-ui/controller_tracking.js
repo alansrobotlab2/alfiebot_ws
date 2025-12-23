@@ -107,11 +107,34 @@ export function sendControllerData() {
     const hasValidHeadset = headsetPose.position !== null;
     
     if (hasValidLeft || hasValidRight || hasValidHeadset) {
+        // Create deep copies to avoid race conditions with concurrent state access
         const data = {
             timestamp: Date.now(),
-            leftController: leftController,
-            rightController: rightController,
-            headset: headsetPose
+            leftController: hasValidLeft ? {
+                hand: leftController.hand,
+                position: { ...leftController.position },
+                rotation: leftController.rotation ? { ...leftController.rotation } : null,
+                quaternion: leftController.quaternion ? { ...leftController.quaternion } : null,
+                gripActive: leftController.gripActive,
+                trigger: leftController.trigger,
+                thumbstick: { ...leftController.thumbstick },
+                buttons: { ...leftController.buttons }
+            } : null,
+            rightController: hasValidRight ? {
+                hand: rightController.hand,
+                position: { ...rightController.position },
+                rotation: rightController.rotation ? { ...rightController.rotation } : null,
+                quaternion: rightController.quaternion ? { ...rightController.quaternion } : null,
+                gripActive: rightController.gripActive,
+                trigger: rightController.trigger,
+                thumbstick: { ...rightController.thumbstick },
+                buttons: { ...rightController.buttons }
+            } : null,
+            headset: hasValidHeadset ? {
+                position: { ...headsetPose.position },
+                rotation: headsetPose.rotation ? { ...headsetPose.rotation } : null,
+                quaternion: headsetPose.quaternion ? { ...headsetPose.quaternion } : null
+            } : null
         };
         connectionState.controllerWS.send(JSON.stringify(data));
     }

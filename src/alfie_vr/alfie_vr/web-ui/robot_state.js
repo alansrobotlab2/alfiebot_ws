@@ -13,6 +13,7 @@ let compressedImageSubscriptionId = null;
 let robotDescriptionSubscriptionId = null;
 let tfSubscriptionId = null;
 let tfStaticSubscriptionId = null;
+let rosoutSubscriptionId = null;
 
 // Video state
 let currentFrameBitmap = null;
@@ -33,6 +34,11 @@ let tfTransforms = {};
 
 // TF callback - allows external modules to receive TF updates
 let onTfUpdateFn = null;
+
+// Rosout message storage (ring buffer)
+const MAX_ROSOUT_MESSAGES = 50;
+let rosoutMessages = [];
+let onRosoutMessageFn = null;
 
 // ========================================
 // Callback References
@@ -102,6 +108,31 @@ export function getTfTransform(frameId) {
  */
 export function setTfUpdateCallback(callback) {
     onTfUpdateFn = callback;
+}
+
+/**
+ * Get rosout messages array
+ */
+export function getRosoutMessages() {
+    return rosoutMessages;
+}
+
+/**
+ * Set a callback to receive rosout updates
+ * @param {Function} callback - Called with (message) for each rosout message
+ */
+export function setRosoutCallback(callback) {
+    onRosoutMessageFn = callback;
+}
+
+/**
+ * Clear all rosout messages
+ */
+export function clearRosoutMessages() {
+    rosoutMessages = [];
+    if (onRosoutMessageFn) {
+        onRosoutMessageFn(null);  // Signal clear
+    }
 }
 
 // ========================================
@@ -180,6 +211,15 @@ function subscribeToRobotTopics(channels) {
     });
     if (tfStaticSubscriptionId) {
         console.log('Subscribed to /alfie/tf_static');
+        subscribedCount++;
+    }
+    
+    // Subscribe to rosout
+    rosoutSubscriptionId = foxgloveConn.subscribe('/rosout', (messageData) => {
+        handleRosoutMessage(messageData);
+    });
+    if (rosoutSubscriptionId) {
+        console.log('Subscribed to /rosout');
         subscribedCount++;
     }
     
@@ -329,6 +369,84 @@ function handleTFMessage(data) {
         if (tfCount < 5) {
             console.warn('TF decode error:', error);
         }
+    }
+}
+
+// Decode rosout message (rcl_interfaces/msg/Log) CDR format
+// Log level constants: DEBUG=10, INFO=20, WARN=30, ERROR=40, FATAL=50
+const LOG_LEVELS = {
+    10: 'DEBUG',
+    20: 'INFO',
+    30: 'WARN',
+    40: 'ERROR',
+    50: 'FATAL'
+};
+
+function handleRosoutMessage(data) {
+    try {
+        let offset = 4;  // Skip CDR header
+        const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+        
+        const readString = () => {
+            const len = view.getUint32(offset, true);
+            offset += 4;
+            // len includes null terminator, so read len-1 bytes
+            const strBytes = new Uint8Array(data.buffer, data.byteOffset + offset, len > 0 ? len - 1 : 0);
+            offset += len;
+            // Align to 4 bytes after string
+            if (offset % 4 !== 0) offset += 4 - (offset % 4);
+            return new TextDecoder().decode(strBytes);
+        };
+        
+        // builtin_interfaces/Time stamp (8 bytes: sec + nanosec)
+        const stampSec = view.getUint32(offset, true); offset += 4;
+        const stampNsec = view.getUint32(offset, true); offset += 4;
+        
+        // uint8 level
+        const level = view.getUint8(offset); offset += 1;
+        // Align to 4 bytes for next string
+        if (offset % 4 !== 0) offset += 4 - (offset % 4);
+        
+        // string name (logger name)
+        const name = readString();
+        
+        // string msg
+        const msg = readString();
+        
+        // string file
+        const file = readString();
+        
+        // string function
+        const func = readString();
+        
+        // uint32 line
+        const line = view.getUint32(offset, true); offset += 4;
+        
+        // Create message object
+        const logMessage = {
+            timestamp: stampSec + stampNsec / 1e9,
+            level: level,
+            levelName: LOG_LEVELS[level] || `L${level}`,
+            name: name,
+            msg: msg,
+            file: file,
+            function: func,
+            line: line
+        };
+        
+        // Add to ring buffer
+        rosoutMessages.push(logMessage);
+        if (rosoutMessages.length > MAX_ROSOUT_MESSAGES) {
+            rosoutMessages.shift();
+        }
+        
+        // Call callback if registered
+        if (onRosoutMessageFn) {
+            onRosoutMessageFn(logMessage);
+        }
+        
+    } catch (error) {
+        console.warn('Rosout decode error:', error);
     }
 }
 

@@ -19,7 +19,7 @@ const RIGHT_PANEL_CONFIG = {
     horizontalOffset: 0.25,  // Offset from right edge of main screen
     verticalOffset: 0.0,      // Offset from stereoSettings.verticalOffset
     angle: -15,                 // Yaw rotation in degrees (positive = right)
-    backgroundAlpha: 0.75,      // Background transparency (0-1)
+    backgroundAlpha: 0.5,      // Background transparency (0-1)
     canvasScale: 1280,          // Multiplier to convert panel size to canvas pixels
     titleFontSize: 17,          // Title font size in pixels
     bodyFontSize: 13            // Body text font size in pixels
@@ -32,10 +32,38 @@ const LEFT_PANEL_CONFIG = {
     horizontalOffset: 0.24,    // Offset from left edge of main screen
     verticalOffset: 0.0,       // Offset from stereoSettings.verticalOffset
     angle: 15,                 // Yaw rotation in degrees (negative = left)
-    backgroundAlpha: 0.75,      // Background transparency (0-1)
+    backgroundAlpha: 0.5,      // Background transparency (0-1)
     canvasScale: 1280,          // Multiplier to convert panel size to canvas pixels
     titleFontSize: 17,          // Title font size in pixels
     bodyFontSize: 13            // Body text font size in pixels
+};
+
+// Bottom rosout log panel configuration
+const ROSOUT_PANEL_CONFIG = {
+    width: 0.45,                // Wide panel at bottom
+    height: 0.06,
+    horizontalOffset: 0.0,      // Centered horizontally
+    verticalOffset: -0.20,      // Below main screen
+    angle: 0,                   // No rotation
+    backgroundAlpha: 0.0,      // Background transparency (0-1)
+    canvasScale: 1280,          // Multiplier to convert panel size to canvas pixels
+    titleFontSize: 17,          // Title font size in pixels
+    bodyFontSize: 13,           // Body text font size in pixels
+    maxMessages: 3              // Number of log messages to display
+};
+
+// Top bearing indicator panel configuration
+const BEARING_PANEL_CONFIG = {
+    width: 0.12,                // Compact centered panel
+    height: 0.04,
+    horizontalOffset: 0.0,      // Centered horizontally
+    verticalOffset: 0.22,       // Above main screen
+    angle: 0,                   // No rotation
+    backgroundAlpha: 0.0,       // Background transparency (0-1)
+    canvasScale: 1280,          // Multiplier to convert panel size to canvas pixels
+    fontSize: 32,               // Main yaw display font size
+    nominalThreshold: 5,        // Degrees for green (nominal)
+    warningThreshold: 30        // Degrees for yellow (warning), beyond is red
 };
 
 // ========================================
@@ -66,6 +94,14 @@ let leftStatusPanelTexture = null;
 let leftStatusPanelPositionBuffer = null;
 let leftStatusPanelTexCoordBuffer = null;
 let leftStatusPanelInitialized = false;
+
+// Bearing panel state
+let bearingPanelCanvas = null;
+let bearingPanelCtx = null;
+let bearingPanelTexture = null;
+let bearingPanelPositionBuffer = null;
+let bearingPanelTexCoordBuffer = null;
+let bearingPanelInitialized = false;
 
 // Pre-allocated buffers
 const rightPanelModelMatrix = preAllocatedBuffers.rightPanelModelMatrix;
@@ -648,6 +684,249 @@ export function drawRightStatusPanel(view, viewport, modelMatrix) {
 }
 
 // ========================================
+// Rosout Log Panel Functions (Bottom Panel)
+// ========================================
+
+// Rosout panel state
+let rosoutPanelCanvas = null;
+let rosoutPanelCtx = null;
+let rosoutPanelTexture = null;
+let rosoutPanelPositionBuffer = null;
+let rosoutPanelTexCoordBuffer = null;
+let rosoutPanelInitialized = false;
+const rosoutPanelModelMatrix = new Float32Array(16);
+
+// Rosout messages callback
+let getRosoutMessagesFn = () => [];
+
+export function setRosoutMessagesCallback(callback) {
+    getRosoutMessagesFn = callback;
+}
+
+function initRosoutPanel() {
+    if (!gl) {
+        vrLogFn('Rosout panel: no GL context');
+        return;
+    }
+    
+    vrLogFn('Init rosout panel...');
+    
+    // Create canvas for log text
+    rosoutPanelCanvas = document.createElement('canvas');
+    rosoutPanelCanvas.width = Math.round(ROSOUT_PANEL_CONFIG.width * ROSOUT_PANEL_CONFIG.canvasScale);
+    rosoutPanelCanvas.height = Math.round(ROSOUT_PANEL_CONFIG.height * ROSOUT_PANEL_CONFIG.canvasScale);
+    rosoutPanelCtx = rosoutPanelCanvas.getContext('2d');
+    
+    // Create texture
+    rosoutPanelTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, rosoutPanelTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    
+    // Create position buffer for 3D quad (centered at bottom)
+    const panelHeight = ROSOUT_PANEL_CONFIG.height;
+    const panelWidth = ROSOUT_PANEL_CONFIG.width;
+    
+    const panelCenterX = ROSOUT_PANEL_CONFIG.horizontalOffset;
+    const panelCenterY = stereoSettings.verticalOffset + ROSOUT_PANEL_CONFIG.verticalOffset;
+    
+    rosoutPanelPositionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, rosoutPanelPositionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        panelCenterX - panelWidth/2, panelCenterY - panelHeight/2,
+        panelCenterX + panelWidth/2, panelCenterY - panelHeight/2,
+        panelCenterX - panelWidth/2, panelCenterY + panelHeight/2,
+        panelCenterX + panelWidth/2, panelCenterY + panelHeight/2,
+    ]), gl.STATIC_DRAW);
+    
+    rosoutPanelTexCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, rosoutPanelTexCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        0, 1,
+        1, 1,
+        0, 0,
+        1, 0,
+    ]), gl.STATIC_DRAW);
+    
+    // Initial update
+    updateRosoutPanelCanvas();
+    
+    rosoutPanelInitialized = true;
+    vrLogFn('Rosout panel: OK');
+}
+
+function updateRosoutPanelCanvas() {
+    if (!rosoutPanelCtx) return;
+    
+    const messages = getRosoutMessagesFn();
+    const canvas = rosoutPanelCanvas;
+    const ctx = rosoutPanelCtx;
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Semi-transparent dark background with rounded corners
+    ctx.fillStyle = `rgba(20, 20, 30, ${ROSOUT_PANEL_CONFIG.backgroundAlpha})`;
+    drawRoundedRect(ctx, 0, 0, canvas.width, canvas.height, 12);
+    
+    // Title
+    ctx.fillStyle = '#f39c12';
+    ctx.font = `bold ${ROSOUT_PANEL_CONFIG.titleFontSize}px monospace`;
+    ctx.textBaseline = 'top';
+    ctx.fillText('📋 ROS Logs', 10, 6);
+    
+    // Draw last N messages
+    const displayMessages = messages.slice(-ROSOUT_PANEL_CONFIG.maxMessages);
+    ctx.font = `${ROSOUT_PANEL_CONFIG.bodyFontSize}px monospace`;
+    
+    const startY = 24;
+    const lineHeight = 15;
+    
+    displayMessages.forEach((msg, i) => {
+        const y = startY + i * lineHeight;
+        
+        // Level color
+        const levelColors = {
+            'DEBUG': '#888888',
+            'INFO': '#44ff44',
+            'WARN': '#f39c12',
+            'ERROR': '#e74c3c',
+            'FATAL': '#ff00ff'
+        };
+        const levelColor = levelColors[msg.levelName] || '#cccccc';
+        
+        // Format: [LEVEL] message
+        ctx.fillStyle = levelColor;
+        ctx.fillText(`[${msg.levelName}]`, 10, y);
+        
+        // Truncate message if too long
+        const maxMsgLen = 90;
+        const truncatedMsg = msg.msg.length > maxMsgLen ? 
+            msg.msg.substring(0, maxMsgLen) + '...' : msg.msg;
+        ctx.fillText(truncatedMsg, 70, y);
+    });
+    
+    // If no messages, show placeholder
+    if (displayMessages.length === 0) {
+        ctx.fillStyle = '#666666';
+        ctx.fillText('Waiting for log messages...', 10, startY);
+    }
+    
+    // Update texture
+    if (gl && rosoutPanelTexture) {
+        gl.bindTexture(gl.TEXTURE_2D, rosoutPanelTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+    }
+}
+
+export function drawRosoutPanel(view, viewport, modelMatrix) {
+    const frameCounter = getFrameCounterFn();
+    const shaderProgram = getShaderProgramFn();
+    const cachedLocations = getCachedLocationsFn();
+    
+    // Initialize on first call
+    if (!rosoutPanelInitialized) {
+        initRosoutPanel();
+    }
+    
+    // Check if initialization succeeded
+    if (!rosoutPanelTexture || !shaderProgram || !cachedLocations) {
+        return;
+    }
+    
+    // Update canvas every 10 frames (reduce CPU load)
+    if (frameCounter % 10 === 0) {
+        updateRosoutPanelCanvas();
+    }
+    
+    // Save current WebGL state
+    const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
+    
+    // Enable blending for transparency
+    // Use blendFuncSeparate to preserve destination alpha (prevents AR passthrough showing through)
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(
+        gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA,
+        gl.ZERO, gl.ONE
+    );
+    
+    // Disable depth test so panel is always visible
+    gl.disable(gl.DEPTH_TEST);
+    
+    gl.useProgram(shaderProgram);
+    
+    // Bind position buffer
+    gl.bindBuffer(gl.ARRAY_BUFFER, rosoutPanelPositionBuffer);
+    if (cachedLocations.position !== -1 && cachedLocations.position !== null) {
+        gl.enableVertexAttribArray(cachedLocations.position);
+        gl.vertexAttribPointer(cachedLocations.position, 2, gl.FLOAT, false, 0, 0);
+    }
+    
+    // Bind texcoord buffer
+    gl.bindBuffer(gl.ARRAY_BUFFER, rosoutPanelTexCoordBuffer);
+    if (cachedLocations.texCoord !== -1 && cachedLocations.texCoord !== null) {
+        gl.enableVertexAttribArray(cachedLocations.texCoord);
+        gl.vertexAttribPointer(cachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+    }
+    
+    // Set uniforms
+    if (cachedLocations.projection !== null) {
+        gl.uniformMatrix4fv(cachedLocations.projection, false, view.projectionMatrix);
+    }
+    
+    if (cachedLocations.view !== null && invertMatrixFn) {
+        invertMatrixFn(view.transform.matrix, viewMatrixBuffer);
+        gl.uniformMatrix4fv(cachedLocations.view, false, viewMatrixBuffer);
+    }
+    
+    if (cachedLocations.model !== null) {
+        if (modelMatrix) {
+            gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix);
+        } else {
+            gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
+        }
+    }
+    
+    if (cachedLocations.distance !== null) {
+        gl.uniform1f(cachedLocations.distance, stereoSettings.screenDistance);
+    }
+    
+    if (cachedLocations.ipdOffset !== null) {
+        // Use zero IPD offset for centered UI panels (no stereo separation)
+        gl.uniform1f(cachedLocations.ipdOffset, 0.0);
+    }
+    
+    if (cachedLocations.isLeftEye !== null) {
+        gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
+    }
+    
+    if (cachedLocations.useDirectVideo !== null) {
+        gl.uniform1f(cachedLocations.useDirectVideo, 0.0);
+    }
+    
+    if (cachedLocations.cornerRadius !== null) {
+        gl.uniform1f(cachedLocations.cornerRadius, 0.02);  // Rounded corners
+    }
+    
+    if (cachedLocations.texture !== null) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, rosoutPanelTexture);
+        gl.uniform1i(cachedLocations.texture, 0);
+    }
+    
+    // Draw the panel
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    
+    // Restore state
+    gl.disable(gl.BLEND);
+    gl.enable(gl.DEPTH_TEST);
+    
+    if (prevProgram) {
+        gl.useProgram(prevProgram);
+    }
+}// ========================================
 // Left Status Panel Functions
 // ========================================
 
@@ -885,6 +1164,233 @@ export function drawLeftStatusPanel(view, viewport, modelMatrix) {
     if (cachedLocations.texture !== null) {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, leftStatusPanelTexture);
+        gl.uniform1i(cachedLocations.texture, 0);
+    }
+    
+    // Draw the panel
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    
+    // Restore state
+    gl.disable(gl.BLEND);
+    gl.enable(gl.DEPTH_TEST);
+    
+    if (prevProgram) {
+        gl.useProgram(prevProgram);
+    }
+}
+// ========================================
+// Bearing Panel Functions (Top Panel)
+// ========================================
+
+function initBearingPanel() {
+    if (!gl) {
+        vrLogFn('Bearing panel: no GL context');
+        return;
+    }
+    
+    vrLogFn('Init bearing panel...');
+    
+    // Create canvas for bearing display
+    bearingPanelCanvas = document.createElement('canvas');
+    bearingPanelCanvas.width = Math.round(BEARING_PANEL_CONFIG.width * BEARING_PANEL_CONFIG.canvasScale);
+    bearingPanelCanvas.height = Math.round(BEARING_PANEL_CONFIG.height * BEARING_PANEL_CONFIG.canvasScale);
+    bearingPanelCtx = bearingPanelCanvas.getContext('2d');
+    
+    // Create texture
+    bearingPanelTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, bearingPanelTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    
+    // Create position buffer for 3D quad (centered at top)
+    const panelHeight = BEARING_PANEL_CONFIG.height;
+    const panelWidth = BEARING_PANEL_CONFIG.width;
+    
+    const panelCenterX = BEARING_PANEL_CONFIG.horizontalOffset;
+    const panelCenterY = stereoSettings.verticalOffset + BEARING_PANEL_CONFIG.verticalOffset;
+    
+    bearingPanelPositionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, bearingPanelPositionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        panelCenterX - panelWidth/2, panelCenterY - panelHeight/2,
+        panelCenterX + panelWidth/2, panelCenterY - panelHeight/2,
+        panelCenterX - panelWidth/2, panelCenterY + panelHeight/2,
+        panelCenterX + panelWidth/2, panelCenterY + panelHeight/2,
+    ]), gl.STATIC_DRAW);
+    
+    bearingPanelTexCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, bearingPanelTexCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        0, 1,
+        1, 1,
+        0, 0,
+        1, 0,
+    ]), gl.STATIC_DRAW);
+    
+    // Initial update
+    updateBearingPanelCanvas();
+    
+    bearingPanelInitialized = true;
+    vrLogFn('Bearing panel: OK');
+}
+
+function updateBearingPanelCanvas() {
+    if (!bearingPanelCtx) return;
+    
+    const canvas = bearingPanelCanvas;
+    const ctx = bearingPanelCtx;
+    
+    // Get current yaw from headset pose
+    const yaw = headsetPose.rotation ? Math.round(headsetPose.rotation.y) : 0;
+    const absYaw = Math.abs(yaw);
+    
+    // Determine color based on yaw threshold
+    let color;
+    if (absYaw <= BEARING_PANEL_CONFIG.nominalThreshold) {
+        color = '#44ff44';  // Green - nominal
+    } else if (absYaw <= BEARING_PANEL_CONFIG.warningThreshold) {
+        color = '#ffff00';  // Yellow - warning
+    } else {
+        color = '#ff4444';  // Red - danger
+    }
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Semi-transparent dark background with rounded corners
+    ctx.fillStyle = `rgba(20, 20, 30, ${BEARING_PANEL_CONFIG.backgroundAlpha})`;
+    drawRoundedRect(ctx, 0, 0, canvas.width, canvas.height, 12);
+    
+    // Set font for measurements
+    ctx.font = `bold ${BEARING_PANEL_CONFIG.fontSize}px monospace`;
+    ctx.textBaseline = 'middle';
+    
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    
+    // Format yaw text
+    const yawText = `${yaw}°`;
+    
+    // Measure text width for centering
+    const textWidth = ctx.measureText(yawText).width;
+    
+    // Draw yaw value centered
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.fillText(yawText, centerX, centerY);
+    
+    // Draw arrow if outside nominal range (pointing direction to return to center)
+    if (absYaw > BEARING_PANEL_CONFIG.nominalThreshold) {
+        const arrowSize = BEARING_PANEL_CONFIG.fontSize * 1.6;
+        const arrowOffset = textWidth / 2 + 25;
+        
+        ctx.font = `bold ${arrowSize}px monospace`;
+        
+        if (yaw > 0) {
+            // Yaw is positive (looking right), arrow points right
+            ctx.fillText('▶', centerX + arrowOffset, centerY);
+        } else {
+            // Yaw is negative (looking left), arrow points left
+            ctx.fillText('◀', centerX - arrowOffset, centerY);
+        }
+    }
+    
+    // Update texture
+    if (gl && bearingPanelTexture) {
+        gl.bindTexture(gl.TEXTURE_2D, bearingPanelTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+    }
+}
+
+export function drawBearingPanel(view, viewport, modelMatrix) {
+    const frameCounter = getFrameCounterFn();
+    const shaderProgram = getShaderProgramFn();
+    const cachedLocations = getCachedLocationsFn();
+    
+    // Initialize on first call
+    if (!bearingPanelInitialized) {
+        initBearingPanel();
+    }
+    
+    // Check if initialization succeeded
+    if (!bearingPanelTexture || !shaderProgram || !cachedLocations) {
+        return;
+    }
+    
+    // Update canvas every 5 frames (bearing needs responsive updates)
+    if (frameCounter % 5 === 0) {
+        updateBearingPanelCanvas();
+    }
+    
+    // Save current WebGL state
+    const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
+    
+    // Enable blending for transparency
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(
+        gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA,
+        gl.ZERO, gl.ONE
+    );
+    
+    // Disable depth test so panel is always visible
+    gl.disable(gl.DEPTH_TEST);
+    
+    gl.useProgram(shaderProgram);
+    
+    // Bind position buffer
+    gl.bindBuffer(gl.ARRAY_BUFFER, bearingPanelPositionBuffer);
+    if (cachedLocations.position !== -1 && cachedLocations.position !== null) {
+        gl.enableVertexAttribArray(cachedLocations.position);
+        gl.vertexAttribPointer(cachedLocations.position, 2, gl.FLOAT, false, 0, 0);
+    }
+    
+    // Bind texcoord buffer
+    gl.bindBuffer(gl.ARRAY_BUFFER, bearingPanelTexCoordBuffer);
+    if (cachedLocations.texCoord !== -1 && cachedLocations.texCoord !== null) {
+        gl.enableVertexAttribArray(cachedLocations.texCoord);
+        gl.vertexAttribPointer(cachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+    }
+    
+    // Set uniforms
+    if (cachedLocations.projection !== null) {
+        gl.uniformMatrix4fv(cachedLocations.projection, false, view.projectionMatrix);
+    }
+    
+    if (cachedLocations.view !== null && invertMatrixFn) {
+        invertMatrixFn(view.transform.matrix, viewMatrixBuffer);
+        gl.uniformMatrix4fv(cachedLocations.view, false, viewMatrixBuffer);
+    }
+    
+    if (cachedLocations.model !== null) {
+        if (modelMatrix) {
+            gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix);
+        } else {
+            gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
+        }
+    }
+    
+    if (cachedLocations.distance !== null) {
+        gl.uniform1f(cachedLocations.distance, stereoSettings.screenDistance);
+    }
+    
+    if (cachedLocations.ipdOffset !== null) {
+        // Use zero IPD offset for centered UI panels (no stereo separation)
+        gl.uniform1f(cachedLocations.ipdOffset, 0.0);
+    }
+    
+    if (cachedLocations.isLeftEye !== null) {
+        gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
+    }
+    
+    if (cachedLocations.useDirectVideo !== null) {
+        gl.uniform1f(cachedLocations.useDirectVideo, 0.0);
+    }
+    
+    if (cachedLocations.texture !== null) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, bearingPanelTexture);
         gl.uniform1i(cachedLocations.texture, 0);
     }
     

@@ -35,6 +35,9 @@
             updateGlContext,
             drawRightStatusPanel,
             drawLeftStatusPanel,
+            drawRosoutPanel,
+            drawBearingPanel,
+            setRosoutMessagesCallback,
         } from './vr_overlays.js';
         import {
             FOXGLOVE_PORT,
@@ -48,6 +51,9 @@
             getLinkNames,
             getTfRate,
             setTfUpdateCallback,
+            setRosoutCallback,
+            getRosoutMessages,
+            clearRosoutMessages,
         } from './robot_state.js';
         import {
             initRobotViewer,
@@ -332,6 +338,10 @@
                     invertMatrix: invertMatrix,
                     viewMatrixBuffer: viewMatrixBuffer,
                 });
+                
+                // Set up rosout messages callback for VR overlay
+                setRosoutMessagesCallback(getRosoutMessages);
+                
                 updateGlContext(gl);
                 
                 // TODO: VR Robot disabled - Three.js WebGL state conflicts with custom shaders
@@ -425,6 +435,8 @@
                     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
                     drawRightStatusPanel(view, viewport, pose.transform.matrix);
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
+                    drawBearingPanel(view, viewport, pose.transform.matrix);
+                    drawRosoutPanel(view, viewport, pose.transform.matrix);
                 }
                 return;
             }
@@ -489,6 +501,8 @@
                     // Draw status panels (head-locked)
                     drawRightStatusPanel(view, viewport, pose.transform.matrix);
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
+                    drawBearingPanel(view, viewport, pose.transform.matrix);
+                    drawRosoutPanel(view, viewport, pose.transform.matrix);
                 }
             } else {
                 // FALLBACK: Use canvas-based splitting (higher latency)
@@ -589,6 +603,8 @@
                     // Draw status panels (head-locked)
                     drawRightStatusPanel(view, viewport, pose.transform.matrix);
                     drawLeftStatusPanel(view, viewport, pose.transform.matrix);
+                    drawBearingPanel(view, viewport, pose.transform.matrix);
+                    drawRosoutPanel(view, viewport, pose.transform.matrix);
                 }
             }
         }
@@ -1062,6 +1078,114 @@
             console.log('Robot panel initialized');
         }
         
+        // ========================================
+        // Rosout Log Panel Functions
+        // ========================================
+        
+        function initRosoutPanel() {
+            const panel = document.getElementById('rosoutPanel');
+            const toggle = document.getElementById('rosoutPanelToggle');
+            const header = document.getElementById('rosoutPanelHeader');
+            const clearBtn = document.getElementById('rosoutPanelClear');
+            const messagesDiv = document.getElementById('rosoutMessages');
+            
+            if (!panel || !toggle || !messagesDiv) {
+                console.warn('Rosout panel elements not found');
+                return;
+            }
+            
+            // Toggle collapse/expand
+            toggle.addEventListener('click', () => {
+                panel.classList.toggle('collapsed');
+                toggle.textContent = panel.classList.contains('collapsed') ? '+' : '−';
+            });
+            
+            // Clear button
+            if (clearBtn) {
+                clearBtn.addEventListener('click', () => {
+                    clearRosoutMessages();
+                    messagesDiv.innerHTML = '';
+                });
+            }
+            
+            // Make panel draggable by header
+            let isDragging = false;
+            let offsetX = 0;
+            let offsetY = 0;
+            
+            header.addEventListener('mousedown', (e) => {
+                if (e.target === toggle || e.target === clearBtn) return;
+                isDragging = true;
+                offsetX = e.clientX - panel.offsetLeft;
+                offsetY = e.clientY - panel.offsetTop;
+            });
+            
+            document.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    panel.style.left = (e.clientX - offsetX) + 'px';
+                    panel.style.top = (e.clientY - offsetY) + 'px';
+                    panel.style.bottom = 'auto';
+                    panel.style.right = 'auto';
+                }
+            });
+            
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+            
+            // Set up callback to receive rosout messages
+            setRosoutCallback((logMessage) => {
+                if (!logMessage) {
+                    // Clear signal
+                    messagesDiv.innerHTML = '';
+                    return;
+                }
+                addRosoutMessageToPanel(logMessage, messagesDiv);
+            });
+            
+            console.log('Rosout panel initialized');
+        }
+        
+        function addRosoutMessageToPanel(logMessage, messagesDiv) {
+            // Format timestamp
+            const date = new Date(logMessage.timestamp * 1000);
+            const timeStr = date.toLocaleTimeString('en-US', { 
+                hour12: false, 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit' 
+            });
+            
+            // Get level class
+            const levelClass = logMessage.levelName.toLowerCase();
+            
+            // Create message element
+            const msgEl = document.createElement('div');
+            msgEl.className = `rosout-msg ${levelClass}`;
+            msgEl.innerHTML = `
+                <span class="rosout-time">${timeStr}</span>
+                <span class="rosout-level">[${logMessage.levelName}]</span>
+                <span class="rosout-name">${logMessage.name}</span>
+                <span class="rosout-text">${escapeHtml(logMessage.msg)}</span>
+            `;
+            
+            messagesDiv.appendChild(msgEl);
+            
+            // Auto-scroll to bottom
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            // Limit displayed messages
+            while (messagesDiv.children.length > 50) {
+                messagesDiv.removeChild(messagesDiv.firstChild);
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
         // Initialize 3D robot viewer and watch for URDF data
         function initRobotViewer3D() {
             // Initialize the Three.js viewer
@@ -1109,6 +1233,7 @@
             console.log('Stereo VR Vision - Initializing...');
             initBatteryMonitor();
             initRobotPanel();  // Initialize robot status panel
+            initRosoutPanel();  // Initialize rosout log panel
             initRobotViewer3D();  // Initialize 3D robot viewer
             initControllerWebSocket();  // Initialize controller tracking WebSocket
             initFoxgloveConnection();

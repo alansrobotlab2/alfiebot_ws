@@ -15,11 +15,6 @@
     <canvas id="rightCanvas" style="display: none;"></canvas>
     <img id="preview" class="hidden" alt="Stereo preview">
     
-    <div id="info">
-        Put on your Meta Quest 3 and click "Enter VR" for immersive 3D vision<br>
-        Use thumbsticks in VR: Left stick = vertical, Right stick = IPD | Triggers = distance<br>
-        Controller tracking streams to robot arms via WebSocket
-    </div>
     <button id="vrButton" disabled>🥽 Enter VR</button>
     <button id="certButton" style="position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); background: #f39c12; color: #000; border: none; padding: 12px 24px; font-size: 14px; border-radius: 8px; cursor: pointer; z-index: 1000; display: none;">🔐 Accept Stereo Stream Certificate</button>
     
@@ -54,6 +49,20 @@
             <div id="robotViewerContainer" class="robot-viewer-3d"></div>
         </div>
         <div class="robot-panel-resize-handle" id="robotPanelResize"></div>
+    </div>
+
+    <!-- Rosout Log Panel -->
+    <div id="rosoutPanel" class="rosout-panel">
+        <div class="rosout-panel-header" id="rosoutPanelHeader">
+            <span class="rosout-panel-title">📋 ROS Logs</span>
+            <div class="rosout-panel-controls">
+                <button class="rosout-panel-clear" id="rosoutPanelClear">Clear</button>
+                <button class="rosout-panel-toggle" id="rosoutPanelToggle">−</button>
+            </div>
+        </div>
+        <div class="rosout-panel-content" id="rosoutPanelContent">
+            <div id="rosoutMessages"></div>
+        </div>
     </div>
 
     <!-- Three.js for 3D robot visualization -->
