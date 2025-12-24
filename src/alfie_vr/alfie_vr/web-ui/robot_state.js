@@ -9,18 +9,27 @@ import { FoxgloveConnection, FOXGLOVE_PORT } from './foxglove_conn.js';
 
 // Connection state
 let foxgloveConn = null;
-let compressedImageSubscriptionId = null;
+let leftImageSubscriptionId = null;
+let rightImageSubscriptionId = null;
 let robotDescriptionSubscriptionId = null;
 let tfSubscriptionId = null;
 let tfStaticSubscriptionId = null;
 let rosoutSubscriptionId = null;
 
-// Video state
+// Video state - now stores left/right separately before combining
 let currentFrameBitmap = null;
+let leftFrameBitmap = null;
+let rightFrameBitmap = null;
+let leftFrameTimestamp = 0;
+let rightFrameTimestamp = 0;
 let lastFrameReceivedTimestamp = 0;
 let receivedFrameCount = 0;
 let lastReceivedFpsTime = performance.now();
 let currentVrFps = 0;
+
+// Canvas for combining left/right images into stereo
+let stereoCanvas = null;
+let stereoCtx = null;
 
 // Robot state
 let urdfString = null;
@@ -167,20 +176,31 @@ export function initFoxgloveConnection() {
 // ========================================
 
 function subscribeToCompressedImage(channels) {
-    const topic = '/alfie/stereo_camera/image_raw/compressed';
+    const leftTopic = '/alfie/left/image_raw/compressed';
+    const rightTopic = '/alfie/right/image_raw/compressed';
     
-    // Use the FoxgloveConnection's subscribe with custom handler
-    compressedImageSubscriptionId = foxgloveConn.subscribe(topic, (messageData) => {
+    // Subscribe to left image with custom handler
+    leftImageSubscriptionId = foxgloveConn.subscribe(leftTopic, (messageData) => {
         const view = new DataView(messageData.buffer, messageData.byteOffset, messageData.byteLength);
-        processCompressedImage(view);
+        processCompressedImageSide(view, 'left');
     });
     
-    if (compressedImageSubscriptionId) {
-        setStatusFn('Subscribed to stereo stream', 'connected');
-    } else {
-        console.log('Compressed image topic not found in advertised channels');
+    // Subscribe to right image with custom handler
+    rightImageSubscriptionId = foxgloveConn.subscribe(rightTopic, (messageData) => {
+        const view = new DataView(messageData.buffer, messageData.byteOffset, messageData.byteLength);
+        processCompressedImageSide(view, 'right');
+    });
+    
+    if (leftImageSubscriptionId && rightImageSubscriptionId) {
+        setStatusFn('Subscribed to stereo streams (left + right)', 'connected');
+    } else if (leftImageSubscriptionId || rightImageSubscriptionId) {
+        const missing = !leftImageSubscriptionId ? 'left' : 'right';
+        setStatusFn(`Partial subscription - missing ${missing} camera`, 'error');
         console.log('Available topics:', channels.map(c => c.topic).join(', '));
-        setStatusFn('Topic not found - is camera running?', 'error');
+    } else {
+        console.log('Stereo image topics not found in advertised channels');
+        console.log('Available topics:', channels.map(c => c.topic).join(', '));
+        setStatusFn('Topics not found - is camera running?', 'error');
     }
 }
 
@@ -467,6 +487,136 @@ function updateLinkCount(count) {
 // ========================================
 // Image Processing
 // ========================================
+
+/**
+ * Process a compressed image from either left or right camera
+ * Combines both into a stereo side-by-side image when both are received
+ */
+async function processCompressedImageSide(view, side) {
+    try {
+        let offset = 4; // Skip CDR encapsulation header (4 bytes)
+        
+        // Helper to align offset
+        const align = (n) => {
+            offset = (offset + n - 1) & ~(n - 1);
+        };
+
+        // Header
+        // stamp (8 bytes)
+        align(4); // Time is struct of 2 int32/uint32, so 4 byte alignment
+        offset += 8;
+        
+        // frame_id (string)
+        align(4);
+        const frameIdLen = view.getUint32(offset, true);
+        offset += 4 + frameIdLen;
+        
+        // format (string)
+        align(4);
+        const formatLen = view.getUint32(offset, true);
+        offset += 4 + formatLen;
+        
+        // data (uint8[])
+        align(4);
+        const dataLen = view.getUint32(offset, true);
+        offset += 4;
+        
+        // Extract image data
+        const imageBytes = new Uint8Array(view.buffer, view.byteOffset + offset, dataLen);
+        
+        // Create blob and bitmap
+        const blob = new Blob([imageBytes], { type: 'image/jpeg' });
+        const bitmap = await createImageBitmap(blob);
+        
+        const now = performance.now();
+        
+        // Store the bitmap for the appropriate side
+        if (side === 'left') {
+            if (leftFrameBitmap) {
+                leftFrameBitmap.close();
+            }
+            leftFrameBitmap = bitmap;
+            leftFrameTimestamp = now;
+        } else {
+            if (rightFrameBitmap) {
+                rightFrameBitmap.close();
+            }
+            rightFrameBitmap = bitmap;
+            rightFrameTimestamp = now;
+        }
+        
+        // Combine if we have both frames within a reasonable time window (100ms)
+        if (leftFrameBitmap && rightFrameBitmap && 
+            Math.abs(leftFrameTimestamp - rightFrameTimestamp) < 100) {
+            combineStereoBitmaps();
+        }
+        
+    } catch (error) {
+        console.error(`Error processing compressed image (${side}):`, error);
+    }
+}
+
+/**
+ * Combine left and right bitmaps into a single side-by-side stereo image
+ * Note: Images are placed with RIGHT on left side and LEFT on right side
+ * to correct for stereo camera mounting orientation
+ */
+function combineStereoBitmaps() {
+    if (!leftFrameBitmap || !rightFrameBitmap) return;
+    
+    const width = leftFrameBitmap.width + rightFrameBitmap.width;
+    const height = Math.max(leftFrameBitmap.height, rightFrameBitmap.height);
+    
+    // Create or resize stereo canvas
+    if (!stereoCanvas) {
+        stereoCanvas = new OffscreenCanvas(width, height);
+        stereoCtx = stereoCanvas.getContext('2d');
+    } else if (stereoCanvas.width !== width || stereoCanvas.height !== height) {
+        stereoCanvas.width = width;
+        stereoCanvas.height = height;
+    }
+    
+    // Swap left/right: put RIGHT image on left side of texture, LEFT on right side
+    // This corrects for the physical camera orientation
+    stereoCtx.drawImage(rightFrameBitmap, 0, 0);
+    stereoCtx.drawImage(leftFrameBitmap, rightFrameBitmap.width, 0);
+    
+    // Create combined bitmap
+    createImageBitmap(stereoCanvas).then(combinedBitmap => {
+        // Release old bitmap
+        if (currentFrameBitmap) {
+            currentFrameBitmap.close();
+        }
+        currentFrameBitmap = combinedBitmap;
+        lastFrameReceivedTimestamp = performance.now();
+        
+        // Track received frame FPS
+        receivedFrameCount++;
+        const now = performance.now();
+        const elapsed = now - lastReceivedFpsTime;
+        if (elapsed >= 1000) {
+            currentVrFps = (receivedFrameCount / elapsed) * 1000;
+            receivedFrameCount = 0;
+            lastReceivedFpsTime = now;
+            
+            // Update HTML FPS counter too
+            const fpsElement = document.getElementById('fpsCounter');
+            if (fpsElement) {
+                fpsElement.textContent = `FPS: ${currentVrFps.toFixed(1)}`;
+            }
+        }
+        
+        // Update status if this is the first frame
+        if (document.getElementById('vrButton').disabled) {
+            setStatusFn('Stereo stream received (L+R combined)', 'connected');
+            enableVrButtonFn();
+            document.getElementById('certButton').style.display = 'none';
+            startPreviewFn();
+        }
+    }).catch(error => {
+        console.error('Error creating combined stereo bitmap:', error);
+    });
+}
 
 export async function processCompressedImage(view) {
     try {
