@@ -42,18 +42,33 @@ class GStreamerCameraNode(Node):
         self.use_hardware_accel = self.get_parameter('use_hardware_accel').get_parameter_value().bool_value
         self.jpeg_quality = self.get_parameter('jpeg_quality').get_parameter_value().integer_value
         
-        # Publishers
-        self.image_pub = self.create_publisher(
+        # Publishers - separate left and right feeds
+        self.left_image_pub = self.create_publisher(
             CompressedImage,
-            'image_raw/compressed',
+            'left/image_raw/compressed',
             1  # Queue size 1 for minimal latency
         )
         
-        self.info_pub = self.create_publisher(
+        self.right_image_pub = self.create_publisher(
+            CompressedImage,
+            'right/image_raw/compressed',
+            1  # Queue size 1 for minimal latency
+        )
+        
+        self.left_info_pub = self.create_publisher(
             CameraInfo,
-            'camera_info',
+            'left/camera_info',
             1
         )
+        
+        self.right_info_pub = self.create_publisher(
+            CameraInfo,
+            'right/camera_info',
+            1
+        )
+        
+        # Pre-compute camera info (half-width for each eye)
+        self._half_width = None  # Will be set after pipeline starts
         
         # Frame counter
         self.frame_count = 0
@@ -82,9 +97,58 @@ class GStreamerCameraNode(Node):
         self.pipeline_thread = threading.Thread(target=self._run_pipeline, daemon=True)
         self.pipeline_thread.start()
         
-        self.get_logger().info(f'GStreamer camera started: {self.device} @ {self.width}x{self.height} {self.framerate}fps')
+        half_width = self.width // 2
+        self.get_logger().info(f'GStreamer stereo camera started: {self.device} @ {self.width}x{self.height} {self.framerate}fps')
+        self.get_logger().info(f'Publishing left/right feeds at {half_width}x{self.height} each')
         if self.flip_vertical:
             self.get_logger().info('Vertical flip enabled')
+    
+    def _create_camera_info(self, header, frame_id):
+        """Create a valid CameraInfo message with proper intrinsic parameters"""
+        half_width = self.width // 2
+        height = self.height
+        
+        info = CameraInfo()
+        info.header = header
+        info.header.frame_id = frame_id
+        info.width = half_width
+        info.height = height
+        
+        # Approximate focal length (can be calibrated later)
+        # For a typical webcam, fx ~= width is a reasonable starting point
+        fx = float(half_width)
+        fy = float(half_width)
+        cx = float(half_width) / 2.0
+        cy = float(height) / 2.0
+        
+        # K matrix (3x3 intrinsic camera matrix)
+        # [fx  0  cx]
+        # [0  fy  cy]
+        # [0   0   1]
+        info.k = [fx, 0.0, cx,
+                  0.0, fy, cy,
+                  0.0, 0.0, 1.0]
+        
+        # Distortion coefficients (assume no distortion for now)
+        info.distortion_model = 'plumb_bob'
+        info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
+        
+        # Rectification matrix (identity for monocular)
+        info.r = [1.0, 0.0, 0.0,
+                  0.0, 1.0, 0.0,
+                  0.0, 0.0, 1.0]
+        
+        # Projection matrix (3x4)
+        # [fx  0  cx  Tx]
+        # [0  fy  cy   0]
+        # [0   0   1   0]
+        # Tx = 0 for left camera, Tx = -fx * baseline for right camera
+        # We'll use Tx=0 for both since we don't have calibration
+        info.p = [fx, 0.0, cx, 0.0,
+                  0.0, fy, cy, 0.0,
+                  0.0, 0.0, 1.0, 0.0]
+        
+        return info
     
     def _check_hardware_support(self):
         """Check if Nvidia hardware acceleration plugins are available"""
@@ -129,41 +193,50 @@ class GStreamerCameraNode(Node):
         return pipeline
     
     def _create_hardware_pipeline(self):
-        """Create hardware-accelerated pipeline using Jetson NVDEC"""
-        # Smart hardware pipeline:
-        # - If NO flip needed: Pass JPEG directly (zero-copy, fastest)
-        # - If flip needed: Use nvv4l2decoder + nvvidconv + nvjpegenc (all hardware!)
+        """Create hardware-accelerated pipeline using Jetson NVDEC with GPU-based stereo split"""
+        # Full hardware pipeline: decode → tee → crop left/right → flip → encode (all on GPU!)
+        # Uses nvvidconv left/right/top/bottom properties or videocrop for cropping
         
-        if not self.flip_vertical:
-            # No flip needed - pass JPEG directly
-            # This is the FASTEST path - zero decode/encode for ROS!
-            pipeline_str = (
-                f'v4l2src device={self.device} ! '
-                f'image/jpeg,width={self.width},height={self.height},framerate={self.framerate}/1 ! '
-                f'appsink name=ros_sink emit-signals=true max-buffers=1 drop=true sync=false'
-            )
-            self.get_logger().info(f'🚀 Hardware Pipeline (No-Flip, Zero-Copy JPEG): {pipeline_str}')
-        else:
-            # Flip needed - use FULL hardware pipeline: decode→flip→encode (all on GPU!)
-            flip_method = 2  # vertical flip in nvvidconv
-            
-            pipeline_str = (
-                f'v4l2src device={self.device} ! '
-                f'image/jpeg,width={self.width},height={self.height},framerate={self.framerate}/1 ! '
-                f'nvv4l2decoder mjpeg=1 ! '
-                f'nvvidconv flip-method={flip_method} ! '
-                f'video/x-raw(memory:NVMM),format=I420 ! '
-                f'nvjpegenc quality={self.jpeg_quality} ! '
-                f'appsink name=ros_sink emit-signals=true max-buffers=1 drop=true sync=false'
-            )
-            self.get_logger().info(f'🚀 Hardware Pipeline (Full GPU: Decode→Flip→Encode): {pipeline_str}')
+        half_width = self.width // 2
+        flip_method = 2 if self.flip_vertical else 0  # 2 = vertical flip, 0 = no flip
+        
+        # Try nvvidconv with left/right crop properties (Jetson L4T style)
+        # Left image: crop right half away (right=half_width)
+        # Right image: crop left half away (left=half_width)
+        
+        pipeline_str = (
+            f'v4l2src device={self.device} ! '
+            f'image/jpeg,width={self.width},height={self.height},framerate={self.framerate}/1 ! '
+            f'nvv4l2decoder mjpeg=1 ! '
+            f'tee name=t '
+            # Left branch: crop right side away, flip if needed, encode
+            f't. ! queue max-size-buffers=1 leaky=downstream ! '
+            f'nvvidconv left=0 right={half_width} top=0 bottom={self.height} flip-method={flip_method} ! '
+            f'video/x-raw(memory:NVMM),format=I420,width={half_width},height={self.height} ! '
+            f'nvjpegenc quality={self.jpeg_quality} ! '
+            f'appsink name=left_sink emit-signals=true max-buffers=1 drop=true sync=false '
+            # Right branch: crop left side away, flip if needed, encode
+            f't. ! queue max-size-buffers=1 leaky=downstream ! '
+            f'nvvidconv left={half_width} right={self.width} top=0 bottom={self.height} flip-method={flip_method} ! '
+            f'video/x-raw(memory:NVMM),format=I420,width={half_width},height={self.height} ! '
+            f'nvjpegenc quality={self.jpeg_quality} ! '
+            f'appsink name=right_sink emit-signals=true max-buffers=1 drop=true sync=false'
+        )
+        
+        flip_str = "Flip→" if self.flip_vertical else ""
+        self.get_logger().info(f'🚀 Hardware Pipeline (Full GPU: Decode→Split→{flip_str}Encode)')
+        self.get_logger().debug(f'Pipeline: {pipeline_str}')
         
         try:
             pipeline = Gst.parse_launch(pipeline_str)
             
-            # Connect ROS sink
-            ros_sink = pipeline.get_by_name('ros_sink')
-            ros_sink.connect('new-sample', self._on_new_sample_hardware_jpeg)
+            # Connect left sink
+            left_sink = pipeline.get_by_name('left_sink')
+            left_sink.connect('new-sample', self._on_new_sample_hardware_left)
+            
+            # Connect right sink
+            right_sink = pipeline.get_by_name('right_sink')
+            right_sink.connect('new-sample', self._on_new_sample_hardware_right)
             
             return pipeline
             
@@ -174,7 +247,7 @@ class GStreamerCameraNode(Node):
             return self._create_software_pipeline()
     
     def _on_new_sample_software(self, sink):
-        """Callback for CPU pipeline - decode and process"""
+        """Callback for CPU pipeline - decode, split, and process left/right"""
         sample = sink.emit('pull-sample')
         if sample is None:
             return Gst.FlowReturn.OK
@@ -190,63 +263,71 @@ class GStreamerCameraNode(Node):
         if not success:
             return Gst.FlowReturn.OK
         
-        jpeg_data_final = None
+        left_jpeg = None
+        right_jpeg = None
         try:
+            # Decode JPEG to split
+            nparr = np.frombuffer(map_info.data, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if img is None:
+                return Gst.FlowReturn.OK
+            
             # Handle vertical flip if needed
             if self.flip_vertical:
-                # Decode, flip, re-encode - use memoryview to avoid copy
-                nparr = np.frombuffer(map_info.data, np.uint8)
-                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                
-                if img is None:
-                    return Gst.FlowReturn.OK
-                
                 img = cv2.flip(img, 0)  # Vertical flip
-                _, encoded = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
-                jpeg_data_final = encoded.tobytes()
-                # Explicitly delete intermediate arrays
-                del nparr, img, encoded
-            else:
-                # No flip - copy JPEG data (must copy before unmap)
-                jpeg_data_final = bytes(map_info.data)
+            
+            # Split into left and right halves
+            height, width = img.shape[:2]
+            half_width = width // 2
+            left_img = img[:, :half_width]
+            right_img = img[:, half_width:]
+            
+            # Encode to JPEG
+            _, left_encoded = cv2.imencode('.jpg', left_img, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+            _, right_encoded = cv2.imencode('.jpg', right_img, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+            left_jpeg = left_encoded.tobytes()
+            right_jpeg = right_encoded.tobytes()
+            
+            # Cleanup
+            del nparr, img, left_img, right_img, left_encoded, right_encoded
         finally:
             buf.unmap(map_info)
         
-        if jpeg_data_final is None:
+        if left_jpeg is None or right_jpeg is None:
             return Gst.FlowReturn.OK
         
-        # Create ROS message - use receive_time (NOW) for freshest timestamp
-        msg = CompressedImage()
-        msg.header = Header()
-        msg.header.stamp = receive_time.to_msg()
-        msg.header.frame_id = self.frame_id
-        msg.format = 'jpeg'
-        msg.data = jpeg_data_final
+        # Create header
+        header = Header()
+        header.stamp = receive_time.to_msg()
         
-        # Publish to ROS
-        self.image_pub.publish(msg)
+        # Publish left image
+        left_msg = CompressedImage()
+        left_msg.header = header
+        left_msg.header.frame_id = 'left_camera_link'
+        left_msg.format = 'jpeg'
+        left_msg.data = left_jpeg
+        self.left_image_pub.publish(left_msg)
         
-        # Publish camera info (basic)
-        info_msg = CameraInfo()
-        info_msg.header = msg.header
-        info_msg.width = self.width
-        info_msg.height = self.height
-        self.info_pub.publish(info_msg)
+        # Publish right image
+        right_msg = CompressedImage()
+        right_msg.header = header
+        right_msg.header.frame_id = 'right_camera_link'
+        right_msg.format = 'jpeg'
+        right_msg.data = right_jpeg
+        self.right_image_pub.publish(right_msg)
         
-        # Stats
-        # self.frame_count += 1
-        # now = self.get_clock().now()
-        # elapsed = (now - self.last_log_time).nanoseconds / 1e9
-        # if elapsed >= 5.0:
-        #     fps = self.frame_count / elapsed
-        #     self.get_logger().info(f'Publishing at {fps:.1f} FPS')
-        #     self.frame_count = 0
-        #     self.last_log_time = now
+        # Publish camera info for both
+        left_info = self._create_camera_info(left_msg.header, 'left_camera_link')
+        self.left_info_pub.publish(left_info)
+        
+        right_info = self._create_camera_info(right_msg.header, 'right_camera_link')
+        self.right_info_pub.publish(right_info)
         
         return Gst.FlowReturn.OK
     
-    def _on_new_sample_hardware_jpeg(self, sink):
-        """Callback for hardware pipeline JPEG passthrough (no flip) - ZERO COPY!"""
+    def _on_new_sample_hardware_left(self, sink):
+        """Callback for hardware pipeline LEFT image - already cropped on GPU"""
         sample = sink.emit('pull-sample')
         if sample is None:
             return Gst.FlowReturn.OK
@@ -258,38 +339,54 @@ class GStreamerCameraNode(Node):
         if not success:
             return Gst.FlowReturn.OK
         
-        # Copy data before unmapping (must copy - buffer is reused by GStreamer)
+        # Copy JPEG data (already cropped and encoded on GPU)
         jpeg_data = bytes(map_info.data)
         buf.unmap(map_info)
         
-        # Create ROS message
+        # Create and publish left image
         msg = CompressedImage()
         msg.header = Header()
         msg.header.stamp = receive_time.to_msg()
-        msg.header.frame_id = self.frame_id
+        msg.header.frame_id = 'left_camera_link'
         msg.format = 'jpeg'
         msg.data = jpeg_data
-        
-        # Publish to ROS
-        self.image_pub.publish(msg)
+        self.left_image_pub.publish(msg)
         
         # Publish camera info
-        info_msg = CameraInfo()
-        info_msg.header = msg.header
-        info_msg.width = self.width
-        info_msg.height = self.height
-        self.info_pub.publish(info_msg)
+        info_msg = self._create_camera_info(msg.header, 'left_camera_link')
+        self.left_info_pub.publish(info_msg)
         
-        # Stats
-        # self.frame_count += 1
-        # now = self.get_clock().now()
-        # elapsed = (now - self.last_log_time).nanoseconds / 1e9
-        # if elapsed >= 5.0:
-        #     fps = self.frame_count / elapsed
-        #     mode = "HW-JPEG" if self.use_hardware_accel and self.flip_vertical else "HW-ZeroCopy"
-        #     self.get_logger().info(f'[{mode}] Publishing at {fps:.1f} FPS')
-        #     self.frame_count = 0
-        #     self.last_log_time = now
+        return Gst.FlowReturn.OK
+    
+    def _on_new_sample_hardware_right(self, sink):
+        """Callback for hardware pipeline RIGHT image - already cropped on GPU"""
+        sample = sink.emit('pull-sample')
+        if sample is None:
+            return Gst.FlowReturn.OK
+        
+        buf = sample.get_buffer()
+        receive_time = self.get_clock().now()
+        
+        success, map_info = buf.map(Gst.MapFlags.READ)
+        if not success:
+            return Gst.FlowReturn.OK
+        
+        # Copy JPEG data (already cropped and encoded on GPU)
+        jpeg_data = bytes(map_info.data)
+        buf.unmap(map_info)
+        
+        # Create and publish right image
+        msg = CompressedImage()
+        msg.header = Header()
+        msg.header.stamp = receive_time.to_msg()
+        msg.header.frame_id = 'right_camera_link'
+        msg.format = 'jpeg'
+        msg.data = jpeg_data
+        self.right_image_pub.publish(msg)
+        
+        # Publish camera info
+        info_msg = self._create_camera_info(msg.header, 'right_camera_link')
+        self.right_info_pub.publish(info_msg)
         
         return Gst.FlowReturn.OK
     
