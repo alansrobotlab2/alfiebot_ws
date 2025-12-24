@@ -558,8 +558,6 @@ async function processCompressedImageSide(view, side) {
 
 /**
  * Combine left and right bitmaps into a single side-by-side stereo image
- * Note: Images are placed with RIGHT on left side and LEFT on right side
- * to correct for stereo camera mounting orientation
  */
 function combineStereoBitmaps() {
     if (!leftFrameBitmap || !rightFrameBitmap) return;
@@ -576,10 +574,11 @@ function combineStereoBitmaps() {
         stereoCanvas.height = height;
     }
     
-    // Swap left/right: put RIGHT image on left side of texture, LEFT on right side
-    // This corrects for the physical camera orientation
-    stereoCtx.drawImage(rightFrameBitmap, 0, 0);
-    stereoCtx.drawImage(leftFrameBitmap, rightFrameBitmap.width, 0);
+    // Draw left image on left side
+    stereoCtx.drawImage(leftFrameBitmap, 0, 0);
+    
+    // Draw right image on right side
+    stereoCtx.drawImage(rightFrameBitmap, leftFrameBitmap.width, 0);
     
     // Create combined bitmap
     createImageBitmap(stereoCanvas).then(combinedBitmap => {
