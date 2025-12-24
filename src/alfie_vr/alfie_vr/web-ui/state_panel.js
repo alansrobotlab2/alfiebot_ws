@@ -14,8 +14,8 @@ import {
 const STATE_PANEL_CONFIG = {
     width: 0.15,
     height: 0.09,
-    horizontalOffset: 0.2,     // Offset from left edge (matching stream panel)
-    verticalOffset: 0.0,       // Centered vertically relative to stereoSettings.verticalOffset
+    horizontalOffset: 0.15,     // Offset from left edge (matching stream panel)
+    verticalOffset: -0.05,       // Centered vertically relative to stereoSettings.verticalOffset
     angle: 10,                 // Yaw rotation in degrees (positive = angled toward viewer)
     backgroundAlpha: 0.5,      // Background transparency (0-1)
     canvasScale: 1280,         // Multiplier to convert panel size to canvas pixels

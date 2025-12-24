@@ -15,14 +15,14 @@ import {
 export const URDF_PANEL_CONFIG = {
     width: 0.18,                // Panel width in world units
     height: 0.38,               // Panel height in world units
-    horizontalOffset: -0.225,    // Small gap from right edge of main screen
+    horizontalOffset: -0.220,    // Small gap from right edge of main screen
     verticalOffset: 0.00,       // Vertical offset from screen center (adjusted for taller panel)
-    angle: -15,                 // Yaw rotation in degrees (negative = angled toward center)
+    angle: -10,                 // Yaw rotation in degrees (negative = angled toward center)
     backgroundAlpha: 0.5,       // Background opacity
     canvasWidth: 512,           // Canvas width in pixels
     canvasHeight: 1088,         // Canvas height in pixels
     topViewRatio: 0.30,         // Top-down view gets 30% of height
-    forwardOffset: 0.15,         // Shift both views forward (robot appears further back)
+    forwardOffset: 0.175,         // Shift both views forward (robot appears further back)
     viewSize: 0.6,              // Orthographic view size (same for both views, larger = see more)
     isoTargetHeight: 0.5,      // How high up the robot the side camera looks (centered on torso)
     renderFps: 15,              // Target FPS for Three.js rendering
