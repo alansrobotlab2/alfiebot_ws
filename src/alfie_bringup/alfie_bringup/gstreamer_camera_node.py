@@ -204,20 +204,22 @@ class GStreamerCameraNode(Node):
         # Left image: crop right half away (right=half_width)
         # Right image: crop left half away (left=half_width)
         
+        # Note: Camera left/right are swapped in the raw image
+        # Left eye is in right half of image, right eye is in left half
         pipeline_str = (
             f'v4l2src device={self.device} ! '
             f'image/jpeg,width={self.width},height={self.height},framerate={self.framerate}/1 ! '
             f'nvv4l2decoder mjpeg=1 ! '
             f'tee name=t '
-            # Left branch: crop right side away, flip if needed, encode
+            # Left branch: left eye is in right half of image, flip if needed, encode
             f't. ! queue max-size-buffers=1 leaky=downstream ! '
-            f'nvvidconv left=0 right={half_width} top=0 bottom={self.height} flip-method={flip_method} ! '
+            f'nvvidconv left={half_width} right={self.width} top=0 bottom={self.height} flip-method={flip_method} ! '
             f'video/x-raw(memory:NVMM),format=I420,width={half_width},height={self.height} ! '
             f'nvjpegenc quality={self.jpeg_quality} ! '
             f'appsink name=left_sink emit-signals=true max-buffers=1 drop=true sync=false '
-            # Right branch: crop left side away, flip if needed, encode
+            # Right branch: right eye is in left half of image, flip if needed, encode
             f't. ! queue max-size-buffers=1 leaky=downstream ! '
-            f'nvvidconv left={half_width} right={self.width} top=0 bottom={self.height} flip-method={flip_method} ! '
+            f'nvvidconv left=0 right={half_width} top=0 bottom={self.height} flip-method={flip_method} ! '
             f'video/x-raw(memory:NVMM),format=I420,width={half_width},height={self.height} ! '
             f'nvjpegenc quality={self.jpeg_quality} ! '
             f'appsink name=right_sink emit-signals=true max-buffers=1 drop=true sync=false'
@@ -278,10 +280,11 @@ class GStreamerCameraNode(Node):
                 img = cv2.flip(img, 0)  # Vertical flip
             
             # Split into left and right halves
+            # Note: Camera left/right are swapped in the raw image
             height, width = img.shape[:2]
             half_width = width // 2
-            left_img = img[:, :half_width]
-            right_img = img[:, half_width:]
+            left_img = img[:, half_width:]   # Left eye is in right half of image
+            right_img = img[:, :half_width]  # Right eye is in left half of image
             
             # Encode to JPEG
             _, left_encoded = cv2.imencode('.jpg', left_img, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
