@@ -15,7 +15,7 @@ import {
 export const URDF_PANEL_CONFIG = {
     width: 0.18,                // Panel width in world units
     height: 0.38,               // Panel height in world units
-    horizontalOffset: -0.220,    // Small gap from right edge of main screen
+    horizontalOffset: -0.150,    // Small gap from right edge of main screen
     verticalOffset: 0.00,       // Vertical offset from screen center (adjusted for taller panel)
     angle: -10,                 // Yaw rotation in degrees (negative = angled toward center)
     backgroundAlpha: 0.5,       // Background opacity
@@ -809,7 +809,8 @@ export function drawUrdfPanel(view, viewport, modelMatrix) {
     }
     
     if (cachedLocations.ipdOffset !== null) {
-        gl.uniform1f(cachedLocations.ipdOffset, stereoSettings.ipdOffset);
+        // Reduced IPD offset for right-side panel
+        gl.uniform1f(cachedLocations.ipdOffset, stereoSettings.ipdOffset * 0.5);
     }
     
     if (cachedLocations.isLeftEye !== null) {

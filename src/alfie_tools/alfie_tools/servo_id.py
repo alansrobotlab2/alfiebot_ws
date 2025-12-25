@@ -6,7 +6,7 @@ Programs the ID of a Waveshare serial bus servo (SMS/STS/SCSCL compatible)
 
 # Configuration variables
 DEVICE = '/dev/ttyACM0'  # Serial port device
-CURRENT_ID = 1           # Current servo ID to program (1-253)    
+CURRENT_ID = 3           # Current servo ID to program (1-253)    
 NEW_ID = 3               # New servo ID to program (1-253)
 
 
@@ -28,6 +28,8 @@ BROADCAST_ID = 0xFE
 # Memory addresses for position control
 ADDR_GOAL_POSITION_L = 42
 ADDR_GOAL_POSITION_H = 43
+ADDR_OFFSET_L = 31
+ADDR_OFFSET_H = 32
 
 import serial
 import time
@@ -54,6 +56,7 @@ def send_packet(ser, servo_id, instruction, address=None, data=None):
     packet.append(checksum)
     
     ser.write(bytes(packet))
+    
     print(f"Sent: {' '.join(f'{b:02X}' for b in packet)}")
     time.sleep(0.01)  # Small delay for servo to process
 
@@ -114,6 +117,18 @@ def set_servo_position(ser, servo_id, position):
     send_packet(ser, servo_id, INST_WRITE_POS, ADDR_GOAL_POSITION_L, [pos_low, pos_high])
     read_response(ser)
 
+def set_position_offset(ser, servo_id, offset):
+    """Set the position offset (signed 16-bit value)"""
+    print(f"\nSetting servo ID {servo_id} position offset to {offset}...")
+    ser.reset_input_buffer()
+    # Offset is 2 bytes: low byte, high byte (signed)
+    if offset < 0:
+        offset = offset & 0xFFFF  # Convert to unsigned representation
+    offset_low = offset & 0xFF
+    offset_high = (offset >> 8) & 0xFF
+    send_packet(ser, servo_id, INST_WRITE, ADDR_OFFSET_L, [offset_low, offset_high])
+    read_response(ser)
+
 def main():
     print("="*60)
     print("Servo ID Programming Tool")
@@ -150,15 +165,20 @@ def main():
             ser.close()
             return 1
         
-        # Step 2: Program the servo ID
+        # Step 2: Program the servo ID and reset position offset
         print("\n" + "="*60)
-        print("STEP 2: Program new ID")
+        print("STEP 2: Program new ID and reset position offset")
         print("="*60)
         unlock_eprom(ser, CURRENT_ID)
         time.sleep(0.1)
         
         write_id(ser, CURRENT_ID, NEW_ID)
         time.sleep(0.1)
+        
+        # Set position offset to 0
+        set_position_offset(ser, NEW_ID, 0)
+        time.sleep(0.1)
+        print("✓ Position offset set to 0")
         
         lock_eprom(ser, NEW_ID)  # Use new ID after writing
         time.sleep(0.1)

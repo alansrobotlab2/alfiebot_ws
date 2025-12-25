@@ -25,6 +25,23 @@ ROLLING_WINDOW_SECONDS = 1.0
 # Percentage to trim from each end for trimmed mean (0.1 = 10%)
 TRIM_PERCENT = 0.1
 
+# Servo status bitfield values
+SERVO_STATUS_VOLTAGE = 1
+SERVO_STATUS_SENSOR = 2
+SERVO_STATUS_TEMPERATURE = 4
+SERVO_STATUS_CURRENT = 8
+SERVO_STATUS_ANGLE = 16
+SERVO_STATUS_OVERLOAD = 32
+
+SERVO_STATUS_FLAGS = [
+    (SERVO_STATUS_VOLTAGE, 'voltage'),
+    (SERVO_STATUS_SENSOR, 'sensor'),
+    (SERVO_STATUS_TEMPERATURE, 'temperature'),
+    (SERVO_STATUS_CURRENT, 'current'),
+    (SERVO_STATUS_ANGLE, 'angle'),
+    (SERVO_STATUS_OVERLOAD, 'overload'),
+]
+
 
 # ============================================================================
 # Health Check Base Class
@@ -481,9 +498,10 @@ class ServoMonitor(HealthCheck):
             if avg_temp is not None and avg_temp >= self.temp_warn:
                 servo_warnings.append(f'temp={avg_temp:.1f}°C')
             
-            # Check status code (0 = normal, any other value is an error)
+            # Check status code bitfield (0 = normal)
             if servo.servo_status != 0:
-                servo_warnings.append(f'status=0x{servo.servo_status:02X}')
+                status_errors = [name for bit, name in SERVO_STATUS_FLAGS if servo.servo_status & bit]
+                servo_warnings.append(f'status={"|".join(status_errors)}')
             
             # Check current draw (in mA, warn if >= 3000mA = 3A)
             current_ma = servo.current_current  # Already in mA per msg definition

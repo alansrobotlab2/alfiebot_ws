@@ -639,7 +639,7 @@ export function drawRosoutPanel(view, viewport, modelMatrix) {
     }
     
     if (cachedLocations.ipdOffset !== null) {
-        // Use zero IPD offset for centered UI panels (no stereo separation)
+        // Zero IPD offset for centered UI panels
         gl.uniform1f(cachedLocations.ipdOffset, 0.0);
     }
     
@@ -870,7 +870,7 @@ export function drawBearingPanel(view, viewport, modelMatrix) {
     }
     
     if (cachedLocations.ipdOffset !== null) {
-        // Use zero IPD offset for centered UI panels (no stereo separation)
+        // Zero IPD offset for centered UI panels
         gl.uniform1f(cachedLocations.ipdOffset, 0.0);
     }
     
