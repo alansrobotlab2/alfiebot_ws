@@ -666,7 +666,9 @@ class AlfieTeleopVRNode(Node):
         self.left_grip_active = False
         self.right_grip_active = False
         
-
+        # Passthrough mode toggle state (triggered by X button on left controller)
+        self.passthrough_mode_active = False
+        self.left_x_button_pressed = False  # Track X button state for edge detection
         
         # Debug visualizer (initialized after arm controllers)
         self.debug_visualizer = None
@@ -886,6 +888,20 @@ class AlfieTeleopVRNode(Node):
             # Y button: reset both arms to zero positions
             buttons = left_controller_goal.metadata.get('buttons', {})
             button_y = buttons.get('y', False) or buttons.get('Y', False)
+            
+            # X button: toggle passthrough mode
+            button_x = buttons.get('x', False) or buttons.get('X', False)
+            
+            # Detect X button press (rising edge)
+            if button_x and not self.left_x_button_pressed:
+                # Toggle passthrough mode
+                self.passthrough_mode_active = not self.passthrough_mode_active
+                self.get_logger().info(f'Passthrough mode: {"ON" if self.passthrough_mode_active else "OFF"}')
+                
+                # Send passthrough mode command to VR headset
+                self.vr_monitor.set_passthrough_mode(self.passthrough_mode_active)
+            
+            self.left_x_button_pressed = button_x
             
             if button_y:
                 self.get_logger().info('Y button pressed - resetting both arms to zero positions')

@@ -11,6 +11,7 @@ import {
     headsetPose,
     gripState,
     invalidateSettingsHash,
+    passthroughMode,
 } from './state.js';
 
 // Forward declaration for vrLog (will be set by main module)
@@ -87,8 +88,19 @@ export function initControllerWebSocket() {
         };
         
         connectionState.controllerWS.onmessage = (event) => {
-            // Handle any messages from the server if needed
-            console.log('Controller WS message:', event.data);
+            // Handle commands from the server
+            try {
+                const data = JSON.parse(event.data);
+                if (data.command === 'passthrough_mode') {
+                    passthroughMode.active = data.active;
+                    console.log(`Passthrough mode: ${data.active ? 'ON' : 'OFF'}`);
+                    vrLogFn(`Passthrough: ${data.active ? 'ON' : 'OFF'}`);
+                } else {
+                    console.log('Controller WS message:', event.data);
+                }
+            } catch (e) {
+                console.log('Controller WS message:', event.data);
+            }
         };
     } catch (error) {
         console.error('Failed to create controller WebSocket:', error);
@@ -104,7 +116,8 @@ export function sendControllerData() {
     
     const hasValidLeft = leftController.position !== null;
     const hasValidRight = rightController.position !== null;
-    const hasValidHeadset = headsetPose.position !== null;
+    // Suppress headset data when passthrough mode is active
+    const hasValidHeadset = !passthroughMode.active && headsetPose.position !== null;
     
     if (hasValidLeft || hasValidRight || hasValidHeadset) {
         // Create deep copies to avoid race conditions with concurrent state access

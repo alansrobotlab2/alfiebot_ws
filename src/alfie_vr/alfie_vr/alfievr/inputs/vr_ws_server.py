@@ -83,6 +83,9 @@ class VRWebSocketServer(BaseInputProvider):
         # Robot state tracking (for relative position calculation)
         self.left_arm_origin_position = None
         self.right_arm_origin_position = None
+        
+        # Event loop reference for thread-safe broadcasts
+        self._event_loop = None
     
     def debug_print(self, msg: str):
         """Print debug message only if debug_logs is enabled."""
@@ -128,6 +131,9 @@ class VRWebSocketServer(BaseInputProvider):
         host = self.config.host_ip
         port = self.config.websocket_port
         
+        # Store reference to the running event loop for thread-safe broadcasts
+        self._event_loop = asyncio.get_running_loop()
+        
         try:
             self.server = await websockets.serve(
                 self.websocket_handler, 
@@ -147,6 +153,43 @@ class VRWebSocketServer(BaseInputProvider):
             self.server.close()
             await self.server.wait_closed()
             logger.info("VR WebSocket server stopped")
+    
+    async def broadcast_message(self, message: dict):
+        """Broadcast a message to all connected VR clients."""
+        if not self.clients:
+            logger.debug("No clients connected for broadcast")
+            return
+        
+        message_json = json.dumps(message)
+        disconnected = set()
+        
+        logger.info(f"Broadcasting to {len(self.clients)} clients: {message}")
+        
+        for client in self.clients:
+            try:
+                await client.send(message_json)
+                logger.debug(f"Sent message to client: {client.remote_address}")
+            except websockets.exceptions.ConnectionClosed:
+                disconnected.add(client)
+            except Exception as e:
+                logger.error(f"Error broadcasting to client: {e}")
+                disconnected.add(client)
+        
+        # Clean up disconnected clients
+        self.clients -= disconnected
+    
+    def broadcast_message_sync(self, message: dict):
+        """Synchronously broadcast a message (thread-safe, schedules on the server's event loop)."""
+        if not hasattr(self, '_event_loop') or self._event_loop is None:
+            logger.warning("Event loop not set, cannot broadcast message")
+            return
+        
+        try:
+            # Schedule the coroutine on the VR server's event loop (thread-safe)
+            asyncio.run_coroutine_threadsafe(self.broadcast_message(message), self._event_loop)
+            logger.debug(f"Scheduled broadcast: {message}")
+        except Exception as e:
+            logger.error(f"Failed to schedule broadcast: {e}")
     
     async def websocket_handler(self, websocket, path=None):
         """Handle WebSocket connections from VR controllers."""

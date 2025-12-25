@@ -21,6 +21,7 @@
             shaderState,
             preAllocatedBuffers,
             invalidateSettingsHash,
+            passthroughMode,
         } from './state.js';
         import {
             initControllerWebSocket,
@@ -455,6 +456,14 @@
             
             const glLayer = xrSession.renderState.baseLayer;
             gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
+            
+            // Check passthrough mode - if active, use 0% opacity (full passthrough) and skip rendering
+            if (passthroughMode.active) {
+                gl.clearColor(0.0, 0.0, 0.0, 0.0);  // 0% opacity - full passthrough
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+                frameCounter++;
+                return;  // Skip all rendering - panels, video, everything
+            }
             
             // Clear with 95% opacity black to dim passthrough (5% passthrough visible)
             gl.clearColor(0.0, 0.0, 0.0, 0.95);  // 95% opacity for immersive AR dimming

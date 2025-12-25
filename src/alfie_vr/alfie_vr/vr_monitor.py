@@ -367,6 +367,9 @@ class VRMonitor:
             return
         
         try:
+            # Capture the event loop reference for the VR server (needed for thread-safe broadcasts)
+            self.vr_server._event_loop = asyncio.get_running_loop()
+            
             # Start HTTPS server
             await self.https_server.start()
             
@@ -501,6 +504,23 @@ class VRMonitor:
     def get_right_goal_nowait(self):
         """Return the latest right arm goal if available, else None."""
         return self.get_latest_goal_nowait("right")
+    
+    def set_passthrough_mode(self, active: bool):
+        """Send passthrough mode command to all connected VR clients.
+        
+        When passthrough mode is active:
+        - VR display shows 0% opacity (full passthrough)
+        - All panels and video are hidden
+        - Headset telemetry is not sent
+        
+        Args:
+            active: True to enable passthrough mode, False to disable
+        """
+        if self.vr_server:
+            self.vr_server.broadcast_message_sync({
+                'command': 'passthrough_mode',
+                'active': active
+            })
     
     async def stop_monitoring(self):
         """Stop monitoring"""

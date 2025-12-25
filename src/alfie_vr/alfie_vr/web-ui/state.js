@@ -198,6 +198,14 @@ export const frameTracking = {
 // Shader State
 // ========================================
 
+// ========================================
+// Passthrough Mode State
+// ========================================
+
+export const passthroughMode = {
+    active: false,  // When true: 0% opacity, hide panels/video, don't send headset data
+};
+
 export const shaderState = {
     program: null,
     positionBuffer: null,
