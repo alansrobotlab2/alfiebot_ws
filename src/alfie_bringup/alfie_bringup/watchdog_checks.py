@@ -22,6 +22,9 @@ VOLTAGE_SCALE = 10.0
 # Time window for rolling averages (in seconds)
 ROLLING_WINDOW_SECONDS = 1.0
 
+# Percentage to trim from each end for trimmed mean (0.1 = 10%)
+TRIM_PERCENT = 0.1
+
 
 # ============================================================================
 # Health Check Base Class
@@ -153,14 +156,24 @@ class ServoVoltageMonitor(HealthCheck):
             return self.servo_names[index]
         return f'Servo[{index}]'
     
-    def _get_average_voltage(self, servo_idx: int) -> Optional[float]:
-        """Calculate the average voltage for a servo over the rolling window"""
+    def _get_trimmed_mean_voltage(self, servo_idx: int) -> Optional[float]:
+        """Calculate the trimmed mean voltage for a servo over the rolling window"""
         if servo_idx not in self.servo_voltage_history:
             return None
         history = self.servo_voltage_history[servo_idx]
         if not history:
             return None
-        return sum(v for _, v in history) / len(history)
+        values = sorted(v for _, v in history)
+        n = len(values)
+        # Calculate how many values to trim from each end
+        trim_count = int(n * TRIM_PERCENT)
+        # Keep at least 1 value in the middle
+        if n - 2 * trim_count < 1:
+            trim_count = max(0, (n - 1) // 2)
+        trimmed = values[trim_count:n - trim_count] if trim_count > 0 else values
+        if not trimmed:
+            return None
+        return sum(trimmed) / len(trimmed)
     
     def check(self) -> Optional[str]:
         """Check if all servo average voltages are within tolerance"""
@@ -173,7 +186,7 @@ class ServoVoltageMonitor(HealthCheck):
         errors = []
         
         for servo_idx in self.servo_voltage_history.keys():
-            avg_voltage = self._get_average_voltage(servo_idx)
+            avg_voltage = self._get_trimmed_mean_voltage(servo_idx)
             if avg_voltage is None:
                 continue
             
@@ -284,15 +297,25 @@ class TemperatureMonitor(HealthCheck):
         while self.temp_history and self.temp_history[0][0] < cutoff_time:
             self.temp_history.popleft()
     
-    def _get_average_temp(self) -> Optional[float]:
-        """Calculate the average temperature over the rolling window"""
+    def _get_trimmed_mean_temp(self) -> Optional[float]:
+        """Calculate the trimmed mean temperature over the rolling window"""
         if not self.temp_history:
             return None
-        return sum(t for _, t in self.temp_history) / len(self.temp_history)
+        values = sorted(t for _, t in self.temp_history)
+        n = len(values)
+        # Calculate how many values to trim from each end
+        trim_count = int(n * TRIM_PERCENT)
+        # Keep at least 1 value in the middle
+        if n - 2 * trim_count < 1:
+            trim_count = max(0, (n - 1) // 2)
+        trimmed = values[trim_count:n - trim_count] if trim_count > 0 else values
+        if not trimmed:
+            return None
+        return sum(trimmed) / len(trimmed)
     
     def check(self) -> Optional[str]:
-        """Check if average temperature is within safe limits"""
-        avg_temp = self._get_average_temp()
+        """Check if trimmed mean temperature is within safe limits"""
+        avg_temp = self._get_trimmed_mean_temp()
         
         if avg_temp is None or avg_temp <= 0:
             return None  # No data yet
@@ -387,6 +410,7 @@ class ServoMonitor(HealthCheck):
     """
     Monitors servo health for a GDB (servo driver board).
     Reports warnings for temperature, status codes, and current draw.
+    Uses rolling window for temperature to handle spurious readings.
     """
     
     def __init__(self, name: str, servo_names: list,
@@ -399,16 +423,48 @@ class ServoMonitor(HealthCheck):
         
         # Store latest servo states
         self.servo_states: list = []
+        # Rolling buffer of (timestamp, temperature) tuples for each servo
+        self.servo_temp_history: Dict[int, Deque[Tuple[float, float]]] = {}
     
     def update(self, servo_states: list) -> None:
         """Called when servo states are received"""
         self.servo_states = servo_states
+        current_time = time.time()
+        
+        # Track temperature history for each servo
+        for i, servo in enumerate(servo_states):
+            if i not in self.servo_temp_history:
+                self.servo_temp_history[i] = deque()
+            
+            self.servo_temp_history[i].append((current_time, float(servo.current_temperature)))
+            
+            # Remove readings older than the window
+            cutoff_time = current_time - ROLLING_WINDOW_SECONDS
+            while self.servo_temp_history[i] and self.servo_temp_history[i][0][0] < cutoff_time:
+                self.servo_temp_history[i].popleft()
     
     def _get_servo_name(self, index: int) -> str:
         """Get human-readable servo name for the given index"""
         if index < len(self.servo_names):
             return self.servo_names[index]
         return f'Servo[{index}]'
+    
+    def _get_trimmed_mean_temp(self, servo_idx: int) -> Optional[float]:
+        """Calculate the trimmed mean temperature for a servo over the rolling window"""
+        if servo_idx not in self.servo_temp_history:
+            return None
+        history = self.servo_temp_history[servo_idx]
+        if not history:
+            return None
+        values = sorted(t for _, t in history)
+        n = len(values)
+        trim_count = int(n * TRIM_PERCENT)
+        if n - 2 * trim_count < 1:
+            trim_count = max(0, (n - 1) // 2)
+        trimmed = values[trim_count:n - trim_count] if trim_count > 0 else values
+        if not trimmed:
+            return None
+        return sum(trimmed) / len(trimmed)
     
     def check(self) -> Optional[str]:
         """Check all servos for warning conditions"""
@@ -420,9 +476,10 @@ class ServoMonitor(HealthCheck):
         for i, servo in enumerate(self.servo_states):
             servo_warnings = []
             
-            # Check temperature (servo reports in °C as uint8)
-            if servo.current_temperature >= self.temp_warn:
-                servo_warnings.append(f'temp={servo.current_temperature}°C')
+            # Check temperature using trimmed mean
+            avg_temp = self._get_trimmed_mean_temp(i)
+            if avg_temp is not None and avg_temp >= self.temp_warn:
+                servo_warnings.append(f'temp={avg_temp:.1f}°C')
             
             # Check status code (0 = normal, any other value is an error)
             if servo.servo_status != 0:
