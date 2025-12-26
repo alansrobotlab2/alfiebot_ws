@@ -54,7 +54,8 @@ const BEARING_PANEL_CONFIG = {
     canvasScale: 1280,          // Multiplier to convert panel size to canvas pixels
     fontSize: 32,               // Main yaw display font size
     nominalThreshold: 5,        // Degrees for green (nominal)
-    warningThreshold: 30        // Degrees for yellow (warning), beyond is red
+    warningThreshold: 30,       // Degrees for yellow (warning), beyond is red
+    displayMultiplier: 2        // Multiplier for displayed bearing value
 };
 
 // ========================================
@@ -736,8 +737,8 @@ function updateBearingPanelCanvas() {
     const canvas = bearingPanelCanvas;
     const ctx = bearingPanelCtx;
     
-    // Get current yaw from headset pose
-    const yaw = headsetPose.rotation ? Math.round(headsetPose.rotation.y) : 0;
+    // Get current yaw from headset pose (multiplied for display)
+    const yaw = headsetPose.rotation ? Math.round(headsetPose.rotation.y * BEARING_PANEL_CONFIG.displayMultiplier) : 0;
     const absYaw = Math.abs(yaw);
     
     // Determine color based on yaw threshold

@@ -546,8 +546,13 @@ async function processCompressedImageSide(view, side) {
         }
         
         // Combine if we have both frames within a reasonable time window (100ms)
+        // Only combine once per pair by resetting timestamps after combining
         if (leftFrameBitmap && rightFrameBitmap && 
+            leftFrameTimestamp > 0 && rightFrameTimestamp > 0 &&
             Math.abs(leftFrameTimestamp - rightFrameTimestamp) < 100) {
+            // Reset timestamps to prevent double-counting this pair
+            leftFrameTimestamp = 0;
+            rightFrameTimestamp = 0;
             combineStereoBitmaps();
         }
         

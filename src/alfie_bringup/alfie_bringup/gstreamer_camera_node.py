@@ -8,7 +8,6 @@ Much lower latency than usb_cam
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage, CameraInfo
-from std_msgs.msg import Header
 import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
@@ -67,19 +66,15 @@ class GStreamerCameraNode(Node):
             1
         )
         
-        # Pre-compute camera info (half-width for each eye)
-        self._half_width = None  # Will be set after pipeline starts
-        
-        # Frame counter
-        self.frame_count = 0
-        self.last_log_time = self.get_clock().now()
-        
         # GLib main loop and bus (for cleanup)
         self.main_loop = None
         self.bus = None
         
         # Initialize GStreamer
         Gst.init(None)
+        
+        # Pre-allocate JPEG encode params (avoid list creation every frame)
+        self._jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
         
         # Check for hardware acceleration support
         self.get_logger().info(f'Hardware acceleration requested: {self.use_hardware_accel}')
@@ -102,53 +97,39 @@ class GStreamerCameraNode(Node):
         self.get_logger().info(f'Publishing left/right feeds at {half_width}x{self.height} each')
         if self.flip_vertical:
             self.get_logger().info('Vertical flip enabled')
+        
+        # Pre-create camera info templates (only header.stamp changes per frame)
+        self._left_camera_info_template = self._create_camera_info_template('left_camera_link')
+        self._right_camera_info_template = self._create_camera_info_template('right_camera_link')
     
-    def _create_camera_info(self, header, frame_id):
-        """Create a valid CameraInfo message with proper intrinsic parameters"""
+    def _create_camera_info_template(self, frame_id):
+        """Create a reusable CameraInfo template (everything except timestamp)"""
         half_width = self.width // 2
         height = self.height
         
         info = CameraInfo()
-        info.header = header
         info.header.frame_id = frame_id
         info.width = half_width
         info.height = height
         
         # Approximate focal length (can be calibrated later)
-        # For a typical webcam, fx ~= width is a reasonable starting point
         fx = float(half_width)
         fy = float(half_width)
         cx = float(half_width) / 2.0
         cy = float(height) / 2.0
         
-        # K matrix (3x3 intrinsic camera matrix)
-        # [fx  0  cx]
-        # [0  fy  cy]
-        # [0   0   1]
-        info.k = [fx, 0.0, cx,
-                  0.0, fy, cy,
-                  0.0, 0.0, 1.0]
-        
-        # Distortion coefficients (assume no distortion for now)
+        info.k = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
         info.distortion_model = 'plumb_bob'
         info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
-        
-        # Rectification matrix (identity for monocular)
-        info.r = [1.0, 0.0, 0.0,
-                  0.0, 1.0, 0.0,
-                  0.0, 0.0, 1.0]
-        
-        # Projection matrix (3x4)
-        # [fx  0  cx  Tx]
-        # [0  fy  cy   0]
-        # [0   0   1   0]
-        # Tx = 0 for left camera, Tx = -fx * baseline for right camera
-        # We'll use Tx=0 for both since we don't have calibration
-        info.p = [fx, 0.0, cx, 0.0,
-                  0.0, fy, cy, 0.0,
-                  0.0, 0.0, 1.0, 0.0]
+        info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        info.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
         
         return info
+    
+    def _publish_camera_info(self, publisher, template, stamp):
+        """Publish camera info with updated timestamp"""
+        template.header.stamp = stamp
+        publisher.publish(template)
     
     def _check_hardware_support(self):
         """Check if Nvidia hardware acceleration plugins are available"""
@@ -254,78 +235,53 @@ class GStreamerCameraNode(Node):
         if sample is None:
             return Gst.FlowReturn.OK
         
-        # Get buffer
         buf = sample.get_buffer()
-        
-        # Get current time FIRST for accurate latency measurement
         receive_time = self.get_clock().now()
         
-        # Extract JPEG data
         success, map_info = buf.map(Gst.MapFlags.READ)
         if not success:
             return Gst.FlowReturn.OK
         
-        left_jpeg = None
-        right_jpeg = None
         try:
-            # Decode JPEG to split
-            nparr = np.frombuffer(map_info.data, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
+            # Decode JPEG - use frombuffer directly (no intermediate variable)
+            img = cv2.imdecode(np.frombuffer(map_info.data, np.uint8), cv2.IMREAD_COLOR)
             if img is None:
                 return Gst.FlowReturn.OK
             
-            # Handle vertical flip if needed
             if self.flip_vertical:
-                img = cv2.flip(img, 0)  # Vertical flip
+                img = cv2.flip(img, 0)
             
-            # Split into left and right halves
-            # Note: Camera left/right are swapped in the raw image
-            height, width = img.shape[:2]
-            half_width = width // 2
-            left_img = img[:, half_width:]   # Left eye is in right half of image
-            right_img = img[:, :half_width]  # Right eye is in left half of image
+            # Split - slicing creates views, not copies
+            half_width = img.shape[1] // 2
+            left_img = img[:, half_width:]   # Left eye is in right half
+            right_img = img[:, :half_width]  # Right eye is in left half
             
-            # Encode to JPEG
-            _, left_encoded = cv2.imencode('.jpg', left_img, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
-            _, right_encoded = cv2.imencode('.jpg', right_img, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
-            left_jpeg = left_encoded.tobytes()
-            right_jpeg = right_encoded.tobytes()
+            stamp = receive_time.to_msg()
             
-            # Cleanup
-            del nparr, img, left_img, right_img, left_encoded, right_encoded
+            # Left image
+            _, left_buf = cv2.imencode('.jpg', left_img, self._jpeg_params)
+            left_msg = CompressedImage()
+            left_msg.header.stamp = stamp
+            left_msg.header.frame_id = 'left_camera_link'
+            left_msg.format = 'jpeg'
+            left_msg.data = left_buf.tobytes()
+            self.left_image_pub.publish(left_msg)
+            
+            # Right image
+            _, right_buf = cv2.imencode('.jpg', right_img, self._jpeg_params)
+            right_msg = CompressedImage()
+            right_msg.header.stamp = stamp
+            right_msg.header.frame_id = 'right_camera_link'
+            right_msg.format = 'jpeg'
+            right_msg.data = right_buf.tobytes()
+            self.right_image_pub.publish(right_msg)
+            
+            # Publish camera info using cached templates
+            self._publish_camera_info(self.left_info_pub, self._left_camera_info_template, stamp)
+            self._publish_camera_info(self.right_info_pub, self._right_camera_info_template, stamp)
+            
         finally:
             buf.unmap(map_info)
-        
-        if left_jpeg is None or right_jpeg is None:
-            return Gst.FlowReturn.OK
-        
-        # Create header
-        header = Header()
-        header.stamp = receive_time.to_msg()
-        
-        # Publish left image
-        left_msg = CompressedImage()
-        left_msg.header = header
-        left_msg.header.frame_id = 'left_camera_link'
-        left_msg.format = 'jpeg'
-        left_msg.data = left_jpeg
-        self.left_image_pub.publish(left_msg)
-        
-        # Publish right image
-        right_msg = CompressedImage()
-        right_msg.header = header
-        right_msg.header.frame_id = 'right_camera_link'
-        right_msg.format = 'jpeg'
-        right_msg.data = right_jpeg
-        self.right_image_pub.publish(right_msg)
-        
-        # Publish camera info for both
-        left_info = self._create_camera_info(left_msg.header, 'left_camera_link')
-        self.left_info_pub.publish(left_info)
-        
-        right_info = self._create_camera_info(right_msg.header, 'right_camera_link')
-        self.right_info_pub.publish(right_info)
         
         return Gst.FlowReturn.OK
     
@@ -342,22 +298,19 @@ class GStreamerCameraNode(Node):
         if not success:
             return Gst.FlowReturn.OK
         
-        # Copy JPEG data (already cropped and encoded on GPU)
-        jpeg_data = bytes(map_info.data)
-        buf.unmap(map_info)
-        
-        # Create and publish left image
-        msg = CompressedImage()
-        msg.header = Header()
-        msg.header.stamp = receive_time.to_msg()
-        msg.header.frame_id = 'left_camera_link'
-        msg.format = 'jpeg'
-        msg.data = jpeg_data
-        self.left_image_pub.publish(msg)
-        
-        # Publish camera info
-        info_msg = self._create_camera_info(msg.header, 'left_camera_link')
-        self.left_info_pub.publish(info_msg)
+        try:
+            stamp = receive_time.to_msg()
+            
+            msg = CompressedImage()
+            msg.header.stamp = stamp
+            msg.header.frame_id = 'left_camera_link'
+            msg.format = 'jpeg'
+            msg.data = bytes(map_info.data)
+            self.left_image_pub.publish(msg)
+            
+            self._publish_camera_info(self.left_info_pub, self._left_camera_info_template, stamp)
+        finally:
+            buf.unmap(map_info)
         
         return Gst.FlowReturn.OK
     
@@ -374,22 +327,19 @@ class GStreamerCameraNode(Node):
         if not success:
             return Gst.FlowReturn.OK
         
-        # Copy JPEG data (already cropped and encoded on GPU)
-        jpeg_data = bytes(map_info.data)
-        buf.unmap(map_info)
-        
-        # Create and publish right image
-        msg = CompressedImage()
-        msg.header = Header()
-        msg.header.stamp = receive_time.to_msg()
-        msg.header.frame_id = 'right_camera_link'
-        msg.format = 'jpeg'
-        msg.data = jpeg_data
-        self.right_image_pub.publish(msg)
-        
-        # Publish camera info
-        info_msg = self._create_camera_info(msg.header, 'right_camera_link')
-        self.right_info_pub.publish(info_msg)
+        try:
+            stamp = receive_time.to_msg()
+            
+            msg = CompressedImage()
+            msg.header.stamp = stamp
+            msg.header.frame_id = 'right_camera_link'
+            msg.format = 'jpeg'
+            msg.data = bytes(map_info.data)
+            self.right_image_pub.publish(msg)
+            
+            self._publish_camera_info(self.right_info_pub, self._right_camera_info_template, stamp)
+        finally:
+            buf.unmap(map_info)
         
         return Gst.FlowReturn.OK
     
