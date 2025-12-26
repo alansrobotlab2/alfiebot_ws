@@ -184,22 +184,27 @@ def generate_launch_description():
                 #'height': 1200,
                 #'framerate': 15,
                 #'jpeg_quality': 70,
+
                 #'width': 2560,
                 #'height': 720,
                 #'framerate': 30,
                 #'jpeg_quality': 70,
+
                 #'width': 1600,
                 #'height': 600,
                 #'framerate': 15,
                 #'jpeg_quality': 95,
+
                 'width': 1280,
                 'height': 480,
                 'framerate': 30,
                 'jpeg_quality': 75,
+
                 # 'width': 640,
                 # 'height': 240,
                 # 'framerate': 10,
                 # 'jpeg_quality': 95,
+                
                 'use_hardware_accel': True,
                 
                 'flip_vertical': True,

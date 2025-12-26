@@ -56,10 +56,46 @@ class AudioPublisher(Node):
         )
         self.stream.start()
         self.last_stream_reset = time.time()
+        self._reset_requested = False
+        
+        # Timer to check if stream reset is needed (runs in main ROS thread)
+        self.create_timer(1.0, self._check_stream_reset)
+
+    def _check_stream_reset(self):
+        """Check and perform stream reset from main thread (not from callback)."""
+        now = time.time()
+        if now - self.last_stream_reset > STREAM_RESET_INTERVAL or self._reset_requested:
+            self.get_logger().info('Resetting audio input stream to prevent overflow.')
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except Exception as e:
+                self.get_logger().warn(f'Error closing stream: {e}')
+            
+            # Small delay to let the device release
+            time.sleep(0.1)
+            
+            try:
+                self.stream = sd.InputStream(
+                    device=self.audio_device,
+                    samplerate=SAMPLE_RATE,
+                    blocksize=BLOCKSIZE,
+                    channels=CHANNELS,
+                    dtype='int16',
+                    callback=self.audio_callback
+                )
+                self.stream.start()
+                self.last_stream_reset = now
+                self._reset_requested = False
+            except Exception as e:
+                self.get_logger().error(f'Error reopening stream: {e}')
 
     def audio_callback(self, indata, frames, time_info, status):
         if status:
             self.get_logger().warn(f'Stream status: {status}')
+            # If there's an input overflow, request a reset from the main thread
+            if status.input_overflow:
+                self._reset_requested = True
         
         msg = AudioFrame()
         # Convert and ensure we have exactly 512 samples
@@ -83,22 +119,6 @@ class AudioPublisher(Node):
             msg.audioframe = padded_data.tolist()
             
         self.publisher_.publish(msg)
-        # Check if it's time to reset the stream
-        now = time.time()
-        if now - self.last_stream_reset > STREAM_RESET_INTERVAL:
-            self.get_logger().info('Resetting audio input stream to prevent overflow.')
-            self.stream.stop()
-            self.stream.close()
-            self.stream = sd.InputStream(
-                device=self.audio_device,
-                samplerate=SAMPLE_RATE,
-                blocksize=BLOCKSIZE,
-                channels=CHANNELS,
-                dtype='int16',
-                callback=self.audio_callback
-            )
-            self.stream.start()
-            self.last_stream_reset = now
 
 
 def main(args=None):
