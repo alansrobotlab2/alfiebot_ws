@@ -12,16 +12,19 @@ export const CONFIG = {
 };
 
 // ========================================
-// Stereo Display Settings
+// 3D View Configuration (Immersive Mode)
 // ========================================
 
-export const stereoSettings = {
-    verticalOffset: -0.17,  // Meters - positive = up
-    ipdOffset: -0.018,      // Meters - adjustment to convergence
-    screenDistance: 0.6,    // Meters - distance to virtual screen
-    screenScale: 0.5,       // Multiplier for screen size
-    cornerRadius: 0.05      // Normalized 0-0.5 - corner radius for rounded corners
+export const immersive3DConfig = {
+    verticalOffset: -0.17,     // Meters - vertical position (positive = up)
+    ipdOffset: -0.018,         // Meters - IPD convergence adjustment
+    screenDistance: 0.6,       // Meters - distance to virtual screen
+    screenScale: 0.5,          // Multiplier for screen size
+    cornerRadius: 0.05         // Normalized 0-0.5 - corner radius for rounded corners
 };
+
+// Legacy alias for backward compatibility with overlay panels
+export const stereoSettings = immersive3DConfig;
 
 // ========================================
 // Connection State

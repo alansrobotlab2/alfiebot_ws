@@ -4,7 +4,7 @@
         
         import {
             CONFIG,
-            stereoSettings,
+            immersive3DConfig,
             connectionState,
             subscriptions,
             xrState,
@@ -79,7 +79,7 @@
             disposeUrdfPanel,
             isUrdfPanelLoaded,
         } from './vr_urdf_panel.js';
-        
+
         // ========================================
         // Local Aliases for Backward Compatibility
         // These reference the shared state objects
@@ -766,9 +766,9 @@
             
             // Create quad vertices (screen-sized quad positioned in front of viewer)
             const aspect = 16 / 9;  // Assume 16:9 aspect ratio per eye
-            const height = stereoSettings.screenScale;
+            const height = immersive3DConfig.screenScale;
             const width = height * aspect;
-            const yOffset = stereoSettings.verticalOffset;
+            const yOffset = immersive3DConfig.verticalOffset;
             
             positionBuffer = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -833,13 +833,13 @@
         
         // Check if position buffer needs rebuild (only when settings change)
         function updatePositionBufferIfNeeded() {
-            const hash = `${stereoSettings.screenScale}_${stereoSettings.verticalOffset}`;
+            const hash = `${immersive3DConfig.screenScale}_${immersive3DConfig.verticalOffset}`;
             if (hash !== lastSettingsHash && positionBuffer) {
                 lastSettingsHash = hash;
                 const aspect = 16 / 9;
-                const height = stereoSettings.screenScale;
+                const height = immersive3DConfig.screenScale;
                 const width = height * aspect;
-                const yOffset = stereoSettings.verticalOffset;
+                const yOffset = immersive3DConfig.verticalOffset;
                 
                 gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
                 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
@@ -902,23 +902,23 @@
             }
             
             if (cachedLocations.distance !== null) {
-                gl.uniform1f(cachedLocations.distance, stereoSettings.screenDistance);
+                gl.uniform1f(cachedLocations.distance, immersive3DConfig.screenDistance);
             }
-            
+
             if (cachedLocations.ipdOffset !== null) {
-                gl.uniform1f(cachedLocations.ipdOffset, stereoSettings.ipdOffset);
+                gl.uniform1f(cachedLocations.ipdOffset, immersive3DConfig.ipdOffset);
             }
-            
+
             if (cachedLocations.isLeftEye !== null) {
                 gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
             }
-            
+
             if (cachedLocations.useDirectVideo !== null) {
                 gl.uniform1f(cachedLocations.useDirectVideo, useDirectVideo ? 1.0 : 0.0);
             }
-            
+
             if (cachedLocations.cornerRadius !== null) {
-                gl.uniform1f(cachedLocations.cornerRadius, stereoSettings.cornerRadius);
+                gl.uniform1f(cachedLocations.cornerRadius, immersive3DConfig.cornerRadius);
             }
             
             if (cachedLocations.texture !== null) {
