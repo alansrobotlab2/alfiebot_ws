@@ -98,9 +98,12 @@
         let videoElement = null;
         let leftTexture = null;
         let rightTexture = null;
+        let leftCenterTexture = null;
+        let rightCenterTexture = null;
         let leftCanvas = null, rightCanvas = null, leftCtx = null, rightCtx = null;
         let useDirectVideoTexture = false;
         let videoTexture = null;
+        let centerVideoTexture = null;
         let texturesInitialized = false;
         let lastVideoWidth = 0;
         let lastVideoHeight = 0;
@@ -315,6 +318,8 @@
                 // Create textures for left and right eye views
                 leftTexture = gl.createTexture();
                 rightTexture = gl.createTexture();
+                leftCenterTexture = gl.createTexture();
+                rightCenterTexture = gl.createTexture();
                 vrLog('Textures created');
                 
                 // Set up canvases for extracting left/right from video
@@ -519,12 +524,22 @@
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                     console.log('Created video texture for direct mode');
                 }
-                
-                // Upload video texture once per frame (shared by both eyes)
+
+                if (!centerVideoTexture) {
+                    centerVideoTexture = gl.createTexture();
+                    gl.bindTexture(gl.TEXTURE_2D, centerVideoTexture);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                    console.log('Created center video texture for direct mode');
+                }
+
+                // Upload wide video texture once per frame (shared by both eyes)
                 gl.bindTexture(gl.TEXTURE_2D, videoTexture);
                 try {
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, currentFrameBitmap);
-                    
+
                     if (frameCounter === 10) {
                         console.log('Video texture upload successful, size:', currentFrameBitmap.width, 'x', currentFrameBitmap.height);
                     }
@@ -533,15 +548,50 @@
                     useDirectVideoTexture = false;  // Fall back to canvas mode
                     return;
                 }
-                
+
+                // Get center camera bitmaps for higher resolution overlay
+                const leftCenterBitmap = getLeftCenterFrameBitmap();
+                const rightCenterBitmap = getRightCenterFrameBitmap();
+
+                // Combine center bitmaps into side-by-side texture (same as wide view format)
+                let centerBitmap = null;
+                if (leftCenterBitmap && rightCenterBitmap) {
+                    // Create canvas to combine left and right center views
+                    if (!leftCanvas || leftCanvas.width !== leftCenterBitmap.width * 2) {
+                        if (!leftCanvas) {
+                            leftCanvas = document.createElement('canvas');
+                            leftCtx = leftCanvas.getContext('2d');
+                        }
+                        leftCanvas.width = leftCenterBitmap.width + rightCenterBitmap.width;
+                        leftCanvas.height = leftCenterBitmap.height;
+                    }
+                    // Draw left and right side by side
+                    leftCtx.drawImage(leftCenterBitmap, 0, 0);
+                    leftCtx.drawImage(rightCenterBitmap, leftCenterBitmap.width, 0);
+                    centerBitmap = leftCanvas;
+                }
+
                 // Render both eyes using shader-based splitting
                 for (const view of pose.views) {
                     const viewport = glLayer.getViewport(view);
                     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-                    
-                    // Use the same video texture for both eyes, shader will split it
+
+                    // Draw wide view base layer
                     gl.bindTexture(gl.TEXTURE_2D, videoTexture);
                     drawTexturedQuad(view, viewport, true, pose.transform.matrix);  // true = use direct video mode
+
+                    // Draw center overlay if available
+                    if (centerBitmap) {
+                        gl.bindTexture(gl.TEXTURE_2D, centerVideoTexture);
+                        try {
+                            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, centerBitmap);
+                            drawCenterOverlay(view, viewport, true, pose.transform.matrix);
+                        } catch (e) {
+                            if (frameCounter % 60 === 0) {
+                                console.error('Failed to upload center texture:', e);
+                            }
+                        }
+                    }
                     
                     // TODO: VR robot rendering disabled - Three.js breaks WebGL state
                     // Need to use a different approach (custom WebGL shaders for robot)
@@ -576,6 +626,8 @@
                 if (!texturesInitialized) {
                     initTexture(leftTexture);
                     initTexture(rightTexture);
+                    initTexture(leftCenterTexture);
+                    initTexture(rightCenterTexture);
                     texturesInitialized = true;
                     console.log('Initialized left/right textures');
                     vrLog('Init L/R textures');
@@ -623,28 +675,49 @@
                 // Upload to WebGL textures (no overlay - using floating panels instead)
                 gl.bindTexture(gl.TEXTURE_2D, leftTexture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, leftCanvas);
-                
+
                 gl.bindTexture(gl.TEXTURE_2D, rightTexture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rightCanvas);
-                
+
+                // Upload center camera textures if available
+                const leftCenterBitmap = getLeftCenterFrameBitmap();
+                const rightCenterBitmap = getRightCenterFrameBitmap();
+                const hasCenterFrames = leftCenterBitmap && rightCenterBitmap;
+
+                if (hasCenterFrames) {
+                    gl.bindTexture(gl.TEXTURE_2D, leftCenterTexture);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, leftCenterBitmap);
+
+                    gl.bindTexture(gl.TEXTURE_2D, rightCenterTexture);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rightCenterBitmap);
+                }
+
                 if (frameCounter === 11) {
                     console.log('Textures uploaded, rendering to eyes');
                     vrLog('Drawing to eyes...');
                 }
-                
+
                 // Render to both eyes
                 for (const view of pose.views) {
                     const viewport = glLayer.getViewport(view);
                     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-                    
+
                     if (frameCounter === 12) {
                         console.log(`Rendering ${view.eye} eye, viewport:`, viewport.width, 'x', viewport.height);
                         vrLog(view.eye + ' eye: ' + viewport.width + 'x' + viewport.height);
                     }
-                    
+
+                    // Draw wide view base layer
                     const texture = view.eye === 'left' ? leftTexture : rightTexture;
                     gl.bindTexture(gl.TEXTURE_2D, texture);
                     drawTexturedQuad(view, viewport, false, pose.transform.matrix);  // false = use canvas mode
+
+                    // Draw center overlay if available
+                    if (hasCenterFrames) {
+                        const centerTexture = view.eye === 'left' ? leftCenterTexture : rightCenterTexture;
+                        gl.bindTexture(gl.TEXTURE_2D, centerTexture);
+                        drawCenterOverlay(view, viewport, false, pose.transform.matrix);
+                    }
                     
                     // TODO: VR robot rendering disabled - Three.js breaks WebGL state
                     // Need to use a different approach (custom WebGL shaders for robot)
@@ -957,7 +1030,98 @@
                 vrLog('Draw quad OK');
             }
         }
-        
+
+        // Draw center overlay quad with proper scaling
+        function drawCenterOverlay(view, viewport, useDirectVideo = false, modelMatrix = null) {
+            if (!shaderProgram) return;
+
+            // Calculate overlay size based on crop dimensions
+            const cfg = immersive3DConfig;
+            const coverageX = cfg.centerCropWidth / cfg.wideSourceWidth;  // 320/800 = 0.4
+            const coverageY = cfg.centerCropHeight / cfg.wideSourceHeight; // 200/600 = 0.333
+
+            // Base quad size (same as wide view)
+            const aspect = 16 / 9;
+            const baseHeight = cfg.screenScale;
+            const baseWidth = baseHeight * aspect;
+
+            // Scale down for center overlay - increased vertical height slightly
+            const overlayWidth = baseWidth * coverageX;
+            const overlayHeight = baseHeight * coverageY * 1.2;  // Increased by 20% vertically
+            const yOffset = cfg.verticalOffset;
+
+            // Create overlay position buffer (centered)
+            const overlayPosBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, overlayPosBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                -overlayWidth/2, -overlayHeight/2 + yOffset,
+                 overlayWidth/2, -overlayHeight/2 + yOffset,
+                -overlayWidth/2,  overlayHeight/2 + yOffset,
+                 overlayWidth/2,  overlayHeight/2 + yOffset,
+            ]), gl.STATIC_DRAW);
+
+            gl.useProgram(shaderProgram);
+
+            // Set up position attribute
+            if (cachedLocations.position !== -1 && cachedLocations.position !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, overlayPosBuffer);
+                gl.enableVertexAttribArray(cachedLocations.position);
+                gl.vertexAttribPointer(cachedLocations.position, 2, gl.FLOAT, false, 0, 0);
+            }
+
+            // Set up texCoord attribute (reuse same buffer)
+            if (cachedLocations.texCoord !== -1 && cachedLocations.texCoord !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+                gl.enableVertexAttribArray(cachedLocations.texCoord);
+                gl.vertexAttribPointer(cachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+            }
+
+            // Set uniforms
+            if (cachedLocations.projection !== null) {
+                gl.uniformMatrix4fv(cachedLocations.projection, false, view.projectionMatrix);
+            }
+
+            if (cachedLocations.view !== null) {
+                invertMatrix(view.transform.matrix, viewMatrixBuffer);
+                gl.uniformMatrix4fv(cachedLocations.view, false, viewMatrixBuffer);
+            }
+
+            if (cachedLocations.model !== null) {
+                gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix || cachedLocations.identityMatrix);
+            }
+
+            if (cachedLocations.distance !== null) {
+                gl.uniform1f(cachedLocations.distance, cfg.screenDistance);
+            }
+
+            if (cachedLocations.ipdOffset !== null) {
+                gl.uniform1f(cachedLocations.ipdOffset, cfg.ipdOffset);
+            }
+
+            if (cachedLocations.isLeftEye !== null) {
+                gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
+            }
+
+            if (cachedLocations.useDirectVideo !== null) {
+                gl.uniform1f(cachedLocations.useDirectVideo, useDirectVideo ? 1.0 : 0.0);
+            }
+
+            if (cachedLocations.cornerRadius !== null) {
+                gl.uniform1f(cachedLocations.cornerRadius, 0.0);  // No rounded corners for center overlay
+            }
+
+            if (cachedLocations.texture !== null) {
+                gl.uniform1i(cachedLocations.texture, 0);
+            }
+
+            // Draw overlay (blending enabled for seamless overlay)
+            gl.enable(gl.BLEND);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            // Clean up temporary buffer
+            gl.deleteBuffer(overlayPosBuffer);
+        }
+
         // Matrix inversion helper
         function invertMatrix(m, out) {
             const m00 = m[0], m01 = m[1], m02 = m[2], m03 = m[3];
