@@ -11,6 +11,8 @@ import { FoxgloveConnection, FOXGLOVE_PORT } from './foxglove_conn.js';
 let foxgloveConn = null;
 let leftImageSubscriptionId = null;
 let rightImageSubscriptionId = null;
+let leftCenterImageSubscriptionId = null;
+let rightCenterImageSubscriptionId = null;
 let robotDescriptionSubscriptionId = null;
 let tfSubscriptionId = null;
 let tfStaticSubscriptionId = null;
@@ -20,8 +22,12 @@ let rosoutSubscriptionId = null;
 let currentFrameBitmap = null;
 let leftFrameBitmap = null;
 let rightFrameBitmap = null;
+let leftCenterFrameBitmap = null;
+let rightCenterFrameBitmap = null;
 let leftFrameTimestamp = 0;
 let rightFrameTimestamp = 0;
+let leftCenterFrameTimestamp = 0;
+let rightCenterFrameTimestamp = 0;
 let lastFrameReceivedTimestamp = 0;
 let receivedFrameCount = 0;
 let lastReceivedFpsTime = performance.now();
@@ -81,6 +87,14 @@ export function getFoxgloveConn() {
 
 export function getCurrentFrameBitmap() {
     return currentFrameBitmap;
+}
+
+export function getLeftCenterFrameBitmap() {
+    return leftCenterFrameBitmap;
+}
+
+export function getRightCenterFrameBitmap() {
+    return rightCenterFrameBitmap;
 }
 
 export function getLastFrameReceivedTimestamp() {
@@ -178,24 +192,46 @@ export function initFoxgloveConnection() {
 function subscribeToCompressedImage(channels) {
     const leftTopic = '/alfie/stereo_camera/left_wide/image_raw/compressed';
     const rightTopic = '/alfie/stereo_camera/right_wide/image_raw/compressed';
-    
-    // Subscribe to left image with custom handler
+    const leftCenterTopic = '/alfie/stereo_camera/left_center/image_raw/compressed';
+    const rightCenterTopic = '/alfie/stereo_camera/right_center/image_raw/compressed';
+
+    // Subscribe to left wide image with custom handler
     leftImageSubscriptionId = foxgloveConn.subscribe(leftTopic, (messageData) => {
         const view = new DataView(messageData.buffer, messageData.byteOffset, messageData.byteLength);
         processCompressedImageSide(view, 'left');
     });
-    
-    // Subscribe to right image with custom handler
+
+    // Subscribe to right wide image with custom handler
     rightImageSubscriptionId = foxgloveConn.subscribe(rightTopic, (messageData) => {
         const view = new DataView(messageData.buffer, messageData.byteOffset, messageData.byteLength);
         processCompressedImageSide(view, 'right');
     });
-    
-    if (leftImageSubscriptionId && rightImageSubscriptionId) {
-        setStatusFn('Subscribed to stereo streams (left + right)', 'connected');
-    } else if (leftImageSubscriptionId || rightImageSubscriptionId) {
-        const missing = !leftImageSubscriptionId ? 'left' : 'right';
-        setStatusFn(`Partial subscription - missing ${missing} camera`, 'error');
+
+    // Subscribe to left center (higher resolution) image
+    leftCenterImageSubscriptionId = foxgloveConn.subscribe(leftCenterTopic, (messageData) => {
+        const view = new DataView(messageData.buffer, messageData.byteOffset, messageData.byteLength);
+        processCompressedImageSide(view, 'left_center');
+    });
+
+    // Subscribe to right center (higher resolution) image
+    rightCenterImageSubscriptionId = foxgloveConn.subscribe(rightCenterTopic, (messageData) => {
+        const view = new DataView(messageData.buffer, messageData.byteOffset, messageData.byteLength);
+        processCompressedImageSide(view, 'right_center');
+    });
+
+    // Report subscription status
+    let subscribedStreams = [];
+    if (leftImageSubscriptionId) subscribedStreams.push('left_wide');
+    if (rightImageSubscriptionId) subscribedStreams.push('right_wide');
+    if (leftCenterImageSubscriptionId) subscribedStreams.push('left_center');
+    if (rightCenterImageSubscriptionId) subscribedStreams.push('right_center');
+
+    if (subscribedStreams.length === 4) {
+        setStatusFn('Subscribed to all stereo streams (wide + center)', 'connected');
+        console.log('Subscribed to all 4 camera streams:', subscribedStreams.join(', '));
+    } else if (subscribedStreams.length > 0) {
+        setStatusFn(`Subscribed to ${subscribedStreams.length}/4 camera streams`, 'connected');
+        console.log('Subscribed to camera streams:', subscribedStreams.join(', '));
         console.log('Available topics:', channels.map(c => c.topic).join(', '));
     } else {
         console.log('Stereo image topics not found in advertised channels');
@@ -537,12 +573,24 @@ async function processCompressedImageSide(view, side) {
             }
             leftFrameBitmap = bitmap;
             leftFrameTimestamp = now;
-        } else {
+        } else if (side === 'right') {
             if (rightFrameBitmap) {
                 rightFrameBitmap.close();
             }
             rightFrameBitmap = bitmap;
             rightFrameTimestamp = now;
+        } else if (side === 'left_center') {
+            if (leftCenterFrameBitmap) {
+                leftCenterFrameBitmap.close();
+            }
+            leftCenterFrameBitmap = bitmap;
+            leftCenterFrameTimestamp = now;
+        } else if (side === 'right_center') {
+            if (rightCenterFrameBitmap) {
+                rightCenterFrameBitmap.close();
+            }
+            rightCenterFrameBitmap = bitmap;
+            rightCenterFrameTimestamp = now;
         }
         
         // Combine if we have both frames within a reasonable time window (100ms)

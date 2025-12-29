@@ -46,6 +46,8 @@
             initFoxgloveConnection,
             getFoxgloveConn,
             getCurrentFrameBitmap,
+            getLeftCenterFrameBitmap,
+            getRightCenterFrameBitmap,
             getLastFrameReceivedTimestamp,
             getCurrentVrFps,
             getUrdfString,
@@ -56,6 +58,13 @@
             getRosoutMessages,
             clearRosoutMessages,
         } from './robot_state.js';
+
+        // Re-export center camera frame getters for external access
+        export {
+            FOXGLOVE_PORT,
+            getLeftCenterFrameBitmap,
+            getRightCenterFrameBitmap,
+        };
         import {
             initRobotViewer,
             loadURDF,
