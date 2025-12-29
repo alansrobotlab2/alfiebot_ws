@@ -176,8 +176,8 @@ export function initFoxgloveConnection() {
 // ========================================
 
 function subscribeToCompressedImage(channels) {
-    const leftTopic = '/alfie/left/image_raw/compressed';
-    const rightTopic = '/alfie/right/image_raw/compressed';
+    const leftTopic = '/alfie/stereo_camera/left_wide/image_raw/compressed';
+    const rightTopic = '/alfie/stereo_camera/right_wide/image_raw/compressed';
     
     // Subscribe to left image with custom handler
     leftImageSubscriptionId = foxgloveConn.subscribe(leftTopic, (messageData) => {
