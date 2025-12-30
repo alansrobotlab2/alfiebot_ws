@@ -22,6 +22,7 @@
             preAllocatedBuffers,
             invalidateSettingsHash,
             passthroughMode,
+            centerViewState,
         } from './state.js';
         import {
             initControllerWebSocket,
@@ -592,8 +593,8 @@
                     gl.bindTexture(gl.TEXTURE_2D, videoTexture);
                     drawTexturedQuad(view, viewport, true, pose.transform.matrix);  // true = use direct video mode
 
-                    // Draw center overlay if available
-                    if (centerBitmap) {
+                    // Draw center overlay if available and visible
+                    if (centerBitmap && centerViewState.visible) {
                         gl.bindTexture(gl.TEXTURE_2D, centerVideoTexture);
                         try {
                             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, centerBitmap);
@@ -605,8 +606,10 @@
                         }
                     }
 
-                    // Draw outline box around center view (without IPD)
-                    drawCenterOutline(view, viewport, pose.transform.matrix);
+                    // Draw outline box around center view (without IPD) if visible
+                    if (centerViewState.visible) {
+                        drawCenterOutline(view, viewport, pose.transform.matrix);
+                    }
                     
                     // TODO: VR robot rendering disabled - Three.js breaks WebGL state
                     // Need to use a different approach (custom WebGL shaders for robot)
@@ -727,15 +730,17 @@
                     gl.bindTexture(gl.TEXTURE_2D, texture);
                     drawTexturedQuad(view, viewport, false, pose.transform.matrix);  // false = use canvas mode
 
-                    // Draw center overlay if available
-                    if (hasCenterFrames) {
+                    // Draw center overlay if available and visible
+                    if (hasCenterFrames && centerViewState.visible) {
                         const centerTexture = view.eye === 'left' ? leftCenterTexture : rightCenterTexture;
                         gl.bindTexture(gl.TEXTURE_2D, centerTexture);
                         drawCenterOverlay(view, viewport, false, pose.transform.matrix);
                     }
 
-                    // Draw outline box around center view (without IPD)
-                    drawCenterOutline(view, viewport, pose.transform.matrix);
+                    // Draw outline box around center view (without IPD) if visible
+                    if (centerViewState.visible) {
+                        drawCenterOutline(view, viewport, pose.transform.matrix);
+                    }
                     
                     // TODO: VR robot rendering disabled - Three.js breaks WebGL state
                     // Need to use a different approach (custom WebGL shaders for robot)

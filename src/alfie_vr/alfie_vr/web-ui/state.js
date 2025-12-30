@@ -220,6 +220,15 @@ export const passthroughMode = {
     active: false,  // When true: 0% opacity, hide panels/video, don't send headset data
 };
 
+// ========================================
+// Center View Toggle State
+// ========================================
+
+export const centerViewState = {
+    visible: true,  // Defaults to on, toggle with left joystick button
+    lastButtonState: false,  // Track button state for edge detection
+};
+
 export const shaderState = {
     program: null,
     positionBuffer: null,

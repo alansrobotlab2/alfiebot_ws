@@ -12,6 +12,7 @@ import {
     gripState,
     invalidateSettingsHash,
     passthroughMode,
+    centerViewState,
 } from './state.js';
 
 // Forward declaration for vrLog (will be set by main module)
@@ -230,13 +231,21 @@ export function processInputSources(frame, refSpace, session = null) {
             
             // Buttons
             if (handedness === 'left') {
+                const thumbstickPressed = !!gamepad.buttons[3]?.pressed;
                 controller.buttons = {
                     squeeze: isGripPressed,
-                    thumbstick: !!gamepad.buttons[3]?.pressed,
+                    thumbstick: thumbstickPressed,
                     x: !!gamepad.buttons[4]?.pressed,
                     y: !!gamepad.buttons[5]?.pressed,
                     menu: !!gamepad.buttons[6]?.pressed
                 };
+
+                // Toggle center view on left thumbstick button press (edge detection)
+                if (thumbstickPressed && !centerViewState.lastButtonState) {
+                    centerViewState.visible = !centerViewState.visible;
+                    vrLogFn(`Center view: ${centerViewState.visible ? 'ON' : 'OFF'}`);
+                }
+                centerViewState.lastButtonState = thumbstickPressed;
             } else {
                 controller.buttons = {
                     squeeze: isGripPressed,
