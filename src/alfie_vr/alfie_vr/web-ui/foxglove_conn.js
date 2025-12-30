@@ -104,6 +104,7 @@ class FoxgloveConnection {
         switch (message.op) {
             case 'serverInfo':
                 console.log('Foxglove server info:', message.name, message.capabilities);
+                this.serverCapabilities = message.capabilities || [];
                 break;
 
             case 'advertise':
@@ -290,6 +291,79 @@ class FoxgloveConnection {
             } else {
                 this.client.send(message);
             }
+        }
+    }
+
+    // Track advertised client channels
+    _clientChannels = new Map();  // topic -> { channelId, ready }
+    _nextClientChannelId = 1;
+    serverCapabilities = [];
+
+    // Advertise a topic for publishing (call once per topic before publishing)
+    advertiseChannel(topic, messageType) {
+        if (this._clientChannels.has(topic)) {
+            return this._clientChannels.get(topic).channelId;
+        }
+
+        // Check if server supports clientPublish
+        if (!this.serverCapabilities.includes('clientPublish')) {
+            console.warn('Server does not support clientPublish capability');
+            console.log('Server capabilities:', this.serverCapabilities);
+        }
+
+        const channelId = this._nextClientChannelId++;
+        this._clientChannels.set(topic, { channelId, ready: true });
+
+        const advertiseMsg = {
+            op: 'clientAdvertise',
+            channels: [{
+                id: channelId,
+                topic: topic,
+                encoding: 'json',
+                schemaName: messageType,
+                schema: ''
+            }]
+        };
+
+        this.client.send(JSON.stringify(advertiseMsg));
+        console.log(`Advertised client channel ${channelId} for ${topic} (type: ${messageType})`);
+        return channelId;
+    }
+
+    // Publish a ROS message to a topic using Foxglove client publish protocol
+    publish(topic, messageType, message) {
+        if (!this.isConnected) {
+            console.warn('Cannot publish: not connected to Foxglove');
+            return false;
+        }
+
+        try {
+            // Get or create channel
+            let channelInfo = this._clientChannels.get(topic);
+            if (!channelInfo) {
+                const channelId = this.advertiseChannel(topic, messageType);
+                channelInfo = this._clientChannels.get(topic);
+            }
+
+            const channelId = channelInfo.channelId;
+
+            // Encode message as JSON string then to bytes
+            const messageJson = JSON.stringify(message);
+            const messageBytes = new TextEncoder().encode(messageJson);
+
+            // Build binary message: opcode (1 byte) + channelId (4 bytes LE) + data
+            const buffer = new ArrayBuffer(1 + 4 + messageBytes.length);
+            const view = new DataView(buffer);
+            view.setUint8(0, 1);  // Opcode 0x01 = client message
+            view.setUint32(1, channelId, true);  // Little-endian channel ID
+            new Uint8Array(buffer, 5).set(messageBytes);
+
+            this.client.send(buffer);
+            console.log(`Published to ${topic} (ch ${channelId}):`, message, `[${messageBytes.length} bytes]`);
+            return true;
+        } catch (error) {
+            console.error('Error publishing message:', error);
+            return false;
         }
     }
 

@@ -229,6 +229,15 @@ export const centerViewState = {
     lastButtonState: false,  // Track button state for edge detection
 };
 
+// ========================================
+// Recording Toggle State
+// ========================================
+
+export const recordingState = {
+    isRecording: false,  // Tracks current recording state
+    lastButtonState: false,  // Track button state for edge detection
+};
+
 export const shaderState = {
     program: null,
     positionBuffer: null,
