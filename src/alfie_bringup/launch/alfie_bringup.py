@@ -172,7 +172,8 @@ def generate_launch_description():
 
 
 
-        # Stereo USB camera - GStreamer pipeline for ultra-low latency
+        # Stereo USB camera - GStreamer pipeline for dual-resolution output
+        # Produces 4 streams: left_wide, right_wide, left_center, right_center (all 640x480)
         Node(
             package='alfie_bringup',
             namespace='alfie',
@@ -180,40 +181,23 @@ def generate_launch_description():
             name='stereo_camera',
             parameters=[{
                 'device': '/dev/video0',
-                #'width': 3200,
-                #'height': 1200,
-                #'framerate': 15,
-                #'jpeg_quality': 70,
-
-                #'width': 2560,
-                #'height': 720,
-                #'framerate': 30,
-                #'jpeg_quality': 70,
-
-                #'width': 1600,
-                #'height': 600,
-                #'framerate': 15,
-                #'jpeg_quality': 95,
-
-                'width': 1280,
-                'height': 480,
+                # Dual-resolution mode: capture at max resolution, output 4 streams
+                # 'source_width': 3200,  # Max resolution for ELP H120
+                # 'source_height': 1200,  # Max resolution for ELP H120
+                # 'output_width': 640,   # Output resolution width
+                # 'output_height': 480,  # Output resolution height
+                # 'framerate': 15,
+                'source_width': 1600,  # Max resolution for ELP H120
+                'source_height': 600,  # Max resolution for ELP H120
+                'output_width': 320,   # Output resolution width
+                'output_height': 240,  # Output resolution height
                 'framerate': 30,
-                'jpeg_quality': 75,
-
-                # 'width': 640,
-                # 'height': 240,
-                # 'framerate': 10,
-                # 'jpeg_quality': 95,
-                
+                'jpeg_quality': 70,
                 'use_hardware_accel': True,
-                
+
                 'flip_vertical': True,
                 'camera_frame_id': 'stereo_camera_link',
             }],
-            remappings=[
-                ('image_raw/compressed', '/alfie/stereo_camera/image_raw/compressed'),
-                ('camera_info', '/alfie/stereo_camera/camera_info'),
-            ],
             output='screen',
             emulate_tty=True,
             sigterm_timeout='5',

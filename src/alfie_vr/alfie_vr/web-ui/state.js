@@ -12,16 +12,30 @@ export const CONFIG = {
 };
 
 // ========================================
-// Stereo Display Settings
+// 3D View Configuration (Immersive Mode)
 // ========================================
 
-export const stereoSettings = {
-    verticalOffset: -0.17,  // Meters - positive = up
-    ipdOffset: -0.018,      // Meters - adjustment to convergence
-    screenDistance: 0.6,    // Meters - distance to virtual screen
-    screenScale: 0.5,       // Multiplier for screen size
-    cornerRadius: 0.05      // Normalized 0-0.5 - corner radius for rounded corners
+export const immersive3DConfig = {
+    verticalOffset: -0.17,     // Meters - vertical position (positive = up)
+    ipdOffset: -0.018,         // Meters - IPD convergence adjustment
+    screenDistance: 0.6,       // Meters - distance to virtual screen
+    screenScale: 0.5,          // Multiplier for screen size
+    cornerRadius: 0.05,        // Normalized 0-0.5 - corner radius for rounded corners
+
+    // Camera resolution configuration
+    wideSourceWidth: 800,      // Wide camera source resolution width
+    wideSourceHeight: 600,     // Wide camera source resolution height
+    wideOutputWidth: 320,      // Wide camera output resolution width
+    wideOutputHeight: 240,     // Wide camera output resolution height
+
+    centerCropWidth: 320,      // Center crop width from source
+    centerCropHeight: 200,     // Center crop height from source
+    centerOutputWidth: 320,    // Center camera output resolution width
+    centerOutputHeight: 240,   // Center camera output resolution height
 };
+
+// Legacy alias for backward compatibility with overlay panels
+export const stereoSettings = immersive3DConfig;
 
 // ========================================
 // Connection State
@@ -204,6 +218,15 @@ export const frameTracking = {
 
 export const passthroughMode = {
     active: false,  // When true: 0% opacity, hide panels/video, don't send headset data
+};
+
+// ========================================
+// Center View Toggle State
+// ========================================
+
+export const centerViewState = {
+    visible: true,  // Defaults to on, toggle with left joystick button
+    lastButtonState: false,  // Track button state for edge detection
 };
 
 export const shaderState = {

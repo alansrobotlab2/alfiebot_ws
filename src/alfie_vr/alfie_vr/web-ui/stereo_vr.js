@@ -4,7 +4,7 @@
         
         import {
             CONFIG,
-            stereoSettings,
+            immersive3DConfig,
             connectionState,
             subscriptions,
             xrState,
@@ -22,6 +22,7 @@
             preAllocatedBuffers,
             invalidateSettingsHash,
             passthroughMode,
+            centerViewState,
         } from './state.js';
         import {
             initControllerWebSocket,
@@ -46,6 +47,8 @@
             initFoxgloveConnection,
             getFoxgloveConn,
             getCurrentFrameBitmap,
+            getLeftCenterFrameBitmap,
+            getRightCenterFrameBitmap,
             getLastFrameReceivedTimestamp,
             getCurrentVrFps,
             getUrdfString,
@@ -56,6 +59,13 @@
             getRosoutMessages,
             clearRosoutMessages,
         } from './robot_state.js';
+
+        // Re-export center camera frame getters for external access
+        export {
+            FOXGLOVE_PORT,
+            getLeftCenterFrameBitmap,
+            getRightCenterFrameBitmap,
+        };
         import {
             initRobotViewer,
             loadURDF,
@@ -79,7 +89,7 @@
             disposeUrdfPanel,
             isUrdfPanelLoaded,
         } from './vr_urdf_panel.js';
-        
+
         // ========================================
         // Local Aliases for Backward Compatibility
         // These reference the shared state objects
@@ -89,9 +99,13 @@
         let videoElement = null;
         let leftTexture = null;
         let rightTexture = null;
+        let leftCenterTexture = null;
+        let rightCenterTexture = null;
         let leftCanvas = null, rightCanvas = null, leftCtx = null, rightCtx = null;
         let useDirectVideoTexture = false;
         let videoTexture = null;
+        let centerVideoTexture = null;
+        let whiteTexture = null;  // 1x1 white texture for drawing outlines
         let texturesInitialized = false;
         let lastVideoWidth = 0;
         let lastVideoHeight = 0;
@@ -115,9 +129,11 @@
         
         // Shader state aliases
         let shaderProgram = null;
+        let outlineShaderProgram = null;
         let positionBuffer = null;
         let texCoordBuffer = null;
         let cachedLocations = null;
+        let outlineCachedLocations = null;
         let lastSettingsHash = '';
         
         // Pre-allocated buffers
@@ -306,6 +322,17 @@
                 // Create textures for left and right eye views
                 leftTexture = gl.createTexture();
                 rightTexture = gl.createTexture();
+                leftCenterTexture = gl.createTexture();
+                rightCenterTexture = gl.createTexture();
+
+                // Create 1x1 black texture for drawing outlines
+                whiteTexture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, whiteTexture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                    new Uint8Array([0, 0, 0, 255]));  // Black with full alpha
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
                 vrLog('Textures created');
                 
                 // Set up canvases for extracting left/right from video
@@ -510,12 +537,22 @@
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                     console.log('Created video texture for direct mode');
                 }
-                
-                // Upload video texture once per frame (shared by both eyes)
+
+                if (!centerVideoTexture) {
+                    centerVideoTexture = gl.createTexture();
+                    gl.bindTexture(gl.TEXTURE_2D, centerVideoTexture);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                    console.log('Created center video texture for direct mode');
+                }
+
+                // Upload wide video texture once per frame (shared by both eyes)
                 gl.bindTexture(gl.TEXTURE_2D, videoTexture);
                 try {
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, currentFrameBitmap);
-                    
+
                     if (frameCounter === 10) {
                         console.log('Video texture upload successful, size:', currentFrameBitmap.width, 'x', currentFrameBitmap.height);
                     }
@@ -524,15 +561,55 @@
                     useDirectVideoTexture = false;  // Fall back to canvas mode
                     return;
                 }
-                
+
+                // Get center camera bitmaps for higher resolution overlay
+                const leftCenterBitmap = getLeftCenterFrameBitmap();
+                const rightCenterBitmap = getRightCenterFrameBitmap();
+
+                // Combine center bitmaps into side-by-side texture (same as wide view format)
+                let centerBitmap = null;
+                if (leftCenterBitmap && rightCenterBitmap) {
+                    // Create canvas to combine left and right center views
+                    if (!leftCanvas || leftCanvas.width !== leftCenterBitmap.width * 2) {
+                        if (!leftCanvas) {
+                            leftCanvas = document.createElement('canvas');
+                            leftCtx = leftCanvas.getContext('2d');
+                        }
+                        leftCanvas.width = leftCenterBitmap.width + rightCenterBitmap.width;
+                        leftCanvas.height = leftCenterBitmap.height;
+                    }
+                    // Draw left and right side by side
+                    leftCtx.drawImage(leftCenterBitmap, 0, 0);
+                    leftCtx.drawImage(rightCenterBitmap, leftCenterBitmap.width, 0);
+                    centerBitmap = leftCanvas;
+                }
+
                 // Render both eyes using shader-based splitting
                 for (const view of pose.views) {
                     const viewport = glLayer.getViewport(view);
                     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-                    
-                    // Use the same video texture for both eyes, shader will split it
+
+                    // Draw wide view base layer
                     gl.bindTexture(gl.TEXTURE_2D, videoTexture);
                     drawTexturedQuad(view, viewport, true, pose.transform.matrix);  // true = use direct video mode
+
+                    // Draw center overlay if available and visible
+                    if (centerBitmap && centerViewState.visible) {
+                        gl.bindTexture(gl.TEXTURE_2D, centerVideoTexture);
+                        try {
+                            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, centerBitmap);
+                            drawCenterOverlay(view, viewport, true, pose.transform.matrix);
+                        } catch (e) {
+                            if (frameCounter % 60 === 0) {
+                                console.error('Failed to upload center texture:', e);
+                            }
+                        }
+                    }
+
+                    // Draw outline box around center view (without IPD) if visible
+                    if (centerViewState.visible) {
+                        drawCenterOutline(view, viewport, pose.transform.matrix);
+                    }
                     
                     // TODO: VR robot rendering disabled - Three.js breaks WebGL state
                     // Need to use a different approach (custom WebGL shaders for robot)
@@ -567,6 +644,8 @@
                 if (!texturesInitialized) {
                     initTexture(leftTexture);
                     initTexture(rightTexture);
+                    initTexture(leftCenterTexture);
+                    initTexture(rightCenterTexture);
                     texturesInitialized = true;
                     console.log('Initialized left/right textures');
                     vrLog('Init L/R textures');
@@ -614,28 +693,54 @@
                 // Upload to WebGL textures (no overlay - using floating panels instead)
                 gl.bindTexture(gl.TEXTURE_2D, leftTexture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, leftCanvas);
-                
+
                 gl.bindTexture(gl.TEXTURE_2D, rightTexture);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rightCanvas);
-                
+
+                // Upload center camera textures if available
+                const leftCenterBitmap = getLeftCenterFrameBitmap();
+                const rightCenterBitmap = getRightCenterFrameBitmap();
+                const hasCenterFrames = leftCenterBitmap && rightCenterBitmap;
+
+                if (hasCenterFrames) {
+                    gl.bindTexture(gl.TEXTURE_2D, leftCenterTexture);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, leftCenterBitmap);
+
+                    gl.bindTexture(gl.TEXTURE_2D, rightCenterTexture);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rightCenterBitmap);
+                }
+
                 if (frameCounter === 11) {
                     console.log('Textures uploaded, rendering to eyes');
                     vrLog('Drawing to eyes...');
                 }
-                
+
                 // Render to both eyes
                 for (const view of pose.views) {
                     const viewport = glLayer.getViewport(view);
                     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-                    
+
                     if (frameCounter === 12) {
                         console.log(`Rendering ${view.eye} eye, viewport:`, viewport.width, 'x', viewport.height);
                         vrLog(view.eye + ' eye: ' + viewport.width + 'x' + viewport.height);
                     }
-                    
+
+                    // Draw wide view base layer
                     const texture = view.eye === 'left' ? leftTexture : rightTexture;
                     gl.bindTexture(gl.TEXTURE_2D, texture);
                     drawTexturedQuad(view, viewport, false, pose.transform.matrix);  // false = use canvas mode
+
+                    // Draw center overlay if available and visible
+                    if (hasCenterFrames && centerViewState.visible) {
+                        const centerTexture = view.eye === 'left' ? leftCenterTexture : rightCenterTexture;
+                        gl.bindTexture(gl.TEXTURE_2D, centerTexture);
+                        drawCenterOverlay(view, viewport, false, pose.transform.matrix);
+                    }
+
+                    // Draw outline box around center view (without IPD) if visible
+                    if (centerViewState.visible) {
+                        drawCenterOutline(view, viewport, pose.transform.matrix);
+                    }
                     
                     // TODO: VR robot rendering disabled - Three.js breaks WebGL state
                     // Need to use a different approach (custom WebGL shaders for robot)
@@ -766,9 +871,9 @@
             
             // Create quad vertices (screen-sized quad positioned in front of viewer)
             const aspect = 16 / 9;  // Assume 16:9 aspect ratio per eye
-            const height = stereoSettings.screenScale;
+            const height = immersive3DConfig.screenScale;
             const width = height * aspect;
-            const yOffset = stereoSettings.verticalOffset;
+            const yOffset = immersive3DConfig.verticalOffset;
             
             positionBuffer = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -804,7 +909,7 @@
             };
             
             console.log('Shader locations:', cachedLocations);
-            
+
             // Verify all locations are valid
             let invalidLocs = [];
             for (const [name, loc] of Object.entries(cachedLocations)) {
@@ -821,7 +926,7 @@
             } else {
                 vrLog('All shader locs OK');
             }
-            
+
             // Identity model matrix (never changes)
             cachedLocations.identityMatrix = new Float32Array([
                 1, 0, 0, 0,
@@ -829,17 +934,146 @@
                 0, 0, 1, 0,
                 0, 0, 0, 1
             ]);
+
+            // Initialize outline shader
+            initOutlineShader();
+        }
+
+        function initOutlineShader() {
+            const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(vertexShader, `
+                attribute vec2 a_position;
+                attribute vec2 a_texCoord;
+                varying vec2 v_texCoord;
+                varying float v_isLeftEye;
+                uniform mat4 u_projection;
+                uniform mat4 u_view;
+                uniform mat4 u_model;
+                uniform float u_distance;
+                uniform float u_ipdOffset;
+                uniform float u_isLeftEye;
+
+                void main() {
+                    // Apply IPD offset (but outline uses 0.0)
+                    float xOffset = u_ipdOffset * (u_isLeftEye > 0.5 ? 1.0 : -1.0);
+                    vec4 pos = vec4(a_position.x + xOffset, a_position.y, -u_distance, 1.0);
+                    gl_Position = u_projection * u_view * u_model * pos;
+                    v_texCoord = a_texCoord;
+                    v_isLeftEye = u_isLeftEye;
+                }
+            `);
+            gl.compileShader(vertexShader);
+
+            if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
+                const err = gl.getShaderInfoLog(vertexShader);
+                console.error('Outline vertex shader error:', err);
+                vrLog('Outline VTX ERR: ' + err.substring(0, 50));
+                return;
+            }
+
+            // Fragment shader for hollow rounded rectangle outline
+            const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(fragmentShader, `
+                precision highp float;
+                varying vec2 v_texCoord;
+                uniform sampler2D u_texture;
+                uniform float u_cornerRadius;
+                uniform float u_outlineWidth;
+                uniform float u_quadAspect;
+
+                // Signed distance function for rounded rectangle with aspect ratio
+                float roundedBoxSDF(vec2 centerPos, vec2 halfSize, float radius) {
+                    vec2 q = abs(centerPos) - halfSize + radius;
+                    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+                }
+
+                void main() {
+                    // Convert tex coords to centered coordinates (-0.5 to 0.5)
+                    vec2 centered = v_texCoord - 0.5;
+
+                    // Apply aspect ratio correction to make perfect circular corners
+                    // The quad is wider than it is tall, so we scale Y to match
+                    vec2 aspectCorrected = centered;
+                    aspectCorrected.x *= u_quadAspect;
+
+                    // Calculate distance from rounded rectangle edge
+                    // Use aspect-corrected half size
+                    vec2 halfSize = vec2(u_quadAspect * 0.5, 0.5);
+                    float dist = roundedBoxSDF(aspectCorrected, halfSize, u_cornerRadius);
+
+                    // Create hollow outline effect:
+                    // Discard pixels outside and inside, keep only the border
+
+                    // Completely discard pixels outside the outer edge
+                    if (dist > 0.002) {
+                        discard;
+                    }
+
+                    // Completely discard pixels inside the inner edge
+                    if (dist < -u_outlineWidth - 0.002) {
+                        discard;
+                    }
+
+                    // Smooth anti-aliasing at edges for crisp appearance
+                    float outerAlpha = 1.0 - smoothstep(-0.002, 0.0, dist);
+                    float innerAlpha = smoothstep(-u_outlineWidth - 0.002, -u_outlineWidth, dist);
+                    float alpha = outerAlpha * innerAlpha;
+
+                    // Sample texture (black)
+                    vec4 color = texture2D(u_texture, v_texCoord);
+                    gl_FragColor = vec4(color.rgb, color.a * alpha);
+                }
+            `);
+            gl.compileShader(fragmentShader);
+
+            if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
+                const err = gl.getShaderInfoLog(fragmentShader);
+                console.error('Outline fragment shader error:', err);
+                vrLog('Outline FRAG ERR: ' + err.substring(0, 50));
+                return;
+            }
+
+            outlineShaderProgram = gl.createProgram();
+            gl.attachShader(outlineShaderProgram, vertexShader);
+            gl.attachShader(outlineShaderProgram, fragmentShader);
+            gl.linkProgram(outlineShaderProgram);
+
+            if (!gl.getProgramParameter(outlineShaderProgram, gl.LINK_STATUS)) {
+                const err = gl.getProgramInfoLog(outlineShaderProgram);
+                console.error('Outline shader linking error:', err);
+                vrLog('Outline LINK ERR: ' + err.substring(0, 50));
+                outlineShaderProgram = null;
+                return;
+            }
+
+            // Cache uniform and attribute locations
+            outlineCachedLocations = {
+                position: gl.getAttribLocation(outlineShaderProgram, 'a_position'),
+                texCoord: gl.getAttribLocation(outlineShaderProgram, 'a_texCoord'),
+                projection: gl.getUniformLocation(outlineShaderProgram, 'u_projection'),
+                view: gl.getUniformLocation(outlineShaderProgram, 'u_view'),
+                model: gl.getUniformLocation(outlineShaderProgram, 'u_model'),
+                texture: gl.getUniformLocation(outlineShaderProgram, 'u_texture'),
+                distance: gl.getUniformLocation(outlineShaderProgram, 'u_distance'),
+                ipdOffset: gl.getUniformLocation(outlineShaderProgram, 'u_ipdOffset'),
+                isLeftEye: gl.getUniformLocation(outlineShaderProgram, 'u_isLeftEye'),
+                cornerRadius: gl.getUniformLocation(outlineShaderProgram, 'u_cornerRadius'),
+                outlineWidth: gl.getUniformLocation(outlineShaderProgram, 'u_outlineWidth'),
+                quadAspect: gl.getUniformLocation(outlineShaderProgram, 'u_quadAspect')
+            };
+
+            vrLog('Outline shader OK');
         }
         
         // Check if position buffer needs rebuild (only when settings change)
         function updatePositionBufferIfNeeded() {
-            const hash = `${stereoSettings.screenScale}_${stereoSettings.verticalOffset}`;
+            const hash = `${immersive3DConfig.screenScale}_${immersive3DConfig.verticalOffset}`;
             if (hash !== lastSettingsHash && positionBuffer) {
                 lastSettingsHash = hash;
                 const aspect = 16 / 9;
-                const height = stereoSettings.screenScale;
+                const height = immersive3DConfig.screenScale;
                 const width = height * aspect;
-                const yOffset = stereoSettings.verticalOffset;
+                const yOffset = immersive3DConfig.verticalOffset;
                 
                 gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
                 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
@@ -902,23 +1136,23 @@
             }
             
             if (cachedLocations.distance !== null) {
-                gl.uniform1f(cachedLocations.distance, stereoSettings.screenDistance);
+                gl.uniform1f(cachedLocations.distance, immersive3DConfig.screenDistance);
             }
-            
+
             if (cachedLocations.ipdOffset !== null) {
-                gl.uniform1f(cachedLocations.ipdOffset, stereoSettings.ipdOffset);
+                gl.uniform1f(cachedLocations.ipdOffset, immersive3DConfig.ipdOffset);
             }
-            
+
             if (cachedLocations.isLeftEye !== null) {
                 gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
             }
-            
+
             if (cachedLocations.useDirectVideo !== null) {
                 gl.uniform1f(cachedLocations.useDirectVideo, useDirectVideo ? 1.0 : 0.0);
             }
-            
+
             if (cachedLocations.cornerRadius !== null) {
-                gl.uniform1f(cachedLocations.cornerRadius, stereoSettings.cornerRadius);
+                gl.uniform1f(cachedLocations.cornerRadius, immersive3DConfig.cornerRadius);
             }
             
             if (cachedLocations.texture !== null) {
@@ -948,7 +1182,202 @@
                 vrLog('Draw quad OK');
             }
         }
-        
+
+        // Draw center overlay quad with proper scaling
+        function drawCenterOverlay(view, viewport, useDirectVideo = false, modelMatrix = null) {
+            if (!shaderProgram) return;
+
+            // Calculate overlay size based on crop dimensions
+            const cfg = immersive3DConfig;
+            const coverageX = cfg.centerCropWidth / cfg.wideSourceWidth;  // 320/800 = 0.4
+            const coverageY = cfg.centerCropHeight / cfg.wideSourceHeight; // 200/600 = 0.333
+
+            // Base quad size (same as wide view)
+            const aspect = 16 / 9;
+            const baseHeight = cfg.screenScale;
+            const baseWidth = baseHeight * aspect;
+
+            // Scale down for center overlay - increased vertical height slightly
+            const overlayWidth = baseWidth * coverageX;
+            const overlayHeight = baseHeight * coverageY * 1.2;  // Increased by 20% vertically
+            const yOffset = cfg.verticalOffset;
+
+            // Create overlay position buffer (centered)
+            const overlayPosBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, overlayPosBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                -overlayWidth/2, -overlayHeight/2 + yOffset,
+                 overlayWidth/2, -overlayHeight/2 + yOffset,
+                -overlayWidth/2,  overlayHeight/2 + yOffset,
+                 overlayWidth/2,  overlayHeight/2 + yOffset,
+            ]), gl.STATIC_DRAW);
+
+            gl.useProgram(shaderProgram);
+
+            // Set up position attribute
+            if (cachedLocations.position !== -1 && cachedLocations.position !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, overlayPosBuffer);
+                gl.enableVertexAttribArray(cachedLocations.position);
+                gl.vertexAttribPointer(cachedLocations.position, 2, gl.FLOAT, false, 0, 0);
+            }
+
+            // Set up texCoord attribute (reuse same buffer)
+            if (cachedLocations.texCoord !== -1 && cachedLocations.texCoord !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+                gl.enableVertexAttribArray(cachedLocations.texCoord);
+                gl.vertexAttribPointer(cachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+            }
+
+            // Set uniforms
+            if (cachedLocations.projection !== null) {
+                gl.uniformMatrix4fv(cachedLocations.projection, false, view.projectionMatrix);
+            }
+
+            if (cachedLocations.view !== null) {
+                invertMatrix(view.transform.matrix, viewMatrixBuffer);
+                gl.uniformMatrix4fv(cachedLocations.view, false, viewMatrixBuffer);
+            }
+
+            if (cachedLocations.model !== null) {
+                gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix || cachedLocations.identityMatrix);
+            }
+
+            if (cachedLocations.distance !== null) {
+                gl.uniform1f(cachedLocations.distance, cfg.screenDistance);
+            }
+
+            if (cachedLocations.ipdOffset !== null) {
+                gl.uniform1f(cachedLocations.ipdOffset, cfg.ipdOffset);
+            }
+
+            if (cachedLocations.isLeftEye !== null) {
+                gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
+            }
+
+            if (cachedLocations.useDirectVideo !== null) {
+                gl.uniform1f(cachedLocations.useDirectVideo, useDirectVideo ? 1.0 : 0.0);
+            }
+
+            if (cachedLocations.cornerRadius !== null) {
+                gl.uniform1f(cachedLocations.cornerRadius, 0.0);  // No rounded corners for center overlay
+            }
+
+            if (cachedLocations.texture !== null) {
+                gl.uniform1i(cachedLocations.texture, 0);
+            }
+
+            // Draw overlay (blending enabled for seamless overlay)
+            gl.enable(gl.BLEND);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            // Clean up temporary buffer
+            gl.deleteBuffer(overlayPosBuffer);
+        }
+
+        // Draw outline box around center view area (without IPD offset)
+        function drawCenterOutline(view, viewport, modelMatrix = null) {
+            if (!outlineShaderProgram || !whiteTexture) return;
+
+            // Calculate outline size based on center overlay dimensions
+            const cfg = immersive3DConfig;
+            const coverageX = cfg.centerCropWidth / cfg.wideSourceWidth;
+            const coverageY = cfg.centerCropHeight / cfg.wideSourceHeight;
+
+            const aspect = 16 / 9;
+            const baseHeight = cfg.screenScale;
+            const baseWidth = baseHeight * aspect;
+
+            const outlineWidth = baseWidth * coverageX;
+            const outlineHeight = baseHeight * coverageY * 1.2;
+            const yOffset = cfg.verticalOffset;
+
+            // Create full quad for the outline area - make it slightly larger to prevent clipping
+            const padding = 0.01;  // Extra padding to prevent edge clipping
+            const outlinePosBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, outlinePosBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                -(outlineWidth/2 + padding), -(outlineHeight/2 + padding) + yOffset,
+                 (outlineWidth/2 + padding), -(outlineHeight/2 + padding) + yOffset,
+                -(outlineWidth/2 + padding),  (outlineHeight/2 + padding) + yOffset,
+                 (outlineWidth/2 + padding),  (outlineHeight/2 + padding) + yOffset,
+            ]), gl.STATIC_DRAW);
+
+            gl.useProgram(outlineShaderProgram);
+
+            // Bind black texture for outline rendering
+            gl.bindTexture(gl.TEXTURE_2D, whiteTexture);
+
+            // Set up position attribute
+            if (outlineCachedLocations.position !== -1 && outlineCachedLocations.position !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, outlinePosBuffer);
+                gl.enableVertexAttribArray(outlineCachedLocations.position);
+                gl.vertexAttribPointer(outlineCachedLocations.position, 2, gl.FLOAT, false, 0, 0);
+            }
+
+            // Set up texCoord attribute
+            if (outlineCachedLocations.texCoord !== -1 && outlineCachedLocations.texCoord !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+                gl.enableVertexAttribArray(outlineCachedLocations.texCoord);
+                gl.vertexAttribPointer(outlineCachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+            }
+
+            // Set uniforms
+            if (outlineCachedLocations.projection !== null) {
+                gl.uniformMatrix4fv(outlineCachedLocations.projection, false, view.projectionMatrix);
+            }
+
+            if (outlineCachedLocations.view !== null) {
+                invertMatrix(view.transform.matrix, viewMatrixBuffer);
+                gl.uniformMatrix4fv(outlineCachedLocations.view, false, viewMatrixBuffer);
+            }
+
+            if (outlineCachedLocations.model !== null) {
+                gl.uniformMatrix4fv(outlineCachedLocations.model, false, modelMatrix || cachedLocations.identityMatrix);
+            }
+
+            if (outlineCachedLocations.distance !== null) {
+                gl.uniform1f(outlineCachedLocations.distance, cfg.screenDistance);
+            }
+
+            // NO IPD offset for outline - set to 0
+            if (outlineCachedLocations.ipdOffset !== null) {
+                gl.uniform1f(outlineCachedLocations.ipdOffset, 0.0);
+            }
+
+            if (outlineCachedLocations.isLeftEye !== null) {
+                gl.uniform1f(outlineCachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
+            }
+
+            if (outlineCachedLocations.texture !== null) {
+                gl.uniform1i(outlineCachedLocations.texture, 0);
+            }
+
+            // Calculate actual aspect ratio of the outline quad
+            const quadAspect = outlineWidth / outlineHeight;
+
+            // Set outline-specific uniforms
+            if (outlineCachedLocations.cornerRadius !== null) {
+                gl.uniform1f(outlineCachedLocations.cornerRadius, 0.08);  // Larger rounded corners
+            }
+
+            if (outlineCachedLocations.outlineWidth !== null) {
+                // Line width - use fixed value in normalized space
+                const lineWidth = 0.008;  // Slightly thicker for visibility
+                gl.uniform1f(outlineCachedLocations.outlineWidth, lineWidth);
+            }
+
+            if (outlineCachedLocations.quadAspect !== null) {
+                gl.uniform1f(outlineCachedLocations.quadAspect, quadAspect);
+            }
+
+            // Enable blending for outline
+            gl.enable(gl.BLEND);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            // Clean up
+            gl.deleteBuffer(outlinePosBuffer);
+        }
+
         // Matrix inversion helper
         function invertMatrix(m, out) {
             const m00 = m[0], m01 = m[1], m02 = m[2], m03 = m[3];
