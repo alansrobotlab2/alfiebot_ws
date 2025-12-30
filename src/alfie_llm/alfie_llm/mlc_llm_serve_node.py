@@ -53,7 +53,6 @@ class MLCLLMServeNode(Node):
                 '--device', '/dev/i2c-4',
                 '--device', '/dev/i2c-5',
                 '--device', '/dev/i2c-7',
-                '--device', '/dev/i2c-9',
                 '-v', '/run/jtop.sock:/run/jtop.sock',
                 '--name', self.container_name,
                 'dustynv/mlc:0.20.0-r36.4.0',
