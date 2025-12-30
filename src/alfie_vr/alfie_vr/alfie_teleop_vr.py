@@ -19,6 +19,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from alfie_msgs.msg import RobotLowCmd, RobotLowState, ServoCmd, BackCmd
 from alfie_msgs.srv import BackRequestCalibration
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Bool
 
 # Local imports
 from alfie_vr.vr_monitor import VRMonitor
@@ -669,7 +670,16 @@ class AlfieTeleopVRNode(Node):
         # Passthrough mode toggle state (triggered by X button on left controller)
         self.passthrough_mode_active = False
         self.left_x_button_pressed = False  # Track X button state for edge detection
-        
+
+        # Recording toggle state (triggered by right thumbstick button)
+        self.is_recording = False
+        self.right_thumbstick_pressed = False  # Track thumbstick button state for edge detection
+
+        # Recording control publishers (use same QoS as data_recorder subscribers)
+        qos_recording = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.recording_start_pub = self.create_publisher(Bool, '/alfie/recording/start', qos_recording)
+        self.recording_stop_pub = self.create_publisher(Bool, '/alfie/recording/stop', qos_recording)
+
         # Debug visualizer (initialized after arm controllers)
         self.debug_visualizer = None
         self.enable_debug_viz = False  # Set to False to disable
@@ -958,10 +968,31 @@ class AlfieTeleopVRNode(Node):
                 # Clamp to valid range
                 new_back_pos = max(BACK_MIN, min(BACK_MAX, new_back_pos))
                 self.robot_cmd_state.back_cmd.position = new_back_pos
-                
+
                 # Debug log
                 self.debug_log(f'Back height: {new_back_pos:.3f} ({"B" if button_b else "A"} pressed)')
-        
+
+            # Thumbstick button: toggle recording (edge detection)
+            thumbstick_button = buttons.get('thumbstick', False)
+
+            if thumbstick_button and not self.right_thumbstick_pressed:
+                # Rising edge - toggle recording state
+                msg = Bool()
+                msg.data = True
+
+                if not self.is_recording:
+                    # Start recording
+                    self.recording_start_pub.publish(msg)
+                    self.is_recording = True
+                    self.get_logger().info('Recording: STARTED (right thumbstick pressed)')
+                else:
+                    # Stop recording
+                    self.recording_stop_pub.publish(msg)
+                    self.is_recording = False
+                    self.get_logger().info('Recording: STOPPED (right thumbstick pressed)')
+
+            self.right_thumbstick_pressed = thumbstick_button
+
         # Process arm control using SimpleTeleopArm with VR controller input
         # Only process when grip button is held (delta control relative to grip press)
         if self.left_arm is not None and left_controller_goal is not None:
