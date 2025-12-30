@@ -104,6 +104,7 @@
         let useDirectVideoTexture = false;
         let videoTexture = null;
         let centerVideoTexture = null;
+        let whiteTexture = null;  // 1x1 white texture for drawing outlines
         let texturesInitialized = false;
         let lastVideoWidth = 0;
         let lastVideoHeight = 0;
@@ -127,9 +128,11 @@
         
         // Shader state aliases
         let shaderProgram = null;
+        let outlineShaderProgram = null;
         let positionBuffer = null;
         let texCoordBuffer = null;
         let cachedLocations = null;
+        let outlineCachedLocations = null;
         let lastSettingsHash = '';
         
         // Pre-allocated buffers
@@ -320,6 +323,15 @@
                 rightTexture = gl.createTexture();
                 leftCenterTexture = gl.createTexture();
                 rightCenterTexture = gl.createTexture();
+
+                // Create 1x1 black texture for drawing outlines
+                whiteTexture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, whiteTexture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                    new Uint8Array([0, 0, 0, 255]));  // Black with full alpha
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
                 vrLog('Textures created');
                 
                 // Set up canvases for extracting left/right from video
@@ -592,6 +604,9 @@
                             }
                         }
                     }
+
+                    // Draw outline box around center view (without IPD)
+                    drawCenterOutline(view, viewport, pose.transform.matrix);
                     
                     // TODO: VR robot rendering disabled - Three.js breaks WebGL state
                     // Need to use a different approach (custom WebGL shaders for robot)
@@ -718,6 +733,9 @@
                         gl.bindTexture(gl.TEXTURE_2D, centerTexture);
                         drawCenterOverlay(view, viewport, false, pose.transform.matrix);
                     }
+
+                    // Draw outline box around center view (without IPD)
+                    drawCenterOutline(view, viewport, pose.transform.matrix);
                     
                     // TODO: VR robot rendering disabled - Three.js breaks WebGL state
                     // Need to use a different approach (custom WebGL shaders for robot)
@@ -886,7 +904,7 @@
             };
             
             console.log('Shader locations:', cachedLocations);
-            
+
             // Verify all locations are valid
             let invalidLocs = [];
             for (const [name, loc] of Object.entries(cachedLocations)) {
@@ -903,7 +921,7 @@
             } else {
                 vrLog('All shader locs OK');
             }
-            
+
             // Identity model matrix (never changes)
             cachedLocations.identityMatrix = new Float32Array([
                 1, 0, 0, 0,
@@ -911,6 +929,135 @@
                 0, 0, 1, 0,
                 0, 0, 0, 1
             ]);
+
+            // Initialize outline shader
+            initOutlineShader();
+        }
+
+        function initOutlineShader() {
+            const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(vertexShader, `
+                attribute vec2 a_position;
+                attribute vec2 a_texCoord;
+                varying vec2 v_texCoord;
+                varying float v_isLeftEye;
+                uniform mat4 u_projection;
+                uniform mat4 u_view;
+                uniform mat4 u_model;
+                uniform float u_distance;
+                uniform float u_ipdOffset;
+                uniform float u_isLeftEye;
+
+                void main() {
+                    // Apply IPD offset (but outline uses 0.0)
+                    float xOffset = u_ipdOffset * (u_isLeftEye > 0.5 ? 1.0 : -1.0);
+                    vec4 pos = vec4(a_position.x + xOffset, a_position.y, -u_distance, 1.0);
+                    gl_Position = u_projection * u_view * u_model * pos;
+                    v_texCoord = a_texCoord;
+                    v_isLeftEye = u_isLeftEye;
+                }
+            `);
+            gl.compileShader(vertexShader);
+
+            if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
+                const err = gl.getShaderInfoLog(vertexShader);
+                console.error('Outline vertex shader error:', err);
+                vrLog('Outline VTX ERR: ' + err.substring(0, 50));
+                return;
+            }
+
+            // Fragment shader for hollow rounded rectangle outline
+            const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(fragmentShader, `
+                precision highp float;
+                varying vec2 v_texCoord;
+                uniform sampler2D u_texture;
+                uniform float u_cornerRadius;
+                uniform float u_outlineWidth;
+                uniform float u_quadAspect;
+
+                // Signed distance function for rounded rectangle with aspect ratio
+                float roundedBoxSDF(vec2 centerPos, vec2 halfSize, float radius) {
+                    vec2 q = abs(centerPos) - halfSize + radius;
+                    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+                }
+
+                void main() {
+                    // Convert tex coords to centered coordinates (-0.5 to 0.5)
+                    vec2 centered = v_texCoord - 0.5;
+
+                    // Apply aspect ratio correction to make perfect circular corners
+                    // The quad is wider than it is tall, so we scale Y to match
+                    vec2 aspectCorrected = centered;
+                    aspectCorrected.x *= u_quadAspect;
+
+                    // Calculate distance from rounded rectangle edge
+                    // Use aspect-corrected half size
+                    vec2 halfSize = vec2(u_quadAspect * 0.5, 0.5);
+                    float dist = roundedBoxSDF(aspectCorrected, halfSize, u_cornerRadius);
+
+                    // Create hollow outline effect:
+                    // Discard pixels outside and inside, keep only the border
+
+                    // Completely discard pixels outside the outer edge
+                    if (dist > 0.002) {
+                        discard;
+                    }
+
+                    // Completely discard pixels inside the inner edge
+                    if (dist < -u_outlineWidth - 0.002) {
+                        discard;
+                    }
+
+                    // Smooth anti-aliasing at edges for crisp appearance
+                    float outerAlpha = 1.0 - smoothstep(-0.002, 0.0, dist);
+                    float innerAlpha = smoothstep(-u_outlineWidth - 0.002, -u_outlineWidth, dist);
+                    float alpha = outerAlpha * innerAlpha;
+
+                    // Sample texture (black)
+                    vec4 color = texture2D(u_texture, v_texCoord);
+                    gl_FragColor = vec4(color.rgb, color.a * alpha);
+                }
+            `);
+            gl.compileShader(fragmentShader);
+
+            if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
+                const err = gl.getShaderInfoLog(fragmentShader);
+                console.error('Outline fragment shader error:', err);
+                vrLog('Outline FRAG ERR: ' + err.substring(0, 50));
+                return;
+            }
+
+            outlineShaderProgram = gl.createProgram();
+            gl.attachShader(outlineShaderProgram, vertexShader);
+            gl.attachShader(outlineShaderProgram, fragmentShader);
+            gl.linkProgram(outlineShaderProgram);
+
+            if (!gl.getProgramParameter(outlineShaderProgram, gl.LINK_STATUS)) {
+                const err = gl.getProgramInfoLog(outlineShaderProgram);
+                console.error('Outline shader linking error:', err);
+                vrLog('Outline LINK ERR: ' + err.substring(0, 50));
+                outlineShaderProgram = null;
+                return;
+            }
+
+            // Cache uniform and attribute locations
+            outlineCachedLocations = {
+                position: gl.getAttribLocation(outlineShaderProgram, 'a_position'),
+                texCoord: gl.getAttribLocation(outlineShaderProgram, 'a_texCoord'),
+                projection: gl.getUniformLocation(outlineShaderProgram, 'u_projection'),
+                view: gl.getUniformLocation(outlineShaderProgram, 'u_view'),
+                model: gl.getUniformLocation(outlineShaderProgram, 'u_model'),
+                texture: gl.getUniformLocation(outlineShaderProgram, 'u_texture'),
+                distance: gl.getUniformLocation(outlineShaderProgram, 'u_distance'),
+                ipdOffset: gl.getUniformLocation(outlineShaderProgram, 'u_ipdOffset'),
+                isLeftEye: gl.getUniformLocation(outlineShaderProgram, 'u_isLeftEye'),
+                cornerRadius: gl.getUniformLocation(outlineShaderProgram, 'u_cornerRadius'),
+                outlineWidth: gl.getUniformLocation(outlineShaderProgram, 'u_outlineWidth'),
+                quadAspect: gl.getUniformLocation(outlineShaderProgram, 'u_quadAspect')
+            };
+
+            vrLog('Outline shader OK');
         }
         
         // Check if position buffer needs rebuild (only when settings change)
@@ -1120,6 +1267,110 @@
 
             // Clean up temporary buffer
             gl.deleteBuffer(overlayPosBuffer);
+        }
+
+        // Draw outline box around center view area (without IPD offset)
+        function drawCenterOutline(view, viewport, modelMatrix = null) {
+            if (!outlineShaderProgram || !whiteTexture) return;
+
+            // Calculate outline size based on center overlay dimensions
+            const cfg = immersive3DConfig;
+            const coverageX = cfg.centerCropWidth / cfg.wideSourceWidth;
+            const coverageY = cfg.centerCropHeight / cfg.wideSourceHeight;
+
+            const aspect = 16 / 9;
+            const baseHeight = cfg.screenScale;
+            const baseWidth = baseHeight * aspect;
+
+            const outlineWidth = baseWidth * coverageX;
+            const outlineHeight = baseHeight * coverageY * 1.2;
+            const yOffset = cfg.verticalOffset;
+
+            // Create full quad for the outline area - make it slightly larger to prevent clipping
+            const padding = 0.01;  // Extra padding to prevent edge clipping
+            const outlinePosBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, outlinePosBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                -(outlineWidth/2 + padding), -(outlineHeight/2 + padding) + yOffset,
+                 (outlineWidth/2 + padding), -(outlineHeight/2 + padding) + yOffset,
+                -(outlineWidth/2 + padding),  (outlineHeight/2 + padding) + yOffset,
+                 (outlineWidth/2 + padding),  (outlineHeight/2 + padding) + yOffset,
+            ]), gl.STATIC_DRAW);
+
+            gl.useProgram(outlineShaderProgram);
+
+            // Bind black texture for outline rendering
+            gl.bindTexture(gl.TEXTURE_2D, whiteTexture);
+
+            // Set up position attribute
+            if (outlineCachedLocations.position !== -1 && outlineCachedLocations.position !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, outlinePosBuffer);
+                gl.enableVertexAttribArray(outlineCachedLocations.position);
+                gl.vertexAttribPointer(outlineCachedLocations.position, 2, gl.FLOAT, false, 0, 0);
+            }
+
+            // Set up texCoord attribute
+            if (outlineCachedLocations.texCoord !== -1 && outlineCachedLocations.texCoord !== null) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+                gl.enableVertexAttribArray(outlineCachedLocations.texCoord);
+                gl.vertexAttribPointer(outlineCachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+            }
+
+            // Set uniforms
+            if (outlineCachedLocations.projection !== null) {
+                gl.uniformMatrix4fv(outlineCachedLocations.projection, false, view.projectionMatrix);
+            }
+
+            if (outlineCachedLocations.view !== null) {
+                invertMatrix(view.transform.matrix, viewMatrixBuffer);
+                gl.uniformMatrix4fv(outlineCachedLocations.view, false, viewMatrixBuffer);
+            }
+
+            if (outlineCachedLocations.model !== null) {
+                gl.uniformMatrix4fv(outlineCachedLocations.model, false, modelMatrix || cachedLocations.identityMatrix);
+            }
+
+            if (outlineCachedLocations.distance !== null) {
+                gl.uniform1f(outlineCachedLocations.distance, cfg.screenDistance);
+            }
+
+            // NO IPD offset for outline - set to 0
+            if (outlineCachedLocations.ipdOffset !== null) {
+                gl.uniform1f(outlineCachedLocations.ipdOffset, 0.0);
+            }
+
+            if (outlineCachedLocations.isLeftEye !== null) {
+                gl.uniform1f(outlineCachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
+            }
+
+            if (outlineCachedLocations.texture !== null) {
+                gl.uniform1i(outlineCachedLocations.texture, 0);
+            }
+
+            // Calculate actual aspect ratio of the outline quad
+            const quadAspect = outlineWidth / outlineHeight;
+
+            // Set outline-specific uniforms
+            if (outlineCachedLocations.cornerRadius !== null) {
+                gl.uniform1f(outlineCachedLocations.cornerRadius, 0.08);  // Larger rounded corners
+            }
+
+            if (outlineCachedLocations.outlineWidth !== null) {
+                // Line width - use fixed value in normalized space
+                const lineWidth = 0.008;  // Slightly thicker for visibility
+                gl.uniform1f(outlineCachedLocations.outlineWidth, lineWidth);
+            }
+
+            if (outlineCachedLocations.quadAspect !== null) {
+                gl.uniform1f(outlineCachedLocations.quadAspect, quadAspect);
+            }
+
+            // Enable blending for outline
+            gl.enable(gl.BLEND);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            // Clean up
+            gl.deleteBuffer(outlinePosBuffer);
         }
 
         // Matrix inversion helper
