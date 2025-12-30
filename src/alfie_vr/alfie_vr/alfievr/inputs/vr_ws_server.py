@@ -406,10 +406,12 @@ class VRWebSocketServer(BaseInputProvider):
                 else:
                     self.update_quaternion_rotation(controller, rotation)
                 
-                controller.z_axis_rotation = self.extract_roll_from_quaternion(controller.accumulated_rotation_quat, controller.origin_quaternion)
-                controller.x_axis_rotation = self.extract_pitch_from_quaternion(controller.accumulated_rotation_quat, controller.origin_quaternion)
+                controller.z_axis_rotation = self.extract_roll_from_quaternion(controller.accumulated_rotation_quat, controller.origin_quaternion, hand)
+                controller.x_axis_rotation = self.extract_pitch_from_quaternion(controller.accumulated_rotation_quat, controller.origin_quaternion, hand)
             
             # Create absolute position control goal
+            # Note: Negation is applied here to match robot coordinate conventions
+            # Handedness mirroring is handled in the extraction functions
             goal = ControlGoal(
                 arm=hand,
                 mode=ControlMode.POSITION_CONTROL,
@@ -502,8 +504,8 @@ class VRWebSocketServer(BaseInputProvider):
                         self.update_quaternion_rotation(controller, rotation)
                     
                     # Get accumulated rotations from quaternion
-                    controller.z_axis_rotation = self.extract_roll_from_quaternion(controller.accumulated_rotation_quat, controller.origin_quaternion)
-                    controller.x_axis_rotation = self.extract_pitch_from_quaternion(controller.accumulated_rotation_quat, controller.origin_quaternion)
+                    controller.z_axis_rotation = self.extract_roll_from_quaternion(controller.accumulated_rotation_quat, controller.origin_quaternion, hand)
+                    controller.x_axis_rotation = self.extract_pitch_from_quaternion(controller.accumulated_rotation_quat, controller.origin_quaternion, hand)
                 
                 # Create position control goal
                 # Note: We send relative position here, the control loop will handle
@@ -600,50 +602,59 @@ class VRWebSocketServer(BaseInputProvider):
         # Store current quaternion for accumulated rotation calculation
         controller.accumulated_rotation_quat = current_quat
     
-    def extract_roll_from_quaternion(self, current_quat: np.ndarray, origin_quat: np.ndarray) -> float:
-        """Extract roll rotation around Z-axis from relative quaternion rotation."""
+    def extract_roll_from_quaternion(self, current_quat: np.ndarray, origin_quat: np.ndarray, hand: str = 'right') -> float:
+        """Extract roll (wrist twist) from relative quaternion rotation.
+
+        Args:
+            current_quat: Current quaternion orientation
+            origin_quat: Origin quaternion orientation
+            hand: 'left' or 'right' controller handedness
+        """
         if current_quat is None or origin_quat is None:
             return 0.0
-        
+
         try:
             # Calculate relative rotation quaternion (from origin to current)
             origin_rotation = R.from_quat(origin_quat)
             current_rotation = R.from_quat(current_quat)
             relative_rotation = current_rotation * origin_rotation.inv()
-            
-            # Project the relative rotation onto the Z-axis (roll)
-            # Get the rotation vector (axis-angle representation)
-            rotvec = relative_rotation.as_rotvec()
-            
-            # The Z-component of the rotation vector represents rotation around Z-axis (roll)
-            z_rotation_rad = rotvec[2]
-            z_rotation_deg = -np.degrees(z_rotation_rad)
-            
-            return z_rotation_deg
+
+            # Use Euler angles for proper decomposition
+            # 'zyx' order: first rotate around Z (roll), then Y (pitch), then X
+            # This gives us independent axis rotations
+            euler = relative_rotation.as_euler('zyx', degrees=True)
+            # euler[0] = Z rotation (roll/twist around controller's pointing axis)
+            roll_deg = -euler[0]  # Negate for correct direction
+
+            return roll_deg
         except Exception as e:
             logger.warning(f"Error extracting roll from quaternion: {e}")
             return 0.0
-    
-    def extract_pitch_from_quaternion(self, current_quat: np.ndarray, origin_quat: np.ndarray) -> float:
-        """Extract pitch rotation around X-axis from relative quaternion rotation."""
+
+    def extract_pitch_from_quaternion(self, current_quat: np.ndarray, origin_quat: np.ndarray, hand: str = 'right') -> float:
+        """Extract pitch (wrist flex up/down) from relative quaternion rotation.
+
+        Args:
+            current_quat: Current quaternion orientation
+            origin_quat: Origin quaternion orientation
+            hand: 'left' or 'right' controller handedness
+        """
         if current_quat is None or origin_quat is None:
             return 0.0
-        
+
         try:
             # Calculate relative rotation quaternion (from origin to current)
             origin_rotation = R.from_quat(origin_quat)
             current_rotation = R.from_quat(current_quat)
             relative_rotation = current_rotation * origin_rotation.inv()
-            
-            # Project the relative rotation onto the X-axis (pitch)
-            # Get the rotation vector (axis-angle representation)
-            rotvec = relative_rotation.as_rotvec()
-            
-            # The X-component of the rotation vector represents rotation around X-axis (pitch)
-            x_rotation_rad = rotvec[0]
-            x_rotation_deg = np.degrees(x_rotation_rad)
-            
-            return x_rotation_deg
+
+            # Use Euler angles for proper decomposition
+            # 'zyx' order: first rotate around Z (roll), then Y (pitch), then X
+            euler = relative_rotation.as_euler('zyx', degrees=True)
+            # euler[2] = X rotation (pitch/tilt up-down)
+            pitch_deg = euler[2]
+
+            return pitch_deg
         except Exception as e:
             logger.warning(f"Error extracting pitch from quaternion: {e}")
             return 0.0
