@@ -58,20 +58,10 @@ class DataRecorder(Node):
             '/alfie/stereo_camera/right_wide/camera_info',
 
             # Robot state
-            '/alfie/joint_states',
             '/alfie/robotlowstate',  # Low-level robot state
-            '/alfie/low/gdb0state',  # Gripper 0 state
-            '/alfie/low/gdb1state',  # Gripper 1 state
 
             # Robot commands (what we want the policy to learn)
             '/alfie/robotlowcmd',    # Low-level robot commands
-            '/alfie/low/gdb0cmd',    # Gripper 0 commands
-            '/alfie/low/gdb1cmd',    # Gripper 1 commands
-            '/alfie/low/backcmd',    # Base movement commands
-
-            # TF for camera transforms
-            '/alfie/tf',
-            '/alfie/tf_static',
 
             # Metadata
             '/recording/metadata',
