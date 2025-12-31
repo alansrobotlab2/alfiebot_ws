@@ -12,6 +12,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', [
             'launch/data_collection.launch.py',
+            'launch/capture_training.py',
         ]),
     ],
     install_requires=['setuptools'],

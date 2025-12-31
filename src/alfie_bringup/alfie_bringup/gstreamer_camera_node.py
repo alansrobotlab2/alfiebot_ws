@@ -139,7 +139,68 @@ class GStreamerCameraNode(Node):
             'left_center_camera_link', self.output_width, self.output_height, focal_length_factor=1.0)
         self._right_center_camera_info_template = self._create_camera_info_template(
             'right_center_camera_link', self.output_width, self.output_height, focal_length_factor=1.0)
+
+        # Add parameter callback to handle runtime changes
+        self.add_on_set_parameters_callback(self._parameter_callback)
     
+    def _parameter_callback(self, params):
+        """Handle parameter changes at runtime"""
+        from rcl_interfaces.msg import SetParametersResult
+
+        needs_restart = False
+
+        for param in params:
+            if param.name == 'framerate':
+                new_framerate = param.value
+                if new_framerate != self.framerate:
+                    self.get_logger().info(f'Framerate change requested: {self.framerate} -> {new_framerate}')
+                    self.framerate = new_framerate
+                    needs_restart = True
+            elif param.name == 'jpeg_quality':
+                new_quality = param.value
+                if new_quality != self.jpeg_quality:
+                    self.get_logger().info(f'JPEG quality change requested: {self.jpeg_quality} -> {new_quality}')
+                    self.jpeg_quality = new_quality
+                    self._jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
+                    needs_restart = True
+
+        if needs_restart:
+            self.get_logger().info('Restarting pipeline with new parameters...')
+            self._restart_pipeline()
+
+        return SetParametersResult(successful=True)
+
+    def _restart_pipeline(self):
+        """Restart the GStreamer pipeline with new parameters"""
+        # Quit the current pipeline
+        if self.main_loop and self.main_loop.is_running():
+            self.main_loop.quit()
+
+        # Wait for pipeline thread to finish
+        if hasattr(self, 'pipeline_thread') and self.pipeline_thread.is_alive():
+            self.pipeline_thread.join(timeout=2.0)
+
+        # Stop and cleanup old pipeline
+        if hasattr(self, 'pipeline') and self.pipeline:
+            self.pipeline.set_state(Gst.State.NULL)
+
+        # Remove old bus watch
+        if self.bus:
+            try:
+                self.bus.remove_signal_watch()
+            except Exception:
+                pass
+            self.bus = None
+
+        # Create new pipeline with updated parameters
+        self.pipeline = self._create_pipeline()
+
+        # Start new pipeline in separate thread
+        self.pipeline_thread = threading.Thread(target=self._run_pipeline, daemon=True)
+        self.pipeline_thread.start()
+
+        self.get_logger().info(f'Pipeline restarted with framerate={self.framerate}, jpeg_quality={self.jpeg_quality}')
+
     def _create_camera_info_template(self, frame_id, width, height, focal_length_factor=1.0):
         """Create a reusable CameraInfo template (everything except timestamp)
 
