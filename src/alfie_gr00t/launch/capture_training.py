@@ -48,7 +48,7 @@ def generate_launch_description():
         period=2.0,  # Wait 2 seconds for nodes to start
         actions=[
             ExecuteProcess(
-                cmd=['ros2', 'param', 'set', '/alfie/stereo_camera', 'framerate', '30'],
+                cmd=['ros2', 'param', 'set', '/alfie/stereo_camera', 'framerate', '15'],
                 output='screen',
                 shell=False
             )

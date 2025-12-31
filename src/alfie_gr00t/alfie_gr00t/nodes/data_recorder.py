@@ -60,8 +60,14 @@ class DataRecorder(Node):
             # Robot state
             '/alfie/robotlowstate',  # Low-level robot state
 
+            '/alfie/robot_description',  # URDF
+            '/alfie/tf',
+            '/alfie/tf/static',
+
             # Robot commands (what we want the policy to learn)
             '/alfie/robotlowcmd',    # Low-level robot commands
+
+            '/rosout',
 
             # Metadata
             '/recording/metadata',
