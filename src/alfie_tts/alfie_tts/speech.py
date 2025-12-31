@@ -30,9 +30,10 @@ class AlfieTTS(Node):
         self.model_path = os.path.join(voices_dir, 'en_US-libritts_r-medium.onnx')
         self.config_path = os.path.join(voices_dir, 'en_US-libritts_r-medium.onnx.json')
         self.speaker_id = 65
-        self.length_scale = None
-        self.noise_scale = None
-        self.noise_w = None
+        self.length_scale = 1.05  # >1.0 slows down speech (1.1 = 10% slower)
+        self.noise_scale = 0.667  # controls pitch variation
+        self.noise_w = 0.8  # controls phoneme duration variation
+        self.playback_rate_scale = 0.95  # <1.0 lowers pitch, >1.0 raises pitch
         self.use_cuda = False
         self.output_device = 0
         self.latency = 0.15
@@ -72,7 +73,7 @@ class AlfieTTS(Node):
     def speech_request_callback(self, msg):
         self.get_logger().info(f"Received speech request: {msg.text}")
         self.publish_speaking(True)
-        alsaaudio.PCM(cardindex=self.output_device)
+        # alsaaudio.PCM(cardindex=self.output_device)
         alsaaudio.Mixer("Master").setvolume(msg.volume)
         
         # Create synthesis config
@@ -84,13 +85,15 @@ class AlfieTTS(Node):
         )
         
         with sd.RawOutputStream(
-            samplerate=self.voice.config.sample_rate,
+            samplerate=int(self.voice.config.sample_rate * self.playback_rate_scale),
             channels=1,
             dtype='int16',
             latency=self.latency,
         ) as output_stream:
             for audio_chunk in self.voice.synthesize(msg.text, syn_config):
                 output_stream.write(audio_chunk.audio_int16_bytes)
+            # Let audio buffer drain before closing stream
+            time.sleep(0.25)
         self.publish_speaking(False)
 
 

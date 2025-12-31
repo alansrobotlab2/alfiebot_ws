@@ -9,6 +9,18 @@ Train a GR00T n1.6 policy for Alfie to autonomously:
 2. **Identify** the soda can among other objects
 3. **Pick up** the soda can successfully
 
+## Mission Parameters:
+1. Back Height set at 0.100 Meters
+2. All Episodes captured with right hand
+3. Can always placed radially at any angle within 1 to 3 feet of robot
+4. Can is always right side up
+5. Can can be facing any direction
+6. Alfie will:
+  - turn to face the can 
+  - then approach to 1 foot from right corner of base
+  - pick up the can
+7. (bonus) Alfie will set the can back down
+
 ## GR00T n1.6 Overview
 
 GR00T (Generalist Robot 00 Technology) n1.6 is NVIDIA's foundation model for humanoid robotics that enables:
@@ -36,10 +48,10 @@ GR00T (Generalist Robot 00 Technology) n1.6 is NVIDIA's foundation model for hum
 │                   Training Pipeline (RTX 5090)                    │
 ├───────────────────────────────────────────────────────────────────┤
 │  GR00T SDK Fine-tuning                                            │
-│  - Load pre-trained GR00T n1.6 foundation model                  │
-│  - Fine-tune on Alfie can-pickup demonstrations                  │
-│  - Imitation learning (behavior cloning)                         │
-│  - Full precision FP32/FP16 training                             │
+│  - Load pre-trained GR00T n1.6 foundation model                   │
+│  - Fine-tune on Alfie can-pickup demonstrations                   │
+│  - Imitation learning (behavior cloning)                          │
+│  - Full precision FP32/FP16 training                              │
 └───────────────────────────────────────────────────────────────────┘
                               │
                               ▼ Export & Quantize
@@ -47,9 +59,9 @@ GR00T (Generalist Robot 00 Technology) n1.6 is NVIDIA's foundation model for hum
 │              Model Optimization Pipeline                          │
 ├───────────────────────────────────────────────────────────────────┤
 │  1. Export to ONNX                                                │
-│  2. Quantize to INT8 with calibration                            │
-│  3. Build TensorRT engine for Jetson Orin                        │
-│  4. Validate accuracy vs. full precision                         │
+│  2. Quantize to INT8 with calibration                             │
+│  3. Build TensorRT engine for Jetson Orin                         │
+│  4. Validate accuracy vs. full precision                          │
 └───────────────────────────────────────────────────────────────────┘
                               │
                               ▼ Deploy

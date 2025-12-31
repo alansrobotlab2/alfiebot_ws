@@ -16,6 +16,7 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from alfie_msgs.msg import RobotLowCmd, RobotLowState, ServoCmd, BackCmd
 from alfie_msgs.srv import BackRequestCalibration
 from geometry_msgs.msg import Twist
@@ -536,9 +537,22 @@ HEAD_JOINT_MAP = {
 
 class AlfieTeleopVRNode(Node):
     """ROS2 node that publishes head tracking data from VR headset"""
-    
+
     def __init__(self):
         super().__init__('alfiebot_teleop_vr_node')
+
+        # Declare parameters
+        self.declare_parameter(
+            'back_height',
+            0.390,
+            ParameterDescriptor(description='Target back height in meters (0.0 to 0.390)')
+        )
+
+        # Get initial parameter value
+        self.back_height = self.get_parameter('back_height').value
+
+        # Register callback for parameter updates
+        self.add_on_set_parameters_callback(self._on_parameter_change)
 
         # Head tracking multipliers (headset rotation -> robot head rotation)
         self.head_pitch_multiplier = 2.0
@@ -626,7 +640,7 @@ class AlfieTeleopVRNode(Node):
         self.robot_cmd_state.eye_pwm = [0, 0]
         self.robot_cmd_state.shoulder_height = 0.0
         self.robot_cmd_state.back_cmd = BackCmd()
-        self.robot_cmd_state.back_cmd.position = 0.390
+        self.robot_cmd_state.back_cmd.position = self.back_height
         self.robot_cmd_state.back_cmd.velocity = 0.2
         self.robot_cmd_state.back_cmd.acceleration = 0.1
         self.robot_cmd_state.cmd_vel = Twist()
@@ -697,7 +711,19 @@ class AlfieTeleopVRNode(Node):
         """Log a debug message only if debug_logs is enabled."""
         if self.debug_logs:
             self.get_logger().info(msg)
-    
+
+    def _on_parameter_change(self, params):
+        """Callback for parameter updates at runtime."""
+        for param in params:
+            if param.name == 'back_height':
+                new_value = param.value
+                # Clamp to valid range
+                new_value = max(0.0, min(0.390, new_value))
+                self.back_height = new_value
+                self.robot_cmd_state.back_cmd.position = new_value
+                self.get_logger().info(f'back_height parameter updated to {new_value:.3f}')
+        return SetParametersResult(successful=True)
+
     def start_vr_monitor(self):
         """Start VR monitor in a separate thread"""
         # Initialize VR monitor

@@ -231,7 +231,7 @@ class SimpleTeleopArm:
             delta_roll = max(-angle_limit, min(angle_limit, delta_roll))
             
             current_roll = self.target_positions.get("wrist_roll", 0.0)
-            new_roll = current_roll - delta_roll  # Negated to fix direction
+            new_roll = current_roll - delta_roll
             new_roll = max(-math.pi/2, min(math.pi/2, new_roll))  # Limit roll range (±90°)
             self.target_positions["wrist_roll"] = new_roll
             
