@@ -17,9 +17,9 @@ Train a GR00T n1.6 policy for Alfie to autonomously:
 5. Can can be facing any direction
 6. Alfie will:
   - turn to face the can 
-  - then approach to 1 foot from right corner of base
-  - pick up the can
-7. (bonus) Alfie will set the can back down
+  - then approach to 1.25 foot from right corner of base
+  - pick up the can, centered, right side up, 1 foot from the floor (approx)
+7. (bonus) Alfie will set the can back down, 1 foot from center of robot
 
 ## GR00T n1.6 Overview
 
