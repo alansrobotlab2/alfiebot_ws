@@ -1,0 +1,645 @@
+#!/usr/bin/env python3
+"""
+ROS2 Bag to GR00T N1.6 Training Data Converter
+
+Converts ROS2 bag demonstrations (MCAP format) into the GR00T training format:
+- Parquet files for state/action data
+- MP4 videos for camera observations
+- Updated meta files (info.jsonl, episodes.jsonl, stats.jsonl)
+
+Usage:
+    python3 rosbag_to_groot.py [--demos-dir PATH] [--output-dir PATH] [--task-index N] [--fps N]
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import zstandard as zstd
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+import numpy as np
+import cv2
+
+# ROS2 imports
+try:
+    from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
+    from rclpy.serialization import deserialize_message
+    from sensor_msgs.msg import CompressedImage
+    from geometry_msgs.msg import Twist
+    # Import custom message types
+    import importlib
+    alfie_msgs = importlib.import_module('alfie_msgs.msg')
+    RobotLowState = alfie_msgs.RobotLowState
+    RobotLowCmd = alfie_msgs.RobotLowCmd
+except ImportError as e:
+    print(f"Error importing ROS2 modules: {e}")
+    print("Make sure to source your ROS2 workspace: source install/setup.bash")
+    sys.exit(1)
+
+# Data processing imports
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+# Video processing
+import av
+
+
+@dataclass
+class EpisodeData:
+    """Container for a single episode's data."""
+    timestamps: List[float] = field(default_factory=list)
+    states: List[np.ndarray] = field(default_factory=list)
+    actions: List[np.ndarray] = field(default_factory=list)
+    images: Dict[str, List[Tuple[float, np.ndarray]]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Initialize image lists for each camera
+        for cam in ['left_wide', 'right_wide', 'left_center', 'right_center']:
+            self.images[cam] = []
+
+
+class RosbagToGrootConverter:
+    """Converts ROS2 bag files to GR00T training format."""
+
+    # Topic to camera key mapping
+    CAMERA_TOPICS = {
+        '/alfie/stereo_camera/left_wide/image_raw/compressed': 'left_wide',
+        '/alfie/stereo_camera/right_wide/image_raw/compressed': 'right_wide',
+        '/alfie/stereo_camera/left_center/image_raw/compressed': 'left_center',
+        '/alfie/stereo_camera/right_center/image_raw/compressed': 'right_center',
+    }
+
+    # Target video dimensions
+    VIDEO_WIDTH = 320
+    VIDEO_HEIGHT = 280
+
+    def __init__(
+        self,
+        demos_dir: str,
+        output_dir: str,
+        fps: int = 15,
+        chunk_size: int = 1000,
+    ):
+        self.demos_dir = Path(demos_dir)
+        self.output_dir = Path(output_dir)
+        self.fps = fps
+        self.chunk_size = chunk_size
+        self.target_dt = 1.0 / fps
+
+        # Ensure output directories exist
+        self.data_dir = self.output_dir / 'data'
+        self.videos_dir = self.output_dir / 'videos'
+        self.meta_dir = self.output_dir / 'meta'
+
+        for d in [self.data_dir, self.videos_dir, self.meta_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+
+        # Statistics accumulators
+        self.all_states = []
+        self.all_actions = []
+        self.episode_metadata = []
+
+    def find_demonstrations(self) -> List[Path]:
+        """Find all demonstration directories."""
+        demos = sorted([
+            d for d in self.demos_dir.iterdir()
+            if d.is_dir() and d.name.startswith('demo_')
+        ])
+        print(f"Found {len(demos)} demonstrations")
+        return demos
+
+    def decompress_mcap(self, mcap_zstd_path: Path) -> Path:
+        """Decompress a zstd-compressed MCAP file."""
+        mcap_path = mcap_zstd_path.with_suffix('')  # Remove .zstd
+
+        if mcap_path.exists():
+            return mcap_path
+
+        print(f"  Decompressing {mcap_zstd_path.name}...")
+        dctx = zstd.ZstdDecompressor()
+        with open(mcap_zstd_path, 'rb') as ifh:
+            with open(mcap_path, 'wb') as ofh:
+                dctx.copy_stream(ifh, ofh)
+        return mcap_path
+
+    def read_rosbag(self, demo_dir: Path) -> Optional[EpisodeData]:
+        """Read a ROS2 bag and extract all relevant data."""
+        # Find the MCAP file
+        mcap_files = list(demo_dir.glob('*.mcap.zstd'))
+        if not mcap_files:
+            mcap_files = list(demo_dir.glob('*.mcap'))
+        if not mcap_files:
+            print(f"  Warning: No MCAP file found in {demo_dir}")
+            return None
+
+        mcap_file = mcap_files[0]
+
+        # Decompress if needed
+        if mcap_file.suffix == '.zstd':
+            mcap_file = self.decompress_mcap(mcap_file)
+
+        episode = EpisodeData()
+
+        # Raw data storage with timestamps
+        state_msgs = []  # (timestamp_ns, RobotLowState)
+        cmd_msgs = []    # (timestamp_ns, RobotLowCmd)
+        image_msgs = {k: [] for k in self.CAMERA_TOPICS.values()}  # camera_key -> [(ts_ns, image)]
+
+        # Read the bag
+        storage_options = StorageOptions(uri=str(mcap_file), storage_id='mcap')
+        converter_options = ConverterOptions(
+            input_serialization_format='cdr',
+            output_serialization_format='cdr'
+        )
+
+        reader = SequentialReader()
+        reader.open(storage_options, converter_options)
+
+        # Get topic types
+        topic_types = {t.name: t.type for t in reader.get_all_topics_and_types()}
+
+        while reader.has_next():
+            topic, data, timestamp_ns = reader.read_next()
+
+            if topic == '/alfie/robotlowstate':
+                msg = deserialize_message(data, RobotLowState)
+                state_msgs.append((timestamp_ns, msg))
+            elif topic == '/alfie/robotlowcmd':
+                msg = deserialize_message(data, RobotLowCmd)
+                cmd_msgs.append((timestamp_ns, msg))
+            elif topic in self.CAMERA_TOPICS:
+                msg = deserialize_message(data, CompressedImage)
+                cam_key = self.CAMERA_TOPICS[topic]
+                # Decode image
+                np_arr = np.frombuffer(msg.data, np.uint8)
+                img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                if img is not None:
+                    # Resize to target dimensions
+                    img = cv2.resize(img, (self.VIDEO_WIDTH, self.VIDEO_HEIGHT))
+                    # Convert BGR to RGB
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    image_msgs[cam_key].append((timestamp_ns, img))
+
+        if not state_msgs or not cmd_msgs:
+            print(f"  Warning: Missing state or command data in {demo_dir}")
+            return None
+
+        # Sort by timestamp
+        state_msgs.sort(key=lambda x: x[0])
+        cmd_msgs.sort(key=lambda x: x[0])
+        for cam_key in image_msgs:
+            image_msgs[cam_key].sort(key=lambda x: x[0])
+
+        # Determine time range (use overlap of state and cmd)
+        start_time_ns = max(state_msgs[0][0], cmd_msgs[0][0])
+        end_time_ns = min(state_msgs[-1][0], cmd_msgs[-1][0])
+
+        # Generate target timestamps at desired FPS
+        target_times_ns = []
+        t = start_time_ns
+        dt_ns = int(self.target_dt * 1e9)
+        while t <= end_time_ns:
+            target_times_ns.append(t)
+            t += dt_ns
+
+        if len(target_times_ns) < 5:
+            print(f"  Warning: Episode too short ({len(target_times_ns)} frames)")
+            return None
+
+        # Helper to find nearest message
+        def find_nearest(msgs, target_ts):
+            if not msgs:
+                return None
+            idx = np.searchsorted([m[0] for m in msgs], target_ts)
+            if idx == 0:
+                return msgs[0][1]
+            if idx >= len(msgs):
+                return msgs[-1][1]
+            # Return closer one
+            if abs(msgs[idx-1][0] - target_ts) < abs(msgs[idx][0] - target_ts):
+                return msgs[idx-1][1]
+            return msgs[idx][1]
+
+        # Interpolate data to target timestamps
+        reference_time_ns = target_times_ns[0]
+
+        for ts_ns in target_times_ns:
+            # Get nearest state and command
+            state_msg = find_nearest(state_msgs, ts_ns)
+            cmd_msg = find_nearest(cmd_msgs, ts_ns)
+
+            if state_msg is None or cmd_msg is None:
+                continue
+
+            # Extract state vector (21 dimensions)
+            state = self.extract_state(state_msg)
+            action = self.extract_action(cmd_msg)
+
+            episode.states.append(state)
+            episode.actions.append(action)
+            episode.timestamps.append((ts_ns - reference_time_ns) / 1e9)
+
+            # Get nearest images for each camera
+            for cam_key, cam_msgs in image_msgs.items():
+                img = find_nearest([(m[0], m[1]) for m in cam_msgs], ts_ns)
+                if img is not None:
+                    episode.images[cam_key].append(((ts_ns - reference_time_ns) / 1e9, img))
+
+        return episode
+
+    def extract_state(self, msg: 'RobotLowState') -> np.ndarray:
+        """Extract 21-dimensional state vector from RobotLowState message.
+
+        State vector layout:
+        [0-2]:   base velocity (linear x, y, z)
+        [3-5]:   base angular velocity (roll, pitch, yaw rates)
+        [6-11]:  left arm joints (shoulder_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll, gripper)
+        [12-17]: right arm joints
+        [18-20]: head joints (yaw, pitch, roll)
+        """
+        state = np.zeros(21, dtype=np.float32)
+
+        # Base velocity from cmd_vel in state (observed base motion)
+        state[0] = msg.cmd_vel.linear.x
+        state[1] = msg.cmd_vel.linear.y
+        state[2] = msg.cmd_vel.linear.z
+        state[3] = msg.cmd_vel.angular.x
+        state[4] = msg.cmd_vel.angular.y
+        state[5] = msg.cmd_vel.angular.z
+
+        # Left arm (servos 0-5): current_location is the joint position
+        for i in range(6):
+            state[6 + i] = msg.servo_state[i].current_location
+
+        # Right arm (servos 6-11)
+        for i in range(6):
+            state[12 + i] = msg.servo_state[6 + i].current_location
+
+        # Head (servos 12-14): yaw, pitch, roll
+        for i in range(3):
+            state[18 + i] = msg.servo_state[12 + i].current_location
+
+        return state
+
+    def extract_action(self, msg: 'RobotLowCmd') -> np.ndarray:
+        """Extract 21-dimensional action vector from RobotLowCmd message.
+
+        Action vector layout (matches state):
+        [0-2]:   base velocity command (linear x, y, z)
+        [3-5]:   base angular velocity command (roll, pitch, yaw)
+        [6-11]:  left arm joint commands
+        [12-17]: right arm joint commands
+        [18-20]: head joint commands
+        """
+        action = np.zeros(21, dtype=np.float32)
+
+        # Base velocity commands
+        action[0] = msg.cmd_vel.linear.x
+        action[1] = msg.cmd_vel.linear.y
+        action[2] = msg.cmd_vel.linear.z
+        action[3] = msg.cmd_vel.angular.x
+        action[4] = msg.cmd_vel.angular.y
+        action[5] = msg.cmd_vel.angular.z
+
+        # Left arm servo commands (target_location)
+        for i in range(6):
+            action[6 + i] = msg.servo_cmd[i].target_location
+
+        # Right arm servo commands
+        for i in range(6):
+            action[12 + i] = msg.servo_cmd[6 + i].target_location
+
+        # Head servo commands
+        for i in range(3):
+            action[18 + i] = msg.servo_cmd[12 + i].target_location
+
+        return action
+
+    def save_episode_parquet(
+        self,
+        episode: EpisodeData,
+        episode_index: int,
+        task_index: int,
+    ) -> Tuple[str, int]:
+        """Save episode data to parquet file."""
+        chunk_index = episode_index // self.chunk_size
+        chunk_dir = self.data_dir / f'chunk-{chunk_index:03d}'
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+
+        parquet_path = chunk_dir / f'episode_{episode_index:06d}.parquet'
+
+        num_frames = len(episode.states)
+
+        # Build dataframe
+        data = {
+            'timestamp': np.array(episode.timestamps, dtype=np.float32),
+            'frame_index': np.arange(num_frames, dtype=np.int64),
+            'episode_index': np.full(num_frames, episode_index, dtype=np.int64),
+            'index': np.arange(num_frames, dtype=np.int64),  # Global index (will update later)
+            'task_index': np.full(num_frames, task_index, dtype=np.int64),
+            'state': [s.tolist() for s in episode.states],
+            'action': [a.tolist() for a in episode.actions],
+        }
+
+        df = pd.DataFrame(data)
+
+        # Convert to pyarrow table with proper schema
+        table = pa.Table.from_pandas(df)
+        pq.write_table(table, parquet_path)
+
+        return str(parquet_path), num_frames
+
+    def save_episode_videos(
+        self,
+        episode: EpisodeData,
+        episode_index: int,
+    ) -> Dict[str, str]:
+        """Save episode videos in AV1 format."""
+        chunk_index = episode_index // self.chunk_size
+        video_paths = {}
+
+        for cam_key in ['left_wide', 'right_wide', 'left_center', 'right_center']:
+            cam_dir = self.videos_dir / f'chunk-{chunk_index:03d}' / cam_key
+            cam_dir.mkdir(parents=True, exist_ok=True)
+
+            video_path = cam_dir / f'episode_{episode_index:06d}.mp4'
+
+            if not episode.images.get(cam_key):
+                print(f"    Warning: No images for {cam_key}")
+                continue
+
+            # Get just the images (without timestamps)
+            frames = [img for _, img in episode.images[cam_key]]
+
+            if len(frames) == 0:
+                continue
+
+            # Write video using PyAV
+            try:
+                container = av.open(str(video_path), mode='w')
+                stream = container.add_stream('libaom-av1', rate=self.fps)
+                stream.width = self.VIDEO_WIDTH
+                stream.height = self.VIDEO_HEIGHT
+                stream.pix_fmt = 'yuv420p'
+                # Set encoding options for reasonable quality/speed
+                stream.options = {
+                    'crf': '30',
+                    'cpu-used': '4',  # Faster encoding (0-8, higher is faster)
+                }
+
+                for frame_data in frames:
+                    frame = av.VideoFrame.from_ndarray(frame_data, format='rgb24')
+                    frame = frame.reformat(format='yuv420p')
+                    for packet in stream.encode(frame):
+                        container.mux(packet)
+
+                # Flush
+                for packet in stream.encode():
+                    container.mux(packet)
+
+                container.close()
+                video_paths[cam_key] = str(video_path)
+
+            except Exception as e:
+                print(f"    Error encoding video for {cam_key}: {e}")
+                # Fallback to h264 if AV1 fails
+                try:
+                    container = av.open(str(video_path), mode='w')
+                    stream = container.add_stream('libx264', rate=self.fps)
+                    stream.width = self.VIDEO_WIDTH
+                    stream.height = self.VIDEO_HEIGHT
+                    stream.pix_fmt = 'yuv420p'
+                    stream.options = {'crf': '23', 'preset': 'fast'}
+
+                    for frame_data in frames:
+                        frame = av.VideoFrame.from_ndarray(frame_data, format='rgb24')
+                        frame = frame.reformat(format='yuv420p')
+                        for packet in stream.encode(frame):
+                            container.mux(packet)
+
+                    for packet in stream.encode():
+                        container.mux(packet)
+
+                    container.close()
+                    video_paths[cam_key] = str(video_path)
+                    print(f"    Saved as H.264 fallback: {video_path}")
+                except Exception as e2:
+                    print(f"    Failed to save video: {e2}")
+
+        return video_paths
+
+    def convert_all(self, task_index: int = 0, start_episode: int = 0) -> int:
+        """Convert all demonstrations to GR00T format."""
+        demos = self.find_demonstrations()
+
+        if not demos:
+            print("No demonstrations found!")
+            return 0
+
+        total_frames = 0
+        episode_index = start_episode
+
+        for i, demo_dir in enumerate(demos):
+            print(f"\nProcessing {demo_dir.name} ({i+1}/{len(demos)})...")
+
+            episode = self.read_rosbag(demo_dir)
+            if episode is None:
+                continue
+
+            print(f"  Extracted {len(episode.states)} frames")
+
+            # Save parquet
+            parquet_path, num_frames = self.save_episode_parquet(
+                episode, episode_index, task_index
+            )
+            print(f"  Saved parquet: {parquet_path}")
+
+            # Save videos
+            video_paths = self.save_episode_videos(episode, episode_index)
+            print(f"  Saved {len(video_paths)} videos")
+
+            # Accumulate statistics
+            self.all_states.extend(episode.states)
+            self.all_actions.extend(episode.actions)
+
+            # Record episode metadata
+            self.episode_metadata.append({
+                'episode_index': episode_index,
+                'task_index': task_index,
+                'num_frames': num_frames,
+                'duration': episode.timestamps[-1] if episode.timestamps else 0,
+                'source': demo_dir.name,
+            })
+
+            total_frames += num_frames
+            episode_index += 1
+
+        print(f"\n{'='*60}")
+        print(f"Converted {episode_index - start_episode} episodes ({total_frames} frames)")
+
+        return episode_index - start_episode
+
+    def compute_and_save_stats(self):
+        """Compute and save normalization statistics."""
+        if not self.all_states or not self.all_actions:
+            print("No data to compute statistics")
+            return
+
+        states = np.array(self.all_states)
+        actions = np.array(self.all_actions)
+
+        stats = {
+            'state': {
+                'mean': states.mean(axis=0).tolist(),
+                'std': states.std(axis=0).tolist(),
+                'min': states.min(axis=0).tolist(),
+                'max': states.max(axis=0).tolist(),
+            },
+            'action': {
+                'mean': actions.mean(axis=0).tolist(),
+                'std': actions.std(axis=0).tolist(),
+                'min': actions.min(axis=0).tolist(),
+                'max': actions.max(axis=0).tolist(),
+            }
+        }
+
+        stats_path = self.meta_dir / 'stats.jsonl'
+        with open(stats_path, 'w') as f:
+            json.dump(stats, f, indent=2)
+        print(f"Saved statistics to {stats_path}")
+
+        # Also save relative stats (normalized)
+        relative_stats = {
+            'state': {
+                'mean': [0.0] * 21,
+                'std': [1.0] * 21,
+            },
+            'action': {
+                'mean': [0.0] * 21,
+                'std': [1.0] * 21,
+            }
+        }
+
+        relative_stats_path = self.meta_dir / 'relative_stats.jsonl'
+        with open(relative_stats_path, 'w') as f:
+            json.dump(relative_stats, f, indent=2)
+        print(f"Saved relative statistics to {relative_stats_path}")
+
+    def save_episodes_metadata(self):
+        """Save episodes.jsonl with per-episode metadata."""
+        episodes_path = self.meta_dir / 'episodes.jsonl'
+        with open(episodes_path, 'w') as f:
+            for ep in self.episode_metadata:
+                f.write(json.dumps(ep) + '\n')
+        print(f"Saved episode metadata to {episodes_path}")
+
+    def update_info_jsonl(self, num_episodes: int, total_frames: int):
+        """Update info.jsonl with correct counts."""
+        info_path = self.meta_dir / 'info.jsonl'
+
+        # Read existing info
+        with open(info_path, 'r') as f:
+            info = json.load(f)
+
+        # Update counts
+        info['total_episodes'] = num_episodes
+        info['total_frames'] = total_frames
+        info['total_chunks'] = (num_episodes + self.chunk_size - 1) // self.chunk_size
+        info['total_videos'] = num_episodes * 4  # 4 cameras per episode
+
+        # Update splits
+        info['splits'] = {
+            'train': f'0:{num_episodes}'
+        }
+
+        # Write back
+        with open(info_path, 'w') as f:
+            json.dump(info, f, indent=4)
+        print(f"Updated {info_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Convert ROS2 bag demonstrations to GR00T N1.6 training format'
+    )
+    parser.add_argument(
+        '--demos-dir',
+        type=str,
+        default='/home/alfie/alfiebot_ws/data/demonstrations',
+        help='Directory containing demonstration folders'
+    )
+    parser.add_argument(
+        '--output-dir',
+        type=str,
+        default='/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge',
+        help='Output directory for GR00T format data'
+    )
+    parser.add_argument(
+        '--task-index',
+        type=int,
+        default=0,
+        help='Task index (0=pick up can, 1=put can down)'
+    )
+    parser.add_argument(
+        '--fps',
+        type=int,
+        default=15,
+        help='Target frames per second'
+    )
+    parser.add_argument(
+        '--start-episode',
+        type=int,
+        default=0,
+        help='Starting episode index (for appending to existing dataset)'
+    )
+
+    args = parser.parse_args()
+
+    print("="*60)
+    print("ROS2 Bag to GR00T Converter")
+    print("="*60)
+    print(f"Demos directory: {args.demos_dir}")
+    print(f"Output directory: {args.output_dir}")
+    print(f"Task index: {args.task_index}")
+    print(f"Target FPS: {args.fps}")
+    print(f"Starting episode: {args.start_episode}")
+    print("="*60)
+
+    converter = RosbagToGrootConverter(
+        demos_dir=args.demos_dir,
+        output_dir=args.output_dir,
+        fps=args.fps,
+    )
+
+    num_episodes = converter.convert_all(
+        task_index=args.task_index,
+        start_episode=args.start_episode
+    )
+
+    if num_episodes > 0:
+        total_frames = sum(ep['num_frames'] for ep in converter.episode_metadata)
+
+        # Save all metadata
+        converter.compute_and_save_stats()
+        converter.save_episodes_metadata()
+        converter.update_info_jsonl(
+            num_episodes=args.start_episode + num_episodes,
+            total_frames=total_frames
+        )
+
+        print("\n" + "="*60)
+        print("Conversion complete!")
+        print(f"  Episodes: {num_episodes}")
+        print(f"  Total frames: {total_frames}")
+        print("="*60)
+    else:
+        print("\nNo episodes converted.")
+
+
+if __name__ == '__main__':
+    main()

@@ -34,12 +34,10 @@
                 "right_wrist_roll_joint",     
                 "right_gripper_active_joint",  
                 "head_yaw_joint",             
-                "head_pitch_joint",            
-                "head_roll_joint",            
+                "head_pitch_joint",
+                "head_roll_joint"
             ],
-            "shape": [
-                21
-            ]
+            "shape": [21]
         },
         "state": {
             "dtype": "float32",
@@ -62,13 +60,11 @@
                 "right_wrist_pitch_joint",   
                 "right_wrist_roll_joint",     
                 "right_gripper_active_joint",  
-                "head_yaw_joint",             
-                "head_pitch_joint",            
-                "head_roll_joint",            
+                "head_yaw_joint",
+                "head_pitch_joint",
+                "head_roll_joint"
             ],
-            "shape": [
-                21
-            ]
+            "shape": [21]
         },
         "video_left_wide": {
             "dtype": "video",
@@ -161,7 +157,7 @@
                 "video.channels": 3,
                 "has_audio": false
             }
-        }
+        },
         "timestamp": {
             "dtype": "float32",
             "shape": [
