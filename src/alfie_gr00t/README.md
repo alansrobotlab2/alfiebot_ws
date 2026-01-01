@@ -166,8 +166,8 @@ GR00T (Generalist Robot 00 Technology) n1.6 is NVIDIA's foundation model for hum
   - [ ] 500+ successful can pickup trajectories
   - [ ] Varying can positions and orientations
   - [ ] Different lighting conditions
-  - [ ] Different can types/brands
   - [ ] Multiple starting configurations
+  - [ ] Multiple environments
 - [ ] Label and validate demonstration quality:
   - [ ] Mark successful vs failed attempts
   - [ ] Annotate grasp quality
