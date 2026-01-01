@@ -21,6 +21,8 @@ import zstandard as zstd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 import numpy as np
 import cv2
 
@@ -84,12 +86,16 @@ class RosbagToGrootConverter:
         output_dir: str,
         fps: int = 15,
         chunk_size: int = 1000,
+        num_threads: int = 1,
+        use_gpu: bool = False,
     ):
         self.demos_dir = Path(demos_dir)
         self.output_dir = Path(output_dir)
         self.fps = fps
         self.chunk_size = chunk_size
         self.target_dt = 1.0 / fps
+        self.num_threads = num_threads
+        self.use_gpu = use_gpu
 
         # Ensure output directories exist
         self.data_dir = self.output_dir / 'data'
@@ -99,10 +105,53 @@ class RosbagToGrootConverter:
         for d in [self.data_dir, self.videos_dir, self.meta_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
-        # Statistics accumulators
+        # Statistics accumulators (thread-safe)
         self.all_states = []
         self.all_actions = []
         self.episode_metadata = []
+        self.stats_lock = Lock()
+        self.print_lock = Lock()
+
+        # Detect available GPU encoder
+        self.gpu_encoder = None
+        if self.use_gpu:
+            self.gpu_encoder = self._detect_gpu_encoder()
+
+    def _detect_gpu_encoder(self) -> Optional[str]:
+        """Detect available GPU video encoder."""
+        # Try to detect NVENC (NVIDIA)
+        try:
+            result = subprocess.run(
+                ['ffmpeg', '-hide_banner', '-encoders'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            output = result.stdout
+
+            # Check for various NVIDIA encoders in order of preference
+            if 'h264_nvenc' in output:
+                print("Detected NVIDIA NVENC H.264 encoder")
+                return 'h264_nvenc'
+            elif 'hevc_nvenc' in output:
+                print("Detected NVIDIA NVENC HEVC encoder")
+                return 'hevc_nvenc'
+            elif 'av1_nvenc' in output:
+                print("Detected NVIDIA NVENC AV1 encoder")
+                return 'av1_nvenc'
+            # Check for AMD
+            elif 'h264_amf' in output:
+                print("Detected AMD AMF H.264 encoder")
+                return 'h264_amf'
+            # Check for Intel
+            elif 'h264_qsv' in output:
+                print("Detected Intel QuickSync H.264 encoder")
+                return 'h264_qsv'
+        except Exception as e:
+            print(f"GPU encoder detection failed: {e}")
+
+        print("No GPU encoder detected, falling back to CPU encoding")
+        return None
 
     def find_demonstrations(self) -> List[Path]:
         """Find all demonstration directories."""
@@ -359,7 +408,7 @@ class RosbagToGrootConverter:
         episode: EpisodeData,
         episode_index: int,
     ) -> Dict[str, str]:
-        """Save episode videos in AV1 format."""
+        """Save episode videos using GPU acceleration if available."""
         chunk_index = episode_index // self.chunk_size
         video_paths = {}
 
@@ -379,18 +428,21 @@ class RosbagToGrootConverter:
             if len(frames) == 0:
                 continue
 
-            # Write video using PyAV
+            # Use GPU-accelerated encoding if available
+            if self.gpu_encoder:
+                success = self._encode_video_gpu(frames, video_path)
+                if success:
+                    video_paths[cam_key] = str(video_path)
+                    continue
+
+            # Fallback to CPU encoding with PyAV
             try:
                 container = av.open(str(video_path), mode='w')
-                stream = container.add_stream('libaom-av1', rate=self.fps)
+                stream = container.add_stream('libx264', rate=self.fps)
                 stream.width = self.VIDEO_WIDTH
                 stream.height = self.VIDEO_HEIGHT
                 stream.pix_fmt = 'yuv420p'
-                # Set encoding options for reasonable quality/speed
-                stream.options = {
-                    'crf': '30',
-                    'cpu-used': '4',  # Faster encoding (0-8, higher is faster)
-                }
+                stream.options = {'crf': '23', 'preset': 'fast'}
 
                 for frame_data in frames:
                     frame = av.VideoFrame.from_ndarray(frame_data, format='rgb24')
@@ -398,7 +450,6 @@ class RosbagToGrootConverter:
                     for packet in stream.encode(frame):
                         container.mux(packet)
 
-                # Flush
                 for packet in stream.encode():
                     container.mux(packet)
 
@@ -406,32 +457,132 @@ class RosbagToGrootConverter:
                 video_paths[cam_key] = str(video_path)
 
             except Exception as e:
-                print(f"    Error encoding video for {cam_key}: {e}")
-                # Fallback to h264 if AV1 fails
-                try:
-                    container = av.open(str(video_path), mode='w')
-                    stream = container.add_stream('libx264', rate=self.fps)
-                    stream.width = self.VIDEO_WIDTH
-                    stream.height = self.VIDEO_HEIGHT
-                    stream.pix_fmt = 'yuv420p'
-                    stream.options = {'crf': '23', 'preset': 'fast'}
-
-                    for frame_data in frames:
-                        frame = av.VideoFrame.from_ndarray(frame_data, format='rgb24')
-                        frame = frame.reformat(format='yuv420p')
-                        for packet in stream.encode(frame):
-                            container.mux(packet)
-
-                    for packet in stream.encode():
-                        container.mux(packet)
-
-                    container.close()
-                    video_paths[cam_key] = str(video_path)
-                    print(f"    Saved as H.264 fallback: {video_path}")
-                except Exception as e2:
-                    print(f"    Failed to save video: {e2}")
+                print(f"    Failed to save video: {e}")
 
         return video_paths
+
+    def _encode_video_gpu(self, frames: List[np.ndarray], output_path: Path) -> bool:
+        """Encode video using GPU acceleration via ffmpeg."""
+        try:
+            # Create a temporary directory for raw frames
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmpdir_path = Path(tmpdir)
+
+                # Save frames as individual images
+                for i, frame in enumerate(frames):
+                    frame_path = tmpdir_path / f'frame_{i:06d}.png'
+                    cv2.imwrite(str(frame_path), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+
+                # Build ffmpeg command with GPU encoder
+                encoder_opts = self._get_encoder_options()
+
+                cmd = [
+                    'ffmpeg',
+                    '-y',  # Overwrite output
+                    '-framerate', str(self.fps),
+                    '-i', str(tmpdir_path / 'frame_%06d.png'),
+                    '-c:v', self.gpu_encoder,
+                ] + encoder_opts + [
+                    '-pix_fmt', 'yuv420p',
+                    str(output_path)
+                ]
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+
+                if result.returncode == 0:
+                    return True
+                else:
+                    print(f"    GPU encoding failed: {result.stderr}")
+                    return False
+
+        except Exception as e:
+            print(f"    GPU encoding error: {e}")
+            return False
+
+    def _get_encoder_options(self) -> List[str]:
+        """Get encoder-specific options for quality/performance."""
+        if not self.gpu_encoder:
+            return []
+
+        # NVIDIA NVENC options
+        if 'nvenc' in self.gpu_encoder:
+            return [
+                '-preset', 'p4',  # Performance preset (p1-p7, p4 is balanced)
+                '-tune', 'hq',    # High quality tuning
+                '-rc', 'vbr',     # Variable bitrate
+                '-cq', '23',      # Constant quality (lower is better, 0-51)
+                '-b:v', '0',      # Let CQ control bitrate
+            ]
+        # AMD AMF options
+        elif 'amf' in self.gpu_encoder:
+            return [
+                '-quality', 'balanced',
+                '-rc', 'vbr_peak',
+                '-qp_i', '23',
+                '-qp_p', '23',
+            ]
+        # Intel QuickSync options
+        elif 'qsv' in self.gpu_encoder:
+            return [
+                '-preset', 'medium',
+                '-global_quality', '23',
+            ]
+
+        return []
+
+    def process_single_episode(
+        self,
+        demo_dir: Path,
+        episode_index: int,
+        task_index: int,
+        demo_number: int,
+        total_demos: int,
+    ) -> Optional[Tuple[int, Dict]]:
+        """Process a single episode (thread-safe)."""
+        with self.print_lock:
+            print(f"\nProcessing {demo_dir.name} ({demo_number}/{total_demos})...")
+
+        episode = self.read_rosbag(demo_dir)
+        if episode is None:
+            return None
+
+        with self.print_lock:
+            print(f"  Extracted {len(episode.states)} frames")
+
+        # Save parquet
+        parquet_path, num_frames = self.save_episode_parquet(
+            episode, episode_index, task_index
+        )
+
+        with self.print_lock:
+            print(f"  Saved parquet: {parquet_path}")
+
+        # Save videos
+        video_paths = self.save_episode_videos(episode, episode_index)
+
+        with self.print_lock:
+            print(f"  Saved {len(video_paths)} videos")
+
+        # Thread-safe statistics accumulation
+        with self.stats_lock:
+            self.all_states.extend(episode.states)
+            self.all_actions.extend(episode.actions)
+
+        # Return metadata for later collection
+        metadata = {
+            'episode_index': episode_index,
+            'task_index': task_index,
+            'num_frames': num_frames,
+            'duration': episode.timestamps[-1] if episode.timestamps else 0,
+            'source': demo_dir.name,
+        }
+
+        return num_frames, metadata
 
     def convert_all(self, task_index: int = 0, start_episode: int = 0) -> int:
         """Convert all demonstrations to GR00T format."""
@@ -444,40 +595,49 @@ class RosbagToGrootConverter:
         total_frames = 0
         episode_index = start_episode
 
-        for i, demo_dir in enumerate(demos):
-            print(f"\nProcessing {demo_dir.name} ({i+1}/{len(demos)})...")
+        if self.num_threads <= 1:
+            # Single-threaded processing (original behavior)
+            for i, demo_dir in enumerate(demos):
+                result = self.process_single_episode(
+                    demo_dir, episode_index, task_index, i + 1, len(demos)
+                )
+                if result is not None:
+                    num_frames, metadata = result
+                    self.episode_metadata.append(metadata)
+                    total_frames += num_frames
+                    episode_index += 1
+        else:
+            # Multi-threaded processing
+            with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+                # Submit all jobs
+                futures = {}
+                for i, demo_dir in enumerate(demos):
+                    future = executor.submit(
+                        self.process_single_episode,
+                        demo_dir,
+                        episode_index + i,
+                        task_index,
+                        i + 1,
+                        len(demos),
+                    )
+                    futures[future] = i
 
-            episode = self.read_rosbag(demo_dir)
-            if episode is None:
-                continue
+                # Collect results as they complete
+                completed_metadata = {}
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result is not None:
+                        num_frames, metadata = result
+                        # Store with original index to maintain order
+                        completed_metadata[futures[future]] = (num_frames, metadata)
 
-            print(f"  Extracted {len(episode.states)} frames")
-
-            # Save parquet
-            parquet_path, num_frames = self.save_episode_parquet(
-                episode, episode_index, task_index
-            )
-            print(f"  Saved parquet: {parquet_path}")
-
-            # Save videos
-            video_paths = self.save_episode_videos(episode, episode_index)
-            print(f"  Saved {len(video_paths)} videos")
-
-            # Accumulate statistics
-            self.all_states.extend(episode.states)
-            self.all_actions.extend(episode.actions)
-
-            # Record episode metadata
-            self.episode_metadata.append({
-                'episode_index': episode_index,
-                'task_index': task_index,
-                'num_frames': num_frames,
-                'duration': episode.timestamps[-1] if episode.timestamps else 0,
-                'source': demo_dir.name,
-            })
-
-            total_frames += num_frames
-            episode_index += 1
+                # Add metadata in order
+                for i in range(len(demos)):
+                    if i in completed_metadata:
+                        num_frames, metadata = completed_metadata[i]
+                        self.episode_metadata.append(metadata)
+                        total_frames += num_frames
+                        episode_index += 1
 
         print(f"\n{'='*60}")
         print(f"Converted {episode_index - start_episode} episodes ({total_frames} frames)")
@@ -597,6 +757,17 @@ def main():
         default=0,
         help='Starting episode index (for appending to existing dataset)'
     )
+    parser.add_argument(
+        '--num-threads',
+        type=int,
+        default=1,
+        help='Number of parallel threads for conversion (default: 1)'
+    )
+    parser.add_argument(
+        '--use-gpu',
+        action='store_true',
+        help='Use GPU acceleration for video encoding (requires NVENC/AMF/QSV)'
+    )
 
     args = parser.parse_args()
 
@@ -608,12 +779,16 @@ def main():
     print(f"Task index: {args.task_index}")
     print(f"Target FPS: {args.fps}")
     print(f"Starting episode: {args.start_episode}")
+    print(f"Number of threads: {args.num_threads}")
+    print(f"GPU acceleration: {'Enabled' if args.use_gpu else 'Disabled'}")
     print("="*60)
 
     converter = RosbagToGrootConverter(
         demos_dir=args.demos_dir,
         output_dir=args.output_dir,
         fps=args.fps,
+        num_threads=args.num_threads,
+        use_gpu=args.use_gpu,
     )
 
     num_episodes = converter.convert_all(
