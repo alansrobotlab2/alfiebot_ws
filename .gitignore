@@ -19,8 +19,7 @@ build_isolated/
 devel_isolated/
 gerbers/
 picodriverboard-backups/
-data/alfiebot.CanDoChallenge/videos/*
-data/alfiebot.CanDoChallenge/data/*
+data/alfiebot.CanDoChallenge/*
 data/datasets/*
 data/demonstrations/*
 
