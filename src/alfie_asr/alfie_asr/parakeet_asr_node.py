@@ -18,11 +18,14 @@ from silero_vad import load_silero_vad, VADIterator
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from ament_index_python.packages import get_package_share_directory
 import shutil
+import gc
+import psutil
 
 SAMPLE_RATE = 16000  # Updated to match audio publisher
 BLOCKSIZE = 512   # Updated to match AudioFrame message
 VAD_BLOCK = 512   # VAD requires minimum 512 samples (32ms at 16kHz)
 FRAMES_PER_VAD = VAD_BLOCK // BLOCKSIZE  # 2 frames needed for VAD
+MAX_AUDIO_BUFFER_SIZE = 16000 * 15  # 15 seconds max buffer (safety limit)
 
 
 class ASRNode(Node):
@@ -36,6 +39,11 @@ class ASRNode(Node):
         self.speaking = False
         self.audio_buffer = bytearray()
         self.micstate = 'IDLE'
+
+        # Memory monitoring
+        self.process = psutil.Process()
+        self.callback_count = 0
+        self.last_memory_log = 0
         
         # Load VAD model
         self.get_logger().info('Loading Silero VAD model...')
@@ -87,9 +95,17 @@ class ASRNode(Node):
         self.speaking = msg.is_speaking
 
     def audio_callback(self, msg):
+        # Memory monitoring (every 1000 callbacks)
+        self.callback_count += 1
+        if self.callback_count % 1000 == 0:
+            mem_info = self.process.memory_info()
+            mem_mb = mem_info.rss / 1024 / 1024
+            self.get_logger().info(f'Memory usage: {mem_mb:.1f} MB | Buffer size: {len(self.audio_buffer)} bytes')
+            self.last_memory_log = mem_mb
+
         # only process the frames if tts isn't speaking
         if self.speaking == False:
-            samples = np.array(msg.audioframe, dtype=np.int16)
+            samples = np.frombuffer(msg.audioframe, dtype=np.int16)
             # Use the full 256-sample frame for VAD
             vad_input = samples.astype(np.float32) / 32768.0
             speech = self.vad_iterator(vad_input)
@@ -101,12 +117,19 @@ class ASRNode(Node):
                 key = "speaking"
 
             if self.micstate == 'IDLE' and key == 'start':
-                self.get_logger().info('Speech start detected')            
+                self.get_logger().info('Speech start detected')
                 self.audio_buffer = bytearray()
                 self.audio_buffer.extend(samples.tobytes())
                 self.micstate = 'SPEECH'
             elif self.micstate == 'SPEECH' and key == 'speaking':
-                self.audio_buffer.extend(samples.tobytes())
+                # Safety check: prevent buffer overflow
+                if len(self.audio_buffer) < MAX_AUDIO_BUFFER_SIZE * 2:
+                    self.audio_buffer.extend(samples.tobytes())
+                else:
+                    self.get_logger().warn('Audio buffer exceeded maximum size, resetting')
+                    self.micstate = 'IDLE'
+                    self.audio_buffer = bytearray()
+                    self.vad_iterator.reset_states()
             elif self.micstate == 'SPEECH' and key == 'end':
                 self.get_logger().info('Speech end detected, transcribing...')
                 self.audio_buffer.extend(samples.tobytes())
@@ -116,9 +139,15 @@ class ASRNode(Node):
                 asr_msg.asrresult = str(result)
                 self.get_logger().info('Speech detected, publishing result: ' + asr_msg.asrresult)
                 self.publisher_.publish(asr_msg)
-                self.micstate = 'IDLE'
+
+                # Explicit cleanup
+                del audio_np
                 self.audio_buffer = bytearray()
+                self.micstate = 'IDLE'
                 self.vad_iterator.reset_states()
+
+                # Force garbage collection after transcription
+                gc.collect()
 
 
 def main(args=None):
