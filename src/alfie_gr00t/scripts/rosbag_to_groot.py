@@ -698,9 +698,9 @@ class RosbagToGrootConverter:
                 f.write(json.dumps(ep) + '\n')
         print(f"Saved episode metadata to {episodes_path}")
 
-    def update_info_jsonl(self, num_episodes: int, total_frames: int):
-        """Update info.jsonl with correct counts."""
-        info_path = self.meta_dir / 'info.jsonl'
+    def update_info_json(self, num_episodes: int, total_frames: int):
+        """Update info.json with correct counts."""
+        info_path = self.meta_dir / 'info.json'
 
         # Read existing info
         with open(info_path, 'r') as f:
@@ -802,7 +802,7 @@ def main():
         # Save all metadata
         converter.compute_and_save_stats()
         converter.save_episodes_metadata()
-        converter.update_info_jsonl(
+        converter.update_info_json(
             num_episodes=args.start_episode + num_episodes,
             total_frames=total_frames
         )
