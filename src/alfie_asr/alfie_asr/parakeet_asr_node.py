@@ -35,7 +35,6 @@ class ASRNode(Node):
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.speaking = False
         self.audio_buffer = bytearray()
-        self.prev_samples = np.zeros(BLOCKSIZE, dtype=np.int16)
         self.micstate = 'IDLE'
         
         # Load VAD model
@@ -119,6 +118,7 @@ class ASRNode(Node):
                 self.publisher_.publish(asr_msg)
                 self.micstate = 'IDLE'
                 self.audio_buffer = bytearray()
+                self.vad_iterator.reset_states()
 
 
 def main(args=None):
