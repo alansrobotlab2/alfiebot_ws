@@ -1,8 +1,8 @@
 # Environment ---
 This solutions runs on a 
  - Jetson Orin NX 16gb developer kit
- - Ubuntu 22.04
- - Jetpack 6.2.1
+ - Ubuntu 22.04r
+ - Jetpack 6.2.1 
 
 # ROS2 ---
 Coding standards, domain knowledge, and preferences that AI should follow.

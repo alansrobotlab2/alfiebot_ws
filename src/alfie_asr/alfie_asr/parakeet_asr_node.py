@@ -25,7 +25,8 @@ SAMPLE_RATE = 16000  # Updated to match audio publisher
 BLOCKSIZE = 512   # Updated to match AudioFrame message
 VAD_BLOCK = 512   # VAD requires minimum 512 samples (32ms at 16kHz)
 FRAMES_PER_VAD = VAD_BLOCK // BLOCKSIZE  # 2 frames needed for VAD
-MAX_AUDIO_BUFFER_SIZE = 16000 * 15  # 15 seconds max buffer (safety limit)
+MAX_SPEECH_SECONDS = 10 # Max speech segment length
+MAX_AUDIO_BUFFER_SIZE = SAMPLE_RATE * MAX_SPEECH_SECONDS  # max buffer (safety limit)
 
 
 class ASRNode(Node):
