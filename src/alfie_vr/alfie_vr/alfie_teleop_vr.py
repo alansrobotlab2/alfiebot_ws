@@ -201,21 +201,10 @@ class AlfieTeleopVRNode(Node):
         self.left_grip_active = False
         self.right_grip_active = False
 
-        # Velocity control with acceleration limits
-        # Velocity limits (easier to adjust here)
-        self.max_linear_vel = 0.15  # m/s - max linear speed
-        self.max_angular_vel = 0.5  # rad/s - max rotation speed
+        # Velocity scaling for joystick input (actual rate limiting done by master_cmd)
+        self.max_linear_vel = 0.15  # m/s - max linear speed request
+        self.max_angular_vel = 0.5  # rad/s - max rotation speed request
 
-        # Acceleration limits (smoother motion control)
-        self.max_linear_accel = 1.0  # m/s^2 - reach max speed in 0.25s
-        self.max_angular_accel = 3.0  # rad/s^2 - reach max angular speed in 0.25s
-
-        # Current velocity state
-        self.current_linear_x = 0.0
-        self.current_linear_y = 0.0
-        self.current_angular_z = 0.0
-        self.last_vel_update_time = time.time()
-        
         # Passthrough mode toggle state (triggered by X button on left controller)
         self.passthrough_mode_active = False
         self.left_x_button_pressed = False  # Track X button state for edge detection
@@ -426,12 +415,6 @@ class AlfieTeleopVRNode(Node):
                     self.robot_cmd_state.servo_cmd[14].target_location = roll_rad
         
         # Process joystick input for cmd_vel
-        # Calculate time delta for acceleration limiting
-        current_time = time.time()
-        dt = current_time - self.last_vel_update_time
-        self.last_vel_update_time = current_time
-        dt = max(0.001, min(dt, 0.1))  # Clamp dt to reasonable range (1ms to 100ms)
-        
         # Target velocities from joystick input
         target_linear_x = 0.0
         target_linear_y = 0.0
@@ -544,30 +527,14 @@ class AlfieTeleopVRNode(Node):
 
             self.right_thumbstick_pressed = thumbstick_button
 
-        # Apply acceleration limiting to smooth velocity changes
-        def apply_accel_limit(current, target, max_accel, dt):
-            """Apply acceleration limiting to velocity changes"""
-            delta = target - current
-            max_delta = max_accel * dt
-
-            if abs(delta) <= max_delta:
-                return target
-            else:
-                return current + math.copysign(max_delta, delta)
-
-        # Smoothly ramp velocities with acceleration limits
-        self.current_linear_x = apply_accel_limit(self.current_linear_x, target_linear_x, self.max_linear_accel, dt)
-        self.current_linear_y = apply_accel_limit(self.current_linear_y, target_linear_y, self.max_linear_accel, dt)
-        self.current_angular_z = apply_accel_limit(self.current_angular_z, target_angular_z, self.max_angular_accel, dt)
-
-        # Apply smoothed velocities to command
-        self.robot_cmd_state.cmd_vel.linear.x = self.current_linear_x
-        self.robot_cmd_state.cmd_vel.linear.y = self.current_linear_y
-        self.robot_cmd_state.cmd_vel.angular.z = self.current_angular_z
+        # Apply target velocities to command (rate limiting handled by master_cmd)
+        self.robot_cmd_state.cmd_vel.linear.x = target_linear_x
+        self.robot_cmd_state.cmd_vel.linear.y = target_linear_y
+        self.robot_cmd_state.cmd_vel.angular.z = target_angular_z
 
         # Debug log (only when commanded velocity is non-zero)
-        if abs(self.current_linear_x) > 0.01 or abs(self.current_linear_y) > 0.01 or abs(self.current_angular_z) > 0.01:
-            self.debug_log(f'Cmd_vel: linear=({self.current_linear_x:.2f}, {self.current_linear_y:.2f}), angular={self.current_angular_z:.2f}')
+        if abs(target_linear_x) > 0.01 or abs(target_linear_y) > 0.01 or abs(target_angular_z) > 0.01:
+            self.debug_log(f'Cmd_vel: linear=({target_linear_x:.2f}, {target_linear_y:.2f}), angular={target_angular_z:.2f}')
 
         # Process arm control using SimpleTeleopArm with VR controller input
         # Only process when grip button is held (delta control relative to grip press)

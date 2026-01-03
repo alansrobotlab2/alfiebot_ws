@@ -1,8 +1,10 @@
+import math
 import time
 from typing import Optional
 import rclpy
 from rclpy.node import Node
 from alfie_msgs.msg import RobotLowCmd, GDBCmd, GDBServoCmd, ServoCmd, BackCmd
+from geometry_msgs.msg import Twist
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 import numpy as np
 from .servo_config import SERVO_POLARITY
@@ -47,7 +49,19 @@ class MasterCmdNode(Node):
         
         # Use shared servo polarity configuration
         self.servo_polarity = SERVO_POLARITY
-        
+
+        # Velocity/acceleration limit parameters
+        self.declare_parameter('max_linear_vel', 0.7)    # m/s
+        self.declare_parameter('max_angular_vel', 1.5)   # rad/s
+        self.declare_parameter('max_linear_accel', 1.0)  # m/s^2
+        self.declare_parameter('max_angular_accel', 3.0) # rad/s^2
+
+        # Current velocity state for acceleration limiting
+        self.current_linear_x = 0.0
+        self.current_linear_y = 0.0
+        self.current_angular_z = 0.0
+        self.last_cmd_time = self.get_clock().now()
+
         # Initialize command variables and timestamp
         self.gdb0_cmd: Optional[GDBCmd] = None
         self.gdb1_cmd: Optional[GDBCmd] = None
@@ -82,7 +96,13 @@ class MasterCmdNode(Node):
             'low/backcmd',
             qos_best_effort
         )
-        
+
+        # Publishers for velocity feedback (consumed by master_status)
+        self.current_cmd_vel_pub = self.create_publisher(
+            Twist, 'low/current_cmd_vel', qos_best_effort)
+        self.command_cmd_vel_pub = self.create_publisher(
+            Twist, 'low/command_cmd_vel', qos_best_effort)
+
         # Create timer for 100Hz publishing (0.01 seconds = 10ms)
         self.cmd_timer = self.create_timer(PUBLISH_PERIOD_SEC, self.publish_gdb_commands)
         
@@ -104,14 +124,45 @@ class MasterCmdNode(Node):
         """
         # Update timestamp
         self.last_robot_cmd_time = self.get_clock().now()
-        
-        # Decompose Twist message into wheel velocities using mecanum kinematics
+
+        # Get velocity/acceleration limit parameters
+        max_lin_vel = self.get_parameter('max_linear_vel').value
+        max_ang_vel = self.get_parameter('max_angular_vel').value
+        max_lin_accel = self.get_parameter('max_linear_accel').value
+        max_ang_accel = self.get_parameter('max_angular_accel').value
+
+        # Calculate dt for acceleration limiting
+        now = self.get_clock().now()
+        dt = (now - self.last_cmd_time).nanoseconds / 1e9
+        dt = max(0.001, min(dt, 0.1))  # Clamp to reasonable range
+        self.last_cmd_time = now
+
+        # Clamp to max velocity limits
+        target_x = max(-max_lin_vel, min(max_lin_vel, msg.cmd_vel.linear.x))
+        target_y = max(-max_lin_vel, min(max_lin_vel, msg.cmd_vel.linear.y))
+        target_z = max(-max_ang_vel, min(max_ang_vel, msg.cmd_vel.angular.z))
+
+        # Apply acceleration limiting
+        self.current_linear_x = self._apply_accel_limit(
+            self.current_linear_x, target_x, max_lin_accel, dt)
+        self.current_linear_y = self._apply_accel_limit(
+            self.current_linear_y, target_y, max_lin_accel, dt)
+        self.current_angular_z = self._apply_accel_limit(
+            self.current_angular_z, target_z, max_ang_accel, dt)
+
+        # Publish both velocities for master_status
+        self.command_cmd_vel_pub.publish(msg.cmd_vel)
+
+        current = Twist()
+        current.linear.x = self.current_linear_x
+        current.linear.y = self.current_linear_y
+        current.angular.z = self.current_angular_z
+        self.current_cmd_vel_pub.publish(current)
+
+        # Use rate-limited velocities for kinematics
         wheel_velocities = self.mecanum_drive_kinematics(
-            msg.cmd_vel.linear.x,
-            msg.cmd_vel.linear.y,
-            msg.cmd_vel.angular.z
-        )
-        
+            self.current_linear_x, self.current_linear_y, self.current_angular_z)
+
         # Create GDBCmd for gdb0 
         # gdb0 gets rear wheels: RL (wheel_velocities[2]) and RR (wheel_velocities[3])
         gdb0_cmd = GDBCmd()
@@ -341,9 +392,28 @@ class MasterCmdNode(Node):
         # Clamp to valid range and convert to int16
         return int(np.clip(steps, -2048, 2048))
     
+    def _apply_accel_limit(self, current: float, target: float,
+                           max_accel: float, dt: float) -> float:
+        """Apply acceleration limiting to velocity changes
+
+        Args:
+            current: Current velocity value
+            target: Target velocity value
+            max_accel: Maximum acceleration (units/s^2)
+            dt: Time delta in seconds
+
+        Returns:
+            New velocity after applying acceleration limit
+        """
+        delta = target - current
+        max_delta = max_accel * dt
+        if abs(delta) <= max_delta:
+            return target
+        return current + math.copysign(max_delta, delta)
+
     def _is_command_fresh(self) -> bool:
         """Check if robot command is recent enough to be published
-        
+
         Returns:
             True if command is fresh and should be published, False otherwise
         """

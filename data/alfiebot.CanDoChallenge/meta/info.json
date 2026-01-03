@@ -1,0 +1,203 @@
+{
+    "codebase_version": "v2.1",
+    "robot_type": "alfiebot_candochallenge",
+    "total_episodes": 31,
+    "total_frames": 7878,
+    "total_tasks": 2,
+    "chunks_size": 1000,
+    "fps": 15,
+    "splits": {
+        "train": "0:31"
+    },
+    "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+    "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
+    "features": {
+        "action": {
+            "dtype": "float32",
+            "names": [
+                "cmd_val_x",
+                "cmd_val_y",
+                "cmd_val_z",
+                "cmd_rot_x",
+                "cmd_rot_y",
+                "cmd_rot_z",
+                "left_shoulder_yaw_joint",
+                "left_shoulder_pitch_joint",
+                "left_elbow_pitch_joint",
+                "left_wrist_pitch_joint",
+                "left_wrist_roll_joint",
+                "left_gripper_active_joint",
+                "right_shoulder_yaw_joint",
+                "right_shoulder_pitch_joint",
+                "right_elbow_pitch_joint",
+                "right_wrist_pitch_joint",
+                "right_wrist_roll_joint",
+                "right_gripper_active_joint",
+                "head_yaw_joint",
+                "head_pitch_joint",
+                "head_roll_joint"
+            ],
+            "shape": [
+                21
+            ]
+        },
+        "state": {
+            "dtype": "float32",
+            "names": [
+                "cmd_val_x",
+                "cmd_val_y",
+                "cmd_val_z",
+                "cmd_rot_x",
+                "cmd_rot_y",
+                "cmd_rot_z",
+                "left_shoulder_yaw_joint",
+                "left_shoulder_pitch_joint",
+                "left_elbow_pitch_joint",
+                "left_wrist_pitch_joint",
+                "left_wrist_roll_joint",
+                "left_gripper_active_joint",
+                "right_shoulder_yaw_joint",
+                "right_shoulder_pitch_joint",
+                "right_elbow_pitch_joint",
+                "right_wrist_pitch_joint",
+                "right_wrist_roll_joint",
+                "right_gripper_active_joint",
+                "head_yaw_joint",
+                "head_pitch_joint",
+                "head_roll_joint"
+            ],
+            "shape": [
+                21
+            ]
+        },
+        "observation.images.left_wide": {
+            "dtype": "video",
+            "shape": [
+                280,
+                320,
+                3
+            ],
+            "names": [
+                "height",
+                "width",
+                "channels"
+            ],
+            "info": {
+                "video.height": 280,
+                "video.width": 320,
+                "video.codec": "av1",
+                "video.pix_fmt": "yuv420p",
+                "video.is_depth_map": false,
+                "video.fps": 15,
+                "video.channels": 3,
+                "has_audio": false
+            }
+        },
+        "observation.images.right_wide": {
+            "dtype": "video",
+            "shape": [
+                280,
+                320,
+                3
+            ],
+            "names": [
+                "height",
+                "width",
+                "channels"
+            ],
+            "info": {
+                "video.height": 280,
+                "video.width": 320,
+                "video.codec": "av1",
+                "video.pix_fmt": "yuv420p",
+                "video.is_depth_map": false,
+                "video.fps": 15,
+                "video.channels": 3,
+                "has_audio": false
+            }
+        },
+        "observation.images.left_center": {
+            "dtype": "video",
+            "shape": [
+                280,
+                320,
+                3
+            ],
+            "names": [
+                "height",
+                "width",
+                "channels"
+            ],
+            "info": {
+                "video.height": 280,
+                "video.width": 320,
+                "video.codec": "av1",
+                "video.pix_fmt": "yuv420p",
+                "video.is_depth_map": false,
+                "video.fps": 15,
+                "video.channels": 3,
+                "has_audio": false
+            }
+        },
+        "observation.images.right_center": {
+            "dtype": "video",
+            "shape": [
+                280,
+                320,
+                3
+            ],
+            "names": [
+                "height",
+                "width",
+                "channels"
+            ],
+            "info": {
+                "video.height": 280,
+                "video.width": 320,
+                "video.codec": "av1",
+                "video.pix_fmt": "yuv420p",
+                "video.is_depth_map": false,
+                "video.fps": 15,
+                "video.channels": 3,
+                "has_audio": false
+            }
+        },
+        "timestamp": {
+            "dtype": "float32",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "frame_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "episode_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "task_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        }
+    },
+    "total_chunks": 1,
+    "total_videos": 124
+}

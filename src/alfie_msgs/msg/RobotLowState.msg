@@ -12,7 +12,9 @@ BackState back_state
 # pwm value from 0 to 255, lowest on state is 1
 uint8[2] eye_state
 
-geometry_msgs/Twist cmd_vel
+# Velocity command state
+geometry_msgs/Twist current_cmd_vel   # Rate-limited velocity (what is actually being sent)
+geometry_msgs/Twist command_cmd_vel   # Original commanded velocity (before limiting)
 
 # state for each of the 4 driver motors in base
 # 0: Front Left  (FL)

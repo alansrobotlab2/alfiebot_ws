@@ -5,6 +5,7 @@ from rclpy.node import Node
 from alfie_msgs.msg import RobotLowState, GDBState, BackState, JetsonState
 from alfie_msgs.msg import ServoState, MotorState
 from sensor_msgs.msg import Imu, MagneticField, JointState
+from geometry_msgs.msg import Twist
 import numpy as np
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from .servo_config import SERVO_POLARITY
@@ -97,6 +98,8 @@ class MasterStatusNode(Node):
         self.oak_imu: Optional[Imu] = None
         self.back_state: Optional[BackState] = None
         self.jetson_state: Optional[JetsonState] = None
+        self.current_cmd_vel: Optional[Twist] = None
+        self.command_cmd_vel: Optional[Twist] = None
         
         # Initialize watchdog health checks
         self.health_checks: Dict[str, HealthCheck] = create_health_checks()
@@ -139,7 +142,15 @@ class MasterStatusNode(Node):
             self.jetson_callback,
             qos_best_effort
         )
-        
+
+        # Subscribe to velocity feedback from master_cmd
+        self.current_cmd_vel_sub = self.create_subscription(
+            Twist, 'low/current_cmd_vel',
+            self.current_cmd_vel_callback, qos_best_effort)
+        self.command_cmd_vel_sub = self.create_subscription(
+            Twist, 'low/command_cmd_vel',
+            self.command_cmd_vel_callback, qos_best_effort)
+
         # Publisher for robot low state (use BEST_EFFORT)
         self.robot_state_pub = self.create_publisher(
             RobotLowState,
@@ -199,7 +210,7 @@ class MasterStatusNode(Node):
     def jetson_callback(self, msg: JetsonState) -> None:
         """Callback for Jetson state"""
         self.jetson_state = msg
-        
+
         # Update watchdog health checks for Jetson
         self.health_checks['jetson_cpu_temp'].update(msg.cpu_temp)
         self.health_checks['jetson_gpu_temp'].update(msg.gpu_temp)
@@ -213,7 +224,15 @@ class MasterStatusNode(Node):
             signal_dbm=msg.wifi_signal_dbm,
             ssid=msg.wifi_ssid
         )
-    
+
+    def current_cmd_vel_callback(self, msg: Twist) -> None:
+        """Callback for rate-limited cmd_vel from master_cmd"""
+        self.current_cmd_vel = msg
+
+    def command_cmd_vel_callback(self, msg: Twist) -> None:
+        """Callback for original commanded cmd_vel from master_cmd"""
+        self.command_cmd_vel = msg
+
     # ========================================================================
     # Publishing Methods
     # ========================================================================
@@ -250,7 +269,13 @@ class MasterStatusNode(Node):
         
         # Servo states (17 total: 0-6 left arm, 7-13 right arm, 14-16 head)
         robot_state.servo_state = self._build_servo_states()
-        
+
+        # Velocity command state from master_cmd
+        if self.current_cmd_vel is not None:
+            robot_state.current_cmd_vel = self.current_cmd_vel
+        if self.command_cmd_vel is not None:
+            robot_state.command_cmd_vel = self.command_cmd_vel
+
         self.robot_state_pub.publish(robot_state)
         
         # Publish joint states for visualization and TF

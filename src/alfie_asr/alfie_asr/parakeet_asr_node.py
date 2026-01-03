@@ -97,12 +97,12 @@ class ASRNode(Node):
 
     def audio_callback(self, msg):
         # Memory monitoring (every 1000 callbacks)
-        self.callback_count += 1
-        if self.callback_count % 1000 == 0:
-            mem_info = self.process.memory_info()
-            mem_mb = mem_info.rss / 1024 / 1024
-            self.get_logger().info(f'Memory usage: {mem_mb:.1f} MB | Buffer size: {len(self.audio_buffer)} bytes')
-            self.last_memory_log = mem_mb
+        # self.callback_count += 1
+        # if self.callback_count % 1000 == 0:
+        #     mem_info = self.process.memory_info()
+        #     mem_mb = mem_info.rss / 1024 / 1024
+        #     self.get_logger().info(f'Memory usage: {mem_mb:.1f} MB | Buffer size: {len(self.audio_buffer)} bytes')
+        #     self.last_memory_log = mem_mb
 
         # only process the frames if tts isn't speaking
         if self.speaking == False:
