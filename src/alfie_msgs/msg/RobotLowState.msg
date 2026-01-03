@@ -17,6 +17,10 @@ uint16[2] eye_state
 # feedback in gen2 hardware, so individual motor states are not reported.
 geometry_msgs/Twist cmd_vel
 
+# Base velocity command state (from command_mux, used by gr00t data capture)
+geometry_msgs/Twist current_cmd_vel   # Rate-limited velocity (what is actually being sent)
+geometry_msgs/Twist command_cmd_vel   # Original commanded velocity (before limiting)
+
 # State for all 15 arm + head servos, in SI units with per-servo polarity already
 # applied by the module firmware:
 #   0-5   left arm   (shoulder_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll, gripper)

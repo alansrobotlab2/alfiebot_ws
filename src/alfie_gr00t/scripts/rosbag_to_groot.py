@@ -287,7 +287,7 @@ class RosbagToGrootConverter:
 
             # Extract state vector (21 dimensions)
             state = self.extract_state(state_msg)
-            action = self.extract_action(cmd_msg)
+            action = self.extract_action(state_msg, cmd_msg)
 
             episode.states.append(state)
             episode.actions.append(action)
@@ -304,22 +304,22 @@ class RosbagToGrootConverter:
     def extract_state(self, msg: 'RobotLowState') -> np.ndarray:
         """Extract 21-dimensional state vector from RobotLowState message.
 
-        State vector layout:
-        [0-2]:   base velocity (linear x, y, z)
-        [3-5]:   base angular velocity (roll, pitch, yaw rates)
+        State vector layout (matches modality.json):
+        [0-2]:   base linear velocity (x, y, z) from current_cmd_vel
+        [3-5]:   base angular velocity (x, y, z) from current_cmd_vel
         [6-11]:  left arm joints (shoulder_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll, gripper)
         [12-17]: right arm joints
         [18-20]: head joints (yaw, pitch, roll)
         """
         state = np.zeros(21, dtype=np.float32)
 
-        # Base velocity from cmd_vel in state (observed base motion)
-        state[0] = msg.cmd_vel.linear.x
-        state[1] = msg.cmd_vel.linear.y
-        state[2] = msg.cmd_vel.linear.z
-        state[3] = msg.cmd_vel.angular.x
-        state[4] = msg.cmd_vel.angular.y
-        state[5] = msg.cmd_vel.angular.z
+        # Base velocity from current_cmd_vel (rate-limited velocity actually being sent)
+        state[0] = msg.current_cmd_vel.linear.x
+        state[1] = msg.current_cmd_vel.linear.y
+        state[2] = msg.current_cmd_vel.linear.z
+        state[3] = msg.current_cmd_vel.angular.x
+        state[4] = msg.current_cmd_vel.angular.y
+        state[5] = msg.current_cmd_vel.angular.z
 
         # Left arm (servos 0-5): current_location is the joint position
         for i in range(6):
@@ -335,37 +335,37 @@ class RosbagToGrootConverter:
 
         return state
 
-    def extract_action(self, msg: 'RobotLowCmd') -> np.ndarray:
-        """Extract 21-dimensional action vector from RobotLowCmd message.
+    def extract_action(self, state_msg: 'RobotLowState', cmd_msg: 'RobotLowCmd') -> np.ndarray:
+        """Extract 21-dimensional action vector from RobotLowState and RobotLowCmd messages.
 
-        Action vector layout (matches state):
-        [0-2]:   base velocity command (linear x, y, z)
-        [3-5]:   base angular velocity command (roll, pitch, yaw)
-        [6-11]:  left arm joint commands
-        [12-17]: right arm joint commands
-        [18-20]: head joint commands
+        Action vector layout (matches modality.json):
+        [0-2]:   base linear velocity command (x, y, z) from command_cmd_vel in state
+        [3-5]:   base angular velocity command (x, y, z) from command_cmd_vel in state
+        [6-11]:  left arm joint commands from servo_cmd
+        [12-17]: right arm joint commands from servo_cmd
+        [18-20]: head joint commands from servo_cmd
         """
         action = np.zeros(21, dtype=np.float32)
 
-        # Base velocity commands
-        action[0] = msg.cmd_vel.linear.x
-        action[1] = msg.cmd_vel.linear.y
-        action[2] = msg.cmd_vel.linear.z
-        action[3] = msg.cmd_vel.angular.x
-        action[4] = msg.cmd_vel.angular.y
-        action[5] = msg.cmd_vel.angular.z
+        # Base velocity from command_cmd_vel (original commanded velocity before rate limiting)
+        action[0] = state_msg.command_cmd_vel.linear.x
+        action[1] = state_msg.command_cmd_vel.linear.y
+        action[2] = state_msg.command_cmd_vel.linear.z
+        action[3] = state_msg.command_cmd_vel.angular.x
+        action[4] = state_msg.command_cmd_vel.angular.y
+        action[5] = state_msg.command_cmd_vel.angular.z
 
         # Left arm servo commands (target_location)
         for i in range(6):
-            action[6 + i] = msg.servo_cmd[i].target_location
+            action[6 + i] = cmd_msg.servo_cmd[i].target_location
 
         # Right arm servo commands
         for i in range(6):
-            action[12 + i] = msg.servo_cmd[6 + i].target_location
+            action[12 + i] = cmd_msg.servo_cmd[6 + i].target_location
 
         # Head servo commands
         for i in range(3):
-            action[18 + i] = msg.servo_cmd[12 + i].target_location
+            action[18 + i] = cmd_msg.servo_cmd[12 + i].target_location
 
         return action
 
