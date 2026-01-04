@@ -1,4 +1,6 @@
 from setuptools import find_packages, setup
+import os
+from glob import glob
 
 package_name = 'alfie_gr00t'
 
@@ -13,6 +15,11 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/data_collection.launch.py',
             'launch/capture_training.py',
+            'launch/groot_inference.launch.py',
+        ]),
+        ('share/' + package_name + '/config', [
+            'config/groot_client.yaml',
+            'config/groot_server.yaml',
         ]),
     ],
     install_requires=['setuptools'],
@@ -29,6 +36,8 @@ setup(
     entry_points={
         'console_scripts': [
             'data_recorder = alfie_gr00t.nodes.data_recorder:main',
+            'groot_client = alfie_gr00t.nodes.groot_client:main',
+            'groot_server = alfie_gr00t.nodes.groot_server:main',
         ],
     },
 )

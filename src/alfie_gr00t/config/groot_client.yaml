@@ -1,0 +1,58 @@
+# GR00T N1.6 Client Configuration
+# Configuration for the GR00T inference client node
+
+groot_client:
+  ros__parameters:
+    # ==========================================================================
+    # Transport Configuration
+    # ==========================================================================
+    # Transport type: "ipc" for on-device, "tcp" for remote server
+    #   - ipc: ~1ms latency, use for on-device inference (recommended)
+    #   - tcp: ~2-5ms latency, use for remote PC server
+    transport: "ipc"
+
+    # TCP settings (only used when transport: "tcp")
+    server_host: "192.168.1.100"
+    server_port: 5555
+
+    # IPC settings (only used when transport: "ipc")
+    # Socket path for Unix domain socket
+    ipc_path: "/tmp/groot_inference.sock"
+
+    # ==========================================================================
+    # Inference Settings
+    # ==========================================================================
+    # Target frames per second for the inference loop
+    # Command publishing always runs at 100 Hz regardless of this setting
+    target_fps: 15
+
+    # Inference timeout in milliseconds
+    # If server doesn't respond within this time, the request fails
+    inference_timeout_ms: 100
+
+    # Which action from the 16-step action horizon to execute
+    # 0 = first (most immediate), 15 = last (most future)
+    action_execution_index: 0
+
+    # ==========================================================================
+    # Task Configuration
+    # ==========================================================================
+    # Language instruction sent to the model for conditioning
+    task_description: "find the can and pick it up"
+
+    # ==========================================================================
+    # Safety Settings
+    # ==========================================================================
+    # Enable joint position and velocity limit enforcement
+    enable_safety_limits: true
+
+    # Action smoothing - Exponential moving average coefficient (0-1)
+    # Higher = less smoothing, more responsive
+    # Lower = more smoothing, smoother but laggier
+    action_smoothing_alpha: 0.7
+
+    # ==========================================================================
+    # Data Paths
+    # ==========================================================================
+    # Normalization statistics file from training dataset
+    stats_file: "/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge/meta/stats.jsonl"

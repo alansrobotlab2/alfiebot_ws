@@ -16,6 +16,7 @@ Train a GR00T n1.6 policy for Alfie to autonomously:
 4. Can is always right side up
 5. Can can be facing any direction
 6. Alfie will:
+  - turn head to find can, right first, then left
   - turn to face the can 
   - then approach to 1.25 foot from right corner of base
   - pick up the can, centered, right side up, 1 foot from the floor (approx)
