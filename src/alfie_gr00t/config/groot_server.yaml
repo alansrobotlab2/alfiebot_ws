@@ -1,0 +1,41 @@
+# GR00T N1.6 Server Configuration
+# Configuration for the GR00T inference server node
+
+groot_server:
+  ros__parameters:
+    # ==========================================================================
+    # Transport Configuration
+    # ==========================================================================
+    # Transport type: "ipc" for on-device, "tcp" for remote server
+    #   - ipc: ~1ms latency, use for on-device inference (recommended)
+    #   - tcp: ~2-5ms latency, use for remote PC server
+    transport: "ipc"
+
+    # TCP settings (only used when transport: "tcp")
+    # Use "*" to bind to all interfaces
+    bind_host: "*"
+    bind_port: 5555
+
+    # IPC settings (only used when transport: "ipc")
+    # Socket path for Unix domain socket
+    ipc_path: "/tmp/groot_inference.sock"
+
+    # ==========================================================================
+    # Model Configuration
+    # ==========================================================================
+    # Path to trained GR00T model checkpoint
+    # Leave empty to use mock mode for testing
+    model_checkpoint: "/home/alfie/alfiebot_ws/models/groot_alfiebot_latest.pth"
+
+    # Use TensorRT for accelerated inference (requires model to be built for TensorRT)
+    use_tensorrt: true
+
+    # Mock mode - returns dummy actions for testing without GPU/model
+    # Useful for testing communication and control pipeline
+    mock_mode: false
+
+    # Action horizon length (number of future steps to predict)
+    action_horizon: 16
+
+    # Device to use for inference ("cuda:0", "cuda:1", etc.)
+    device: "cuda:0"
