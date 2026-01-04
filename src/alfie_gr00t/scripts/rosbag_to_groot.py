@@ -302,16 +302,19 @@ class RosbagToGrootConverter:
         return episode
 
     def extract_state(self, msg: 'RobotLowState') -> np.ndarray:
-        """Extract 21-dimensional state vector from RobotLowState message.
+        """Extract 22-dimensional state vector from RobotLowState message.
 
         State vector layout (matches modality.json):
         [0-2]:   base linear velocity (x, y, z) from current_cmd_vel
         [3-5]:   base angular velocity (x, y, z) from current_cmd_vel
-        [6-11]:  left arm joints (shoulder_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll, gripper)
-        [12-17]: right arm joints
-        [18-20]: head joints (yaw, pitch, roll)
+        [6]:     back joint (from back_state.current_position)
+        [7-11]:  left arm joints (shoulder_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll)
+        [12]:    left gripper
+        [13-17]: right arm joints
+        [18]:    right gripper
+        [19-21]: head joints (yaw, pitch, roll)
         """
-        state = np.zeros(21, dtype=np.float32)
+        state = np.zeros(22, dtype=np.float32)
 
         # Base velocity from current_cmd_vel (rate-limited velocity actually being sent)
         state[0] = msg.current_cmd_vel.linear.x
@@ -321,31 +324,43 @@ class RosbagToGrootConverter:
         state[4] = msg.current_cmd_vel.angular.y
         state[5] = msg.current_cmd_vel.angular.z
 
-        # Left arm (servos 0-5): current_location is the joint position
-        for i in range(6):
-            state[6 + i] = msg.servo_state[i].current_location
+        # Back joint (from back_state)
+        state[6] = msg.back_state.current_position
 
-        # Right arm (servos 6-11)
-        for i in range(6):
-            state[12 + i] = msg.servo_state[6 + i].current_location
+        # Left arm (servos 0-4): shoulder_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll
+        for i in range(5):
+            state[7 + i] = msg.servo_state[i].current_location
+
+        # Left gripper (servo 5)
+        state[12] = msg.servo_state[5].current_location
+
+        # Right arm (servos 6-10)
+        for i in range(5):
+            state[13 + i] = msg.servo_state[6 + i].current_location
+
+        # Right gripper (servo 11)
+        state[18] = msg.servo_state[11].current_location
 
         # Head (servos 12-14): yaw, pitch, roll
         for i in range(3):
-            state[18 + i] = msg.servo_state[12 + i].current_location
+            state[19 + i] = msg.servo_state[12 + i].current_location
 
         return state
 
     def extract_action(self, state_msg: 'RobotLowState', cmd_msg: 'RobotLowCmd') -> np.ndarray:
-        """Extract 21-dimensional action vector from RobotLowState and RobotLowCmd messages.
+        """Extract 22-dimensional action vector from RobotLowState and RobotLowCmd messages.
 
         Action vector layout (matches modality.json):
         [0-2]:   base linear velocity command (x, y, z) from command_cmd_vel in state
         [3-5]:   base angular velocity command (x, y, z) from command_cmd_vel in state
-        [6-11]:  left arm joint commands from servo_cmd
-        [12-17]: right arm joint commands from servo_cmd
-        [18-20]: head joint commands from servo_cmd
+        [6]:     back joint command (from back_state.command_position)
+        [7-11]:  left arm joint commands from servo_cmd
+        [12]:    left gripper command
+        [13-17]: right arm joint commands from servo_cmd
+        [18]:    right gripper command
+        [19-21]: head joint commands from servo_cmd
         """
-        action = np.zeros(21, dtype=np.float32)
+        action = np.zeros(22, dtype=np.float32)
 
         # Base velocity from command_cmd_vel (original commanded velocity before rate limiting)
         action[0] = state_msg.command_cmd_vel.linear.x
@@ -355,17 +370,26 @@ class RosbagToGrootConverter:
         action[4] = state_msg.command_cmd_vel.angular.y
         action[5] = state_msg.command_cmd_vel.angular.z
 
+        # Back joint command (from back_state)
+        action[6] = state_msg.back_state.command_position
+
         # Left arm servo commands (target_location)
-        for i in range(6):
-            action[6 + i] = cmd_msg.servo_cmd[i].target_location
+        for i in range(5):
+            action[7 + i] = cmd_msg.servo_cmd[i].target_location
+
+        # Left gripper command
+        action[12] = cmd_msg.servo_cmd[5].target_location
 
         # Right arm servo commands
-        for i in range(6):
-            action[12 + i] = cmd_msg.servo_cmd[6 + i].target_location
+        for i in range(5):
+            action[13 + i] = cmd_msg.servo_cmd[6 + i].target_location
+
+        # Right gripper command
+        action[18] = cmd_msg.servo_cmd[11].target_location
 
         # Head servo commands
         for i in range(3):
-            action[18 + i] = cmd_msg.servo_cmd[12 + i].target_location
+            action[19 + i] = cmd_msg.servo_cmd[12 + i].target_location
 
         return action
 
@@ -676,12 +700,12 @@ class RosbagToGrootConverter:
         # Also save relative stats (normalized)
         relative_stats = {
             'state': {
-                'mean': [0.0] * 21,
-                'std': [1.0] * 21,
+                'mean': [0.0] * 22,
+                'std': [1.0] * 22,
             },
             'action': {
-                'mean': [0.0] * 21,
-                'std': [1.0] * 21,
+                'mean': [0.0] * 22,
+                'std': [1.0] * 22,
             }
         }
 
