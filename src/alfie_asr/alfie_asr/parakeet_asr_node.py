@@ -7,19 +7,40 @@ os.environ['OMP_NUM_THREADS'] = '4'  # Set number of OpenMP threads
 
 import threading
 import time
+import numpy as np
+import onnxruntime as ort
+import onnx_asr
+import gc
+import psutil
+
+# IMPORTANT: Load ASR model BEFORE importing PyTorch/Silero to avoid cuBLAS conflict
+# ONNX Runtime and PyTorch both try to create cuBLAS handles, but ONNX Runtime fails
+# if PyTorch initializes CUDA first
+print("Pre-loading Parakeet ASR model with GPU (before PyTorch)...")
+ort.set_default_logger_severity(3)
+_sess_options = ort.SessionOptions()
+_sess_options.intra_op_num_threads = 4
+_sess_options.inter_op_num_threads = 4
+_sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+_sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+_asr_model = onnx_asr.load_model(
+    "istupakov/parakeet-tdt-0.6b-v2-onnx",
+    quantization="int8",
+    sess_options=_sess_options,
+    providers=_providers
+)
+print("ASR model pre-loaded successfully")
+
+# Now safe to import PyTorch-based libraries
 import rclpy
 from rclpy.node import Node
 from alfie_msgs.msg import AudioFrame, ASRResult
 from alfie_msgs.msg import Speaking
-import numpy as np
-import onnxruntime as ort
-import onnx_asr
 from silero_vad import load_silero_vad, VADIterator
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from ament_index_python.packages import get_package_share_directory
 import shutil
-import gc
-import psutil
 
 SAMPLE_RATE = 16000  # Updated to match audio publisher
 BLOCKSIZE = 512   # Updated to match AudioFrame message
@@ -46,7 +67,11 @@ class ASRNode(Node):
         self.callback_count = 0
         self.last_memory_log = 0
         
-        # Load VAD model
+        # Use the pre-loaded ASR model (loaded at module level before PyTorch)
+        self.asr_model = _asr_model
+        self.get_logger().info('Using pre-loaded Parakeet ASR model')
+
+        # Load VAD model (PyTorch-based, safe to load after ONNX Runtime CUDA is initialized)
         self.get_logger().info('Loading Silero VAD model...')
         self.silero_model = load_silero_vad(onnx=True)
         self.vad_iterator = VADIterator(
@@ -56,25 +81,6 @@ class ASRNode(Node):
             speech_pad_ms=30,
             threshold=0.35,
         )
-
-        # Configure ONNX Runtime session options for GPU
-        sess_options = ort.SessionOptions()
-        sess_options.intra_op_num_threads = 4
-        sess_options.inter_op_num_threads = 4
-        sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        
-        # Explicitly set providers to use CUDA (GPU) first, then CPU as fallback
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-        
-        self.get_logger().info('Loading Parakeet ASR model with GPU acceleration...')
-        self.asr_model = onnx_asr.load_model(
-            "istupakov/parakeet-tdt-0.6b-v2-onnx", 
-            quantization="int8",
-            sess_options=sess_options,
-            providers=providers
-        )
-        self.get_logger().info('ASR model loaded successfully')
         
         self.publisher_ = self.create_publisher(ASRResult, 'asrresult', qos)
 
