@@ -13,15 +13,18 @@ class Normalizer:
     Uses stats from the GR00T training dataset to normalize observations
     and denormalize actions for consistent policy inference.
 
-    State/Action vector layout (21 dimensions):
+    State/Action vector layout (22 dimensions):
         [0-5]:   base velocity (linear x,y,z, angular x,y,z)
-        [6-11]:  left arm joint positions
-        [12-17]: right arm joint positions
-        [18-20]: head joint positions
+        [6]:     back joint position
+        [7-11]:  left arm joint positions
+        [12]:    left gripper
+        [13-17]: right arm joint positions
+        [18]:    right gripper
+        [19-21]: head joint positions
     """
 
-    STATE_DIM = 21
-    ACTION_DIM = 21
+    STATE_DIM = 22
+    ACTION_DIM = 22
 
     def __init__(self, stats_path: Optional[Union[str, Path]] = None):
         """Initialize normalizer with training statistics.
@@ -110,7 +113,7 @@ class Normalizer:
         """Normalize state vector using z-score normalization.
 
         Args:
-            state: Raw state vector of shape (21,) or (N, 21).
+            state: Raw state vector of shape (22,) or (N, 22).
 
         Returns:
             Normalized state vector with zero mean and unit variance.
@@ -122,7 +125,7 @@ class Normalizer:
         """Denormalize state vector back to original scale.
 
         Args:
-            state: Normalized state vector of shape (21,) or (N, 21).
+            state: Normalized state vector of shape (22,) or (N, 22).
 
         Returns:
             Denormalized state vector.
@@ -134,7 +137,7 @@ class Normalizer:
         """Normalize action vector using z-score normalization.
 
         Args:
-            action: Raw action vector of shape (21,) or (N, 21).
+            action: Raw action vector of shape (22,) or (N, 22).
 
         Returns:
             Normalized action vector.
@@ -146,7 +149,7 @@ class Normalizer:
         """Denormalize action vector back to original scale.
 
         Args:
-            action: Normalized action vector of shape (21,) or (N, 21).
+            action: Normalized action vector of shape (22,) or (N, 22).
 
         Returns:
             Denormalized action vector in robot command units.

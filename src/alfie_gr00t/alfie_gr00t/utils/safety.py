@@ -150,11 +150,15 @@ class SafetyMonitor:
             'is_safe': self.is_safe(),
         }
 
+    # Back joint limits (meters - linear actuator)
+    BACK_JOINT_MIN = 0.0
+    BACK_JOINT_MAX = 0.1  # 10cm range
+
     def apply_velocity_limits(self, action: np.ndarray) -> np.ndarray:
         """Apply velocity limits to base velocity commands.
 
         Args:
-            action: 21D action vector.
+            action: 22D action vector.
 
         Returns:
             Action vector with velocity limits applied.
@@ -178,16 +182,20 @@ class SafetyMonitor:
         """Apply joint position limits to servo commands.
 
         Args:
-            action: 21D action vector.
+            action: 22D action vector.
 
         Returns:
             Action vector with joint limits applied.
         """
         action = action.copy()
 
-        # Joint positions are at indices 6-20 (15 servos)
+        # Back joint limit (index 6)
+        action[6] = np.clip(action[6], self.BACK_JOINT_MIN, self.BACK_JOINT_MAX)
+
+        # Servo positions are at indices 7-21 (15 servos)
+        # Servo index 0-14 maps to action index 7-21
         for servo_idx, limits in self.JOINT_LIMITS.items():
-            action_idx = 6 + servo_idx
+            action_idx = 7 + servo_idx
             action[action_idx] = limits.clip(action[action_idx])
 
         return action
@@ -196,7 +204,7 @@ class SafetyMonitor:
         """Apply all safety limits to action vector.
 
         Args:
-            action: 21D action vector (denormalized).
+            action: 22D action vector (denormalized).
 
         Returns:
             Action vector with all limits applied.
@@ -214,8 +222,8 @@ class SafetyMonitor:
         """Apply delta limits to prevent large sudden movements.
 
         Args:
-            action: Target action (21D).
-            current_state: Current state (21D).
+            action: Target action (22D).
+            current_state: Current state (22D).
             max_joint_delta: Maximum allowed joint position change per step (radians).
 
         Returns:
@@ -223,8 +231,8 @@ class SafetyMonitor:
         """
         action = action.copy()
 
-        # Apply delta limits to joint positions (indices 6-20)
-        for i in range(6, 21):
+        # Apply delta limits to back joint (index 6) and servo positions (indices 7-21)
+        for i in range(6, 22):
             delta = action[i] - current_state[i]
             if abs(delta) > max_joint_delta:
                 action[i] = current_state[i] + np.sign(delta) * max_joint_delta

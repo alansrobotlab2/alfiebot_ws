@@ -34,7 +34,7 @@ COMMAND_RATE_HZ = 100
 class ClientState(Enum):
     """GR00T client state machine states."""
 
-    IDLE = 0        # Waiting for activation
+    IDLE = 0        # Waiting for activationsrc/alfie_asr/alfie_asr
     CONNECTING = 1  # Attempting to connect to server
     ACTIVE = 2      # Running inference loop
     E_STOP = 3      # Emergency stop triggered

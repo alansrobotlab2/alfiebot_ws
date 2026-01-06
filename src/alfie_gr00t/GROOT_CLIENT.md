@@ -36,9 +36,9 @@ The command loop runs at exactly 100 Hz to match robot expectations, holding/rep
 │                            PC (Server)                                      │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                    GR00T Inference Server                            │   │
-│  │  - Receives observations (4 images + 21D state + language)          │   │
+│  │  - Receives observations (4 images + 22D state + language)          │   │
 │  │  - Runs TensorRT inference                                          │   │
-│  │  - Returns 16-step action horizon (16 x 21D)                        │   │
+│  │  - Returns 16-step action horizon (16 x 22D)                        │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
                                                           │
@@ -73,9 +73,9 @@ Collects and synchronizes sensor data from ROS2 topics:
 **Processing:**
 - Uses `ApproximateTimeSynchronizer` with 50ms slop
 - Decompresses JPEG images, resizes to 320x280
-- Extracts 21D state vector from RobotLowState
+- Extracts 22D state vector from RobotLowState
 
-### 2. State Vector (21 dimensions)
+### 2. State Vector (22 dimensions)
 
 ```
 Index   Description                     Source
@@ -86,21 +86,22 @@ Index   Description                     Source
 [3]     Base angular velocity X         robotlowstate.current_cmd_vel.angular.x
 [4]     Base angular velocity Y         robotlowstate.current_cmd_vel.angular.y
 [5]     Base angular velocity Z         robotlowstate.current_cmd_vel.angular.z
-[6]     Left shoulder yaw               robotlowstate.servo_state[0].current_location
-[7]     Left shoulder pitch             robotlowstate.servo_state[1].current_location
-[8]     Left elbow pitch                robotlowstate.servo_state[2].current_location
-[9]     Left wrist pitch                robotlowstate.servo_state[3].current_location
-[10]    Left wrist roll                 robotlowstate.servo_state[4].current_location
-[11]    Left gripper                    robotlowstate.servo_state[5].current_location
-[12]    Right shoulder yaw              robotlowstate.servo_state[6].current_location
-[13]    Right shoulder pitch            robotlowstate.servo_state[7].current_location
-[14]    Right elbow pitch               robotlowstate.servo_state[8].current_location
-[15]    Right wrist pitch               robotlowstate.servo_state[9].current_location
-[16]    Right wrist roll                robotlowstate.servo_state[10].current_location
-[17]    Right gripper                   robotlowstate.servo_state[11].current_location
-[18]    Head yaw                        robotlowstate.servo_state[12].current_location
-[19]    Head pitch                      robotlowstate.servo_state[13].current_location
-[20]    Head roll                       robotlowstate.servo_state[14].current_location
+[6]     Back joint                      robotlowstate.back_state.current_position
+[7]     Left shoulder yaw               robotlowstate.servo_state[0].current_location
+[8]     Left shoulder pitch             robotlowstate.servo_state[1].current_location
+[9]     Left elbow pitch                robotlowstate.servo_state[2].current_location
+[10]    Left wrist pitch                robotlowstate.servo_state[3].current_location
+[11]    Left wrist roll                 robotlowstate.servo_state[4].current_location
+[12]    Left gripper                    robotlowstate.servo_state[5].current_location
+[13]    Right shoulder yaw              robotlowstate.servo_state[6].current_location
+[14]    Right shoulder pitch            robotlowstate.servo_state[7].current_location
+[15]    Right elbow pitch               robotlowstate.servo_state[8].current_location
+[16]    Right wrist pitch               robotlowstate.servo_state[9].current_location
+[17]    Right wrist roll                robotlowstate.servo_state[10].current_location
+[18]    Right gripper                   robotlowstate.servo_state[11].current_location
+[19]    Head yaw                        robotlowstate.servo_state[12].current_location
+[20]    Head pitch                      robotlowstate.servo_state[13].current_location
+[21]    Head roll                       robotlowstate.servo_state[14].current_location
 ```
 
 ### 3. ZMQClient (`core/zmq_client.py`)
@@ -118,7 +119,7 @@ Handles communication with the inference server using ZeroMQ REQ/REP pattern.
         "left_center": b"...",
         "right_center": b"...",
     },
-    "state": [0.0, 0.0, ...],              # 21D normalized state
+    "state": [0.0, 0.0, ...],              # 22D normalized state
     "language": "find the can and pick it up"
 }
 ```
@@ -126,7 +127,7 @@ Handles communication with the inference server using ZeroMQ REQ/REP pattern.
 **Action Response (Server → Client):**
 ```python
 {
-    "actions": [[...], [...], ...],        # 16 x 21D action horizon
+    "actions": [[...], [...], ...],        # 16 x 22D action horizon
     "inference_time_ms": 25.3,
     "status": "ok"
 }
@@ -146,9 +147,12 @@ Converts action predictions to RobotLowCmd messages:
 | [3] | cmd_vel.angular.x |
 | [4] | cmd_vel.angular.y |
 | [5] | cmd_vel.angular.z |
-| [6-11] | servo_cmd[0-5].target_location (left arm) |
-| [12-17] | servo_cmd[6-11].target_location (right arm) |
-| [18-20] | servo_cmd[12-14].target_location (head) |
+| [6] | back_cmd.command_position |
+| [7-11] | servo_cmd[0-4].target_location (left arm) |
+| [12] | servo_cmd[5].target_location (left gripper) |
+| [13-17] | servo_cmd[6-10].target_location (right arm) |
+| [18] | servo_cmd[11].target_location (right gripper) |
+| [19-21] | servo_cmd[12-14].target_location (head) |
 
 **Processing:**
 1. Denormalize using training statistics
@@ -374,7 +378,7 @@ while True:
 
     # Extract data
     images = obs['images']      # dict of JPEG bytes
-    state = obs['state']        # 21D normalized state
+    state = obs['state']        # 22D normalized state
     language = obs['language']  # task description
 
     # Run inference (your GR00T model here)
@@ -382,7 +386,7 @@ while True:
 
     # Send response
     response = {
-        'actions': actions,  # 16 x 21D
+        'actions': actions,  # 16 x 22D
         'inference_time_ms': 25.0,
         'status': 'ok'
     }
