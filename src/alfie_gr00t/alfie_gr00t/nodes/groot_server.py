@@ -6,9 +6,9 @@ and serves action predictions via ZeroMQ REP/REQ pattern.
 
 The server:
 - Loads a trained GR00T model checkpoint
-- Receives observations (4 images + 21D state + language) via ZeroMQ
+- Receives observations (4 images + 22D state + language) via ZeroMQ
 - Runs TensorRT inference at ~15-20 FPS
-- Returns 16-step action horizon (16 x 21D)
+- Returns 16-step action horizon (16 x 22D)
 
 For on-device deployment, uses IPC (Unix domain sockets) for ~5x faster
 communication than TCP localhost.
@@ -244,14 +244,14 @@ class GrootServerNode(Node):
         """Generate mock actions for testing.
 
         Args:
-            state: Current state vector (21D).
+            state: Current state vector (22D).
 
         Returns:
-            Mock action horizon (16 x 21D).
+            Mock action horizon (16 x 22D).
         """
         # Return state as first action, then gradually return to zero
         # This creates a "hold current position" behavior
-        actions = np.zeros((self.action_horizon, 21), dtype=np.float32)
+        actions = np.zeros((self.action_horizon, 22), dtype=np.float32)
 
         for i in range(self.action_horizon):
             # Exponential decay toward zero
@@ -270,11 +270,11 @@ class GrootServerNode(Node):
 
         Args:
             images: Dictionary of JPEG-compressed images.
-            state: Normalized state vector (21D).
+            state: Normalized state vector (22D).
             language: Task description string.
 
         Returns:
-            Action horizon (16 x 21D).
+            Action horizon (16 x 22D).
         """
         # Decode images from JPEG
         image_arrays = {}

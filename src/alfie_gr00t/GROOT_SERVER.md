@@ -15,7 +15,7 @@ The server uses ZeroMQ REP/REQ pattern to receive observations and return action
 │  │                                                           │ │
 │  │  1. Receives observation via ZeroMQ REP                   │ │
 │  │     - 4 JPEG images (320x280)                            │ │
-│  │     - 21D normalized state vector                        │ │
+│  │     - 22D normalized state vector                        │ │
 │  │     - Language task description                          │ │
 │  │                                                           │ │
 │  │  2. Processes observation                                │ │
@@ -27,7 +27,7 @@ The server uses ZeroMQ REP/REQ pattern to receive observations and return action
 │  │     - or PyTorch model (slower fallback)                 │ │
 │  │                                                           │ │
 │  │  4. Returns action prediction                            │ │
-│  │     - 16-step action horizon (16 x 21D)                  │ │
+│  │     - 16-step action horizon (16 x 22D)                  │ │
 │  │     - Inference timing statistics                        │ │
 │  │                                                           │ │
 │  └───────────────────────────────────────────────────────────┘ │
@@ -78,7 +78,7 @@ The server receives msgpack-encoded observations:
         "left_center": b"...",
         "right_center": b"...",
     },
-    "state": [0.0, 0.0, ...],              # 21D normalized state
+    "state": [0.0, 0.0, ...],              # 22D normalized state
     "language": "find the can and pick it up"
 }
 ```
@@ -90,7 +90,7 @@ The server returns msgpack-encoded actions:
 ```python
 {
     "actions": [                           # 16-step action horizon
-        [0.1, 0.2, ...],                  # Step 0 (21D)
+        [0.1, 0.2, ...],                  # Step 0 (22D)
         [0.1, 0.2, ...],                  # Step 1
         ...
         [0.1, 0.2, ...]                   # Step 15
@@ -364,7 +364,7 @@ To use a different inference backend, modify `_run_inference()` in [groot_server
 def _run_inference(self, images, state, language):
     # Your custom inference code here
     actions = your_model.predict(images, state, language)
-    return actions  # Must return (16, 21) numpy array
+    return actions  # Must return (16, 22) numpy array
 ```
 
 ## See Also

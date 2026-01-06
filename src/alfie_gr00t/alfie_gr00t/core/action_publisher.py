@@ -16,14 +16,14 @@ from ..utils.safety import SafetyMonitor
 class ActionPublisher:
     """Publishes GR00T action predictions to /alfie/robotlowcmd.
 
-    Converts 21D action vectors to RobotLowCmd messages with:
+    Converts 22D action vectors to RobotLowCmd messages with:
     - Action denormalization
     - Exponential moving average smoothing
     - Safety limit enforcement
     - Servo parameter configuration
     """
 
-    ACTION_DIM = 21
+    ACTION_DIM = 22
     NUM_SERVOS = 15
 
     def __init__(
@@ -91,8 +91,8 @@ class ActionPublisher:
         """Publish action to robot.
 
         Args:
-            action: 21D action vector.
-            current_state: Current 21D state vector (for delta limits).
+            action: 22D action vector.
+            current_state: Current 22D state vector (for delta limits).
             normalized: Whether action is normalized (needs denormalization).
             apply_smoothing: Whether to apply EMA smoothing.
             apply_safety: Whether to apply safety limits.
@@ -172,12 +172,15 @@ class ActionPublisher:
 
         Action vector layout:
         [0-5]:   cmd_vel (linear.x,y,z, angular.x,y,z)
-        [6-11]:  servo_cmd[0-5].target_location (left arm)
-        [12-17]: servo_cmd[6-11].target_location (right arm)
-        [18-20]: servo_cmd[12-14].target_location (head)
+        [6]:     back_cmd.command_position
+        [7-11]:  servo_cmd[0-4].target_location (left arm)
+        [12]:    servo_cmd[5].target_location (left gripper)
+        [13-17]: servo_cmd[6-10].target_location (right arm)
+        [18]:    servo_cmd[11].target_location (right gripper)
+        [19-21]: servo_cmd[12-14].target_location (head)
 
         Args:
-            action: 21D denormalized action vector.
+            action: 22D denormalized action vector.
 
         Returns:
             RobotLowCmd message.
@@ -192,18 +195,57 @@ class ActionPublisher:
         msg.cmd_vel.angular.y = float(action[4])
         msg.cmd_vel.angular.z = float(action[5])
 
-        # Servo commands (15 total)
-        for i in range(self.NUM_SERVOS):
+        # Back command (index 6)
+        msg.back_cmd = BackCmd()
+        msg.back_cmd.command_position = float(action[6])
+
+        # Left arm servos (indices 7-11 -> servos 0-4)
+        for i in range(5):
             servo_cmd = ServoCmd()
             servo_cmd.enabled = True
-            servo_cmd.target_location = float(action[6 + i])
+            servo_cmd.target_location = float(action[7 + i])
             servo_cmd.target_speed = self.default_servo_speed
             servo_cmd.target_acceleration = self.default_servo_acceleration
             servo_cmd.target_torque = self.default_servo_torque
             msg.servo_cmd[i] = servo_cmd
 
-        # Back command (not controlled by policy, use defaults)
-        msg.back_cmd = BackCmd()
+        # Left gripper (index 12 -> servo 5)
+        servo_cmd = ServoCmd()
+        servo_cmd.enabled = True
+        servo_cmd.target_location = float(action[12])
+        servo_cmd.target_speed = self.default_servo_speed
+        servo_cmd.target_acceleration = self.default_servo_acceleration
+        servo_cmd.target_torque = self.default_servo_torque
+        msg.servo_cmd[5] = servo_cmd
+
+        # Right arm servos (indices 13-17 -> servos 6-10)
+        for i in range(5):
+            servo_cmd = ServoCmd()
+            servo_cmd.enabled = True
+            servo_cmd.target_location = float(action[13 + i])
+            servo_cmd.target_speed = self.default_servo_speed
+            servo_cmd.target_acceleration = self.default_servo_acceleration
+            servo_cmd.target_torque = self.default_servo_torque
+            msg.servo_cmd[6 + i] = servo_cmd
+
+        # Right gripper (index 18 -> servo 11)
+        servo_cmd = ServoCmd()
+        servo_cmd.enabled = True
+        servo_cmd.target_location = float(action[18])
+        servo_cmd.target_speed = self.default_servo_speed
+        servo_cmd.target_acceleration = self.default_servo_acceleration
+        servo_cmd.target_torque = self.default_servo_torque
+        msg.servo_cmd[11] = servo_cmd
+
+        # Head servos (indices 19-21 -> servos 12-14)
+        for i in range(3):
+            servo_cmd = ServoCmd()
+            servo_cmd.enabled = True
+            servo_cmd.target_location = float(action[19 + i])
+            servo_cmd.target_speed = self.default_servo_speed
+            servo_cmd.target_acceleration = self.default_servo_acceleration
+            servo_cmd.target_torque = self.default_servo_torque
+            msg.servo_cmd[12 + i] = servo_cmd
 
         # Eye PWM (not controlled by policy)
         msg.eye_pwm = [0, 0]

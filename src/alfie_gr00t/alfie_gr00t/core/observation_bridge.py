@@ -26,11 +26,11 @@ class Observation:
     # Camera images as numpy arrays (for local processing)
     images_array: dict[str, np.ndarray] = field(default_factory=dict)
 
-    # State vector (21D, raw)
-    state: np.ndarray = field(default_factory=lambda: np.zeros(21, dtype=np.float32))
+    # State vector (22D, raw)
+    state: np.ndarray = field(default_factory=lambda: np.zeros(22, dtype=np.float32))
 
-    # State vector (21D, normalized)
-    state_normalized: np.ndarray = field(default_factory=lambda: np.zeros(21, dtype=np.float32))
+    # State vector (22D, normalized)
+    state_normalized: np.ndarray = field(default_factory=lambda: np.zeros(22, dtype=np.float32))
 
     # Timestamp (ROS time in seconds)
     timestamp: float = 0.0
@@ -58,7 +58,7 @@ class ObservationBridge:
     IMAGE_HEIGHT = 280
 
     # State vector dimension
-    STATE_DIM = 21
+    STATE_DIM = 22
 
     def __init__(
         self,
@@ -249,20 +249,23 @@ class ObservationBridge:
         return encoded.tobytes()
 
     def _extract_state(self, msg: RobotLowState) -> np.ndarray:
-        """Extract 21-dimensional state vector from RobotLowState message.
+        """Extract 22-dimensional state vector from RobotLowState message.
 
         State vector layout (matches modality.json):
         [0-2]:   base linear velocity (x, y, z) from current_cmd_vel
         [3-5]:   base angular velocity (x, y, z) from current_cmd_vel
-        [6-11]:  left arm joints (servos 0-5 current_location)
-        [12-17]: right arm joints (servos 6-11 current_location)
-        [18-20]: head joints (servos 12-14 current_location)
+        [6]:     back joint (from back_state.current_position)
+        [7-11]:  left arm joints (servos 0-4 current_location)
+        [12]:    left gripper (servo 5 current_location)
+        [13-17]: right arm joints (servos 6-10 current_location)
+        [18]:    right gripper (servo 11 current_location)
+        [19-21]: head joints (servos 12-14 current_location)
 
         Args:
             msg: RobotLowState message.
 
         Returns:
-            21D state vector.
+            22D state vector.
         """
         state = np.zeros(self.STATE_DIM, dtype=np.float32)
 
@@ -274,17 +277,26 @@ class ObservationBridge:
         state[4] = msg.current_cmd_vel.angular.y
         state[5] = msg.current_cmd_vel.angular.z
 
-        # Left arm (servos 0-5)
-        for i in range(6):
-            state[6 + i] = msg.servo_state[i].current_location
+        # Back joint (from back_state)
+        state[6] = msg.back_state.current_position
 
-        # Right arm (servos 6-11)
-        for i in range(6):
-            state[12 + i] = msg.servo_state[6 + i].current_location
+        # Left arm (servos 0-4)
+        for i in range(5):
+            state[7 + i] = msg.servo_state[i].current_location
+
+        # Left gripper (servo 5)
+        state[12] = msg.servo_state[5].current_location
+
+        # Right arm (servos 6-10)
+        for i in range(5):
+            state[13 + i] = msg.servo_state[6 + i].current_location
+
+        # Right gripper (servo 11)
+        state[18] = msg.servo_state[11].current_location
 
         # Head (servos 12-14)
         for i in range(3):
-            state[18 + i] = msg.servo_state[12 + i].current_location
+            state[19 + i] = msg.servo_state[12 + i].current_location
 
         return state
 
