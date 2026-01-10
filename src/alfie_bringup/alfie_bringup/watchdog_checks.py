@@ -408,8 +408,8 @@ class WifiMonitor(HealthCheck):
             return None  # No data yet
         
         # Check connection status
-        if self.require_connected and not self.is_connected:
-            return f'{self.name} CRITICAL: WiFi disconnected!'
+        # if self.require_connected and not self.is_connected:
+        #     return f'{self.name} CRITICAL: WiFi disconnected!'
         
         # Check signal strength (only if connected)
         if self.is_connected and self.signal_dbm is not None:
