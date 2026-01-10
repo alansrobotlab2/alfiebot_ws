@@ -27,6 +27,7 @@ setup(
         # board moved to JetPack 7.2 / CUDA 13.2.
         'torchaudio==2.11.0',
         'numpy',
+        'huggingface_hub',
     ],
     zip_safe=True,
     maintainer='alfie',
