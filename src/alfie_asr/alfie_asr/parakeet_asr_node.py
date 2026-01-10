@@ -13,9 +13,18 @@ import onnx_asr
 import gc
 import psutil
 
+from alfie_asr.model_manager import ensure_models, ModelNotAvailableError
+
 # IMPORTANT: Load ASR model BEFORE importing PyTorch/Silero to avoid cuBLAS conflict
 # ONNX Runtime and PyTorch both try to create cuBLAS handles, but ONNX Runtime fails
 # if PyTorch initializes CUDA first
+print("Checking for local models...")
+try:
+    _asr_model_dir, _vad_model_path = ensure_models()
+except ModelNotAvailableError as e:
+    print(f"FATAL: {e}")
+    sys.exit(1)
+
 print("Pre-loading Parakeet ASR model with GPU (before PyTorch)...")
 ort.set_default_logger_severity(3)
 _sess_options = ort.SessionOptions()
@@ -26,6 +35,7 @@ _sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_A
 _providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
 _asr_model = onnx_asr.load_model(
     "istupakov/parakeet-tdt-0.6b-v2-onnx",
+    path=str(_asr_model_dir),
     quantization="int8",
     sess_options=_sess_options,
     providers=_providers
@@ -37,7 +47,8 @@ import rclpy
 from rclpy.node import Node
 from alfie_msgs.msg import AudioFrame, ASRResult
 from alfie_msgs.msg import Speaking
-from silero_vad import load_silero_vad, VADIterator
+from silero_vad import VADIterator
+from silero_vad.utils_vad import OnnxWrapper
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from ament_index_python.packages import get_package_share_directory
 import shutil
@@ -71,9 +82,9 @@ class ASRNode(Node):
         self.asr_model = _asr_model
         self.get_logger().info('Using pre-loaded Parakeet ASR model')
 
-        # Load VAD model (PyTorch-based, safe to load after ONNX Runtime CUDA is initialized)
-        self.get_logger().info('Loading Silero VAD model...')
-        self.silero_model = load_silero_vad(onnx=True)
+        # Load VAD model from local path
+        self.get_logger().info(f'Loading Silero VAD model from {_vad_model_path}...')
+        self.silero_model = OnnxWrapper(str(_vad_model_path), force_onnx_cpu=True)
         self.vad_iterator = VADIterator(
             self.silero_model,
             sampling_rate=SAMPLE_RATE,
