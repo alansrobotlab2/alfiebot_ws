@@ -191,7 +191,7 @@ def generate_launch_description():
                 'source_height': 600,  # Max resolution for ELP H120
                 'output_width': 320,   # Output resolution width
                 'output_height': 240,  # Output resolution height
-                'framerate': 30,
+                'framerate': 15,
                 'jpeg_quality': 70,
                 'use_hardware_accel': True,
 
