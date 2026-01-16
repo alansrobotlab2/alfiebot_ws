@@ -426,16 +426,16 @@ class MasterCmdNode(Node):
         
         # Check if the last command is within the timeout period
         time_since_last_cmd = (self.get_clock().now() - self.last_robot_cmd_time).nanoseconds / 1e9
-        
-        # if time_since_last_cmd > CMD_TIMEOUT_SEC:
-        #     # Throttle warning to once per second
-        #     current_time = self.get_clock().now()
-        #     if self.last_warn_time is None or (current_time - self.last_warn_time).nanoseconds / 1e9 >= WARNING_THROTTLE_SEC:
-        #         self.get_logger().warn(
-        #             f'No robot command received for {time_since_last_cmd:.3f}s - NOT publishing gdb commands')
-        #         self.last_warn_time = current_time
-        #     return False
-        
+
+        if time_since_last_cmd > CMD_TIMEOUT_SEC:
+            # Throttle warning to once per second
+            current_time = self.get_clock().now()
+            if self.last_warn_time is None or (current_time - self.last_warn_time).nanoseconds / 1e9 >= WARNING_THROTTLE_SEC:
+                self.get_logger().warn(
+                    f'No robot command received for {time_since_last_cmd:.3f}s - NOT publishing gdb commands')
+                self.last_warn_time = current_time
+            return False
+
         return True
 
 
