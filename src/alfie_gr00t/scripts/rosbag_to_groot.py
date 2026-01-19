@@ -9,6 +9,14 @@ Converts ROS2 bag demonstrations (MCAP format) into the GR00T training format:
 
 Usage:
     python3 rosbag_to_groot.py [--demos-dir PATH] [--output-dir PATH] [--task-index N] [--fps N]
+
+python3 rosbag_to_groot.py \
+    --demos-dir /home/alansrobotlab/Projects/alfiebot_ws/data/demonstrations \
+    --output-dir /home/alansrobotlab/Projects/alfiebot_ws/data/alfiebot.CanDoChallenge \
+    --task-index 0 \
+    --start-episode 0 \
+    --num-threads 32
+
 """
 
 import argparse
@@ -36,7 +44,6 @@ try:
     import importlib
     alfie_msgs = importlib.import_module('alfie_msgs.msg')
     RobotLowState = alfie_msgs.RobotLowState
-    RobotLowCmd = alfie_msgs.RobotLowCmd
 except ImportError as e:
     print(f"Error importing ROS2 modules: {e}")
     print("Make sure to source your ROS2 workspace: source install/setup.bash")
@@ -196,7 +203,6 @@ class RosbagToGrootConverter:
 
         # Raw data storage with timestamps
         state_msgs = []  # (timestamp_ns, RobotLowState)
-        cmd_msgs = []    # (timestamp_ns, RobotLowCmd)
         image_msgs = {k: [] for k in self.CAMERA_TOPICS.values()}  # camera_key -> [(ts_ns, image)]
 
         # Read the bag
@@ -218,9 +224,6 @@ class RosbagToGrootConverter:
             if topic == '/alfie/robotlowstate':
                 msg = deserialize_message(data, RobotLowState)
                 state_msgs.append((timestamp_ns, msg))
-            elif topic == '/alfie/robotlowcmd':
-                msg = deserialize_message(data, RobotLowCmd)
-                cmd_msgs.append((timestamp_ns, msg))
             elif topic in self.CAMERA_TOPICS:
                 msg = deserialize_message(data, CompressedImage)
                 cam_key = self.CAMERA_TOPICS[topic]
@@ -234,19 +237,18 @@ class RosbagToGrootConverter:
                     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                     image_msgs[cam_key].append((timestamp_ns, img))
 
-        if not state_msgs or not cmd_msgs:
-            print(f"  Warning: Missing state or command data in {demo_dir}")
+        if not state_msgs:
+            print(f"  Warning: Missing state data in {demo_dir}")
             return None
 
         # Sort by timestamp
         state_msgs.sort(key=lambda x: x[0])
-        cmd_msgs.sort(key=lambda x: x[0])
         for cam_key in image_msgs:
             image_msgs[cam_key].sort(key=lambda x: x[0])
 
-        # Determine time range (use overlap of state and cmd)
-        start_time_ns = max(state_msgs[0][0], cmd_msgs[0][0])
-        end_time_ns = min(state_msgs[-1][0], cmd_msgs[-1][0])
+        # Determine time range from state messages
+        start_time_ns = state_msgs[0][0]
+        end_time_ns = state_msgs[-1][0]
 
         # Generate target timestamps at desired FPS
         target_times_ns = []
@@ -278,16 +280,15 @@ class RosbagToGrootConverter:
         reference_time_ns = target_times_ns[0]
 
         for ts_ns in target_times_ns:
-            # Get nearest state and command
+            # Get nearest state
             state_msg = find_nearest(state_msgs, ts_ns)
-            cmd_msg = find_nearest(cmd_msgs, ts_ns)
 
-            if state_msg is None or cmd_msg is None:
+            if state_msg is None:
                 continue
 
-            # Extract state vector (21 dimensions)
+            # Extract state and action vectors (both from RobotLowState)
             state = self.extract_state(state_msg)
-            action = self.extract_action(state_msg, cmd_msg)
+            action = self.extract_action(state_msg)
 
             episode.states.append(state)
             episode.actions.append(action)
@@ -347,18 +348,18 @@ class RosbagToGrootConverter:
 
         return state
 
-    def extract_action(self, state_msg: 'RobotLowState', cmd_msg: 'RobotLowCmd') -> np.ndarray:
-        """Extract 22-dimensional action vector from RobotLowState and RobotLowCmd messages.
+    def extract_action(self, state_msg: 'RobotLowState') -> np.ndarray:
+        """Extract 22-dimensional action vector from RobotLowState message.
 
         Action vector layout (matches modality.json):
-        [0-2]:   base linear velocity command (x, y, z) from command_cmd_vel in state
-        [3-5]:   base angular velocity command (x, y, z) from command_cmd_vel in state
+        [0-2]:   base linear velocity command (x, y, z) from command_cmd_vel
+        [3-5]:   base angular velocity command (x, y, z) from command_cmd_vel
         [6]:     back joint command (from back_state.command_position)
-        [7-11]:  left arm joint commands from servo_cmd
+        [7-11]:  left arm joint commands from servo_state[].target_location
         [12]:    left gripper command
-        [13-17]: right arm joint commands from servo_cmd
+        [13-17]: right arm joint commands from servo_state[].target_location
         [18]:    right gripper command
-        [19-21]: head joint commands from servo_cmd
+        [19-21]: head joint commands from servo_state[].target_location
         """
         action = np.zeros(22, dtype=np.float32)
 
@@ -373,23 +374,23 @@ class RosbagToGrootConverter:
         # Back joint command (from back_state)
         action[6] = state_msg.back_state.command_position
 
-        # Left arm servo commands (target_location)
+        # Left arm servo commands (target_location from servo_state)
         for i in range(5):
-            action[7 + i] = cmd_msg.servo_cmd[i].target_location
+            action[7 + i] = state_msg.servo_state[i].target_location
 
         # Left gripper command
-        action[12] = cmd_msg.servo_cmd[5].target_location
+        action[12] = state_msg.servo_state[5].target_location
 
         # Right arm servo commands
         for i in range(5):
-            action[13 + i] = cmd_msg.servo_cmd[6 + i].target_location
+            action[13 + i] = state_msg.servo_state[6 + i].target_location
 
         # Right gripper command
-        action[18] = cmd_msg.servo_cmd[11].target_location
+        action[18] = state_msg.servo_state[11].target_location
 
         # Head servo commands
         for i in range(3):
-            action[19 + i] = cmd_msg.servo_cmd[12 + i].target_location
+            action[19 + i] = state_msg.servo_state[12 + i].target_location
 
         return action
 

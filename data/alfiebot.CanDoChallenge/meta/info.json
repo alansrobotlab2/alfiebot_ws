@@ -1,13 +1,13 @@
 {
     "codebase_version": "v2.1",
     "robot_type": "alfiebot_candochallenge",
-    "total_episodes": 31,
-    "total_frames": 7878,
+    "total_episodes": 68,
+    "total_frames": 16002,
     "total_tasks": 2,
     "chunks_size": 1000,
     "fps": 15,
     "splits": {
-        "train": "0:31"
+        "train": "0:68"
     },
     "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
     "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
@@ -201,5 +201,5 @@
         }
     },
     "total_chunks": 1,
-    "total_videos": 124
+    "total_videos": 272
 }
