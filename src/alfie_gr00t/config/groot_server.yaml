@@ -25,10 +25,10 @@ groot_server:
     # ==========================================================================
     # Path to trained GR00T model checkpoint
     # Leave empty to use mock mode for testing
-    model_checkpoint: "/home/alfie/alfiebot_ws/models/groot_alfiebot_latest.pth"
+    model_checkpoint: "/home/alfie/cando"
 
     # Use TensorRT for accelerated inference (requires model to be built for TensorRT)
-    use_tensorrt: true
+    use_tensorrt: false
 
     # Mock mode - returns dummy actions for testing without GPU/model
     # Useful for testing communication and control pipeline
