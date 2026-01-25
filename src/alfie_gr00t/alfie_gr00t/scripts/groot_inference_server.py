@@ -241,15 +241,19 @@ class GrootInferenceServer:
             return False
         except Exception as e:
             import traceback
+            tb = traceback.format_exc()
             self.logger.error(f'Error handling request: {e}')
-            self.logger.error(f'Full traceback:\n{traceback.format_exc()}')
+            self.logger.error(f'Full traceback:\n{tb}')
             # Log observation details if available
-            if 'images' in dir() and images:
-                self.logger.error(f'Received image keys: {list(images.keys())}')
-            if 'state' in dir() and state is not None:
-                self.logger.error(f'Received state shape: {state.shape}')
-            if 'language' in dir():
-                self.logger.error(f'Received language: {language}')
+            try:
+                if images:
+                    self.logger.error(f'Received image keys: {list(images.keys())}')
+                if state is not None:
+                    self.logger.error(f'Received state shape: {state.shape}')
+                if language:
+                    self.logger.error(f'Received language: {language}')
+            except Exception:
+                pass
             # Send error response
             error_response = {
                 'actions': [],
@@ -328,25 +332,19 @@ class GrootInferenceServer:
             'head': state[np.newaxis, np.newaxis, 19:22].astype(np.float32),
         }
 
-        # Format language for Gr00tPolicy
-        # Expected format: annotation[key] = list[list[str]] with shape (B, T)
-        # Key is "human.task_description" under the "annotation" dict
-        annotation_dict = {
-            'human.task_description': [[language]]  # (1, 1) - batch size 1, temporal 1
-        }
-
         # Prepare observation dict for GR00T
+        # GR00T expects flat keys with dot notation for nested structures
         observation = {
             'video': video_dict,
             'state': state_dict,
-            'annotation': annotation_dict,
+            # Flat key for annotation - GR00T looks for 'annotation.human.task_description'
+            'annotation.human.task_description': [[language]],  # (B=1, T=1)
         }
 
         # Log observation structure for debugging
         self.logger.debug(f"Observation keys: {list(observation.keys())}")
         self.logger.debug(f"  video keys: {list(video_dict.keys())}")
         self.logger.debug(f"  state keys: {list(state_dict.keys())}")
-        self.logger.debug(f"  annotation keys: {list(annotation_dict.keys())}")
 
         # Run inference using get_action()
         try:
@@ -358,13 +356,11 @@ class GrootInferenceServer:
             self.logger.error(f"  Top-level keys: {list(observation.keys())}")
             self.logger.error(f"  video keys: {list(video_dict.keys())}")
             self.logger.error(f"  state keys: {list(state_dict.keys())}")
-            self.logger.error(f"  annotation keys: {list(annotation_dict.keys())}")
             for k, v in video_dict.items():
                 self.logger.error(f"    video[{k}] shape: {v.shape}")
             for k, v in state_dict.items():
                 self.logger.error(f"    state[{k}] shape: {v.shape}")
-            for k, v in annotation_dict.items():
-                self.logger.error(f"    annotation[{k}]: {v}")
+            self.logger.error(f"  annotation.human.task_description: {observation.get('annotation.human.task_description')}")
             raise
 
         # Reassemble actions from split body parts into 22D vector
