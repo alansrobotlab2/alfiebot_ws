@@ -320,17 +320,17 @@ class GrootInferenceServer:
         }
 
         # Format language for Gr00tPolicy
-        # Expected format: language[key] = list[list[str]] with shape (B, T)
-        # Key must match modality config: "human.task_description"
-        language_dict = {
-            'human.task_description': [[language]]  # (1, 1) - batch size 1, temporal 1
+        # Expected format: annotation[key] = list[list[str]] with shape (B, T)
+        # Key must match modality config: "annotation.human.task_description"
+        annotation_dict = {
+            'annotation.human.task_description': [[language]]  # (1, 1) - batch size 1, temporal 1
         }
 
         # Prepare observation dict for GR00T
         observation = {
             'video': video_dict,
             'state': state_dict,
-            'language': language_dict,
+            'annotation': annotation_dict,
         }
 
         # Run inference using get_action()
