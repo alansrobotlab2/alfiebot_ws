@@ -321,9 +321,9 @@ class GrootInferenceServer:
 
         # Format language for Gr00tPolicy
         # Expected format: annotation[key] = list[list[str]] with shape (B, T)
-        # Key must match modality config: "annotation.human.task_description"
+        # Key is "human.task_description" under the "annotation" dict
         annotation_dict = {
-            'annotation.human.task_description': [[language]]  # (1, 1) - batch size 1, temporal 1
+            'human.task_description': [[language]]  # (1, 1) - batch size 1, temporal 1
         }
 
         # Prepare observation dict for GR00T
@@ -333,8 +333,30 @@ class GrootInferenceServer:
             'annotation': annotation_dict,
         }
 
+        # Log observation structure for debugging
+        self.logger.debug(f"Observation keys: {list(observation.keys())}")
+        self.logger.debug(f"  video keys: {list(video_dict.keys())}")
+        self.logger.debug(f"  state keys: {list(state_dict.keys())}")
+        self.logger.debug(f"  annotation keys: {list(annotation_dict.keys())}")
+
         # Run inference using get_action()
-        action_dict, info = self._policy.get_action(observation)
+        try:
+            action_dict, info = self._policy.get_action(observation)
+        except KeyError as e:
+            missing_key = str(e)
+            self.logger.error(f"KeyError during inference: {missing_key}")
+            self.logger.error(f"Observation structure provided:")
+            self.logger.error(f"  Top-level keys: {list(observation.keys())}")
+            self.logger.error(f"  video keys: {list(video_dict.keys())}")
+            self.logger.error(f"  state keys: {list(state_dict.keys())}")
+            self.logger.error(f"  annotation keys: {list(annotation_dict.keys())}")
+            for k, v in video_dict.items():
+                self.logger.error(f"    video[{k}] shape: {v.shape}")
+            for k, v in state_dict.items():
+                self.logger.error(f"    state[{k}] shape: {v.shape}")
+            for k, v in annotation_dict.items():
+                self.logger.error(f"    annotation[{k}]: {v}")
+            raise
 
         # Reassemble actions from split body parts into 22D vector
         # Action dict contains keys: base, back, left_arm, left_hand, right_arm, right_hand, head
