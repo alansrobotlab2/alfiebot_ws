@@ -9,7 +9,7 @@ groot_server:
     # Transport type: "ipc" for on-device, "tcp" for remote server
     #   - ipc: ~1ms latency, use for on-device inference (recommended)
     #   - tcp: ~2-5ms latency, use for remote PC server
-    transport: "ipc"
+    transport: "tcp"
 
     # TCP settings (only used when transport: "tcp")
     # Use "*" to bind to all interfaces

@@ -175,18 +175,54 @@ class GrootClientNode(Node):
         # Status publishing timer (1 Hz)
         self.status_timer = self.create_timer(1.0, self._publish_status)
 
-        self.get_logger().info(
-            f'GR00T Client initialized: server={self.server_address}, '
-            f'inference_fps={self.target_fps}, command_hz={COMMAND_RATE_HZ}, '
-            f'task="{self.task_description}"'
-        )
+        # Print parameter values on startup
+        self._log_parameters()
+
+        # Test server connection
+        self._test_server_connection()
+
+    def _log_parameters(self):
+        """Log all parameter values on startup."""
+        self.get_logger().info('=' * 60)
+        self.get_logger().info('GR00T Client Parameters:')
+        self.get_logger().info('=' * 60)
+        self.get_logger().info(f'  Transport:            {self.transport}')
+        self.get_logger().info(f'  Server Address:       {self.server_address}')
+        if self.transport == 'tcp':
+            self.get_logger().info(f'    Host:               {self.server_host}')
+            self.get_logger().info(f'    Port:               {self.server_port}')
+        else:
+            self.get_logger().info(f'    IPC Path:           {self.ipc_path}')
+        self.get_logger().info(f'  Target FPS:           {self.target_fps}')
+        self.get_logger().info(f'  Command Rate:         {COMMAND_RATE_HZ} Hz')
+        self.get_logger().info(f'  Inference Timeout:    {self.inference_timeout_ms} ms')
+        self.get_logger().info(f'  Task Description:     "{self.task_description}"')
+        self.get_logger().info(f'  Safety Limits:        {self.enable_safety_limits}')
+        self.get_logger().info(f'  Action Smoothing:     {self.action_smoothing_alpha}')
+        self.get_logger().info(f'  Action Exec Index:    {self.action_execution_index}')
+        self.get_logger().info(f'  Stats File:           {self.stats_file}')
+        self.get_logger().info('=' * 60)
+
+    def _test_server_connection(self):
+        """Test connection to the inference server on startup."""
+        self.get_logger().info(f'Testing connection to server at {self.server_address}...')
+
+        if self.zmq_client.connect():
+            self.get_logger().info('Server connection successful!')
+            # Disconnect after test - will reconnect when activated
+            self.zmq_client.close()
+        else:
+            self.get_logger().warn(
+                f'Could not connect to server at {self.server_address}. '
+                'Server may not be running. Will retry on activation.'
+            )
 
     def _declare_parameters(self):
         """Declare all ROS2 parameters."""
         # Transport configuration
         # Use "ipc" for on-device inference (faster), "tcp" for remote server
-        self.declare_parameter('transport', 'ipc')
-        self.declare_parameter('server_host', '192.168.1.100')
+        self.declare_parameter('transport', 'tcp')
+        self.declare_parameter('server_host', '192.168.50.108')
         self.declare_parameter('server_port', 5555)
         self.declare_parameter('ipc_path', DEFAULT_IPC_PATH)
 

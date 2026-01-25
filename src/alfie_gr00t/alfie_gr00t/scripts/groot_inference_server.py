@@ -306,15 +306,24 @@ class GrootInferenceServer:
 
         # Format state for Gr00tPolicy
         # Expected format: state[key] = np.ndarray[np.float32, (B, T, D)]
-        # For now, use a generic state key - this may need adjustment based on model config
+        # State must be split according to modality config:
+        #   base: [0:6], back: [6:7], left_arm: [7:12], left_hand: [12:13],
+        #   right_arm: [13:18], right_hand: [18:19], head: [19:22]
         state_dict = {
-            'state': state[np.newaxis, np.newaxis, :].astype(np.float32)  # (1, 1, D)
+            'base': state[np.newaxis, np.newaxis, 0:6].astype(np.float32),
+            'back': state[np.newaxis, np.newaxis, 6:7].astype(np.float32),
+            'left_arm': state[np.newaxis, np.newaxis, 7:12].astype(np.float32),
+            'left_hand': state[np.newaxis, np.newaxis, 12:13].astype(np.float32),
+            'right_arm': state[np.newaxis, np.newaxis, 13:18].astype(np.float32),
+            'right_hand': state[np.newaxis, np.newaxis, 18:19].astype(np.float32),
+            'head': state[np.newaxis, np.newaxis, 19:22].astype(np.float32),
         }
 
         # Format language for Gr00tPolicy
         # Expected format: language[key] = list[list[str]] with shape (B, T)
+        # Key must match modality config: "human.task_description"
         language_dict = {
-            'task': [[language]]  # (1, 1) - batch size 1, temporal 1
+            'human.task_description': [[language]]  # (1, 1) - batch size 1, temporal 1
         }
 
         # Prepare observation dict for GR00T
@@ -327,14 +336,40 @@ class GrootInferenceServer:
         # Run inference using get_action()
         action_dict, info = self._policy.get_action(observation)
 
-        # Extract actions - the dict may have different keys based on embodiment
-        # Return the first action array found, squeezed to (T, D) format
-        for action_key, action_arr in action_dict.items():
-            # action_arr has shape (B, T, D), squeeze batch dim
-            return action_arr[0]  # (T, D)
+        # Reassemble actions from split body parts into 22D vector
+        # Action dict contains keys: base, back, left_arm, left_hand, right_arm, right_hand, head
+        # Each has shape (B, T, D) where D varies per body part
+        # Output should be (T, 22) with parts concatenated in order
 
-        # Fallback if no actions returned
-        return np.zeros((self.action_horizon, 22), dtype=np.float32)
+        # Define expected action parts and their dimensions (must match modality config)
+        action_parts = [
+            ('base', 6),       # [0:6]
+            ('back', 1),       # [6:7]
+            ('left_arm', 5),   # [7:12]
+            ('left_hand', 1),  # [12:13]
+            ('right_arm', 5),  # [13:18]
+            ('right_hand', 1), # [18:19]
+            ('head', 3),       # [19:22]
+        ]
+
+        # Get temporal dimension from first available action
+        temporal_dim = self.action_horizon
+        for key, _ in action_parts:
+            if key in action_dict:
+                temporal_dim = action_dict[key].shape[1]
+                break
+
+        # Assemble full action array
+        actions = np.zeros((temporal_dim, 22), dtype=np.float32)
+        offset = 0
+        for key, dim in action_parts:
+            if key in action_dict:
+                # action_dict[key] has shape (B, T, D), squeeze batch dim
+                part_actions = action_dict[key][0]  # (T, D)
+                actions[:, offset:offset + dim] = part_actions
+            offset += dim
+
+        return actions
 
     def get_stats(self) -> dict:
         """Get server statistics.
