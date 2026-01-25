@@ -182,12 +182,12 @@ class ZMQClient:
         Args:
             images: Dictionary mapping camera names to JPEG bytes.
                    Keys: 'left_wide', 'right_wide', 'left_center', 'right_center'
-            state: Normalized state vector (21D).
+            state: Normalized state vector (22D).
             language: Task description string.
 
         Returns:
             Action response dictionary with 'actions' key containing
-            16x21 action horizon, or None on failure.
+            16x22 action horizon, or None on failure.
         """
         if not self._connected:
             if not self.connect():

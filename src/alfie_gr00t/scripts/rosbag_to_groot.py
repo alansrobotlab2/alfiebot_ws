@@ -5,7 +5,7 @@ ROS2 Bag to GR00T N1.6 Training Data Converter
 Converts ROS2 bag demonstrations (MCAP format) into the GR00T training format:
 - Parquet files for state/action data
 - MP4 videos for camera observations
-- Updated meta files (info.jsonl, episodes.jsonl, stats.jsonl)
+- Updated meta files (info.json, episodes.jsonl, tasks.jsonl, stats.json)
 
 Usage:
     python3 rosbag_to_groot.py [--demos-dir PATH] [--output-dir PATH] [--task-index N] [--fps N]
@@ -438,7 +438,7 @@ class RosbagToGrootConverter:
         video_paths = {}
 
         for cam_key in ['left_wide', 'right_wide', 'left_center', 'right_center']:
-            cam_dir = self.videos_dir / f'chunk-{chunk_index:03d}' / cam_key
+            cam_dir = self.videos_dir / f'chunk-{chunk_index:03d}' / f'observation.images.{cam_key}'
             cam_dir.mkdir(parents=True, exist_ok=True)
 
             video_path = cam_dir / f'episode_{episode_index:06d}.mp4'
@@ -602,7 +602,7 @@ class RosbagToGrootConverter:
         metadata = {
             'episode_index': episode_index,
             'task_index': task_index,
-            'num_frames': num_frames,
+            'length': num_frames,
             'duration': episode.timestamps[-1] if episode.timestamps else 0,
             'source': demo_dir.name,
         }
@@ -693,7 +693,7 @@ class RosbagToGrootConverter:
             }
         }
 
-        stats_path = self.meta_dir / 'stats.jsonl'
+        stats_path = self.meta_dir / 'stats.json'
         with open(stats_path, 'w') as f:
             json.dump(stats, f, indent=2)
         print(f"Saved statistics to {stats_path}")
@@ -710,7 +710,7 @@ class RosbagToGrootConverter:
             }
         }
 
-        relative_stats_path = self.meta_dir / 'relative_stats.jsonl'
+        relative_stats_path = self.meta_dir / 'relative_stats.json'
         with open(relative_stats_path, 'w') as f:
             json.dump(relative_stats, f, indent=2)
         print(f"Saved relative statistics to {relative_stats_path}")
@@ -822,7 +822,7 @@ def main():
     )
 
     if num_episodes > 0:
-        total_frames = sum(ep['num_frames'] for ep in converter.episode_metadata)
+        total_frames = sum(ep['length'] for ep in converter.episode_metadata)
 
         # Save all metadata
         converter.compute_and_save_stats()
