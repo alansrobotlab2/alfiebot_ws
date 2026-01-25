@@ -342,9 +342,22 @@ class GrootInferenceServer:
         }
 
         # Log observation structure for debugging
-        self.logger.debug(f"Observation keys: {list(observation.keys())}")
-        self.logger.debug(f"  video keys: {list(video_dict.keys())}")
-        self.logger.debug(f"  state keys: {list(state_dict.keys())}")
+        self.logger.info(f"Observation keys: {list(observation.keys())}")
+        self.logger.info(f"  video keys: {list(video_dict.keys())}")
+        self.logger.info(f"  state keys: {list(state_dict.keys())}")
+        for k, v in video_dict.items():
+            self.logger.info(f"    video[{k}] shape: {v.shape}")
+        for k, v in state_dict.items():
+            self.logger.info(f"    state[{k}] shape: {v.shape}")
+        self.logger.info(f"  annotation key: 'annotation.human.task_description' = {observation.get('annotation.human.task_description')}")
+
+        # Log policy expected keys if available
+        if hasattr(self._policy, 'config'):
+            self.logger.info(f"Policy config: {self._policy.config}")
+        if hasattr(self._policy, 'modality_config'):
+            self.logger.info(f"Policy modality_config: {self._policy.modality_config}")
+        if hasattr(self._policy, '_modality_config'):
+            self.logger.info(f"Policy _modality_config: {self._policy._modality_config}")
 
         # Run inference using get_action()
         try:
@@ -361,6 +374,13 @@ class GrootInferenceServer:
             for k, v in state_dict.items():
                 self.logger.error(f"    state[{k}] shape: {v.shape}")
             self.logger.error(f"  annotation.human.task_description: {observation.get('annotation.human.task_description')}")
+            # Try to get policy's expected keys
+            if hasattr(self._policy, 'config'):
+                self.logger.error(f"Policy config: {self._policy.config}")
+            if hasattr(self._policy, 'modality_config'):
+                self.logger.error(f"Policy modality_config: {self._policy.modality_config}")
+            if hasattr(self._policy, '_modality_config'):
+                self.logger.error(f"Policy _modality_config: {self._policy._modality_config}")
             raise
 
         # Reassemble actions from split body parts into 22D vector
