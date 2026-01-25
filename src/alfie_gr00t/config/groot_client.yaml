@@ -1,7 +1,7 @@
 # GR00T N1.6 Client Configuration
 # Configuration for the GR00T inference client node
 
-groot_client:
+/alfie/groot_client:
   ros__parameters:
     # ==========================================================================
     # Transport Configuration
@@ -9,10 +9,10 @@ groot_client:
     # Transport type: "ipc" for on-device, "tcp" for remote server
     #   - ipc: ~1ms latency, use for on-device inference (recommended)
     #   - tcp: ~2-5ms latency, use for remote PC server
-    transport: "ipc"
+    transport: "tcp"
 
     # TCP settings (only used when transport: "tcp")
-    server_host: "192.168.1.100"
+    server_host: "192.168.50.108"
     server_port: 5555
 
     # IPC settings (only used when transport: "ipc")
