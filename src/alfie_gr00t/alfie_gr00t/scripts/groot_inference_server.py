@@ -240,7 +240,16 @@ class GrootInferenceServer:
             # No message available
             return False
         except Exception as e:
+            import traceback
             self.logger.error(f'Error handling request: {e}')
+            self.logger.error(f'Full traceback:\n{traceback.format_exc()}')
+            # Log observation details if available
+            if 'images' in dir() and images:
+                self.logger.error(f'Received image keys: {list(images.keys())}')
+            if 'state' in dir() and state is not None:
+                self.logger.error(f'Received state shape: {state.shape}')
+            if 'language' in dir():
+                self.logger.error(f'Received language: {language}')
             # Send error response
             error_response = {
                 'actions': [],
