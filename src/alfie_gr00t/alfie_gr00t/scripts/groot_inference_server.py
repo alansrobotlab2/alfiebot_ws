@@ -241,17 +241,31 @@ class GrootInferenceServer:
             return False
         except Exception as e:
             import traceback
+            import sys
             tb = traceback.format_exc()
+            # Force output to stderr
+            print(f'='*60, file=sys.stderr, flush=True)
+            print(f'ERROR handling request: {e}', file=sys.stderr, flush=True)
+            print(f'Full traceback:', file=sys.stderr, flush=True)
+            print(tb, file=sys.stderr, flush=True)
+            print(f'='*60, file=sys.stderr, flush=True)
+            # Also log
             self.logger.error(f'Error handling request: {e}')
             self.logger.error(f'Full traceback:\n{tb}')
             # Log observation details if available
             try:
                 if images:
-                    self.logger.error(f'Received image keys: {list(images.keys())}')
+                    msg = f'Received image keys: {list(images.keys())}'
+                    print(msg, file=sys.stderr, flush=True)
+                    self.logger.error(msg)
                 if state is not None:
-                    self.logger.error(f'Received state shape: {state.shape}')
+                    msg = f'Received state shape: {state.shape}'
+                    print(msg, file=sys.stderr, flush=True)
+                    self.logger.error(msg)
                 if language:
-                    self.logger.error(f'Received language: {language}')
+                    msg = f'Received language: {language}'
+                    print(msg, file=sys.stderr, flush=True)
+                    self.logger.error(msg)
             except Exception:
                 pass
             # Send error response
