@@ -235,7 +235,7 @@ class GrootClientNode(Node):
         self.declare_parameter('action_execution_index', 0)
         self.declare_parameter(
             'stats_file',
-            '/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge/meta/stats.jsonl'
+            '/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge/meta/stats.json'
         )
 
     def _activate_callback(self, msg: Bool):
