@@ -38,6 +38,7 @@ setup(
             'data_recorder = alfie_gr00t.nodes.data_recorder:main',
             'groot_client = alfie_gr00t.nodes.groot_client:main',
             'groot_server = alfie_gr00t.nodes.groot_server:main',
+            'groot_inference_server = alfie_gr00t.scripts.groot_inference_server:main',
         ],
     },
 )

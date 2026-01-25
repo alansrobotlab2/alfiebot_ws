@@ -73,8 +73,8 @@ def generate_launch_description():
     # Launch arguments - Model configuration
     model_checkpoint_arg = DeclareLaunchArgument(
         'model_checkpoint',
-        default_value='/home/alfie/alfiebot_ws/models/groot_alfiebot_latest.pth',
-        description='Path to GR00T model checkpoint'
+        default_value='/home/alfie/cando',
+        description='Path to GR00T model checkpoint directory'
     )
 
     use_tensorrt_arg = DeclareLaunchArgument(

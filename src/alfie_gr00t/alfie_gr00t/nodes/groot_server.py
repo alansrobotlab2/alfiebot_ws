@@ -1,53 +1,51 @@
 #!/usr/bin/env python3
-"""GR00T N1.6 inference server node for Alfiebot.
+"""GR00T N1.6 inference server ROS2 node wrapper.
 
-This node runs the NVIDIA GR00T N1.6 model inference using TensorRT
-and serves action predictions via ZeroMQ REP/REQ pattern.
+This node wraps the standalone GR00T inference server, providing ROS2
+parameter integration and status publishing.
 
-The server:
-- Loads a trained GR00T model checkpoint
-- Receives observations (4 images + 22D state + language) via ZeroMQ
-- Runs TensorRT inference at ~15-20 FPS
-- Returns 16-step action horizon (16 x 22D)
-
-For on-device deployment, uses IPC (Unix domain sockets) for ~5x faster
-communication than TCP localhost.
+The actual inference logic is in alfie_gr00t.scripts.groot_inference_server,
+which can be run standalone without ROS2.
 """
 
-import os
-import time
-from pathlib import Path
-from typing import Optional
+import logging
 
-import cv2
-import msgpack
-import numpy as np
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-import zmq
 
-# GR00T imports (conditional - may not be available during setup)
-try:
-    from gr00t.core.inference import GrootInferenceEngine
-    from gr00t.core.policy import GrootPolicy
-    GROOT_AVAILABLE = True
-except ImportError:
-    GROOT_AVAILABLE = False
-    print("Warning: GR00T SDK not available. Server will run in mock mode.")
+from alfie_gr00t.scripts.groot_inference_server import GrootInferenceServer
+
+
+class ROS2LogHandler(logging.Handler):
+    """Logging handler that forwards to ROS2 logger."""
+
+    def __init__(self, ros_logger):
+        super().__init__()
+        self._ros_logger = ros_logger
+
+    def emit(self, record):
+        msg = self.format(record)
+        if record.levelno >= logging.ERROR:
+            self._ros_logger.error(msg)
+        elif record.levelno >= logging.WARNING:
+            self._ros_logger.warn(msg)
+        elif record.levelno >= logging.INFO:
+            self._ros_logger.info(msg)
+        else:
+            self._ros_logger.debug(msg)
 
 
 class GrootServerNode(Node):
     """GR00T N1.6 inference server ROS2 node.
 
-    Runs a ZeroMQ REP server that:
-    1. Receives observation messages (images, state, language)
-    2. Runs GR00T TensorRT inference
-    3. Returns action predictions (16-step horizon)
+    This is a thin wrapper around GrootInferenceServer that:
+    - Exposes configuration via ROS2 parameters
+    - Publishes server status to a ROS2 topic
+    - Integrates with ROS2 lifecycle (spin/shutdown)
 
-    The server can run in two modes:
-    - Production: Loads actual GR00T model and runs TensorRT inference
-    - Mock: Returns random actions for testing without GPU/model
+    The actual ZMQ server and inference logic is in the standalone
+    GrootInferenceServer class.
     """
 
     def __init__(self):
@@ -57,60 +55,44 @@ class GrootServerNode(Node):
         self._declare_parameters()
 
         # Get parameters
-        self.transport = self.get_parameter('transport').value
-        self.bind_host = self.get_parameter('bind_host').value
-        self.bind_port = self.get_parameter('bind_port').value
-        self.ipc_path = self.get_parameter('ipc_path').value
-        self.model_checkpoint = self.get_parameter('model_checkpoint').value
-        self.use_tensorrt = self.get_parameter('use_tensorrt').value
-        self.mock_mode = self.get_parameter('mock_mode').value
-        self.action_horizon = self.get_parameter('action_horizon').value
-        self.device = self.get_parameter('device').value
+        transport = self.get_parameter('transport').value
+        bind_host = self.get_parameter('bind_host').value
+        bind_port = self.get_parameter('bind_port').value
+        ipc_path = self.get_parameter('ipc_path').value
+        model_checkpoint = self.get_parameter('model_checkpoint').value
+        embodiment_tag = self.get_parameter('embodiment_tag').value
+        mock_mode = self.get_parameter('mock_mode').value
+        action_horizon = self.get_parameter('action_horizon').value
+        device = self.get_parameter('device').value
 
-        # Build bind address
-        self.bind_address = self._build_bind_address()
+        # Setup logger that forwards to ROS2
+        logger = logging.getLogger('groot_inference_server')
+        logger.setLevel(logging.DEBUG)
+        logger.handlers.clear()
+        logger.addHandler(ROS2LogHandler(self.get_logger()))
 
-        # Initialize ZeroMQ
-        self._context = zmq.Context()
-        self._socket = self._context.socket(zmq.REP)
+        # Create the inference server
+        self._server = GrootInferenceServer(
+            transport=transport,
+            bind_host=bind_host,
+            bind_port=bind_port,
+            ipc_path=ipc_path,
+            model_checkpoint=model_checkpoint,
+            embodiment_tag=embodiment_tag,
+            mock_mode=mock_mode,
+            action_horizon=action_horizon,
+            device=device,
+            logger=logger,
+        )
 
-        # Cleanup IPC socket file if it exists
-        if self.transport == 'ipc' and os.path.exists(self.ipc_path):
-            os.unlink(self.ipc_path)
-            self.get_logger().info(f'Cleaned up existing IPC socket: {self.ipc_path}')
-
-        try:
-            self._socket.bind(self.bind_address)
-            self.get_logger().info(f'GR00T server bound to: {self.bind_address}')
-        except zmq.ZMQError as e:
-            self.get_logger().error(f'Failed to bind socket: {e}')
-            raise
-
-        # Initialize model
-        self._policy: Optional[GrootPolicy] = None
-        self._inference_engine: Optional[GrootInferenceEngine] = None
-
-        if not self.mock_mode:
-            self._load_model()
-        else:
-            self.get_logger().warn('Running in MOCK mode - will return random actions')
-
-        # Statistics
-        self._total_requests = 0
-        self._total_inference_time_ms = 0.0
-        self._last_inference_time_ms = 0.0
+        # Start the server
+        self._server.start()
 
         # Status publisher
         self.status_pub = self.create_publisher(String, '~/status', 10)
         self.status_timer = self.create_timer(1.0, self._publish_status)
 
-        # Start inference loop in main thread
-        self.get_logger().info(
-            f'GR00T Server ready. transport={self.transport}, '
-            f'mock={self.mock_mode}, tensorrt={self.use_tensorrt}'
-        )
-
-        # Run server loop
+        # Server loop timer - process requests in ROS2 spin
         self.create_timer(0.001, self._server_loop)
 
     def _declare_parameters(self):
@@ -123,226 +105,25 @@ class GrootServerNode(Node):
 
         # Model configuration
         self.declare_parameter('model_checkpoint', '')
-        self.declare_parameter('use_tensorrt', True)
+        self.declare_parameter('embodiment_tag', 'new_embodiment')
         self.declare_parameter('mock_mode', False)
         self.declare_parameter('action_horizon', 16)
         self.declare_parameter('device', 'cuda:0')
 
-    def _build_bind_address(self) -> str:
-        """Build ZeroMQ bind address from parameters."""
-        if self.transport == 'ipc':
-            return f'ipc://{self.ipc_path}'
-        elif self.transport == 'tcp':
-            return f'tcp://{self.bind_host}:{self.bind_port}'
-        else:
-            raise ValueError(f'Unknown transport: {self.transport}')
-
-    def _load_model(self):
-        """Load GR00T model checkpoint."""
-        if not GROOT_AVAILABLE:
-            self.get_logger().error('GR00T SDK not available. Cannot load model.')
-            self.mock_mode = True
-            return
-
-        if not self.model_checkpoint or not Path(self.model_checkpoint).exists():
-            self.get_logger().error(
-                f'Model checkpoint not found: {self.model_checkpoint}. '
-                'Running in mock mode.'
-            )
-            self.mock_mode = True
-            return
-
-        try:
-            self.get_logger().info(f'Loading GR00T model from: {self.model_checkpoint}')
-
-            # Load policy
-            self._policy = GrootPolicy.from_checkpoint(
-                checkpoint_path=self.model_checkpoint,
-                device=self.device,
-            )
-
-            # Initialize TensorRT engine if enabled
-            if self.use_tensorrt:
-                self.get_logger().info('Building TensorRT engine...')
-                self._inference_engine = GrootInferenceEngine(
-                    policy=self._policy,
-                    device=self.device,
-                    use_fp16=True,
-                )
-                self.get_logger().info('TensorRT engine ready')
-
-            self.get_logger().info('Model loaded successfully')
-
-        except Exception as e:
-            self.get_logger().error(f'Failed to load model: {e}')
-            self.get_logger().warn('Falling back to mock mode')
-            self.mock_mode = True
-
     def _server_loop(self):
-        """Main server loop - process one request per timer callback."""
-        try:
-            # Non-blocking check for messages
-            if self._socket.poll(timeout=1, flags=zmq.POLLIN):
-                self._handle_request()
-        except Exception as e:
-            self.get_logger().error(f'Error in server loop: {e}')
-
-    def _handle_request(self):
-        """Handle a single inference request."""
-        try:
-            # Receive observation
-            data = self._socket.recv(flags=zmq.NOBLOCK)
-            obs = msgpack.unpackb(data, raw=False)
-
-            # Extract observation data
-            images = obs.get('images', {})
-            state = np.array(obs.get('state', []), dtype=np.float32)
-            language = obs.get('language', '')
-
-            # Run inference
-            start_time = time.monotonic()
-
-            if self.mock_mode:
-                actions = self._mock_inference(state)
-            else:
-                actions = self._run_inference(images, state, language)
-
-            inference_time_ms = (time.monotonic() - start_time) * 1000
-
-            # Build response
-            response = {
-                'actions': actions.tolist() if isinstance(actions, np.ndarray) else actions,
-                'inference_time_ms': inference_time_ms,
-                'status': 'ok',
-            }
-
-            # Send response
-            packed = msgpack.packb(response, use_bin_type=True)
-            self._socket.send(packed)
-
-            # Update statistics
-            self._total_requests += 1
-            self._total_inference_time_ms += inference_time_ms
-            self._last_inference_time_ms = inference_time_ms
-
-        except zmq.Again:
-            # No message available
-            pass
-        except Exception as e:
-            self.get_logger().error(f'Error handling request: {e}')
-            # Send error response
-            error_response = {
-                'actions': [],
-                'inference_time_ms': 0.0,
-                'status': 'error',
-                'error_message': str(e),
-            }
-            packed = msgpack.packb(error_response, use_bin_type=True)
-            self._socket.send(packed)
-
-    def _mock_inference(self, state: np.ndarray) -> np.ndarray:
-        """Generate mock actions for testing.
-
-        Args:
-            state: Current state vector (22D).
-
-        Returns:
-            Mock action horizon (16 x 22D).
-        """
-        # Return state as first action, then gradually return to zero
-        # This creates a "hold current position" behavior
-        actions = np.zeros((self.action_horizon, 22), dtype=np.float32)
-
-        for i in range(self.action_horizon):
-            # Exponential decay toward zero
-            decay = np.exp(-i / 4.0)
-            actions[i] = state * decay
-
-        return actions
-
-    def _run_inference(
-        self,
-        images: dict[str, bytes],
-        state: np.ndarray,
-        language: str,
-    ) -> np.ndarray:
-        """Run GR00T model inference.
-
-        Args:
-            images: Dictionary of JPEG-compressed images.
-            state: Normalized state vector (22D).
-            language: Task description string.
-
-        Returns:
-            Action horizon (16 x 22D).
-        """
-        # Decode images from JPEG
-        image_arrays = {}
-        for key, jpeg_bytes in images.items():
-            img_array = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-            # Convert BGR to RGB
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            image_arrays[key] = img
-
-        # Prepare observation dict for GR00T
-        observation = {
-            'video': image_arrays,  # dict of RGB images
-            'state': state,
-            'language': language,
-        }
-
-        # Run inference
-        if self._inference_engine is not None:
-            # Use TensorRT engine
-            actions = self._inference_engine.predict(observation)
-        else:
-            # Use PyTorch model
-            actions = self._policy.predict(observation)
-
-        return actions
+        """Process server requests."""
+        self._server.spin_once()
 
     def _publish_status(self):
         """Publish server status."""
-        avg_inference_ms = (
-            self._total_inference_time_ms / self._total_requests
-            if self._total_requests > 0
-            else 0.0
-        )
-
-        status = {
-            'total_requests': self._total_requests,
-            'average_inference_ms': avg_inference_ms,
-            'last_inference_ms': self._last_inference_time_ms,
-            'mock_mode': self.mock_mode,
-            'tensorrt': self.use_tensorrt and not self.mock_mode,
-            'bind_address': self.bind_address,
-        }
-
+        stats = self._server.get_stats()
         msg = String()
-        msg.data = str(status)
+        msg.data = str(stats)
         self.status_pub.publish(msg)
 
     def destroy_node(self):
         """Clean up resources on shutdown."""
-        self.get_logger().info('Shutting down GR00T server...')
-
-        # Close socket
-        if self._socket is not None:
-            self._socket.close()
-
-        # Terminate context
-        if self._context is not None:
-            self._context.term()
-
-        # Cleanup IPC socket file
-        if self.transport == 'ipc' and os.path.exists(self.ipc_path):
-            try:
-                os.unlink(self.ipc_path)
-                self.get_logger().info(f'Cleaned up IPC socket: {self.ipc_path}')
-            except Exception as e:
-                self.get_logger().warn(f'Failed to cleanup IPC socket: {e}')
-
+        self._server.stop()
         super().destroy_node()
 
 
