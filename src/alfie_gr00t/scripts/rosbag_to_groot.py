@@ -21,7 +21,6 @@ python3 rosbag_to_groot.py \
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -112,11 +111,8 @@ class RosbagToGrootConverter:
         for d in [self.data_dir, self.videos_dir, self.meta_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
-        # Statistics accumulators (thread-safe)
-        self.all_states = []
-        self.all_actions = []
+        # Episode metadata for newly added episodes
         self.episode_metadata = []
-        self.stats_lock = Lock()
         self.print_lock = Lock()
 
         # Detect available GPU encoder
@@ -166,8 +162,51 @@ class RosbagToGrootConverter:
             d for d in self.demos_dir.iterdir()
             if d.is_dir() and d.name.startswith('demo_')
         ])
-        print(f"Found {len(demos)} demonstrations")
+        print(f"Found {len(demos)} demo directories in {self.demos_dir}")
         return demos
+
+    def load_existing_episodes(self) -> Dict[str, Dict]:
+        """Load episodes.jsonl and return a map of source demo name -> episode metadata."""
+        episodes_path = self.meta_dir / 'episodes.jsonl'
+        if not episodes_path.exists():
+            print("No existing episodes.jsonl found - starting fresh")
+            return {}
+
+        existing = {}
+        with open(episodes_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                ep = json.loads(line)
+                source = ep.get('source', '')
+                if source:
+                    existing[source] = ep
+
+        print(f"Found {len(existing)} existing episodes in episodes.jsonl")
+        return existing
+
+    def remove_episode_files(self, episode_meta: Dict) -> None:
+        """Delete all output files for an episode (parquet + videos)."""
+        ep_idx = episode_meta['episode_index']
+        chunk_idx = ep_idx // self.chunk_size
+
+        # Delete parquet
+        parquet_path = self.data_dir / f'chunk-{chunk_idx:03d}' / f'episode_{ep_idx:06d}.parquet'
+        if parquet_path.exists():
+            parquet_path.unlink()
+            print(f"  Deleted {parquet_path.relative_to(self.output_dir)}")
+
+        # Delete videos for all 4 cameras
+        for cam_key in ['left_wide', 'right_wide', 'left_center', 'right_center']:
+            video_path = (
+                self.videos_dir / f'chunk-{chunk_idx:03d}'
+                / f'observation.images.{cam_key}'
+                / f'episode_{ep_idx:06d}.mp4'
+            )
+            if video_path.exists():
+                video_path.unlink()
+                print(f"  Deleted {video_path.relative_to(self.output_dir)}")
 
     def decompress_mcap(self, mcap_zstd_path: Path) -> Path:
         """Decompress a zstd-compressed MCAP file."""
@@ -593,11 +632,6 @@ class RosbagToGrootConverter:
         with self.print_lock:
             print(f"  Saved {len(video_paths)} videos")
 
-        # Thread-safe statistics accumulation
-        with self.stats_lock:
-            self.all_states.extend(episode.states)
-            self.all_actions.extend(episode.actions)
-
         # Return metadata for later collection
         metadata = {
             'episode_index': episode_index,
@@ -609,74 +643,143 @@ class RosbagToGrootConverter:
 
         return num_frames, metadata
 
-    def convert_all(self, task_index: int = 0, start_episode: int = 0) -> int:
-        """Convert all demonstrations to GR00T format."""
+    def convert_all(self, task_index: int = 0) -> Tuple[int, int, int]:
+        """Incrementally sync demonstrations to GR00T format.
+
+        Compares source demos against existing episodes.jsonl to determine
+        what to skip, remove, or add.
+
+        Returns:
+            Tuple of (num_skipped, num_removed, num_added)
+        """
+        # Phase 1: Load existing state
+        existing_episodes = self.load_existing_episodes()
         demos = self.find_demonstrations()
 
-        if not demos:
-            print("No demonstrations found!")
-            return 0
+        if not demos and not existing_episodes:
+            print("No demonstrations found and no existing episodes!")
+            return (0, 0, 0)
 
-        total_frames = 0
-        episode_index = start_episode
+        current_demo_names = {d.name for d in demos}
+        existing_demo_names = set(existing_episodes.keys())
+        demo_dir_map = {d.name: d for d in demos}
 
-        if self.num_threads <= 1:
-            # Single-threaded processing (original behavior)
-            for i, demo_dir in enumerate(demos):
-                result = self.process_single_episode(
-                    demo_dir, episode_index, task_index, i + 1, len(demos)
-                )
-                if result is not None:
-                    num_frames, metadata = result
-                    self.episode_metadata.append(metadata)
-                    total_frames += num_frames
-                    episode_index += 1
-        else:
-            # Multi-threaded processing
-            with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-                # Submit all jobs
-                futures = {}
-                for i, demo_dir in enumerate(demos):
-                    future = executor.submit(
-                        self.process_single_episode,
-                        demo_dir,
-                        episode_index + i,
-                        task_index,
-                        i + 1,
-                        len(demos),
+        # Phase 2: Diff
+        unchanged_names = existing_demo_names & current_demo_names
+        removed_names = existing_demo_names - current_demo_names
+        added_names = current_demo_names - existing_demo_names
+
+        print(f"\nSync plan: Skip {len(unchanged_names)}, "
+              f"Remove {len(removed_names)}, Add {len(added_names)}")
+
+        # Phase 3: Remove deleted episodes
+        for name in sorted(removed_names):
+            ep_meta = existing_episodes[name]
+            print(f"\nRemoving episode {ep_meta['episode_index']} "
+                  f"(source: {name}) - source no longer exists")
+            self.remove_episode_files(ep_meta)
+            del existing_episodes[name]
+
+        # Phase 4: Log skipped episodes
+        if unchanged_names:
+            print(f"\nSkipping {len(unchanged_names)} unchanged episodes")
+
+        # Phase 5: Add new episodes
+        num_added = 0
+        if added_names:
+            # Determine next episode index
+            if existing_episodes:
+                next_idx = max(ep['episode_index'] for ep in existing_episodes.values()) + 1
+            else:
+                next_idx = 0
+
+            added_demos = sorted([demo_dir_map[n] for n in added_names], key=lambda d: d.name)
+            total_to_add = len(added_demos)
+
+            if self.num_threads <= 1:
+                # Single-threaded
+                for i, demo_dir in enumerate(added_demos):
+                    episode_index = next_idx + i
+                    result = self.process_single_episode(
+                        demo_dir, episode_index, task_index, i + 1, total_to_add
                     )
-                    futures[future] = i
-
-                # Collect results as they complete
-                completed_metadata = {}
-                for future in as_completed(futures):
-                    result = future.result()
                     if result is not None:
                         num_frames, metadata = result
-                        # Store with original index to maintain order
-                        completed_metadata[futures[future]] = (num_frames, metadata)
-
-                # Add metadata in order
-                for i in range(len(demos)):
-                    if i in completed_metadata:
-                        num_frames, metadata = completed_metadata[i]
                         self.episode_metadata.append(metadata)
-                        total_frames += num_frames
-                        episode_index += 1
+                        num_added += 1
+            else:
+                # Multi-threaded
+                with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+                    futures = {}
+                    for i, demo_dir in enumerate(added_demos):
+                        episode_index = next_idx + i
+                        future = executor.submit(
+                            self.process_single_episode,
+                            demo_dir,
+                            episode_index,
+                            task_index,
+                            i + 1,
+                            total_to_add,
+                        )
+                        futures[future] = i
 
-        print(f"\n{'='*60}")
-        print(f"Converted {episode_index - start_episode} episodes ({total_frames} frames)")
+                    completed_metadata = {}
+                    for future in as_completed(futures):
+                        result = future.result()
+                        if result is not None:
+                            num_frames, metadata = result
+                            completed_metadata[futures[future]] = metadata
 
-        return episode_index - start_episode
+                    # Add metadata in order
+                    for i in range(len(added_demos)):
+                        if i in completed_metadata:
+                            self.episode_metadata.append(completed_metadata[i])
+                            num_added += 1
 
-    def compute_and_save_stats(self):
-        """Compute and save normalization statistics."""
-        if not self.all_states or not self.all_actions:
-            print("No data to compute statistics")
+        # Phase 6: Merge and save episodes metadata
+        all_episodes = list(existing_episodes.values()) + self.episode_metadata
+        all_episodes.sort(key=lambda ep: ep['episode_index'])
+
+        episodes_path = self.meta_dir / 'episodes.jsonl'
+        with open(episodes_path, 'w') as f:
+            for ep in all_episodes:
+                f.write(json.dumps(ep) + '\n')
+        print(f"\nSaved {len(all_episodes)} episodes to {episodes_path}")
+
+        # Phase 7: Recompute stats if anything changed
+        has_changes = len(removed_names) > 0 or num_added > 0
+        if has_changes:
+            self.recompute_stats_from_parquet()
+
+        return (len(unchanged_names), len(removed_names), num_added)
+
+    def recompute_stats_from_parquet(self):
+        """Recompute normalization statistics by reading all parquet files."""
+        parquet_files = sorted(self.data_dir.glob('chunk-*/episode_*.parquet'))
+
+        if not parquet_files:
+            print("No parquet files found - skipping stats computation")
             return
 
-        states = np.array(self.all_states)
-        actions = np.array(self.all_actions)
+        print(f"Recomputing statistics from {len(parquet_files)} parquet files...")
+
+        all_states = []
+        all_actions = []
+
+        for pf in parquet_files:
+            try:
+                df = pd.read_parquet(pf)
+                all_states.extend(df['state'].tolist())
+                all_actions.extend(df['action'].tolist())
+            except Exception as e:
+                print(f"  Warning: Failed to read {pf.name}: {e}")
+
+        if not all_states:
+            print("No data found in parquet files - skipping stats computation")
+            return
+
+        states = np.array(all_states, dtype=np.float32)
+        actions = np.array(all_actions, dtype=np.float32)
 
         stats = {
             'state': {
@@ -714,14 +817,6 @@ class RosbagToGrootConverter:
         with open(relative_stats_path, 'w') as f:
             json.dump(relative_stats, f, indent=2)
         print(f"Saved relative statistics to {relative_stats_path}")
-
-    def save_episodes_metadata(self):
-        """Save episodes.jsonl with per-episode metadata."""
-        episodes_path = self.meta_dir / 'episodes.jsonl'
-        with open(episodes_path, 'w') as f:
-            for ep in self.episode_metadata:
-                f.write(json.dumps(ep) + '\n')
-        print(f"Saved episode metadata to {episodes_path}")
 
     def update_info_json(self, num_episodes: int, total_frames: int):
         """Update info.json with correct counts."""
@@ -796,14 +891,16 @@ def main():
 
     args = parser.parse_args()
 
+    if args.start_episode != 0:
+        print("Warning: --start-episode is deprecated and ignored in incremental sync mode")
+
     print("="*60)
-    print("ROS2 Bag to GR00T Converter")
+    print("ROS2 Bag to GR00T Converter (Incremental Sync)")
     print("="*60)
     print(f"Demos directory: {args.demos_dir}")
     print(f"Output directory: {args.output_dir}")
     print(f"Task index: {args.task_index}")
     print(f"Target FPS: {args.fps}")
-    print(f"Starting episode: {args.start_episode}")
     print(f"Number of threads: {args.num_threads}")
     print(f"GPU acceleration: {'Enabled' if args.use_gpu else 'Disabled'}")
     print("="*60)
@@ -816,29 +913,38 @@ def main():
         use_gpu=args.use_gpu,
     )
 
-    num_episodes = converter.convert_all(
+    num_skipped, num_removed, num_added = converter.convert_all(
         task_index=args.task_index,
-        start_episode=args.start_episode
     )
 
-    if num_episodes > 0:
-        total_frames = sum(ep['length'] for ep in converter.episode_metadata)
+    # Read final episode counts from the just-written episodes.jsonl
+    episodes_path = converter.meta_dir / 'episodes.jsonl'
+    total_episodes = 0
+    total_frames = 0
+    if episodes_path.exists():
+        with open(episodes_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    ep = json.loads(line)
+                    total_episodes += 1
+                    total_frames += ep.get('length', 0)
 
-        # Save all metadata
-        converter.compute_and_save_stats()
-        converter.save_episodes_metadata()
+    # Update info.json with current totals
+    if num_removed > 0 or num_added > 0:
         converter.update_info_json(
-            num_episodes=args.start_episode + num_episodes,
+            num_episodes=total_episodes,
             total_frames=total_frames
         )
 
-        print("\n" + "="*60)
-        print("Conversion complete!")
-        print(f"  Episodes: {num_episodes}")
-        print(f"  Total frames: {total_frames}")
-        print("="*60)
-    else:
-        print("\nNo episodes converted.")
+    print("\n" + "="*60)
+    print("Sync complete!")
+    print(f"  Skipped:  {num_skipped}")
+    print(f"  Removed:  {num_removed}")
+    print(f"  Added:    {num_added}")
+    print(f"  Total episodes: {total_episodes}")
+    print(f"  Total frames:   {total_frames}")
+    print("="*60)
 
 
 if __name__ == '__main__':
