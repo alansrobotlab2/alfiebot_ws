@@ -213,14 +213,98 @@ ROS2 bag automatically timestamps messages. If you see drift:
 - Verify camera drivers publish correct timestamps
 - Use `message_filters` for explicit sync (advanced)
 
+## Converting to GR00T Training Format
+
+Once you have recorded demonstrations, convert them to the GR00T N1.6 training format using `rosbag_to_groot.py`. This produces parquet files (state/action data), MP4 videos (camera observations), and meta files required for training.
+
+### Check available data
+
+Run with `--report` to see a summary of recorded demos and any existing converted output:
+
+```bash
+python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
+    --demos-dir ~/alfiebot_ws/data/demonstrations \
+    --output-dir ~/alfiebot_ws/data/alfiebot.CanDoChallenge \
+    --report
+```
+
+### Convert all demos
+
+```bash
+python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
+    --demos-dir ~/alfiebot_ws/data/demonstrations \
+    --output-dir ~/alfiebot_ws/data/alfiebot.CanDoChallenge \
+    --task-index 0 \
+    --num-threads 8
+```
+
+### Append new demos to an existing dataset
+
+If you have already converted some demos and want to add more, use `--start-episode` set to the next episode number:
+
+```bash
+python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
+    --demos-dir ~/alfiebot_ws/data/demonstrations \
+    --output-dir ~/alfiebot_ws/data/alfiebot.CanDoChallenge \
+    --task-index 0 \
+    --start-episode 50 \
+    --num-threads 8
+```
+
+### GPU-accelerated video encoding
+
+On the Jetson, use `--use-gpu` to encode videos with NVENC instead of CPU libx264:
+
+```bash
+python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
+    --demos-dir ~/alfiebot_ws/data/demonstrations \
+    --output-dir ~/alfiebot_ws/data/alfiebot.CanDoChallenge \
+    --num-threads 8 --use-gpu
+```
+
+### All options
+
+Run with no arguments for a full summary of available options and examples:
+
+```bash
+python3 src/alfie_gr00t/scripts/rosbag_to_groot.py
+```
+
+### Output structure
+
+After conversion, the output directory will contain:
+
+```
+alfiebot.CanDoChallenge/
+├── data/
+│   └── chunk-000/
+│       ├── episode_000000.parquet
+│       ├── episode_000001.parquet
+│       └── ...
+├── videos/
+│   └── chunk-000/
+│       ├── observation.images.left_wide/
+│       │   ├── episode_000000.mp4
+│       │   └── ...
+│       ├── observation.images.right_wide/
+│       ├── observation.images.left_center/
+│       └── observation.images.right_center/
+└── meta/
+    ├── info.json
+    ├── stats.json
+    ├── relative_stats.json
+    ├── episodes.jsonl
+    └── tasks.jsonl
+```
+
 ## Next Steps
 
 After collecting 500+ demonstrations:
 
 1. **Annotate all demos** - Use annotation tool to label quality
 2. **Filter dataset** - Remove corrupted/failed recordings
-3. **Convert to GR00T format** - Use conversion script (Phase 3)
-4. **Train policy** - Fine-tune GR00T on RTX 5090 (Phase 3)
+3. **Convert to GR00T format** - Use `rosbag_to_groot.py` as described above
+4. **Train policy** - Fine-tune GR00T on RTX 5090
 
 ## Advanced Options
 

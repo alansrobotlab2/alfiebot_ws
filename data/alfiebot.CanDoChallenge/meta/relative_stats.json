@@ -1,5 +1,5 @@
 {
-  "state": {
+  "observation.state": {
     "mean": [
       0.0,
       0.0,

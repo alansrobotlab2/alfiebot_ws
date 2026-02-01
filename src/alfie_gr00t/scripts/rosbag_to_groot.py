@@ -449,13 +449,14 @@ class RosbagToGrootConverter:
         num_frames = len(episode.states)
 
         # Build dataframe
+        # Note: GR00T expects 'observation.state' not 'state' for proprioceptive data
         data = {
             'timestamp': np.array(episode.timestamps, dtype=np.float32),
             'frame_index': np.arange(num_frames, dtype=np.int64),
             'episode_index': np.full(num_frames, episode_index, dtype=np.int64),
             'index': np.arange(num_frames, dtype=np.int64),  # Global index (will update later)
             'task_index': np.full(num_frames, task_index, dtype=np.int64),
-            'state': [s.tolist() for s in episode.states],
+            'observation.state': [s.tolist() for s in episode.states],
             'action': [a.tolist() for a in episode.actions],
         }
 
@@ -782,7 +783,7 @@ class RosbagToGrootConverter:
         actions = np.array(all_actions, dtype=np.float32)
 
         stats = {
-            'state': {
+            'observation.state': {
                 'mean': states.mean(axis=0).tolist(),
                 'std': states.std(axis=0).tolist(),
                 'min': states.min(axis=0).tolist(),
@@ -803,7 +804,7 @@ class RosbagToGrootConverter:
 
         # Also save relative stats (normalized)
         relative_stats = {
-            'state': {
+            'observation.state': {
                 'mean': [0.0] * 22,
                 'std': [1.0] * 22,
             },
@@ -817,6 +818,94 @@ class RosbagToGrootConverter:
         with open(relative_stats_path, 'w') as f:
             json.dump(relative_stats, f, indent=2)
         print(f"Saved relative statistics to {relative_stats_path}")
+
+    def save_episodes_metadata(self):
+        """Save episodes.jsonl with per-episode metadata."""
+        episodes_path = self.meta_dir / 'episodes.jsonl'
+        with open(episodes_path, 'w') as f:
+            for ep in self.episode_metadata:
+                f.write(json.dumps(ep) + '\n')
+        print(f"Saved episode metadata to {episodes_path}")
+
+    def report(self):
+        """Report on available demos and existing output data."""
+        print("=" * 60)
+        print("REPORT: Demos & Output Status")
+        print("=" * 60)
+
+        # --- Input demos ---
+        print(f"\nDemos directory: {self.demos_dir}")
+        if not self.demos_dir.exists():
+            print("  Directory does not exist!")
+        else:
+            demos = self.find_demonstrations()
+            if demos:
+                total_size_mb = 0.0
+                for i, d in enumerate(demos):
+                    mcap_zstd = list(d.glob('*.mcap.zstd'))
+                    mcap_plain = list(d.glob('*.mcap'))
+                    mcap_files = mcap_zstd or mcap_plain
+                    if mcap_files:
+                        size_mb = mcap_files[0].stat().st_size / (1024 * 1024)
+                        total_size_mb += size_mb
+                        compressed = " (zstd)" if mcap_zstd else ""
+                        print(f"  [{i:3d}] {d.name}  {size_mb:8.1f} MB{compressed}")
+                    else:
+                        print(f"  [{i:3d}] {d.name}  NO MCAP FILE")
+                print(f"\n  Total: {len(demos)} demos, {total_size_mb:.1f} MB")
+
+        # --- Output data ---
+        print(f"\nOutput directory: {self.output_dir}")
+        if not self.output_dir.exists():
+            print("  Directory does not exist (will be created on convert)")
+        else:
+            # Parquet files
+            parquet_files = sorted(self.data_dir.glob('chunk-*/*.parquet')) if self.data_dir.exists() else []
+            print(f"\n  Parquet episodes: {len(parquet_files)}")
+            if parquet_files:
+                total_pq_mb = sum(f.stat().st_size for f in parquet_files) / (1024 * 1024)
+                print(f"    Total size: {total_pq_mb:.1f} MB")
+                print(f"    Range: {parquet_files[0].stem} .. {parquet_files[-1].stem}")
+
+            # Video files
+            video_files = sorted(self.videos_dir.glob('chunk-*/*/*.mp4')) if self.videos_dir.exists() else []
+            print(f"\n  Video files: {len(video_files)}")
+            if video_files:
+                total_vid_mb = sum(f.stat().st_size for f in video_files) / (1024 * 1024)
+                # Count unique episodes from video filenames
+                video_episodes = set(f.stem for f in video_files)
+                # Count camera streams
+                camera_dirs = set(f.parent.name for f in video_files)
+                print(f"    Total size: {total_vid_mb:.1f} MB")
+                print(f"    Episodes with video: {len(video_episodes)}")
+                print(f"    Camera streams: {', '.join(sorted(camera_dirs))}")
+
+            # Meta files
+            print(f"\n  Meta files:")
+            for meta_name in ['info.json', 'stats.json', 'relative_stats.json', 'episodes.jsonl', 'tasks.jsonl']:
+                meta_path = self.meta_dir / meta_name
+                if meta_path.exists():
+                    size_kb = meta_path.stat().st_size / 1024
+                    extra = ""
+                    if meta_name == 'info.json':
+                        try:
+                            with open(meta_path) as f:
+                                info = json.load(f)
+                            extra = f"  (episodes={info.get('total_episodes', '?')}, frames={info.get('total_frames', '?')})"
+                        except Exception:
+                            pass
+                    elif meta_name == 'episodes.jsonl':
+                        try:
+                            with open(meta_path) as f:
+                                line_count = sum(1 for _ in f)
+                            extra = f"  ({line_count} entries)"
+                        except Exception:
+                            pass
+                    print(f"    {meta_name:25s} {size_kb:8.1f} KB{extra}")
+                else:
+                    print(f"    {meta_name:25s} MISSING")
+
+        print("\n" + "=" * 60)
 
     def update_info_json(self, num_episodes: int, total_frames: int):
         """Update info.json with correct counts."""
@@ -843,56 +932,129 @@ class RosbagToGrootConverter:
         print(f"Updated {info_path}")
 
 
+def print_usage_summary():
+    """Print a friendly summary and argument reference."""
+    print("""
+============================================================
+  ROS2 Bag to GR00T N1.6 Training Data Converter
+============================================================
+
+Converts ROS2 bag demonstrations (MCAP format) into the
+GR00T training format: parquet files, MP4 videos, and
+meta files (info.json, episodes.jsonl, tasks.jsonl, stats.json).
+
+Arguments:
+  --demos-dir DIR       Input directory containing demo_* folders
+                        (default: /home/alfie/alfiebot_ws/data/demonstrations)
+  --output-dir DIR      Output directory for GR00T format data
+                        (default: /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge)
+  --task-index N        Task index for labeling (0=pick up can, 1=put can down)
+                        (default: 0)
+  --fps N               Target frames per second for resampling
+                        (default: 15)
+  --start-episode N     Starting episode index, use to append to existing dataset
+                        (default: 0)
+  --num-threads N       Parallel threads for conversion
+                        (default: 1)
+  --use-gpu             Use GPU-accelerated video encoding (NVENC/AMF/QSV)
+  --report              Show summary of available demos and existing output
+                        data without converting anything
+
+Examples:
+  # Check what demos and output data exist
+  python3 rosbag_to_groot.py --report
+
+  # Convert all demos with defaults
+  python3 rosbag_to_groot.py
+
+  # Convert with custom paths and multithreading
+  python3 rosbag_to_groot.py \\
+      --demos-dir /path/to/demos \\
+      --output-dir /path/to/output \\
+      --num-threads 8
+
+  # Append new demos starting at episode 50
+  python3 rosbag_to_groot.py --start-episode 50
+============================================================
+""")
+
+
 def main():
+    # Show summary if run with no arguments
+    if len(sys.argv) == 1:
+        print_usage_summary()
+        return
+
     parser = argparse.ArgumentParser(
-        description='Convert ROS2 bag demonstrations to GR00T N1.6 training format'
+        description='ROS2 Bag to GR00T N1.6 Training Data Converter',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+examples:
+  %(prog)s --report
+  %(prog)s --demos-dir /path/to/demos --output-dir /path/to/output
+  %(prog)s --start-episode 50 --num-threads 8 --use-gpu
+"""
     )
     parser.add_argument(
         '--demos-dir',
         type=str,
         default='/home/alfie/alfiebot_ws/data/demonstrations',
-        help='Directory containing demonstration folders'
+        help='Directory containing demonstration folders (default: %(default)s)'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
         default='/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge',
-        help='Output directory for GR00T format data'
+        help='Output directory for GR00T format data (default: %(default)s)'
     )
     parser.add_argument(
         '--task-index',
         type=int,
         default=0,
-        help='Task index (0=pick up can, 1=put can down)'
+        help='Task index: 0=pick up can, 1=put can down (default: %(default)s)'
     )
     parser.add_argument(
         '--fps',
         type=int,
         default=15,
-        help='Target frames per second'
+        help='Target frames per second (default: %(default)s)'
     )
     parser.add_argument(
         '--start-episode',
         type=int,
         default=0,
-        help='Starting episode index (for appending to existing dataset)'
+        help='Starting episode index for appending to existing dataset (default: %(default)s)'
     )
     parser.add_argument(
         '--num-threads',
         type=int,
         default=1,
-        help='Number of parallel threads for conversion (default: 1)'
+        help='Number of parallel threads for conversion (default: %(default)s)'
     )
     parser.add_argument(
         '--use-gpu',
         action='store_true',
         help='Use GPU acceleration for video encoding (requires NVENC/AMF/QSV)'
     )
+    parser.add_argument(
+        '--report',
+        action='store_true',
+        help='Report on available demos and existing output data without converting'
+    )
 
     args = parser.parse_args()
 
-    if args.start_episode != 0:
-        print("Warning: --start-episode is deprecated and ignored in incremental sync mode")
+    converter = RosbagToGrootConverter(
+        demos_dir=args.demos_dir,
+        output_dir=args.output_dir,
+        fps=args.fps,
+        num_threads=args.num_threads,
+        use_gpu=args.use_gpu,
+    )
+
+    if args.report:
+        converter.report()
+        return
 
     print("="*60)
     print("ROS2 Bag to GR00T Converter (Incremental Sync)")
@@ -904,14 +1066,6 @@ def main():
     print(f"Number of threads: {args.num_threads}")
     print(f"GPU acceleration: {'Enabled' if args.use_gpu else 'Disabled'}")
     print("="*60)
-
-    converter = RosbagToGrootConverter(
-        demos_dir=args.demos_dir,
-        output_dir=args.output_dir,
-        fps=args.fps,
-        num_threads=args.num_threads,
-        use_gpu=args.use_gpu,
-    )
 
     num_skipped, num_removed, num_added = converter.convert_all(
         task_index=args.task_index,

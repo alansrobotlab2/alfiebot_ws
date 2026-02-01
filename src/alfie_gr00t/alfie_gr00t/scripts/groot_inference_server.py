@@ -346,6 +346,13 @@ class GrootInferenceServer:
             'head': state[np.newaxis, np.newaxis, 19:22].astype(np.float32),
         }
 
+        # Format language for Gr00tPolicy
+        # Expected format: language[key] = list[list[str]] with shape (B, T)
+        # Key must match modality config: "annotation.human.task_description"
+        language_dict = {
+            'annotation.human.task_description': [[language]]  # (1, 1) - batch size 1, temporal 1
+        }
+
         # Prepare observation dict for GR00T
         # GR00T expects flat keys with dot notation for nested structures
         observation = {
