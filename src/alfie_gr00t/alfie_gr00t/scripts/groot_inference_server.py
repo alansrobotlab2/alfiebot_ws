@@ -414,7 +414,9 @@ class GrootInferenceServer:
                     )
 
         # Advance 1 step per request (matches 15 FPS client rate)
-        self._replay_step += 1
+        # Stop advancing once we've exhausted the episode
+        if self._replay_step < self._replay_total_steps:
+            self._replay_step += 1
 
         return actions
 
