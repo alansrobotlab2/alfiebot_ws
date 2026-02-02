@@ -324,8 +324,8 @@ class GrootInferenceServer:
 
     def _load_replay_data(self):
         """Load episode actions from parquet and normalize for replay."""
+        import json
         import pandas as pd
-        from alfie_gr00t.core.normalization import Normalizer
 
         dataset_path = Path(self.dataset_path)
 
@@ -351,15 +351,24 @@ class GrootInferenceServer:
         if not stats_path:
             stats_path = str(dataset_path / 'meta' / 'stats.json')
 
-        normalizer = Normalizer(stats_path)
-        if not normalizer.is_loaded:
+        # Normalize actions using stats (z-score: (x - mean) / std)
+        # Inline to avoid dependency on alfie_gr00t package for standalone use
+        try:
+            with open(stats_path, 'r') as f:
+                stats = json.load(f)
+            action_stats = stats.get('action', {})
+            action_mean = np.array(action_stats['mean'], dtype=np.float32)
+            action_std = np.array(action_stats['std'], dtype=np.float32)
+            # Replace zero std with 1.0 to avoid division by zero
+            action_std = np.where(action_std == 0, 1.0, action_std)
+            self._replay_actions = (raw_actions - action_mean) / action_std
+            self.logger.info(f'Normalized replay actions using {stats_path}')
+        except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
             self.logger.warning(
-                f'Could not load stats from {stats_path}. '
+                f'Could not load stats from {stats_path}: {e}. '
                 'Replay actions will NOT be normalized.'
             )
             self._replay_actions = raw_actions
-        else:
-            self._replay_actions = normalizer.normalize_action(raw_actions)
 
         self._replay_step = 0
         self._replay_total_steps = len(self._replay_actions)
