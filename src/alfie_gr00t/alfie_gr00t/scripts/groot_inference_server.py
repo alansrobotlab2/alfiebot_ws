@@ -228,6 +228,10 @@ class GrootInferenceServer:
             start_time = time.monotonic()
 
             if self.replay_mode:
+                self.logger.info(
+                    f'Replay inference triggered — step {self._replay_step}/'
+                    f'{self._replay_total_steps} (episode {self.episode_index})'
+                )
                 actions = self._replay_inference(state)
             elif self.mock_mode:
                 actions = self._mock_inference(state)
@@ -396,13 +400,17 @@ class GrootInferenceServer:
             if step < self._replay_total_steps:
                 actions[i] = self._replay_actions[step]
             else:
-                # Pad with last valid action
-                actions[i] = self._replay_actions[-1]
+                # Pad with last valid action but zero out base velocity
+                # so the robot stops driving. Indices 0:6 are base twist
+                # (linear x/y/z, angular x/y/z). Keep joint positions
+                # (indices 6+) at their last values to hold pose.
+                actions[i] = self._replay_actions[-1].copy()
+                actions[i, 0:6] = 0.0
                 if not self._replay_done:
                     self._replay_done = True
                     self.logger.info(
                         f'Episode {self.episode_index} replay complete '
-                        f'at step {self._replay_step}'
+                        f'at step {self._replay_step} — base velocity zeroed'
                     )
 
         # Advance 1 step per request (matches 15 FPS client rate)
