@@ -39,7 +39,7 @@
                 "head_roll_joint"
             ],
             "shape": [
-                21
+                22
             ]
         },
         "observation.state": {
@@ -69,7 +69,7 @@
                 "head_roll_joint"
             ],
             "shape": [
-                21
+                22
             ]
         },
         "observation.images.left_wide": {

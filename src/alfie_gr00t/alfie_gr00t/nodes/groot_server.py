@@ -64,6 +64,9 @@ class GrootServerNode(Node):
         mock_mode = self.get_parameter('mock_mode').value
         action_horizon = self.get_parameter('action_horizon').value
         device = self.get_parameter('device').value
+        dataset_path = self.get_parameter('dataset_path').value
+        episode_index = self.get_parameter('episode_index').value
+        stats_path = self.get_parameter('stats_path').value
 
         # Setup logger that forwards to ROS2
         logger = logging.getLogger('groot_inference_server')
@@ -83,6 +86,9 @@ class GrootServerNode(Node):
             action_horizon=action_horizon,
             device=device,
             logger=logger,
+            dataset_path=dataset_path,
+            episode_index=episode_index,
+            stats_path=stats_path,
         )
 
         # Start the server
@@ -109,6 +115,11 @@ class GrootServerNode(Node):
         self.declare_parameter('mock_mode', False)
         self.declare_parameter('action_horizon', 16)
         self.declare_parameter('device', 'cuda:0')
+
+        # Replay configuration
+        self.declare_parameter('dataset_path', '')
+        self.declare_parameter('episode_index', 0)
+        self.declare_parameter('stats_path', '')
 
     def _server_loop(self):
         """Process server requests."""

@@ -393,6 +393,136 @@ while True:
     socket.send(msgpack.packb(response, use_bin_type=True))
 ```
 
+## Episode Replay Mode
+
+The inference server supports replaying recorded episodes from a LeRobot-format dataset. In replay mode, the server ignores incoming observations and serves pre-recorded actions from a parquet file. The client requires no changes -- it receives actions exactly as it would from live model inference.
+
+### How It Works
+
+1. Server loads a parquet episode file containing 22D action vectors
+2. Actions are normalized using `stats.json` (same as model output)
+3. Each client request returns the next 16-step action horizon from the episode
+4. The replay advances 1 step per request, matching the 15 FPS client rate
+5. When the episode ends, the server pads with the last action
+
+### Dataset Location
+
+Episodes are stored at:
+```
+/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge/
+├── data/chunk-000/
+│   ├── episode_000000.parquet
+│   ├── episode_000001.parquet
+│   └── ...
+├── meta/
+│   ├── stats.json
+│   ├── episodes.jsonl
+│   └── info.json
+└── videos/chunk-000/
+    └── ...
+```
+
+### Running Replay (Standalone Server)
+
+```bash
+# Replay episode 0
+python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
+    --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    --episode-index 0 \
+    --transport tcp --port 5555
+
+# Replay a different episode
+python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
+    --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    --episode-index 3 \
+    --transport tcp --port 5555
+
+# With custom stats file
+python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
+    --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    --episode-index 0 \
+    --stats-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge/meta/stats.json \
+    --transport tcp --port 5555
+```
+
+### Running Replay (ROS2 Launch)
+
+```bash
+# Replay episode 0 with full client-server launch
+ros2 launch alfie_gr00t groot_inference.launch.py \
+    dataset_path:=/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    episode_index:=0
+
+# Replay over TCP (server on remote PC)
+ros2 launch alfie_gr00t groot_inference.launch.py \
+    transport:=tcp \
+    dataset_path:=/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    episode_index:=2
+```
+
+### Running Replay (ROS2 Node Directly)
+
+```bash
+ros2 run alfie_gr00t groot_server --ros-args \
+    -p transport:=tcp \
+    -p bind_port:=5555 \
+    -p dataset_path:=/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    -p episode_index:=0
+```
+
+### End-to-End Replay Test
+
+1. Start the replay server (on the PC or Jetson):
+```bash
+python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
+    --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    --episode-index 0 \
+    --transport tcp --port 5555
+```
+
+2. Start the client (on the Jetson):
+```bash
+ros2 run alfie_gr00t groot_client --ros-args \
+    -p transport:=tcp \
+    -p server_host:=192.168.50.108 \
+    -p server_port:=5555
+```
+
+3. Activate the client:
+```bash
+ros2 topic pub --once /alfie/groot_client/activate std_msgs/Bool "data: true"
+```
+
+4. Monitor actions being published:
+```bash
+ros2 topic echo /alfie/robotlowcmd
+```
+
+5. Check server replay progress:
+```bash
+ros2 topic echo /alfie/groot_server/status
+```
+The status will show `replay_step`, `replay_total_steps`, and `replay_done`.
+
+### Server Configuration (`config/groot_server.yaml`)
+
+```yaml
+groot_server:
+  ros__parameters:
+    # Replay Mode - set dataset_path to enable
+    dataset_path: ""              # Empty = normal inference, set path = replay mode
+    episode_index: 0              # Which episode to replay (0-based)
+    stats_path: ""                # Auto-detected from {dataset_path}/meta/stats.json
+```
+
+### Notes
+
+- Replay mode takes priority over both model inference and mock mode
+- If the parquet file is not found, the server falls back to mock mode
+- Stats are auto-detected from `{dataset_path}/meta/stats.json` if `stats_path` is empty
+- The episode replays at real-time speed (1 step per 15 FPS request)
+- After the episode ends, the last action is held indefinitely
+
 ## Troubleshooting
 
 ### Connection Issues

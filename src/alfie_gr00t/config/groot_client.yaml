@@ -28,7 +28,7 @@
 
     # Inference timeout in milliseconds
     # If server doesn't respond within this time, the request fails
-    inference_timeout_ms: 100
+    inference_timeout_ms: 5000
 
     # Which action from the 16-step action horizon to execute
     # 0 = first (most immediate), 15 = last (most future)

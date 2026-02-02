@@ -69,6 +69,9 @@ class GrootInferenceServer:
         action_horizon: int = 16,
         device: str = 'cuda:0',
         logger: Optional[logging.Logger] = None,
+        dataset_path: str = '',
+        episode_index: int = 0,
+        stats_path: str = '',
     ):
         """Initialize the inference server.
 
@@ -83,6 +86,9 @@ class GrootInferenceServer:
             action_horizon: Number of action steps to predict
             device: CUDA device string
             logger: Optional logger instance
+            dataset_path: Path to LeRobot-format dataset for replay mode
+            episode_index: Episode index to replay
+            stats_path: Path to stats.json for normalizing replay actions
         """
         self.transport = transport
         self.bind_host = bind_host
@@ -93,6 +99,9 @@ class GrootInferenceServer:
         self.mock_mode = mock_mode
         self.action_horizon = action_horizon
         self.device = device
+        self.dataset_path = dataset_path
+        self.episode_index = episode_index
+        self.stats_path = stats_path
 
         # Setup logging
         self.logger = logger or logging.getLogger(__name__)
@@ -115,6 +124,13 @@ class GrootInferenceServer:
 
         # Running state
         self._running = False
+
+        # Replay state
+        self.replay_mode = bool(self.dataset_path)
+        self._replay_actions: Optional[np.ndarray] = None
+        self._replay_step = 0
+        self._replay_total_steps = 0
+        self._replay_done = False
 
     def _build_bind_address(self) -> str:
         """Build ZeroMQ bind address from parameters."""
@@ -211,7 +227,9 @@ class GrootInferenceServer:
             # Run inference
             start_time = time.monotonic()
 
-            if self.mock_mode:
+            if self.replay_mode:
+                actions = self._replay_inference(state)
+            elif self.mock_mode:
                 actions = self._mock_inference(state)
             else:
                 actions = self._run_inference(images, state, language)
@@ -304,6 +322,98 @@ class GrootInferenceServer:
 
         return actions
 
+    def _load_replay_data(self):
+        """Load episode actions from parquet and normalize for replay."""
+        import pandas as pd
+        from alfie_gr00t.core.normalization import Normalizer
+
+        dataset_path = Path(self.dataset_path)
+
+        # Compute chunk index (chunks_size=1000)
+        chunk_idx = self.episode_index // 1000
+        parquet_path = (
+            dataset_path
+            / f'data/chunk-{chunk_idx:03d}/episode_{self.episode_index:06d}.parquet'
+        )
+
+        if not parquet_path.exists():
+            self.logger.error(f'Parquet not found: {parquet_path}')
+            self.logger.warning('Falling back to mock mode')
+            self.replay_mode = False
+            self.mock_mode = True
+            return
+
+        df = pd.read_parquet(parquet_path)
+        raw_actions = np.array(df['action'].tolist(), dtype=np.float32)
+
+        # Resolve stats path
+        stats_path = self.stats_path
+        if not stats_path:
+            stats_path = str(dataset_path / 'meta' / 'stats.json')
+
+        normalizer = Normalizer(stats_path)
+        if not normalizer.is_loaded:
+            self.logger.warning(
+                f'Could not load stats from {stats_path}. '
+                'Replay actions will NOT be normalized.'
+            )
+            self._replay_actions = raw_actions
+        else:
+            self._replay_actions = normalizer.normalize_action(raw_actions)
+
+        self._replay_step = 0
+        self._replay_total_steps = len(self._replay_actions)
+        self._replay_done = False
+
+        self.logger.info(
+            f'Loaded episode {self.episode_index}: '
+            f'{self._replay_total_steps} steps from {parquet_path}'
+        )
+
+    def _replay_inference(self, state: np.ndarray) -> np.ndarray:
+        """Return next action chunk from pre-recorded episode.
+
+        Args:
+            state: Current state vector (ignored, actions come from dataset).
+
+        Returns:
+            Action horizon (action_horizon x 22D), normalized.
+        """
+        state_dim = 22
+        actions = np.zeros((self.action_horizon, state_dim), dtype=np.float32)
+
+        for i in range(self.action_horizon):
+            step = self._replay_step + i
+            if step < self._replay_total_steps:
+                actions[i] = self._replay_actions[step]
+            else:
+                # Pad with last valid action
+                actions[i] = self._replay_actions[-1]
+                if not self._replay_done:
+                    self._replay_done = True
+                    self.logger.info(
+                        f'Episode {self.episode_index} replay complete '
+                        f'at step {self._replay_step}'
+                    )
+
+        # Advance 1 step per request (matches 15 FPS client rate)
+        self._replay_step += 1
+
+        return actions
+
+    def set_episode(self, episode_index: int):
+        """Switch to a different episode for replay."""
+        if not self.replay_mode:
+            self.logger.warning('set_episode only works in replay mode')
+            return
+        self.episode_index = episode_index
+        self._load_replay_data()
+
+    def reset_replay(self):
+        """Reset replay to beginning of current episode."""
+        self._replay_step = 0
+        self._replay_done = False
+
     def _run_inference(
         self,
         images: dict[str, bytes],
@@ -358,6 +468,7 @@ class GrootInferenceServer:
         observation = {
             'video': video_dict,
             'state': state_dict,
+            'language': [[language]],  # (B=1, T=1)
             # Flat key for annotation - GR00T looks for 'annotation.human.task_description'
             'annotation.human.task_description': [[language]],  # (B=1, T=1)
         }
@@ -451,21 +562,38 @@ class GrootInferenceServer:
             else 0.0
         )
 
-        return {
+        stats = {
             'total_requests': self._total_requests,
             'average_inference_ms': avg_inference_ms,
             'last_inference_ms': self._last_inference_time_ms,
             'mock_mode': self.mock_mode,
+            'replay_mode': self.replay_mode,
             'embodiment': self.embodiment_tag_str,
             'bind_address': self.bind_address,
             'running': self._running,
         }
 
+        if self.replay_mode:
+            stats.update({
+                'replay_episode': self.episode_index,
+                'replay_step': self._replay_step,
+                'replay_total_steps': self._replay_total_steps,
+                'replay_done': self._replay_done,
+            })
+
+        return stats
+
     def start(self):
         """Start the server (non-blocking setup)."""
         self._setup_socket()
 
-        if not self.mock_mode:
+        if self.replay_mode:
+            self._load_replay_data()
+            self.logger.info(
+                f'Running in REPLAY mode - episode {self.episode_index}, '
+                f'{self._replay_total_steps} steps'
+            )
+        elif not self.mock_mode:
             self._load_model()
         else:
             self.logger.warning('Running in MOCK mode - will return random actions')
@@ -473,7 +601,8 @@ class GrootInferenceServer:
         self._running = True
         self.logger.info(
             f'GR00T Server ready. transport={self.transport}, '
-            f'mock={self.mock_mode}, embodiment={self.embodiment_tag_str}'
+            f'replay={self.replay_mode}, mock={self.mock_mode}, '
+            f'embodiment={self.embodiment_tag_str}'
         )
 
     def spin_once(self) -> bool:
@@ -520,63 +649,111 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description='GR00T N1.6 Inference Server',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+modes:
+  The server runs in one of three modes (checked in this priority order):
+
+  1. Replay mode   --dataset-path is set
+                   Serves pre-recorded actions from a LeRobot-format dataset.
+                   No GPU or model required.
+
+  2. Mock mode     --mock flag is set
+                   Returns dummy actions for testing without GPU/model.
+
+  3. Production    (default) --checkpoint is set
+                   Loads a GR00T model and runs TensorRT inference.
+
+examples:
+  # Replay episode 3 over TCP
+  %(prog)s --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \\
+           --episode-index 3 --transport tcp --port 5555
+
+  # Mock mode for testing
+  %(prog)s --mock --transport tcp --port 5555
+
+  # Production inference
+  %(prog)s --checkpoint /home/alfie/cando --transport tcp --port 5555
+""",
     )
 
     # Transport options
-    parser.add_argument(
+    transport_group = parser.add_argument_group('transport')
+    transport_group.add_argument(
         '--transport', '-t',
         choices=['ipc', 'tcp'],
         default='ipc',
-        help='ZeroMQ transport type'
+        help='ZeroMQ transport type (default: %(default)s)'
     )
-    parser.add_argument(
+    transport_group.add_argument(
         '--host',
         default='*',
-        help='Host to bind for TCP transport'
+        help='Host to bind for TCP transport (default: %(default)s)'
     )
-    parser.add_argument(
+    transport_group.add_argument(
         '--port', '-p',
         type=int,
         default=5555,
-        help='Port to bind for TCP transport'
+        help='Port to bind for TCP transport (default: %(default)s)'
     )
-    parser.add_argument(
+    transport_group.add_argument(
         '--ipc-path',
         default='/tmp/groot_inference.sock',
-        help='Path for IPC Unix socket'
+        help='Path for IPC Unix socket (default: %(default)s)'
     )
 
     # Model options
-    parser.add_argument(
+    model_group = parser.add_argument_group('model')
+    model_group.add_argument(
         '--checkpoint', '-c',
         default='',
         help='Path to GR00T model checkpoint'
     )
-    parser.add_argument(
+    model_group.add_argument(
         '--embodiment', '-e',
         default='new_embodiment',
-        help='Embodiment tag string'
+        help='Embodiment tag string (default: %(default)s)'
     )
-    parser.add_argument(
+    model_group.add_argument(
         '--device', '-d',
         default='cuda:0',
-        help='CUDA device string'
+        help='CUDA device string (default: %(default)s)'
+    )
+
+    # Replay mode options
+    replay_group = parser.add_argument_group('replay mode')
+    replay_group.add_argument(
+        '--dataset-path',
+        default='',
+        help='Path to LeRobot-format dataset (enables replay mode)'
+    )
+    replay_group.add_argument(
+        '--episode-index',
+        type=int,
+        default=0,
+        help='Episode index to replay (default: %(default)s)'
+    )
+    replay_group.add_argument(
+        '--stats-path',
+        default='',
+        help='Path to stats.json for normalizing replay actions '
+             '(default: {dataset_path}/meta/stats.json)'
     )
 
     # Runtime options
-    parser.add_argument(
+    runtime_group = parser.add_argument_group('runtime')
+    runtime_group.add_argument(
         '--mock', '-m',
         action='store_true',
         help='Run in mock mode (no model, random actions)'
     )
-    parser.add_argument(
+    runtime_group.add_argument(
         '--action-horizon',
         type=int,
         default=16,
-        help='Number of action steps to predict'
+        help='Number of action steps to predict (default: %(default)s)'
     )
-    parser.add_argument(
+    runtime_group.add_argument(
         '--verbose', '-v',
         action='store_true',
         help='Enable verbose logging'
@@ -610,6 +787,9 @@ def main():
         action_horizon=args.action_horizon,
         device=args.device,
         logger=logger,
+        dataset_path=args.dataset_path,
+        episode_index=args.episode_index,
+        stats_path=args.stats_path,
     )
 
     # Setup signal handlers
