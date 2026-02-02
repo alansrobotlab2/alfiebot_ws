@@ -100,38 +100,77 @@ class ActionPublisher:
         Returns:
             True if action was published, False if blocked by safety.
         """
+        logger = self.node.get_logger()
         action = np.asarray(action, dtype=np.float32).flatten()
 
         if len(action) != self.ACTION_DIM:
-            self.node.get_logger().error(
+            logger.error(
                 f'Action dimension mismatch: expected {self.ACTION_DIM}, got {len(action)}'
             )
             return False
 
+        # Log raw action base values (every 100th publish to avoid spam)
+        log_this = (self._publish_count % 100 == 0)
+
+        if log_this:
+            logger.info(
+                f'[base_debug] raw_action base[0:6]='
+                f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
+            )
+
         # Denormalize if needed
         if normalized:
             action = self.normalizer.denormalize_action(action)
+            if log_this:
+                logger.info(
+                    f'[base_debug] denorm base[0:6]='
+                    f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
+                )
 
         # Apply smoothing
         if apply_smoothing and self._last_action is not None:
+            pre_smooth = action[0:6].copy()
             action = (
                 self.smoothing_alpha * action +
                 (1 - self.smoothing_alpha) * self._last_action
             )
+            if log_this:
+                logger.info(
+                    f'[base_debug] smoothed base[0:6]='
+                    f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
+                    f' (pre_smooth={np.array2string(pre_smooth, precision=4, suppress_small=True)})'
+                )
 
         # Apply safety limits
         if apply_safety:
             # Check if safe to publish
             if not self.safety.is_safe():
-                self.node.get_logger().warn('Safety check failed, not publishing')
+                logger.warn('Safety check failed, not publishing')
                 return False
 
+            pre_safety = action[0:6].copy()
             # Apply velocity and joint limits
             action = self.safety.apply_limits(action)
 
             # Apply delta limits if we have current state
             if current_state is not None:
                 action = self.safety.compute_delta_limits(action, current_state)
+
+            if log_this:
+                logger.info(
+                    f'[base_debug] post_safety base[0:6]='
+                    f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
+                    f' (pre_safety={np.array2string(pre_safety, precision=4, suppress_small=True)})'
+                )
+
+        # Final twist values that will be published
+        if log_this:
+            logger.info(
+                f'[base_debug] FINAL twist: '
+                f'lin=({action[0]:.4f}, {action[1]:.4f}, {action[2]:.4f}) '
+                f'ang=({action[3]:.4f}, {action[4]:.4f}, {action[5]:.4f}) '
+                f'[publish #{self._publish_count}]'
+            )
 
         # Store for next smoothing iteration
         self._last_action = action.copy()
@@ -197,7 +236,7 @@ class ActionPublisher:
 
         # Back command (index 6)
         msg.back_cmd = BackCmd()
-        msg.back_cmd.command_position = float(action[6])
+        msg.back_cmd.position = float(action[6])
 
         # Left arm servos (indices 7-11 -> servos 0-4)
         for i in range(5):

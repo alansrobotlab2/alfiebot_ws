@@ -39,3 +39,18 @@ groot_server:
 
     # Device to use for inference ("cuda:0", "cuda:1", etc.)
     device: "cuda:0"
+
+    # ==========================================================================
+    # Replay Mode Configuration
+    # ==========================================================================
+    # Path to LeRobot-format dataset for episode replay
+    # When set, server ignores model and replays recorded actions
+    # Leave empty for normal inference mode
+    dataset_path: ""
+
+    # Episode index to replay (0-based)
+    episode_index: 0
+
+    # Path to stats.json for normalizing replay actions
+    # Leave empty to auto-detect from {dataset_path}/meta/stats.json
+    stats_path: ""

@@ -57,7 +57,14 @@ IPC (Inter-Process Communication) uses Unix domain sockets and is ~5x faster tha
    - Runs TensorRT accelerated inference
    - Target: 15-20 FPS on Jetson Orin NX
 
-2. **Mock Mode** (testing)
+2. **Replay Mode** (episode playback)
+   - Replays pre-recorded actions from a LeRobot-format dataset
+   - No GPU or model required
+   - Actions are normalized using `stats.json` before serving
+   - Advances 1 step per client request (real-time at 15 FPS)
+   - Enabled by setting `dataset_path` to a dataset directory
+
+3. **Mock Mode** (testing)
    - Returns dummy actions without GPU/model
    - Useful for testing communication pipeline
    - Action pattern: exponential decay to zero (hold position)
@@ -130,6 +137,11 @@ groot_server:
     mock_mode: false
     action_horizon: 16
     device: "cuda:0"
+
+    # Replay mode (set dataset_path to enable)
+    dataset_path: ""              # Path to LeRobot-format dataset (empty = disabled)
+    episode_index: 0              # Which episode to replay (0-based)
+    stats_path: ""                # Auto-detected from {dataset_path}/meta/stats.json
 ```
 
 ## Running the Server
@@ -213,8 +225,18 @@ Published at 1 Hz:
     'average_inference_ms': 24.5,
     'last_inference_ms': 25.3,
     'mock_mode': False,
-    'tensorrt': True,
+    'replay_mode': False,
     'bind_address': 'ipc:///tmp/groot_inference.sock'
+}
+
+# When in replay mode, additional fields are included:
+{
+    'replay_mode': True,
+    'replay_episode': 0,
+    'replay_step': 150,
+    'replay_total_steps': 410,
+    'replay_done': False,
+    ...
 }
 ```
 
@@ -337,6 +359,76 @@ ros2 launch alfie_gr00t groot_inference.launch.py
 # Activate inference
 ros2 topic pub --once /alfie/groot_client/activate std_msgs/Bool "data: true"
 ```
+
+## Episode Replay Mode
+
+Replay mode serves pre-recorded actions from a LeRobot-format dataset. The client sees no difference -- it receives 16x22D normalized action arrays as usual, but they come from disk instead of model inference.
+
+### Dataset Structure
+
+```
+/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge/
+├── data/chunk-000/
+│   ├── episode_000000.parquet    # 22D state + action vectors
+│   ├── episode_000001.parquet
+│   └── ...
+├── meta/
+│   ├── stats.json                # Normalization statistics
+│   ├── episodes.jsonl            # Episode metadata
+│   └── info.json                 # Dataset info
+└── videos/chunk-000/
+    └── ...
+```
+
+### Running Replay (Standalone)
+
+```bash
+python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
+    --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    --episode-index 0 \
+    --transport tcp --port 5555
+```
+
+### Running Replay (ROS2 Launch)
+
+```bash
+ros2 launch alfie_gr00t groot_inference.launch.py \
+    dataset_path:=/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    episode_index:=0
+```
+
+### Running Replay (ROS2 Node)
+
+```bash
+ros2 run alfie_gr00t groot_server --ros-args \
+    -p dataset_path:=/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    -p episode_index:=0 \
+    -p transport:=tcp \
+    -p bind_port:=5555
+```
+
+### CLI Arguments (Standalone Server)
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--dataset-path` | `""` | Path to LeRobot-format dataset (enables replay mode) |
+| `--episode-index` | `0` | Episode index to replay |
+| `--stats-path` | `""` | Path to stats.json (auto-detected if empty) |
+
+### Mode Priority
+
+When multiple modes are configured, the server uses this priority:
+
+1. **Replay** -- if `dataset_path` is set
+2. **Mock** -- if `mock_mode` is true
+3. **Production** -- loads model from `model_checkpoint`
+
+### Behavior
+
+- Each client request advances the replay by 1 step (matching 15 FPS)
+- When the episode ends, the last action is held indefinitely
+- If the parquet file is not found, the server falls back to mock mode
+- Stats are auto-detected from `{dataset_path}/meta/stats.json`
 
 ## Development
 

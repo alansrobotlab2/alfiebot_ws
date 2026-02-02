@@ -114,6 +114,19 @@ def generate_launch_description():
         description='Action smoothing EMA coefficient (0-1)'
     )
 
+    # Launch arguments - Replay mode
+    dataset_path_arg = DeclareLaunchArgument(
+        'dataset_path',
+        default_value='',
+        description='Path to LeRobot-format dataset for replay mode (empty = normal inference)'
+    )
+
+    episode_index_arg = DeclareLaunchArgument(
+        'episode_index',
+        default_value='0',
+        description='Episode index to replay'
+    )
+
     # GR00T server node
     groot_server_node = Node(
         package='alfie_gr00t',
@@ -133,6 +146,8 @@ def generate_launch_description():
                 'model_checkpoint': LaunchConfiguration('model_checkpoint'),
                 'use_tensorrt': LaunchConfiguration('use_tensorrt'),
                 'mock_mode': LaunchConfiguration('mock_mode'),
+                'dataset_path': LaunchConfiguration('dataset_path'),
+                'episode_index': LaunchConfiguration('episode_index'),
             }
         ],
     )
@@ -181,6 +196,10 @@ def generate_launch_description():
         enable_safety_arg,
         smoothing_alpha_arg,
 
+        # Replay arguments
+        dataset_path_arg,
+        episode_index_arg,
+
         # Log startup info
         LogInfo(msg=['=========================================']),
         LogInfo(msg=['GR00T N1.6 Inference System']),
@@ -188,6 +207,8 @@ def generate_launch_description():
         LogInfo(msg=['Transport: ', LaunchConfiguration('transport')]),
         LogInfo(msg=['Launch Server: ', LaunchConfiguration('launch_server')]),
         LogInfo(msg=['Mock Mode: ', LaunchConfiguration('mock_mode')]),
+        LogInfo(msg=['Replay Dataset: ', LaunchConfiguration('dataset_path')]),
+        LogInfo(msg=['Replay Episode: ', LaunchConfiguration('episode_index')]),
         LogInfo(msg=['Task: ', LaunchConfiguration('task_description')]),
         LogInfo(msg=['Inference FPS: ', LaunchConfiguration('target_fps'), ' | Command: 100 Hz']),
         LogInfo(msg=['=========================================']),
