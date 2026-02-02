@@ -228,10 +228,16 @@ class GrootInferenceServer:
             start_time = time.monotonic()
 
             if self.replay_mode:
-                self.logger.info(
-                    f'Replay inference triggered — step {self._replay_step}/'
-                    f'{self._replay_total_steps} (episode {self.episode_index})'
-                )
+                # Log replay progress every 50 steps, plus first and last active step
+                if (
+                    self._replay_step == 0
+                    or self._replay_step % 50 == 0
+                    or self._replay_step == self._replay_total_steps - 1
+                ) and not self._replay_done:
+                    self.logger.info(
+                        f'Replay inference — step {self._replay_step}/'
+                        f'{self._replay_total_steps} (episode {self.episode_index})'
+                    )
                 actions = self._replay_inference(state)
             elif self.mock_mode:
                 actions = self._mock_inference(state)
