@@ -5,7 +5,7 @@ ROS2 Bag to GR00T N1.6 Training Data Converter
 Converts ROS2 bag demonstrations (MCAP format) into the GR00T training format:
 - Parquet files for state/action data
 - MP4 videos for camera observations
-- Updated meta files (info.json, episodes.jsonl, tasks.jsonl, stats.json)
+- Updated meta files (info.json, episodes.jsonl, tasks.jsonl)
 
 Usage:
     python3 rosbag_to_groot.py [--demos-dir PATH] [--output-dir PATH] [--task-index N] [--fps N]
@@ -747,77 +747,7 @@ class RosbagToGrootConverter:
                 f.write(json.dumps(ep) + '\n')
         print(f"\nSaved {len(all_episodes)} episodes to {episodes_path}")
 
-        # Phase 7: Recompute stats if anything changed
-        has_changes = len(removed_names) > 0 or num_added > 0
-        if has_changes:
-            self.recompute_stats_from_parquet()
-
         return (len(unchanged_names), len(removed_names), num_added)
-
-    def recompute_stats_from_parquet(self):
-        """Recompute normalization statistics by reading all parquet files."""
-        parquet_files = sorted(self.data_dir.glob('chunk-*/episode_*.parquet'))
-
-        if not parquet_files:
-            print("No parquet files found - skipping stats computation")
-            return
-
-        print(f"Recomputing statistics from {len(parquet_files)} parquet files...")
-
-        all_states = []
-        all_actions = []
-
-        for pf in parquet_files:
-            try:
-                df = pd.read_parquet(pf)
-                all_states.extend(df['state'].tolist())
-                all_actions.extend(df['action'].tolist())
-            except Exception as e:
-                print(f"  Warning: Failed to read {pf.name}: {e}")
-
-        if not all_states:
-            print("No data found in parquet files - skipping stats computation")
-            return
-
-        states = np.array(all_states, dtype=np.float32)
-        actions = np.array(all_actions, dtype=np.float32)
-
-        stats = {
-            'observation.state': {
-                'mean': states.mean(axis=0).tolist(),
-                'std': states.std(axis=0).tolist(),
-                'min': states.min(axis=0).tolist(),
-                'max': states.max(axis=0).tolist(),
-            },
-            'action': {
-                'mean': actions.mean(axis=0).tolist(),
-                'std': actions.std(axis=0).tolist(),
-                'min': actions.min(axis=0).tolist(),
-                'max': actions.max(axis=0).tolist(),
-            }
-        }
-
-        stats_path = self.meta_dir / 'stats.json'
-        with open(stats_path, 'w') as f:
-            json.dump(stats, f, indent=2)
-        print(f"Saved statistics to {stats_path}")
-
-        # Also save relative stats (normalized)
-        relative_stats = {
-            'observation.state': {
-                'mean': [0.0] * 22,
-                'std': [1.0] * 22,
-            },
-            'action': {
-                'mean': [0.0] * 22,
-                'std': [1.0] * 22,
-            }
-        }
-
-        relative_stats_path = self.meta_dir / 'relative_stats.json'
-        with open(relative_stats_path, 'w') as f:
-            json.dump(relative_stats, f, indent=2)
-        print(f"Saved relative statistics to {relative_stats_path}")
 
     def save_episodes_metadata(self):
         """Save episodes.jsonl with per-episode metadata."""
@@ -882,7 +812,7 @@ class RosbagToGrootConverter:
 
             # Meta files
             print(f"\n  Meta files:")
-            for meta_name in ['info.json', 'stats.json', 'relative_stats.json', 'episodes.jsonl', 'tasks.jsonl']:
+            for meta_name in ['info.json', 'episodes.jsonl', 'tasks.jsonl']:
                 meta_path = self.meta_dir / meta_name
                 if meta_path.exists():
                     size_kb = meta_path.stat().st_size / 1024
@@ -941,7 +871,7 @@ def print_usage_summary():
 
 Converts ROS2 bag demonstrations (MCAP format) into the
 GR00T training format: parquet files, MP4 videos, and
-meta files (info.json, episodes.jsonl, tasks.jsonl, stats.json).
+meta files (info.json, episodes.jsonl, tasks.jsonl).
 
 Arguments:
   --demos-dir DIR       Input directory containing demo_* folders
