@@ -74,6 +74,7 @@ class GrootClientNode(Node):
         self.action_smoothing_alpha = self.get_parameter('action_smoothing_alpha').value
         self.action_execution_index = self.get_parameter('action_execution_index').value
         self.stats_file = self.get_parameter('stats_file').value
+        self.csv_log_path = self.get_parameter('csv_log_path').value
 
         # Build server address from transport parameters
         self.server_address = build_server_address(
@@ -124,6 +125,7 @@ class GrootClientNode(Node):
             normalizer=self.normalizer,
             safety=self.safety if self.enable_safety_limits else None,
             smoothing_alpha=self.action_smoothing_alpha,
+            csv_log_path=self.csv_log_path,
         )
 
         # QoS for control topics
@@ -201,6 +203,7 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Action Smoothing:     {self.action_smoothing_alpha}')
         self.get_logger().info(f'  Action Exec Index:    {self.action_execution_index}')
         self.get_logger().info(f'  Stats File:           {self.stats_file}')
+        self.get_logger().info(f'  CSV Log Path:         {self.csv_log_path or "(disabled)"}')
         self.get_logger().info('=' * 60)
 
     def _test_server_connection(self):
@@ -237,6 +240,7 @@ class GrootClientNode(Node):
             'stats_file',
             '/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge/meta/stats.json'
         )
+        self.declare_parameter('csv_log_path', '')
 
     def _activate_callback(self, msg: Bool):
         """Handle activation/deactivation requests."""
@@ -463,6 +467,9 @@ class GrootClientNode(Node):
 
         # Send stop command
         self.action_publisher.publish_stop()
+
+        # Close CSV log
+        self.action_publisher.close_csv()
 
         # Close ZMQ connection
         self.zmq_client.close()

@@ -1,5 +1,8 @@
 """Action publisher for converting GR00T actions to ROS2 robot commands."""
 
+import csv
+import time
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -26,6 +29,18 @@ class ActionPublisher:
     ACTION_DIM = 22
     NUM_SERVOS = 15
 
+    # Joint names matching the 22D action vector layout
+    JOINT_NAMES = [
+        'cmd_vel_lx', 'cmd_vel_ly', 'cmd_vel_lz',
+        'cmd_vel_ax', 'cmd_vel_ay', 'cmd_vel_az',
+        'back_joint',
+        'left_shoulder_yaw', 'left_shoulder_pitch', 'left_elbow_pitch',
+        'left_wrist_pitch', 'left_wrist_roll', 'left_gripper',
+        'right_shoulder_yaw', 'right_shoulder_pitch', 'right_elbow_pitch',
+        'right_wrist_pitch', 'right_wrist_roll', 'right_gripper',
+        'head_yaw', 'head_pitch', 'head_roll',
+    ]
+
     def __init__(
         self,
         node: Node,
@@ -36,6 +51,7 @@ class ActionPublisher:
         default_servo_speed: float = 1.5,
         default_servo_acceleration: float = 5.0,
         default_servo_torque: float = 0.5,
+        csv_log_path: str = '',
     ):
         """Initialize action publisher.
 
@@ -74,11 +90,60 @@ class ActionPublisher:
 
         # Statistics
         self._publish_count = 0
+        self._inference_step = 0
+
+        # CSV logging
+        self._csv_file = None
+        self._csv_writer = None
+        if csv_log_path:
+            self._init_csv_log(csv_log_path)
 
     def reset_smoothing(self):
         """Reset action smoothing state."""
         self._last_action = None
         self._last_state = None
+
+    def _init_csv_log(self, csv_log_path: str):
+        """Initialize CSV log file with headers."""
+        path = Path(csv_log_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._csv_file = open(path, 'w', newline='')
+        self._csv_writer = csv.writer(self._csv_file)
+
+        # Build header row
+        header = ['timestamp', 'step']
+        for prefix in ['raw', 'denorm', 'smoothed', 'final', 'state']:
+            for name in self.JOINT_NAMES:
+                header.append(f'{prefix}_{name}')
+        self._csv_writer.writerow(header)
+        self._csv_file.flush()
+        self.node.get_logger().info(f'CSV logging enabled: {csv_log_path}')
+
+    def _write_csv_row(
+        self,
+        raw: np.ndarray,
+        denorm: np.ndarray,
+        smoothed: np.ndarray,
+        final: np.ndarray,
+        state: Optional[np.ndarray],
+    ):
+        """Write one row to the CSV log."""
+        if self._csv_writer is None:
+            return
+        state_vals = state if state is not None else np.zeros(self.ACTION_DIM)
+        row = [time.time(), self._inference_step]
+        for arr in [raw, denorm, smoothed, final, state_vals]:
+            row.extend(arr.tolist())
+        self._csv_writer.writerow(row)
+        self._csv_file.flush()
+        self._inference_step += 1
+
+    def close_csv(self):
+        """Close CSV log file."""
+        if self._csv_file is not None:
+            self._csv_file.close()
+            self._csv_file = None
+            self._csv_writer = None
 
     def publish_action(
         self,
@@ -112,6 +177,9 @@ class ActionPublisher:
         # Log raw action base values (every 100th publish to avoid spam)
         log_this = (self._publish_count % 100 == 0)
 
+        # Capture raw (normalized) action for CSV
+        raw_action = action.copy()
+
         if log_this:
             logger.info(
                 f'[base_debug] raw_action base[0:6]='
@@ -127,6 +195,9 @@ class ActionPublisher:
                     f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
                 )
 
+        # Capture denormalized action for CSV
+        denorm_action = action.copy()
+
         # Apply smoothing
         if apply_smoothing and self._last_action is not None:
             pre_smooth = action[0:6].copy()
@@ -140,6 +211,9 @@ class ActionPublisher:
                     f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
                     f' (pre_smooth={np.array2string(pre_smooth, precision=4, suppress_small=True)})'
                 )
+
+        # Capture smoothed action for CSV
+        smoothed_action = action.copy()
 
         # Apply safety limits
         if apply_safety:
@@ -170,6 +244,16 @@ class ActionPublisher:
                 f'lin=({action[0]:.4f}, {action[1]:.4f}, {action[2]:.4f}) '
                 f'ang=({action[3]:.4f}, {action[4]:.4f}, {action[5]:.4f}) '
                 f'[publish #{self._publish_count}]'
+            )
+
+        # Write CSV row on every publish (100Hz) for full fidelity
+        if self._csv_writer is not None:
+            self._write_csv_row(
+                raw=raw_action,
+                denorm=denorm_action,
+                smoothed=smoothed_action,
+                final=action,
+                state=current_state,
             )
 
         # Store for next smoothing iteration
