@@ -339,12 +339,16 @@ class GrootInferenceServer:
 
         dataset_path = Path(self.dataset_path)
 
-        # Compute chunk index (chunks_size=1000)
-        chunk_idx = self.episode_index // 1000
+        # Try flat layout first, then chunked layout
         parquet_path = (
-            dataset_path
-            / f'data/chunk-{chunk_idx:03d}/episode_{self.episode_index:06d}.parquet'
+            dataset_path / f'data/episode_{self.episode_index:06d}.parquet'
         )
+        if not parquet_path.exists():
+            chunk_idx = self.episode_index // 1000
+            parquet_path = (
+                dataset_path
+                / f'data/chunk-{chunk_idx:03d}/episode_{self.episode_index:06d}.parquet'
+            )
 
         if not parquet_path.exists():
             self.logger.error(f'Parquet not found: {parquet_path}')
