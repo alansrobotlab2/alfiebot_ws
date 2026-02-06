@@ -22,9 +22,10 @@
     # ==========================================================================
     # Inference Settings
     # ==========================================================================
-    # Target frames per second for the inference loop
+    # Max inference rate (FPS) — ceiling to avoid flooding WiFi/TCP
+    # Server inference time is the floor; this caps the max send rate
     # Command publishing always runs at 100 Hz regardless of this setting
-    target_fps: 15
+    target_fps: 6
 
     # Inference timeout in milliseconds
     # If server doesn't respond within this time, the request fails
@@ -51,8 +52,3 @@
     # Lower = more smoothing, smoother but laggier
     action_smoothing_alpha: 0.7
 
-    # ==========================================================================
-    # Data Paths
-    # ==========================================================================
-    # Normalization statistics file from training dataset
-    stats_file: "/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge/meta/stats.jsonl"
