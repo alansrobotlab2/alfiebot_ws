@@ -453,11 +453,11 @@ class GrootInferenceServer:
 
         Args:
             images: Dictionary of JPEG-compressed images.
-            state: Normalized state vector (22D).
+            state: Raw state vector (22D) — Gr00tPolicy normalizes internally.
             language: Task description string.
 
         Returns:
-            Action horizon (16 x 22D).
+            Action horizon (16 x 22D), unnormalized.
         """
         # Decode images from JPEG and format for Gr00tPolicy
         # Expected format: video[key] = np.ndarray[np.uint8, (B, T, H, W, C)]
@@ -487,19 +487,17 @@ class GrootInferenceServer:
 
         # Format language for Gr00tPolicy
         # Expected format: language[key] = list[list[str]] with shape (B, T)
-        # Key must match modality config: "annotation.human.task_description"
+        # Key must match modality config from fine-tuning
         language_dict = {
-            'annotation.human.task_description': [[language]]  # (1, 1) - batch size 1, temporal 1
+            'annotation.human.action.task_description': [[language]]  # (1, 1) - batch size 1, temporal 1
         }
 
         # Prepare observation dict for GR00T
-        # GR00T expects flat keys with dot notation for nested structures
+        # GR00T expects language as a dict: {"annotation.human.task_description": [[str]]}
         observation = {
             'video': video_dict,
             'state': state_dict,
-            'language': [[language]],  # (B=1, T=1)
-            # Flat key for annotation - GR00T looks for 'annotation.human.task_description'
-            'annotation.human.task_description': [[language]],  # (B=1, T=1)
+            'language': language_dict,
         }
 
         # Log observation structure for debugging

@@ -174,15 +174,15 @@ class ActionPublisher:
             )
             return False
 
-        # Log raw action base values (every 100th publish to avoid spam)
+        # Log action base values (every 100th publish to avoid spam)
         log_this = (self._publish_count % 100 == 0)
 
-        # Capture raw (normalized) action for CSV
+        # Capture input action for CSV
         raw_action = action.copy()
 
         if log_this:
             logger.info(
-                f'[base_debug] raw_action base[0:6]='
+                f'[base_debug] input_action base[0:6]='
                 f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
             )
 
