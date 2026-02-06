@@ -503,29 +503,12 @@ class GrootInferenceServer:
         df = pd.read_parquet(parquet_path)
         raw_actions = np.array(df['action'].tolist(), dtype=np.float32)
 
-        # Resolve stats path
-        stats_path = self.stats_path
-        if not stats_path:
-            stats_path = str(dataset_path / 'meta' / 'stats.json')
-
-        # Normalize actions using stats (z-score: (x - mean) / std)
-        # Inline to avoid dependency on alfie_gr00t package for standalone use
-        try:
-            with open(stats_path, 'r') as f:
-                stats = json.load(f)
-            action_stats = stats.get('action', {})
-            action_mean = np.array(action_stats['mean'], dtype=np.float32)
-            action_std = np.array(action_stats['std'], dtype=np.float32)
-            # Replace zero std with 1.0 to avoid division by zero
-            action_std = np.where(action_std == 0, 1.0, action_std)
-            self._replay_actions = (raw_actions - action_mean) / action_std
-            self.logger.info(f'Normalized replay actions using {stats_path}')
-        except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
-            self.logger.warning(
-                f'Could not load stats from {stats_path}: {e}. '
-                'Replay actions will NOT be normalized.'
-            )
-            self._replay_actions = raw_actions
+        # Use raw actions directly — production mode returns unnormalized
+        # (raw physical units) actions, so replay mode must match.
+        # The Gr00tPolicy internally handles normalization/denormalization;
+        # the client expects raw values (velocity m/s, joint positions rad).
+        self._replay_actions = raw_actions
+        self.logger.info(f'Replay actions loaded as raw values (no normalization)')
 
         self._replay_step = 0
         self._replay_total_steps = len(self._replay_actions)
@@ -643,23 +626,11 @@ class GrootInferenceServer:
             'language': language_dict,
         }
 
-        # Log observation structure for debugging
-        self.logger.info(f"Observation keys: {list(observation.keys())}")
-        self.logger.info(f"  video keys: {list(video_dict.keys())}")
-        self.logger.info(f"  state keys: {list(state_dict.keys())}")
-        for k, v in video_dict.items():
-            self.logger.info(f"    video[{k}] shape: {v.shape}")
-        for k, v in state_dict.items():
-            self.logger.info(f"    state[{k}] shape: {v.shape}")
-        self.logger.info(f"  annotation key: 'annotation.human.task_description' = {observation.get('annotation.human.task_description')}")
-
-        # Log policy expected keys if available
-        if hasattr(self._policy, 'config'):
-            self.logger.info(f"Policy config: {self._policy.config}")
-        if hasattr(self._policy, 'modality_config'):
-            self.logger.info(f"Policy modality_config: {self._policy.modality_config}")
-        if hasattr(self._policy, '_modality_config'):
-            self.logger.info(f"Policy _modality_config: {self._policy._modality_config}")
+        # Log observation structure periodically (every 50 requests to avoid spam)
+        if self._total_requests % 50 == 0:
+            self.logger.info(f"Observation: video={list(video_dict.keys())}, state={list(state_dict.keys())}")
+            for k, v in state_dict.items():
+                self.logger.info(f"  state[{k}]={v[0, 0, :].tolist()}")
 
         # Run inference using get_action()
         try:
@@ -684,6 +655,15 @@ class GrootInferenceServer:
             if hasattr(self._policy, '_modality_config'):
                 self.logger.error(f"Policy _modality_config: {self._policy._modality_config}")
             raise
+
+        # Log action_dict diagnostics periodically
+        if self._total_requests % 50 == 0:
+            self.logger.info(f"action_dict keys: {list(action_dict.keys())}")
+            for key, val in action_dict.items():
+                self.logger.info(
+                    f"  {key}: shape={val.shape}, "
+                    f"mean={val.mean():.4f}, range=[{val.min():.4f}, {val.max():.4f}]"
+                )
 
         # Reassemble actions from split body parts into 22D vector
         # Action dict contains keys: base, back, left_arm, left_hand, right_arm, right_hand, head
@@ -717,6 +697,13 @@ class GrootInferenceServer:
                 part_actions = action_dict[key][0]  # (T, D)
                 actions[:, offset:offset + dim] = part_actions
             offset += dim
+
+        # Log assembled action diagnostics periodically
+        if self._total_requests % 50 == 0:
+            self.logger.info(
+                f"Assembled actions[0]: base={actions[0, 0:6]}, "
+                f"right_arm={actions[0, 13:18]}, head={actions[0, 19:22]}"
+            )
 
         return actions
 
