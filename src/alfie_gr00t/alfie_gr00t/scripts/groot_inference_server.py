@@ -174,6 +174,8 @@ class GrootInferenceServer:
         stats_path: str = '',
         trt_engine_path: str = '',
         denoising_steps: int = 0,
+        enable_viz: bool = False,
+        viz_port: int = 7860,
     ):
         """Initialize the inference server.
 
@@ -230,6 +232,14 @@ class GrootInferenceServer:
 
         # Running state
         self._running = False
+
+        # Visualizer
+        self._enable_viz = enable_viz
+        self._viz = None
+        self._viz_port = viz_port
+        if enable_viz:
+            from alfie_gr00t.viz import GrootVisualizer
+            self._viz = GrootVisualizer(enable=True, port=viz_port)
 
         # Replay state
         self.replay_mode = bool(self.dataset_path)
@@ -374,6 +384,17 @@ class GrootInferenceServer:
                 'inference_time_ms': inference_time_ms,
                 'status': 'ok',
             }
+
+            # Update visualizer
+            if self._viz is not None:
+                viz_start = time.monotonic()
+                self._viz.update(observation=obs, response=response)
+                viz_ms = (time.monotonic() - viz_start) * 1000
+                if self._total_requests % 50 == 0:
+                    self.logger.info(
+                        f'[perf] inference={inference_time_ms:.1f}ms, '
+                        f'viz_update={viz_ms:.1f}ms'
+                    )
 
             # Send response
             packed = msgpack.packb(response, use_bin_type=True)
@@ -753,6 +774,9 @@ class GrootInferenceServer:
             f'replay={self.replay_mode}, mock={self.mock_mode}, '
             f'embodiment={self.embodiment_tag_str}'
         )
+        if self._enable_viz:
+            self.logger.info(f'Gradio visualization available at http://localhost:{self._viz_port}')
+
 
     def spin_once(self) -> bool:
         """Process one request if available.
@@ -774,6 +798,11 @@ class GrootInferenceServer:
         """Stop the server and cleanup resources."""
         self.logger.info('Shutting down GR00T server...')
         self._running = False
+
+        # Close visualizer
+        if self._viz is not None:
+            self._viz.close()
+            self._viz = None
 
         # Close socket
         if self._socket is not None:
@@ -918,6 +947,17 @@ examples:
         action='store_true',
         help='Enable verbose logging'
     )
+    runtime_group.add_argument(
+        '--enable-viz',
+        action='store_true',
+        help='Enable Gradio visualizer for inference I/O'
+    )
+    runtime_group.add_argument(
+        '--viz-port',
+        type=int,
+        default=7860,
+        help='Port for Gradio visualizer (default: %(default)s)'
+    )
 
     return parser.parse_args()
 
@@ -934,6 +974,10 @@ def main():
         datefmt='%Y-%m-%d %H:%M:%S',
     )
     logger = logging.getLogger('groot_inference_server')
+
+    # Silence noisy third-party loggers even in verbose mode
+    for name in ('matplotlib', 'PIL', 'httpcore', 'httpx', 'urllib3', 'asyncio'):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     # Create server
     server = GrootInferenceServer(
@@ -952,6 +996,8 @@ def main():
         stats_path=args.stats_path,
         trt_engine_path=args.trt_engine_path,
         denoising_steps=args.denoising_steps,
+        enable_viz=args.enable_viz,
+        viz_port=args.viz_port,
     )
 
     # Setup signal handlers

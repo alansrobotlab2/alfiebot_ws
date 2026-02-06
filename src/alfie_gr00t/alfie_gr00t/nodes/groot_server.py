@@ -67,6 +67,8 @@ class GrootServerNode(Node):
         dataset_path = self.get_parameter('dataset_path').value
         episode_index = self.get_parameter('episode_index').value
         stats_path = self.get_parameter('stats_path').value
+        enable_viz = self.get_parameter('enable_viz').value
+        viz_port = self.get_parameter('viz_port').value
 
         # Setup logger that forwards to ROS2
         logger = logging.getLogger('groot_inference_server')
@@ -89,6 +91,8 @@ class GrootServerNode(Node):
             dataset_path=dataset_path,
             episode_index=episode_index,
             stats_path=stats_path,
+            enable_viz=enable_viz,
+            viz_port=viz_port,
         )
 
         # Start the server
@@ -120,6 +124,10 @@ class GrootServerNode(Node):
         self.declare_parameter('dataset_path', '')
         self.declare_parameter('episode_index', 0)
         self.declare_parameter('stats_path', '')
+
+        # Visualizer configuration
+        self.declare_parameter('enable_viz', False)
+        self.declare_parameter('viz_port', 7860)
 
     def _server_loop(self):
         """Process server requests."""
