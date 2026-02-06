@@ -6,9 +6,12 @@ sends synchronized observations, and publishes action predictions
 to control the robot.
 
 Key timing:
-- Inference runs on a background thread, paced to target_fps
+- Inference runs continuously on a background thread (as fast as the server allows)
+- The server returns a 16-step action horizon; the command loop steps through
+  these actions at the training data rate (15 FPS = 67ms per action)
 - Command publishing runs at exactly 100 Hz on the ROS2 executor
-- The two are decoupled so blocking inference never starves commands
+- When a new action chunk arrives, it immediately replaces the current one
+- EMA smoothing at 100 Hz bridges transitions between chunks
 """
 
 from enum import Enum
@@ -31,6 +34,10 @@ from ..utils.safety import SafetyMonitor
 # Command publishing rate (Hz) - must match robot expectations
 COMMAND_RATE_HZ = 100
 
+# Training data collection rate (Hz) - action horizon step period
+TRAINING_FPS = 15
+ACTION_STEP_PERIOD = 1.0 / TRAINING_FPS  # ~67ms per action step
+
 
 class ClientState(Enum):
     """GR00T client state machine states."""
@@ -48,6 +55,7 @@ class GrootClientNode(Node):
     Orchestrates:
     - Observation collection from cameras and robot state
     - ZeroMQ communication with inference server (background thread)
+    - Action chunk execution at training rate (15 FPS)
     - Action publishing to robot (100 Hz on ROS2 executor)
     - Safety monitoring and state management
 
@@ -55,11 +63,18 @@ class GrootClientNode(Node):
     - Raw state is sent to the server; Gr00tPolicy normalizes internally
     - Server returns raw/unnormalized actions; no denormalization needed
 
+    Action chunking:
+    - Server returns 16 actions per inference call (the action horizon)
+    - The 100 Hz command timer steps through them at 67ms each (15 FPS training rate)
+    - Inference runs continuously; each new chunk immediately replaces the old one
+    - With ~300ms inference, typically ~4-5 actions execute before a fresh chunk arrives
+    - Actions 5-15 serve as a buffer when inference is occasionally slow
+
     Threading model:
-    - Inference runs on a dedicated background thread, paced to target_fps.
+    - Inference runs continuously on a dedicated background thread.
       The blocking ZMQ call (~300ms) never stalls the ROS2 executor.
     - Command publishing runs at 100 Hz on the single-threaded ROS2 executor.
-    - _action_lock protects the shared action/state between threads.
+    - _action_lock protects the shared action chunk between threads.
     """
 
     def __init__(self):
@@ -78,7 +93,8 @@ class GrootClientNode(Node):
         self.task_description = self.get_parameter('task_description').value
         self.enable_safety_limits = self.get_parameter('enable_safety_limits').value
         self.action_smoothing_alpha = self.get_parameter('action_smoothing_alpha').value
-        self.action_execution_index = self.get_parameter('action_execution_index').value
+        self.action_chunk_enabled = self.get_parameter('action_chunk_enabled').value
+        self.action_chunk_size = self.get_parameter('action_chunk_size').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
 
         # Build server address from transport parameters
@@ -94,9 +110,11 @@ class GrootClientNode(Node):
         self._active = False
         self._running = True  # Controls inference thread lifetime
 
-        # Current action to publish (protected by lock for thread safety)
-        self._current_action: Optional[np.ndarray] = None
-        self._current_state: Optional[np.ndarray] = None
+        # Action chunk state (protected by lock for thread safety)
+        # The inference thread writes a full chunk; the command timer reads it
+        self._action_chunk: Optional[np.ndarray] = None  # shape (N, 22)
+        self._chunk_state: Optional[np.ndarray] = None   # state when chunk arrived
+        self._chunk_timestamp: float = 0.0               # time.monotonic() when chunk arrived
         self._action_lock = threading.Lock()
 
         # Initialize safety monitor
@@ -199,7 +217,9 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Task Description:     "{self.task_description}"')
         self.get_logger().info(f'  Safety Limits:        {self.enable_safety_limits}')
         self.get_logger().info(f'  Action Smoothing:     {self.action_smoothing_alpha}')
-        self.get_logger().info(f'  Action Exec Index:    {self.action_execution_index}')
+        self.get_logger().info(f'  Action Chunking:      {self.action_chunk_enabled}')
+        self.get_logger().info(f'  Action Chunk Size:    {self.action_chunk_size}')
+        self.get_logger().info(f'  Action Step Period:   {ACTION_STEP_PERIOD * 1000:.1f} ms ({TRAINING_FPS} FPS)')
         self.get_logger().info(f'  CSV Log Path:         {self.csv_log_path or "(disabled)"}')
         self.get_logger().info('=' * 60)
 
@@ -232,7 +252,8 @@ class GrootClientNode(Node):
         self.declare_parameter('task_description', 'find the can and pick it up')
         self.declare_parameter('enable_safety_limits', True)
         self.declare_parameter('action_smoothing_alpha', 0.7)
-        self.declare_parameter('action_execution_index', 0)
+        self.declare_parameter('action_chunk_enabled', True)
+        self.declare_parameter('action_chunk_size', 16)
         self.declare_parameter('csv_log_path', '')
 
     def _activate_callback(self, msg: Bool):
@@ -284,10 +305,10 @@ class GrootClientNode(Node):
         self._active = False
         self._state = ClientState.IDLE
 
-        # Clear current action
+        # Clear action chunk
         with self._action_lock:
-            self._current_action = None
-            self._current_state = None
+            self._action_chunk = None
+            self._chunk_state = None
 
         # Send stop command
         self.action_publisher.publish_stop()
@@ -302,10 +323,10 @@ class GrootClientNode(Node):
         self._active = False
         self.safety.e_stop_active = True
 
-        # Clear current action
+        # Clear action chunk
         with self._action_lock:
-            self._current_action = None
-            self._current_state = None
+            self._action_chunk = None
+            self._chunk_state = None
 
         # Send stop command
         self.action_publisher.publish_stop()
@@ -320,10 +341,10 @@ class GrootClientNode(Node):
         self.safety.reset_failures()
         self._state = ClientState.IDLE
 
-        # Clear current action
+        # Clear action chunk
         with self._action_lock:
-            self._current_action = None
-            self._current_state = None
+            self._action_chunk = None
+            self._chunk_state = None
 
         # Reset smoothing
         self.action_publisher.reset_smoothing()
@@ -331,20 +352,15 @@ class GrootClientNode(Node):
     def _inference_loop(self):
         """Background inference loop (runs on dedicated thread).
 
-        Continuously sends observations to the server and stores action
-        predictions for the 100 Hz command loop on the ROS2 executor.
-        Paced to target_fps; if inference takes longer, runs as fast as
-        the server allows.
+        Runs inference continuously — the server round-trip (~300ms) is the
+        natural throttle. Each response provides a full action chunk that
+        the 100 Hz command timer steps through at the training rate.
         """
-        frame_period = 1.0 / self.target_fps
-
         while self._running:
             # Idle-poll when not active
             if not self._active or self._state != ClientState.ACTIVE:
                 time.sleep(0.05)
                 continue
-
-            loop_start = time.monotonic()
 
             # Get latest observation
             obs = self.observation_bridge.get_latest_observation()
@@ -369,50 +385,57 @@ class GrootClientNode(Node):
                     self._state = ClientState.ERROR
                     self._active = False
                     with self._action_lock:
-                        self._current_action = None
+                        self._action_chunk = None
                 continue
 
             # Update safety watchdog
             self.safety.update_inference_time()
 
-            # Extract action from response
-            action = self._extract_action(response)
-            if action is None:
+            # Extract action chunk from response
+            chunk = self._extract_action_chunk(response)
+            if chunk is None:
                 self.get_logger().warn('Invalid action response from server')
                 continue
 
-            # Store action for command loop to publish at 100 Hz
+            # Store chunk for command loop — immediate swap
+            now = time.monotonic()
             with self._action_lock:
-                self._current_action = action
-                self._current_state = obs.state.copy()
-
-            # Pace to target_fps (sleep only if we finished faster)
-            elapsed = time.monotonic() - loop_start
-            sleep_time = frame_period - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+                self._action_chunk = chunk
+                self._chunk_state = obs.state.copy()
+                self._chunk_timestamp = now
 
     def _command_callback(self):
         """Command publishing callback (runs at exactly 100 Hz).
 
-        Publishes the current action to /alfie/robotlowcmd at 100 Hz.
-        Between inference updates, this holds/republishes the last action.
+        Steps through the action chunk at the training data rate (67ms per
+        action). Between action steps, republishes the current action with
+        EMA smoothing for smooth servo motion.
         """
         if not self._active or self._state != ClientState.ACTIVE:
             return
 
-        # Get current action (thread-safe)
+        # Get current chunk (thread-safe)
         with self._action_lock:
-            action = self._current_action
-            state = self._current_state
+            chunk = self._action_chunk
+            state = self._chunk_state
+            timestamp = self._chunk_timestamp
 
-        if action is None:
-            # No action yet, skip this cycle
+        if chunk is None:
+            # No actions yet, skip this cycle
             return
 
+        # Select action from chunk based on elapsed time
+        if self.action_chunk_enabled:
+            elapsed = time.monotonic() - timestamp
+            idx = min(int(elapsed / ACTION_STEP_PERIOD), len(chunk) - 1)
+        else:
+            # Chunking disabled — always use first action (original behavior)
+            idx = 0
+
+        action = chunk[idx]
+
         # Publish action to robot at 100 Hz
-        # Note: smoothing is applied here, so rapid republishing helps
-        # maintain smooth servo motion
+        # EMA smoothing bridges transitions between action steps and chunks
         self.action_publisher.publish_action(
             action=action,
             current_state=state,
@@ -420,14 +443,15 @@ class GrootClientNode(Node):
             apply_safety=self.enable_safety_limits,
         )
 
-    def _extract_action(self, response: dict) -> Optional[np.ndarray]:
-        """Extract action from server response.
+    def _extract_action_chunk(self, response: dict) -> Optional[np.ndarray]:
+        """Extract action chunk from server response.
 
         Args:
             response: Server response dictionary with 'actions' key.
 
         Returns:
-            Selected action from action horizon, or None on error.
+            Action chunk as (N, 22) ndarray, or None on error.
+            N is min(action_chunk_size, available actions).
         """
         if 'status' in response and response['status'] != 'ok':
             self.get_logger().warn(f"Server error: {response.get('error_message', 'unknown')}")
@@ -442,11 +466,9 @@ class GrootClientNode(Node):
         if not isinstance(actions, list) or len(actions) == 0:
             return None
 
-        # Select action based on execution index
-        action_idx = min(self.action_execution_index, len(actions) - 1)
-        action = actions[action_idx]
-
-        return np.array(action, dtype=np.float32)
+        # Take first N actions based on chunk size
+        n = min(self.action_chunk_size, len(actions))
+        return np.array(actions[:n], dtype=np.float32)
 
     def _publish_status(self):
         """Publish current status."""

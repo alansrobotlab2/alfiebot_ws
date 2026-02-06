@@ -114,6 +114,18 @@ def generate_launch_description():
         description='Action smoothing EMA coefficient (0-1)'
     )
 
+    action_chunk_enabled_arg = DeclareLaunchArgument(
+        'action_chunk_enabled',
+        default_value='true',
+        description='Enable action chunking (step through 16-action horizon at training rate)'
+    )
+
+    action_chunk_size_arg = DeclareLaunchArgument(
+        'action_chunk_size',
+        default_value='16',
+        description='Number of actions to execute from the 16-step horizon (1-16)'
+    )
+
     # Launch arguments - Replay mode
     dataset_path_arg = DeclareLaunchArgument(
         'dataset_path',
@@ -171,6 +183,8 @@ def generate_launch_description():
                 'target_fps': LaunchConfiguration('target_fps'),
                 'enable_safety_limits': LaunchConfiguration('enable_safety_limits'),
                 'action_smoothing_alpha': LaunchConfiguration('action_smoothing_alpha'),
+                'action_chunk_enabled': LaunchConfiguration('action_chunk_enabled'),
+                'action_chunk_size': LaunchConfiguration('action_chunk_size'),
             }
         ],
     )
@@ -195,6 +209,8 @@ def generate_launch_description():
         target_fps_arg,
         enable_safety_arg,
         smoothing_alpha_arg,
+        action_chunk_enabled_arg,
+        action_chunk_size_arg,
 
         # Replay arguments
         dataset_path_arg,

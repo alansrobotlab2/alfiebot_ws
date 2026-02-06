@@ -31,9 +31,12 @@
     # If server doesn't respond within this time, the request fails
     inference_timeout_ms: 5000
 
-    # Which action from the 16-step action horizon to execute
-    # 0 = first (most immediate), 15 = last (most future)
-    action_execution_index: 0
+    # Action chunking - step through the 16-action horizon sequentially
+    # at the training data rate (15 FPS = 67ms per action).
+    # When enabled, inference runs continuously and each new chunk
+    # immediately replaces the previous one.
+    action_chunk_enabled: true
+    action_chunk_size: 16     # Execute first N of 16 actions (1-16)
 
     # ==========================================================================
     # Task Configuration
