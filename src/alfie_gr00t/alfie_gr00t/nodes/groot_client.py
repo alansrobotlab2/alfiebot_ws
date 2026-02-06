@@ -50,6 +50,10 @@ class GrootClientNode(Node):
     - Action publishing to robot (100 Hz)
     - Safety monitoring and state management
 
+    Normalization contract:
+    - Raw state is sent to the server; Gr00tPolicy normalizes internally
+    - Server returns raw/unnormalized actions; no denormalization needed
+
     The inference loop runs at target_fps (default 15) to get new actions
     from the server. The command loop runs at 100 Hz to publish commands
     to the robot, holding/interpolating the last received action between
@@ -349,10 +353,10 @@ class GrootClientNode(Node):
         if obs is None or not obs.valid:
             return
 
-        # Send observation to server
+        # Send raw state — Gr00tPolicy normalizes internally
         response = self.zmq_client.send_observation(
             images=obs.images,
-            state=obs.state_normalized,
+            state=obs.state,
             language=self.task_description,
         )
 
@@ -407,7 +411,7 @@ class GrootClientNode(Node):
         self.action_publisher.publish_action(
             action=action,
             current_state=state,
-            normalized=True,  # Server returns normalized actions
+            normalized=False,  # Gr00tPolicy returns raw/unnormalized actions
             apply_smoothing=True,
             apply_safety=self.enable_safety_limits,
         )

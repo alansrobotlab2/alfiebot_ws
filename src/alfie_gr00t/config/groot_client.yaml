@@ -12,7 +12,7 @@
     transport: "tcp"
 
     # TCP settings (only used when transport: "tcp")
-    server_host: "192.168.50.108"
+    server_host: "192.168.50.201"
     server_port: 5555
 
     # IPC settings (only used when transport: "ipc")

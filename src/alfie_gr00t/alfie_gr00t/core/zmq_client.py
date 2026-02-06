@@ -85,6 +85,7 @@ class ZMQClient:
 
         # Statistics
         self._latency_history: deque = deque(maxlen=100)
+        self._message_sizes: deque = deque(maxlen=100)  # (send_bytes, recv_bytes)
         self._frame_id = 0
 
     @property
@@ -213,9 +214,10 @@ class ZMQClient:
             response_packed = self._socket.recv()
             response = msgpack.unpackb(response_packed, raw=False)
 
-            # Track latency
+            # Track latency and message sizes
             latency_ms = (time.monotonic() - start_time) * 1000
             self._latency_history.append(latency_ms)
+            self._message_sizes.append((len(packed), len(response_packed)))
 
             # Success - reset failure count and increment frame
             self._consecutive_failures = 0
@@ -243,6 +245,42 @@ class ZMQClient:
             self._log(f'Msgpack decode error: {e}')
             return None
 
+    def ping(self, timeout_ms: int = 3000) -> bool:
+        """Send a ping to verify the server is reachable and responding.
+
+        Args:
+            timeout_ms: Timeout for the ping in milliseconds.
+
+        Returns:
+            True if server responded, False otherwise.
+        """
+        if not self._connected:
+            return False
+
+        # Temporarily override timeout for ping
+        orig_timeout = self.timeout_ms
+        self._socket.setsockopt(zmq.RCVTIMEO, timeout_ms)
+
+        try:
+            ping_msg = msgpack.packb({'ping': True}, use_bin_type=True)
+            self._socket.send(ping_msg)
+            response_packed = self._socket.recv()
+            msgpack.unpackb(response_packed, raw=False)
+            self._log('Server ping successful')
+            return True
+        except zmq.Again:
+            self._log(f'Server ping timed out ({timeout_ms}ms)')
+            self._reset_socket()
+            return False
+        except zmq.ZMQError as e:
+            self._log(f'Server ping failed: {e}')
+            self._reset_socket()
+            return False
+        finally:
+            # Restore original timeout if still connected
+            if self._socket is not None:
+                self._socket.setsockopt(zmq.RCVTIMEO, orig_timeout)
+
     def should_reconnect(self) -> bool:
         """Check if reconnection should be attempted.
 
@@ -260,7 +298,7 @@ class ZMQClient:
         Returns:
             Dictionary with connection and performance stats.
         """
-        return {
+        stats = {
             'connected': self._connected,
             'server_address': self.server_address,
             'frame_id': self._frame_id,
@@ -268,3 +306,21 @@ class ZMQClient:
             'average_latency_ms': self.average_latency_ms,
             'latency_samples': len(self._latency_history),
         }
+
+        if self._message_sizes:
+            send_sizes = [s for s, _ in self._message_sizes]
+            recv_sizes = [r for _, r in self._message_sizes]
+            stats['avg_send_bytes'] = sum(send_sizes) / len(send_sizes)
+            stats['avg_recv_bytes'] = sum(recv_sizes) / len(recv_sizes)
+            stats['total_send_bytes'] = sum(send_sizes)
+            stats['total_recv_bytes'] = sum(recv_sizes)
+
+        return stats
+
+    def get_latency_history(self) -> list[float]:
+        """Get full latency history for analysis."""
+        return list(self._latency_history)
+
+    def get_message_size_history(self) -> list[tuple[int, int]]:
+        """Get full message size history as (send_bytes, recv_bytes) tuples."""
+        return list(self._message_sizes)
