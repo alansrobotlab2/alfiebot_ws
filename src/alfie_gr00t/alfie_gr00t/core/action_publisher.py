@@ -12,15 +12,13 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from alfie_msgs.msg import BackCmd, RobotLowCmd, ServoCmd
 
-from .normalization import Normalizer
 from ..utils.safety import SafetyMonitor
 
 
 class ActionPublisher:
     """Publishes GR00T action predictions to /alfie/robotlowcmd.
 
-    Converts 22D action vectors to RobotLowCmd messages with:
-    - Action denormalization
+    Converts 22D raw action vectors (physical units) to RobotLowCmd messages with:
     - Exponential moving average smoothing
     - Safety limit enforcement
     - Servo parameter configuration
@@ -45,7 +43,6 @@ class ActionPublisher:
         self,
         node: Node,
         cmd_topic: str = '/alfie/robotlowcmd',
-        normalizer: Optional[Normalizer] = None,
         safety: Optional[SafetyMonitor] = None,
         smoothing_alpha: float = 0.7,
         default_servo_speed: float = 1.5,
@@ -58,7 +55,6 @@ class ActionPublisher:
         Args:
             node: ROS2 node for creating publisher.
             cmd_topic: Topic to publish RobotLowCmd.
-            normalizer: Normalizer for denormalizing actions.
             safety: Safety monitor for limit enforcement.
             smoothing_alpha: EMA smoothing coefficient (0-1, higher = less smoothing).
             default_servo_speed: Default servo speed in rad/s.
@@ -66,7 +62,6 @@ class ActionPublisher:
             default_servo_torque: Default servo torque (0-1 fraction of max).
         """
         self.node = node
-        self.normalizer = normalizer or Normalizer()
         self.safety = safety or SafetyMonitor()
 
         self.smoothing_alpha = smoothing_alpha
@@ -112,7 +107,7 @@ class ActionPublisher:
 
         # Build header row
         header = ['timestamp', 'step']
-        for prefix in ['raw', 'denorm', 'smoothed', 'final', 'state']:
+        for prefix in ['raw', 'smoothed', 'final', 'state']:
             for name in self.JOINT_NAMES:
                 header.append(f'{prefix}_{name}')
         self._csv_writer.writerow(header)
@@ -122,7 +117,6 @@ class ActionPublisher:
     def _write_csv_row(
         self,
         raw: np.ndarray,
-        denorm: np.ndarray,
         smoothed: np.ndarray,
         final: np.ndarray,
         state: Optional[np.ndarray],
@@ -132,7 +126,7 @@ class ActionPublisher:
             return
         state_vals = state if state is not None else np.zeros(self.ACTION_DIM)
         row = [time.time(), self._inference_step]
-        for arr in [raw, denorm, smoothed, final, state_vals]:
+        for arr in [raw, smoothed, final, state_vals]:
             row.extend(arr.tolist())
         self._csv_writer.writerow(row)
         self._csv_file.flush()
@@ -149,16 +143,16 @@ class ActionPublisher:
         self,
         action: np.ndarray,
         current_state: Optional[np.ndarray] = None,
-        normalized: bool = True,
         apply_smoothing: bool = True,
         apply_safety: bool = True,
     ) -> bool:
         """Publish action to robot.
 
+        Actions are expected in raw physical units (server returns unnormalized).
+
         Args:
-            action: 22D action vector.
+            action: 22D action vector in raw physical units.
             current_state: Current 22D state vector (for delta limits).
-            normalized: Whether action is normalized (needs denormalization).
             apply_smoothing: Whether to apply EMA smoothing.
             apply_safety: Whether to apply safety limits.
 
@@ -185,18 +179,6 @@ class ActionPublisher:
                 f'[base_debug] input_action base[0:6]='
                 f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
             )
-
-        # Denormalize if needed
-        if normalized:
-            action = self.normalizer.denormalize_action(action)
-            if log_this:
-                logger.info(
-                    f'[base_debug] denorm base[0:6]='
-                    f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
-                )
-
-        # Capture denormalized action for CSV
-        denorm_action = action.copy()
 
         # Apply smoothing
         if apply_smoothing and self._last_action is not None:
@@ -250,7 +232,6 @@ class ActionPublisher:
         if self._csv_writer is not None:
             self._write_csv_row(
                 raw=raw_action,
-                denorm=denorm_action,
                 smoothed=smoothed_action,
                 final=action,
                 state=current_state,
@@ -303,7 +284,7 @@ class ActionPublisher:
         [19-21]: servo_cmd[12-14].target_location (head)
 
         Args:
-            action: 22D denormalized action vector.
+            action: 22D action vector in raw physical units.
 
         Returns:
             RobotLowCmd message.

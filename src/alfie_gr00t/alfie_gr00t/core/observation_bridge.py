@@ -13,8 +13,6 @@ from sensor_msgs.msg import CompressedImage
 
 from alfie_msgs.msg import RobotLowState
 
-from .normalization import Normalizer
-
 
 @dataclass
 class Observation:
@@ -26,11 +24,8 @@ class Observation:
     # Camera images as numpy arrays (for local processing)
     images_array: dict[str, np.ndarray] = field(default_factory=dict)
 
-    # State vector (22D, raw)
+    # State vector (22D, raw physical units)
     state: np.ndarray = field(default_factory=lambda: np.zeros(22, dtype=np.float32))
-
-    # State vector (22D, normalized)
-    state_normalized: np.ndarray = field(default_factory=lambda: np.zeros(22, dtype=np.float32))
 
     # Timestamp (ROS time in seconds)
     timestamp: float = 0.0
@@ -66,7 +61,6 @@ class ObservationBridge:
         camera_topic_prefix: str = '/alfie/stereo_camera',
         state_topic: str = '/alfie/robotlowstate',
         sync_slop: float = 0.05,
-        normalizer: Optional[Normalizer] = None,
         jpeg_quality: int = 80,
     ):
         """Initialize observation bridge.
@@ -76,11 +70,9 @@ class ObservationBridge:
             camera_topic_prefix: Prefix for camera topics.
             state_topic: Topic for robot state.
             sync_slop: Time synchronization tolerance in seconds.
-            normalizer: Optional normalizer for state vectors.
             jpeg_quality: JPEG compression quality (0-100).
         """
         self.node = node
-        self.normalizer = normalizer or Normalizer()
         self.jpeg_quality = jpeg_quality
 
         # Build camera topic names
@@ -174,9 +166,8 @@ class ObservationBridge:
                 # Re-compress to JPEG for transmission
                 obs.images[name] = self._compress_jpeg(img_array)
 
-        # Extract state vector
+        # Extract state vector (raw physical units — server normalizes internally)
         obs.state = self._extract_state(state)
-        obs.state_normalized = self.normalizer.normalize_state(obs.state)
 
         # Set timestamp from state message (most reliable)
         obs.timestamp = (

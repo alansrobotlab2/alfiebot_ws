@@ -6,12 +6,14 @@ sends synchronized observations, and publishes action predictions
 to control the robot.
 
 Key timing:
-- Inference runs at 15 FPS (configurable)
-- Command publishing runs at exactly 100 Hz to match robot expectations
+- Inference runs on a background thread, paced to target_fps
+- Command publishing runs at exactly 100 Hz on the ROS2 executor
+- The two are decoupled so blocking inference never starves commands
 """
 
 from enum import Enum
 import threading
+import time
 from typing import Optional
 
 import numpy as np
@@ -21,7 +23,6 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
 
 from ..core.action_publisher import ActionPublisher
-from ..core.normalization import Normalizer
 from ..core.observation_bridge import Observation, ObservationBridge
 from ..core.zmq_client import ZMQClient, build_server_address, DEFAULT_IPC_PATH
 from ..utils.safety import SafetyMonitor
@@ -46,18 +47,19 @@ class GrootClientNode(Node):
 
     Orchestrates:
     - Observation collection from cameras and robot state
-    - ZeroMQ communication with inference server (15 FPS)
-    - Action publishing to robot (100 Hz)
+    - ZeroMQ communication with inference server (background thread)
+    - Action publishing to robot (100 Hz on ROS2 executor)
     - Safety monitoring and state management
 
     Normalization contract:
     - Raw state is sent to the server; Gr00tPolicy normalizes internally
     - Server returns raw/unnormalized actions; no denormalization needed
 
-    The inference loop runs at target_fps (default 15) to get new actions
-    from the server. The command loop runs at 100 Hz to publish commands
-    to the robot, holding/interpolating the last received action between
-    inference updates.
+    Threading model:
+    - Inference runs on a dedicated background thread, paced to target_fps.
+      The blocking ZMQ call (~300ms) never stalls the ROS2 executor.
+    - Command publishing runs at 100 Hz on the single-threaded ROS2 executor.
+    - _action_lock protects the shared action/state between threads.
     """
 
     def __init__(self):
@@ -77,7 +79,6 @@ class GrootClientNode(Node):
         self.enable_safety_limits = self.get_parameter('enable_safety_limits').value
         self.action_smoothing_alpha = self.get_parameter('action_smoothing_alpha').value
         self.action_execution_index = self.get_parameter('action_execution_index').value
-        self.stats_file = self.get_parameter('stats_file').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
 
         # Build server address from transport parameters
@@ -91,18 +92,12 @@ class GrootClientNode(Node):
         # Initialize state
         self._state = ClientState.IDLE
         self._active = False
+        self._running = True  # Controls inference thread lifetime
 
         # Current action to publish (protected by lock for thread safety)
         self._current_action: Optional[np.ndarray] = None
         self._current_state: Optional[np.ndarray] = None
         self._action_lock = threading.Lock()
-
-        # Initialize normalizer
-        self.normalizer = Normalizer(self.stats_file)
-        if self.normalizer.is_loaded:
-            self.get_logger().info(f'Loaded normalization stats from: {self.stats_file}')
-        else:
-            self.get_logger().warn(f'Could not load stats from: {self.stats_file}')
 
         # Initialize safety monitor
         self.safety = SafetyMonitor(
@@ -118,15 +113,11 @@ class GrootClientNode(Node):
         )
 
         # Initialize observation bridge
-        self.observation_bridge = ObservationBridge(
-            node=self,
-            normalizer=self.normalizer,
-        )
+        self.observation_bridge = ObservationBridge(node=self)
 
         # Initialize action publisher
         self.action_publisher = ActionPublisher(
             node=self,
-            normalizer=self.normalizer,
             safety=self.safety if self.enable_safety_limits else None,
             smoothing_alpha=self.action_smoothing_alpha,
             csv_log_path=self.csv_log_path,
@@ -166,13 +157,8 @@ class GrootClientNode(Node):
         # Status publisher
         self.status_pub = self.create_publisher(String, '~/status', qos_control)
 
-        # Inference loop timer (15 FPS - gets new actions from server)
-        self.inference_timer = self.create_timer(
-            1.0 / self.target_fps,
-            self._inference_callback,
-        )
-
         # Command publishing timer (100 Hz - sends commands to robot)
+        # Runs on the ROS2 executor, never blocked by inference
         self.command_timer = self.create_timer(
             1.0 / COMMAND_RATE_HZ,
             self._command_callback,
@@ -186,6 +172,14 @@ class GrootClientNode(Node):
 
         # Test server connection
         self._test_server_connection()
+
+        # Start inference on a background thread (after all setup is complete)
+        self._inference_thread = threading.Thread(
+            target=self._inference_loop,
+            name='groot_inference',
+            daemon=True,
+        )
+        self._inference_thread.start()
 
     def _log_parameters(self):
         """Log all parameter values on startup."""
@@ -206,7 +200,6 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Safety Limits:        {self.enable_safety_limits}')
         self.get_logger().info(f'  Action Smoothing:     {self.action_smoothing_alpha}')
         self.get_logger().info(f'  Action Exec Index:    {self.action_execution_index}')
-        self.get_logger().info(f'  Stats File:           {self.stats_file}')
         self.get_logger().info(f'  CSV Log Path:         {self.csv_log_path or "(disabled)"}')
         self.get_logger().info('=' * 60)
 
@@ -240,10 +233,6 @@ class GrootClientNode(Node):
         self.declare_parameter('enable_safety_limits', True)
         self.declare_parameter('action_smoothing_alpha', 0.7)
         self.declare_parameter('action_execution_index', 0)
-        self.declare_parameter(
-            'stats_file',
-            '/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge/meta/stats.json'
-        )
         self.declare_parameter('csv_log_path', '')
 
     def _activate_callback(self, msg: Bool):
@@ -339,53 +328,69 @@ class GrootClientNode(Node):
         # Reset smoothing
         self.action_publisher.reset_smoothing()
 
-    def _inference_callback(self):
-        """Inference loop callback (runs at target_fps, e.g., 15 FPS).
+    def _inference_loop(self):
+        """Background inference loop (runs on dedicated thread).
 
-        Gets new action predictions from the server and stores them
-        for the command loop to publish at 100 Hz.
+        Continuously sends observations to the server and stores action
+        predictions for the 100 Hz command loop on the ROS2 executor.
+        Paced to target_fps; if inference takes longer, runs as fast as
+        the server allows.
         """
-        if not self._active or self._state != ClientState.ACTIVE:
-            return
+        frame_period = 1.0 / self.target_fps
 
-        # Get latest observation
-        obs = self.observation_bridge.get_latest_observation()
-        if obs is None or not obs.valid:
-            return
+        while self._running:
+            # Idle-poll when not active
+            if not self._active or self._state != ClientState.ACTIVE:
+                time.sleep(0.05)
+                continue
 
-        # Send raw state — Gr00tPolicy normalizes internally
-        response = self.zmq_client.send_observation(
-            images=obs.images,
-            state=obs.state,
-            language=self.task_description,
-        )
+            loop_start = time.monotonic()
 
-        if response is None:
-            # Inference failed
-            self.safety.record_failure()
+            # Get latest observation
+            obs = self.observation_bridge.get_latest_observation()
+            if obs is None or not obs.valid:
+                time.sleep(0.01)
+                continue
 
-            if self.safety.in_safe_mode:
-                self.get_logger().error('Too many failures, entering safe mode')
-                self._state = ClientState.ERROR
-                self._active = False
-                self.action_publisher.publish_stop()
-                with self._action_lock:
-                    self._current_action = None
-            return
+            # Send raw state — Gr00tPolicy normalizes internally
+            # This is the blocking call (~300ms) that motivated the thread
+            response = self.zmq_client.send_observation(
+                images=obs.images,
+                state=obs.state,
+                language=self.task_description,
+            )
 
-        # Update safety watchdog
-        self.safety.update_inference_time()
+            if response is None:
+                # Inference failed
+                self.safety.record_failure()
 
-        # Extract action from response
-        action = self._extract_action(response)
-        if action is None:
-            self.get_logger().warn('Invalid action response from server')
-            return
+                if self.safety.in_safe_mode:
+                    self.get_logger().error('Too many failures, entering safe mode')
+                    self._state = ClientState.ERROR
+                    self._active = False
+                    with self._action_lock:
+                        self._current_action = None
+                continue
 
-        # Store action for command loop to publish at 100 Hz
-        with self._action_lock:
-            self._current_action = action
-            self._current_state = obs.state.copy()
+            # Update safety watchdog
+            self.safety.update_inference_time()
+
+            # Extract action from response
+            action = self._extract_action(response)
+            if action is None:
+                self.get_logger().warn('Invalid action response from server')
+                continue
+
+            # Store action for command loop to publish at 100 Hz
+            with self._action_lock:
+                self._current_action = action
+                self._current_state = obs.state.copy()
+
+            # Pace to target_fps (sleep only if we finished faster)
+            elapsed = time.monotonic() - loop_start
+            sleep_time = frame_period - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
     def _command_callback(self):
         """Command publishing callback (runs at exactly 100 Hz).
@@ -411,7 +416,6 @@ class GrootClientNode(Node):
         self.action_publisher.publish_action(
             action=action,
             current_state=state,
-            normalized=False,  # Gr00tPolicy returns raw/unnormalized actions
             apply_smoothing=True,
             apply_safety=self.enable_safety_limits,
         )
@@ -468,6 +472,11 @@ class GrootClientNode(Node):
     def destroy_node(self):
         """Clean up resources on shutdown."""
         self.get_logger().info('Shutting down GR00T client...')
+
+        # Stop inference thread
+        self._running = False
+        if self._inference_thread.is_alive():
+            self._inference_thread.join(timeout=2.0)
 
         # Send stop command
         self.action_publisher.publish_stop()
