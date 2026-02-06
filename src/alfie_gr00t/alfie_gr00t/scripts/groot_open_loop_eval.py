@@ -466,6 +466,7 @@ def run_eval(args):
     print(f'  Timeout:          {args.timeout_ms} ms')
     print(f'  Action Horizon:   {action_horizon}')
     print(f'  Task:             "{args.task}"')
+    print(f'  Closed-Loop:      {args.closed_loop}')
     grouped_plot_path = save_plot.replace('.png', '_grouped.png').replace('.jpeg', '_grouped.jpeg')
     print(f'  Trajectory Plot:  {save_plot}')
     print(f'  Grouped Plot:     {grouped_plot_path}')
@@ -513,13 +514,24 @@ def run_eval(args):
     pred_action_across_time = []
     num_inference_steps = 0
 
+    # Closed-loop state: updated with predicted actions instead of GT
+    closed_loop_state = gt_states[0].copy() if args.closed_loop else None
+
     for step in range(0, num_frames, action_horizon):
         logger.info(f'Inference at step {step}/{num_frames}')
 
-        # Get observation at this step
-        state_raw = gt_states[step]
+        # Get observation state at this step
+        if args.closed_loop and closed_loop_state is not None:
+            state_raw = closed_loop_state.copy()
+            logger.info(
+                f'[closed-loop] state_base={state_raw[0:6]}, '
+                f'gt_base={gt_states[step][0:6]}'
+            )
+        else:
+            state_raw = gt_states[step]
 
         # Compress camera images to JPEG
+        # (always use GT images — we're only simulating state drift)
         images = {}
         frame_dict = video_frames[step] if step < len(video_frames) else {}
         for cam_name, img in frame_dict.items():
@@ -548,9 +560,16 @@ def run_eval(args):
 
         for j in range(action_horizon):
             if j < len(actions_list):
-                pred_action_across_time.append(
-                    np.array(actions_list[j], dtype=np.float32)
-                )
+                pred_action = np.array(actions_list[j], dtype=np.float32)
+                pred_action_across_time.append(pred_action)
+
+                # In closed-loop mode, propagate the predicted action as the
+                # next state (simulates what the robot would actually see).
+                # Base velocity (cmd_vel) commands become the new base state.
+                # Joint positions become the new joint state.
+                if args.closed_loop:
+                    closed_loop_state[0:6] = pred_action[0:6]   # base velocity
+                    closed_loop_state[6:22] = pred_action[6:22] # joint positions
 
         num_inference_steps += 1
 
@@ -570,12 +589,13 @@ def run_eval(args):
         sys.exit(1)
 
     # Compute metrics
+    eval_mode = 'CLOSED-LOOP' if args.closed_loop else 'OPEN-LOOP'
     mse = np.mean((gt_actions_trimmed - pred_actions_arr) ** 2)
     mae = np.mean(np.abs(gt_actions_trimmed - pred_actions_arr))
 
     print()
-    print(f'  MSE: {mse:.6f}')
-    print(f'  MAE: {mae:.6f}')
+    print(f'  [{eval_mode}] MSE: {mse:.6f}')
+    print(f'  [{eval_mode}] MAE: {mae:.6f}')
     print()
 
     # Per-joint metrics
@@ -679,6 +699,12 @@ examples:
     parser.add_argument(
         '--verbose', '-v', action='store_true',
         help='Enable verbose logging',
+    )
+    parser.add_argument(
+        '--closed-loop', action='store_true',
+        help='Simulate closed-loop execution: update state with predicted actions '
+             'instead of using ground truth state at each step. Shows how errors '
+             'compound, matching live robot behavior.',
     )
 
     return parser.parse_args()

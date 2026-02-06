@@ -96,6 +96,7 @@ class GrootClientNode(Node):
         self.action_chunk_enabled = self.get_parameter('action_chunk_enabled').value
         self.action_chunk_size = self.get_parameter('action_chunk_size').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
+        self.base_velocity_decay = self.get_parameter('base_velocity_decay').value
 
         # Build server address from transport parameters
         self.server_address = build_server_address(
@@ -221,6 +222,7 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Action Chunk Size:    {self.action_chunk_size}')
         self.get_logger().info(f'  Action Step Period:   {ACTION_STEP_PERIOD * 1000:.1f} ms ({TRAINING_FPS} FPS)')
         self.get_logger().info(f'  CSV Log Path:         {self.csv_log_path or "(disabled)"}')
+        self.get_logger().info(f'  Base Vel Decay:       {self.base_velocity_decay}')
         self.get_logger().info('=' * 60)
 
     def _test_server_connection(self):
@@ -255,6 +257,14 @@ class GrootClientNode(Node):
         self.declare_parameter('action_chunk_enabled', True)
         self.declare_parameter('action_chunk_size', 16)
         self.declare_parameter('csv_log_path', '')
+
+        # Base velocity drift correction.
+        # Because base actions use RELATIVE representation (delta added to current
+        # state), small consistent prediction errors cause velocity to compound.
+        # This decay factor (0-1) is multiplied into the base velocity each
+        # command cycle:  0.0 = no correction, 0.95 = gentle decay toward zero.
+        # Set to 0.0 to disable.
+        self.declare_parameter('base_velocity_decay', 0.0)
 
     def _activate_callback(self, msg: Bool):
         """Handle activation/deactivation requests."""
@@ -397,6 +407,12 @@ class GrootClientNode(Node):
                 self.get_logger().warn('Invalid action response from server')
                 continue
 
+            # Log state/action for drift diagnostics
+            self.get_logger().info(
+                f'[drift] state_base={np.array2string(obs.state[0:6], precision=4, suppress_small=True)}, '
+                f'action_base={np.array2string(chunk[0, 0:6], precision=4, suppress_small=True)}'
+            )
+
             # Store chunk for command loop — immediate swap
             now = time.monotonic()
             with self._action_lock:
@@ -432,7 +448,13 @@ class GrootClientNode(Node):
             # Chunking disabled — always use first action (original behavior)
             idx = 0
 
-        action = chunk[idx]
+        action = chunk[idx].copy()
+
+        # Apply base velocity drift correction.
+        # RELATIVE actions compound velocity: output = state + delta.
+        # Decay pulls base velocity toward zero to counteract drift.
+        if self.base_velocity_decay > 0.0:
+            action[0:6] *= (1.0 - self.base_velocity_decay)
 
         # Publish action to robot at 100 Hz
         # EMA smoothing bridges transitions between action steps and chunks

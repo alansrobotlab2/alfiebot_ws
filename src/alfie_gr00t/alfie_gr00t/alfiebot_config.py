@@ -9,6 +9,11 @@ from gr00t.data.types import (
 )
 
 
+# Must match the modality config saved in the fine-tuned checkpoint
+# (processor_config.json → modality_configs → new_embodiment).
+# This file is NOT imported by the inference server at runtime — the
+# server loads config directly from the checkpoint.  It IS used by
+# training scripts and the rosbag_to_groot converter.
 alfiebot_config = {
     "video": ModalityConfig(
         delta_indices=[0],
@@ -23,6 +28,7 @@ alfiebot_config = {
         delta_indices=[0],
         modality_keys=[
             "base",
+            "back",
             "left_arm",
             "left_hand",
             "right_arm",
@@ -31,40 +37,49 @@ alfiebot_config = {
         ],
     ),
     "action": ModalityConfig(
-        delta_indices=[
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            11,
-            12,
-            13,
-            14,
-            15,
-        ],
+        delta_indices=list(range(16)),
         modality_keys=[
             "base",
+            "back",
             "left_arm",
             "left_hand",
             "right_arm",
             "right_hand",
-            "neck",
+            "head",
         ],
         action_configs=[
-            ActionConfig(
+            ActionConfig(  # base — velocity deltas
                 rep=ActionRepresentation.RELATIVE,
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),
-            ActionConfig(
+            ActionConfig(  # back
+                rep=ActionRepresentation.RELATIVE,
+                type=ActionType.NON_EEF,
+                format=ActionFormat.DEFAULT,
+            ),
+            ActionConfig(  # left_arm
+                rep=ActionRepresentation.RELATIVE,
+                type=ActionType.NON_EEF,
+                format=ActionFormat.DEFAULT,
+            ),
+            ActionConfig(  # left_hand
                 rep=ActionRepresentation.ABSOLUTE,
+                type=ActionType.NON_EEF,
+                format=ActionFormat.DEFAULT,
+            ),
+            ActionConfig(  # right_arm
+                rep=ActionRepresentation.RELATIVE,
+                type=ActionType.NON_EEF,
+                format=ActionFormat.DEFAULT,
+            ),
+            ActionConfig(  # right_hand
+                rep=ActionRepresentation.ABSOLUTE,
+                type=ActionType.NON_EEF,
+                format=ActionFormat.DEFAULT,
+            ),
+            ActionConfig(  # head
+                rep=ActionRepresentation.RELATIVE,
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),
@@ -72,7 +87,7 @@ alfiebot_config = {
     ),
     "language": ModalityConfig(
         delta_indices=[0],
-        modality_keys=["human.task_description"],
+        modality_keys=["annotation.human.action.task_description"],
     ),
 }
 
