@@ -238,7 +238,15 @@ class GrootInferenceServer:
         self._viz = None
         self._viz_port = viz_port
         if enable_viz:
-            from alfie_gr00t.viz import GrootVisualizer
+            try:
+                from alfie_gr00t.viz import GrootVisualizer
+            except ModuleNotFoundError:
+                # Standalone execution — add package root to sys.path
+                import sys
+                _pkg_root = str(Path(__file__).resolve().parents[2])
+                if _pkg_root not in sys.path:
+                    sys.path.insert(0, _pkg_root)
+                from alfie_gr00t.viz import GrootVisualizer
             self._viz = GrootVisualizer(enable=True, port=viz_port)
 
         # Replay state

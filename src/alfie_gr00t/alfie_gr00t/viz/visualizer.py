@@ -214,6 +214,7 @@ class GrootVisualizer:
         # Build and launch UI
         self._demo = self._build_ui()
         self._demo.launch(
+            server_name='0.0.0.0',
             server_port=self._port,
             share=self._share,
             prevent_thread_lock=True,
