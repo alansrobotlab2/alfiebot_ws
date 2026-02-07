@@ -9,11 +9,13 @@ from gr00t.data.types import (
 )
 
 
-# Must match the modality config saved in the fine-tuned checkpoint
-# (processor_config.json → modality_configs → new_embodiment).
-# This file is NOT imported by the inference server at runtime — the
-# server loads config directly from the checkpoint.  It IS used by
-# training scripts and the rosbag_to_groot converter.
+# Modality config for Alfiebot GR00T fine-tuning.
+# Used by training scripts and rosbag_to_groot converter.
+# NOT imported by the inference server at runtime — the server loads
+# config directly from the checkpoint's processor_config.json.
+#
+# All action_configs are ABSOLUTE to avoid compounding error in
+# closed-loop execution (RELATIVE deltas accumulate prediction noise).
 alfiebot_config = {
     "video": ModalityConfig(
         delta_indices=[0],
@@ -48,38 +50,38 @@ alfiebot_config = {
             "head",
         ],
         action_configs=[
-            ActionConfig(  # base — velocity deltas
-                rep=ActionRepresentation.RELATIVE,
-                type=ActionType.NON_EEF,
-                format=ActionFormat.DEFAULT,
-            ),
-            ActionConfig(  # back
-                rep=ActionRepresentation.RELATIVE,
-                type=ActionType.NON_EEF,
-                format=ActionFormat.DEFAULT,
-            ),
-            ActionConfig(  # left_arm
-                rep=ActionRepresentation.RELATIVE,
-                type=ActionType.NON_EEF,
-                format=ActionFormat.DEFAULT,
-            ),
-            ActionConfig(  # left_hand
+            ActionConfig(  # base — velocity commands (m/s, rad/s)
                 rep=ActionRepresentation.ABSOLUTE,
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),
-            ActionConfig(  # right_arm
-                rep=ActionRepresentation.RELATIVE,
-                type=ActionType.NON_EEF,
-                format=ActionFormat.DEFAULT,
-            ),
-            ActionConfig(  # right_hand
+            ActionConfig(  # back — position (meters)
                 rep=ActionRepresentation.ABSOLUTE,
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),
-            ActionConfig(  # head
-                rep=ActionRepresentation.RELATIVE,
+            ActionConfig(  # left_arm — joint positions (rad)
+                rep=ActionRepresentation.ABSOLUTE,
+                type=ActionType.NON_EEF,
+                format=ActionFormat.DEFAULT,
+            ),
+            ActionConfig(  # left_hand — gripper position (rad)
+                rep=ActionRepresentation.ABSOLUTE,
+                type=ActionType.NON_EEF,
+                format=ActionFormat.DEFAULT,
+            ),
+            ActionConfig(  # right_arm — joint positions (rad)
+                rep=ActionRepresentation.ABSOLUTE,
+                type=ActionType.NON_EEF,
+                format=ActionFormat.DEFAULT,
+            ),
+            ActionConfig(  # right_hand — gripper position (rad)
+                rep=ActionRepresentation.ABSOLUTE,
+                type=ActionType.NON_EEF,
+                format=ActionFormat.DEFAULT,
+            ),
+            ActionConfig(  # head — joint positions (rad)
+                rep=ActionRepresentation.ABSOLUTE,
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),

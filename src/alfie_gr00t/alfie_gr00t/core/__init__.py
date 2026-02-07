@@ -3,8 +3,16 @@
 
 from .normalization import Normalizer
 from .zmq_client import ZMQClient
-from .observation_bridge import ObservationBridge
-from .action_publisher import ActionPublisher
+
+# Lazy imports for ROS2-dependent modules to allow standalone (non-ROS) usage
+def __getattr__(name):
+    if name == "ObservationBridge":
+        from .observation_bridge import ObservationBridge
+        return ObservationBridge
+    if name == "ActionPublisher":
+        from .action_publisher import ActionPublisher
+        return ActionPublisher
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     'Normalizer',
