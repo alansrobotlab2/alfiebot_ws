@@ -593,6 +593,13 @@ class GrootInferenceServer:
         Returns:
             Action horizon (16 x 22D), unnormalized.
         """
+        # First-call banner to confirm new code is loaded
+        if self._total_requests == 0:
+            print("="*60, flush=True)
+            print("[groot_server] FIRST INFERENCE REQUEST — diagnostic logging active", flush=True)
+            print(f"[groot_server] state shape={state.shape}, images={list(images.keys())}, lang='{language}'", flush=True)
+            print("="*60, flush=True)
+
         # Decode images from JPEG and format for Gr00tPolicy
         # Expected format: video[key] = np.ndarray[np.uint8, (B, T, H, W, C)]
         video_dict = {}
@@ -636,11 +643,13 @@ class GrootInferenceServer:
 
         # Log model input state every 10 requests for debugging
         if self._total_requests % 10 == 0:
-            self.logger.info(
+            msg = (
                 f"[input] head=({state[19]:.3f},{state[20]:.3f},{state[21]:.3f}) "
                 f"r_arm=({state[13]:.3f},{state[14]:.3f},{state[15]:.3f},{state[16]:.3f},{state[17]:.3f}) "
                 f"r_grip={state[18]:.3f} back={state[6]:.3f} fwd={state[0]:.3f}"
             )
+            self.logger.info(msg)
+            print(msg, flush=True)
 
         # Log observation structure periodically (every 50 requests to avoid spam)
         if self._total_requests % 50 == 0:
@@ -717,11 +726,13 @@ class GrootInferenceServer:
         # Log model output actions every 10 requests for debugging
         if self._total_requests % 10 == 0:
             a = actions[0]
-            self.logger.info(
+            msg = (
                 f"[output] head=({a[19]:.3f},{a[20]:.3f},{a[21]:.3f}) "
                 f"r_arm=({a[13]:.3f},{a[14]:.3f},{a[15]:.3f},{a[16]:.3f},{a[17]:.3f}) "
                 f"r_grip={a[18]:.3f} back={a[6]:.3f} fwd={a[0]:.3f}"
             )
+            self.logger.info(msg)
+            print(msg, flush=True)
 
         # Log assembled action diagnostics periodically
         if self._total_requests % 50 == 0:
