@@ -159,7 +159,7 @@ def _empty_action_plot() -> go.Figure:
 
 def _placeholder_image() -> np.ndarray:
     """Return a dark placeholder image."""
-    img = np.zeros((280, 320, 3), dtype=np.uint8)
+    img = np.zeros((240, 320, 3), dtype=np.uint8)
     return img
 
 
@@ -235,7 +235,7 @@ class GrootVisualizer:
                 for name in CAMERA_NAMES:
                     cam_components[name] = gr.Image(
                         label=name,
-                        height=280,
+                        height=240,
                     )
 
             # Task description

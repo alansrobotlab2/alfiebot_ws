@@ -58,7 +58,7 @@ CAMERA_NAMES = ['left_wide', 'right_wide', 'left_center', 'right_center']
 
 # Target image size for inference (must match ObservationBridge)
 IMAGE_WIDTH = 320
-IMAGE_HEIGHT = 280
+IMAGE_HEIGHT = 240
 
 # Body-part groupings matching the modality config
 # Maps group name -> (start_index, end_index) in the 22D vector
