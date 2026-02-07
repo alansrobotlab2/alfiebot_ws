@@ -634,6 +634,14 @@ class GrootInferenceServer:
             'language': language_dict,
         }
 
+        # Log model input state every 10 requests for debugging
+        if self._total_requests % 10 == 0:
+            self.logger.info(
+                f"[input] head=({state[19]:.3f},{state[20]:.3f},{state[21]:.3f}) "
+                f"r_arm=({state[13]:.3f},{state[14]:.3f},{state[15]:.3f},{state[16]:.3f},{state[17]:.3f}) "
+                f"r_grip={state[18]:.3f} back={state[6]:.3f} fwd={state[0]:.3f}"
+            )
+
         # Log observation structure periodically (every 50 requests to avoid spam)
         if self._total_requests % 50 == 0:
             self.logger.info(f"Observation: video={list(video_dict.keys())}, state={list(state_dict.keys())}")
@@ -705,6 +713,15 @@ class GrootInferenceServer:
                 part_actions = action_dict[key][0]  # (T, D)
                 actions[:, offset:offset + dim] = part_actions
             offset += dim
+
+        # Log model output actions every 10 requests for debugging
+        if self._total_requests % 10 == 0:
+            a = actions[0]
+            self.logger.info(
+                f"[output] head=({a[19]:.3f},{a[20]:.3f},{a[21]:.3f}) "
+                f"r_arm=({a[13]:.3f},{a[14]:.3f},{a[15]:.3f},{a[16]:.3f},{a[17]:.3f}) "
+                f"r_grip={a[18]:.3f} back={a[6]:.3f} fwd={a[0]:.3f}"
+            )
 
         # Log assembled action diagnostics periodically
         if self._total_requests % 50 == 0:

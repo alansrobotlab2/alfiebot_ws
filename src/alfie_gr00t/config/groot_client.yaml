@@ -12,7 +12,7 @@
     transport: "tcp"
 
     # TCP settings (only used when transport: "tcp")
-    server_host: "192.168.50.201"
+    server_host: "192.168.50.108"
     server_port: 5555
 
     # IPC settings (only used when transport: "ipc")
@@ -54,4 +54,20 @@
     # Higher = less smoothing, more responsive
     # Lower = more smoothing, smoother but laggier
     action_smoothing_alpha: 0.7
+
+    # Maximum allowed joint position change per command cycle (radians)
+    # With ABSOLUTE actions, servos self-limit via target_speed/acceleration,
+    # so this is a safety backstop. 0.5 rad at 100Hz = 50 rad/s theoretical max.
+    max_joint_delta: 0.5
+
+    # CSV log path for action diagnostics (empty = disabled)
+    # Logs raw, smoothed, final actions and state at 100 Hz
+    csv_log_path: "/tmp/groot_client_debug.csv"
+
+    # ==========================================================================
+    # Debug Settings
+    # ==========================================================================
+    # Save first few observation images to /tmp/groot_debug_images/ for
+    # visual comparison with training data (helps diagnose domain gap)
+    debug_save_images: true
 

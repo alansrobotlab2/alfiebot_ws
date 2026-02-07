@@ -97,6 +97,8 @@ class GrootClientNode(Node):
         self.action_chunk_size = self.get_parameter('action_chunk_size').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
         self.base_velocity_decay = self.get_parameter('base_velocity_decay').value
+        self.max_joint_delta = self.get_parameter('max_joint_delta').value
+        self.debug_save_images = self.get_parameter('debug_save_images').value
 
         # Build server address from transport parameters
         self.server_address = build_server_address(
@@ -132,7 +134,10 @@ class GrootClientNode(Node):
         )
 
         # Initialize observation bridge
-        self.observation_bridge = ObservationBridge(node=self)
+        self.observation_bridge = ObservationBridge(
+            node=self,
+            debug_save_images=self.debug_save_images,
+        )
 
         # Initialize action publisher
         self.action_publisher = ActionPublisher(
@@ -223,6 +228,8 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Action Step Period:   {ACTION_STEP_PERIOD * 1000:.1f} ms ({TRAINING_FPS} FPS)')
         self.get_logger().info(f'  CSV Log Path:         {self.csv_log_path or "(disabled)"}')
         self.get_logger().info(f'  Base Vel Decay:       {self.base_velocity_decay}')
+        self.get_logger().info(f'  Max Joint Delta:      {self.max_joint_delta} rad')
+        self.get_logger().info(f'  Debug Save Images:    {self.debug_save_images}')
         self.get_logger().info('=' * 60)
 
     def _test_server_connection(self):
@@ -259,12 +266,19 @@ class GrootClientNode(Node):
         self.declare_parameter('csv_log_path', '')
 
         # Base velocity drift correction.
-        # Because base actions use RELATIVE representation (delta added to current
-        # state), small consistent prediction errors cause velocity to compound.
-        # This decay factor (0-1) is multiplied into the base velocity each
-        # command cycle:  0.0 = no correction, 0.95 = gentle decay toward zero.
-        # Set to 0.0 to disable.
+        # Decay factor (0-1) multiplied into base velocity each command cycle.
+        # Can help dampen small prediction noise in base velocity output.
+        # 0.0 = no correction (default), 0.95 = gentle decay toward zero.
         self.declare_parameter('base_velocity_decay', 0.0)
+
+        # Maximum allowed joint position change per command cycle (radians).
+        # Safety backstop for delta limiting — servos also self-limit via
+        # target_speed/acceleration, so this is a secondary safeguard.
+        self.declare_parameter('max_joint_delta', 0.5)
+
+        # Debug: save first few observation images to disk for visual comparison
+        # with training data. Images saved to /tmp/groot_debug_images/
+        self.declare_parameter('debug_save_images', False)
 
     def _activate_callback(self, msg: Bool):
         """Handle activation/deactivation requests."""
@@ -302,6 +316,9 @@ class GrootClientNode(Node):
             self._state = ClientState.ACTIVE
             self._active = True
             self.get_logger().info('GR00T inference active')
+
+            # Check starting pose against training data distribution
+            self._check_starting_pose()
         else:
             self._state = ClientState.ERROR
             self.get_logger().error('Failed to connect to inference server')
@@ -358,6 +375,43 @@ class GrootClientNode(Node):
 
         # Reset smoothing
         self.action_publisher.reset_smoothing()
+
+    def _check_starting_pose(self):
+        """Check if robot starting pose is within training data distribution.
+
+        Logs warnings for joints significantly out of range.
+        """
+        # Expected STARTING values from training episode t=0 analysis
+        # (not mid-task averages — these are the poses when demos begin)
+        # Format: state_dim -> (name, expected_value, tolerance)
+        EXPECTED_START = {
+            6:  ('back_joint', 0.098, 0.02),
+            9:  ('left_elbow_pitch', -1.477, 0.15),
+            19: ('head_yaw', 0.0, 0.5),
+            20: ('head_pitch', -0.04, 0.3),
+            21: ('head_roll', 0.06, 0.15),
+        }
+
+        obs = self.observation_bridge.get_latest_observation()
+        if obs is None or not obs.valid:
+            self.get_logger().warn('Pose check: no valid observation available')
+            return
+
+        mismatches = []
+        for idx, (name, expected, tol) in EXPECTED_START.items():
+            actual = obs.state[idx]
+            if abs(actual - expected) > tol:
+                mismatches.append(
+                    f'{name}={actual:.3f} (expected ~{expected:.3f}, off by {actual - expected:+.3f})'
+                )
+
+        if mismatches:
+            self.get_logger().warn(
+                f'Starting pose mismatches ({len(mismatches)} joints): '
+                + ', '.join(mismatches)
+            )
+        else:
+            self.get_logger().info('Starting pose check: all joints within training range')
 
     def _inference_loop(self):
         """Background inference loop (runs on dedicated thread).
@@ -451,18 +505,25 @@ class GrootClientNode(Node):
         action = chunk[idx].copy()
 
         # Apply base velocity drift correction.
-        # RELATIVE actions compound velocity: output = state + delta.
-        # Decay pulls base velocity toward zero to counteract drift.
+        # Decay pulls base velocity toward zero to counteract prediction noise.
         if self.base_velocity_decay > 0.0:
             action[0:6] *= (1.0 - self.base_velocity_decay)
+
+        # Use LIVE robot state for delta limiting instead of the stale chunk
+        # state (which was captured ~300ms ago when inference was requested).
+        # The robot has moved since then; using stale state causes delta limits
+        # to clamp ABSOLUTE targets incorrectly, producing wrong movements.
+        live_obs = self.observation_bridge.get_latest_observation()
+        live_state = live_obs.state if (live_obs is not None and live_obs.valid) else state
 
         # Publish action to robot at 100 Hz
         # EMA smoothing bridges transitions between action steps and chunks
         self.action_publisher.publish_action(
             action=action,
-            current_state=state,
+            current_state=live_state,
             apply_smoothing=True,
             apply_safety=self.enable_safety_limits,
+            max_joint_delta=self.max_joint_delta,
         )
 
     def _extract_action_chunk(self, response: dict) -> Optional[np.ndarray]:

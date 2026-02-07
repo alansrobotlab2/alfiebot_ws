@@ -1,5 +1,6 @@
 """Observation bridge for collecting and synchronizing ROS2 sensor data."""
 
+import os
 import threading
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -61,7 +62,8 @@ class ObservationBridge:
         camera_topic_prefix: str = '/alfie/stereo_camera',
         state_topic: str = '/alfie/robotlowstate',
         sync_slop: float = 0.05,
-        jpeg_quality: int = 80,
+        jpeg_quality: int = 95,
+        debug_save_images: bool = False,
     ):
         """Initialize observation bridge.
 
@@ -71,9 +73,16 @@ class ObservationBridge:
             state_topic: Topic for robot state.
             sync_slop: Time synchronization tolerance in seconds.
             jpeg_quality: JPEG compression quality (0-100).
+            debug_save_images: Save first N frames to /tmp/groot_debug_images/ for comparison.
         """
         self.node = node
         self.jpeg_quality = jpeg_quality
+        self._debug_save_images = debug_save_images
+
+        # Create debug image directory if needed
+        if self._debug_save_images:
+            os.makedirs('/tmp/groot_debug_images', exist_ok=True)
+            node.get_logger().info('Debug image saving enabled: /tmp/groot_debug_images/')
 
         # Build camera topic names
         self.camera_topics = [
@@ -177,6 +186,17 @@ class ObservationBridge:
 
         # Check validity (all cameras received)
         obs.valid = len(obs.images) == len(self.CAMERA_NAMES)
+
+        # Save debug images for visual comparison with training data
+        if self._debug_save_images and self._observation_count < 5:
+            for name, img_array in obs.images_array.items():
+                path = f'/tmp/groot_debug_images/live_{self._observation_count}_{name}.png'
+                cv2.imwrite(path, cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR))
+            if self._observation_count == 0:
+                self.node.get_logger().info(
+                    f'Saved debug images to /tmp/groot_debug_images/ '
+                    f'(frame {self._observation_count}, {len(obs.images_array)} cameras)'
+                )
 
         # Update latest observation
         with self._observation_lock:

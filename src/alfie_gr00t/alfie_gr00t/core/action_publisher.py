@@ -145,6 +145,7 @@ class ActionPublisher:
         current_state: Optional[np.ndarray] = None,
         apply_smoothing: bool = True,
         apply_safety: bool = True,
+        max_joint_delta: float = 0.3,
     ) -> bool:
         """Publish action to robot.
 
@@ -155,6 +156,7 @@ class ActionPublisher:
             current_state: Current 22D state vector (for delta limits).
             apply_smoothing: Whether to apply EMA smoothing.
             apply_safety: Whether to apply safety limits.
+            max_joint_delta: Maximum joint position change per step (radians).
 
         Returns:
             True if action was published, False if blocked by safety.
@@ -210,7 +212,9 @@ class ActionPublisher:
 
             # Apply delta limits if we have current state
             if current_state is not None:
-                action = self.safety.compute_delta_limits(action, current_state)
+                action = self.safety.compute_delta_limits(
+                    action, current_state, max_joint_delta=max_joint_delta,
+                )
 
             if log_this:
                 logger.info(
