@@ -75,11 +75,12 @@ compares predicted actions against ground truth. Produces trajectory plots and
 communication diagnostics. No ROS2 required.
 
 ```bash
-python ./alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_open_loop_eval.py \
-    --dataset-path ./alfiebot_ws/data/alfiebot.CanDoChallenge \
+python ./src/alfie_gr00t/alfie_gr00t/scripts/groot_open_loop_eval.py \
+    --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
     --episode-index 0 \
-    --host 192.168.50.201 \
-    --port 5555 \
+    --host 192.168.50.108 --port 5555 \
+    --save-plot /tmp/groot_eval/episode_000.png \
+    --task "find the can and pick it up" \
     --closed-loop
 ```
 

@@ -359,6 +359,13 @@ class GrootInferenceServer:
             data = self._socket.recv(flags=zmq.NOBLOCK)
             obs = msgpack.unpackb(data, raw=False)
 
+            # Handle ping requests (connectivity check)
+            if obs.get('ping'):
+                pong = msgpack.packb({'status': 'ok', 'pong': True}, use_bin_type=True)
+                self._socket.send(pong)
+                self.logger.info('Ping received — pong sent')
+                return True
+
             # Extract observation data
             images = obs.get('images', {})
             state = np.array(obs.get('state', []), dtype=np.float32)
