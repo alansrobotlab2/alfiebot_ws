@@ -51,7 +51,7 @@ class ObservationBridge:
 
     # Target image size for inference
     IMAGE_WIDTH = 320
-    IMAGE_HEIGHT = 280
+    IMAGE_HEIGHT = 240
 
     # State vector dimension
     STATE_DIM = 22
@@ -192,10 +192,21 @@ class ObservationBridge:
             for name, img_array in obs.images_array.items():
                 path = f'/tmp/groot_debug_images/live_{self._observation_count}_{name}.png'
                 cv2.imwrite(path, cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR))
+            # Also save the exact JPEG bytes that would be sent to the server
+            for name, jpeg_bytes in obs.images.items():
+                path = f'/tmp/groot_debug_images/live_{self._observation_count}_{name}.jpg'
+                with open(path, 'wb') as f:
+                    f.write(jpeg_bytes)
+            # Also save raw camera JPEG (before decompress/resize/recompress)
+            for name, msg in zip(self.CAMERA_NAMES, camera_msgs):
+                path = f'/tmp/groot_debug_images/raw_{self._observation_count}_{name}.jpg'
+                with open(path, 'wb') as f:
+                    f.write(bytes(msg.data))
             if self._observation_count == 0:
                 self.node.get_logger().info(
                     f'Saved debug images to /tmp/groot_debug_images/ '
-                    f'(frame {self._observation_count}, {len(obs.images_array)} cameras)'
+                    f'(frame {self._observation_count}, {len(obs.images_array)} cameras, '
+                    f'+ JPEG bytes + raw camera JPEG)'
                 )
 
         # Update latest observation

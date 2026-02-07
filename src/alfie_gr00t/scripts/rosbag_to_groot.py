@@ -84,7 +84,7 @@ class RosbagToGrootConverter:
 
     # Target video dimensions
     VIDEO_WIDTH = 320
-    VIDEO_HEIGHT = 280
+    VIDEO_HEIGHT = 240
 
     def __init__(
         self,

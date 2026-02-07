@@ -75,7 +75,7 @@
         "observation.images.left_wide": {
             "dtype": "video",
             "shape": [
-                280,
+                240,
                 320,
                 3
             ],
@@ -85,9 +85,9 @@
                 "channels"
             ],
             "info": {
-                "video.height": 280,
+                "video.height": 240,
                 "video.width": 320,
-                "video.codec": "av1",
+                "video.codec": "h264",
                 "video.pix_fmt": "yuv420p",
                 "video.is_depth_map": false,
                 "video.fps": 15,
@@ -98,7 +98,7 @@
         "observation.images.right_wide": {
             "dtype": "video",
             "shape": [
-                280,
+                240,
                 320,
                 3
             ],
@@ -108,9 +108,9 @@
                 "channels"
             ],
             "info": {
-                "video.height": 280,
+                "video.height": 240,
                 "video.width": 320,
-                "video.codec": "av1",
+                "video.codec": "h264",
                 "video.pix_fmt": "yuv420p",
                 "video.is_depth_map": false,
                 "video.fps": 15,
@@ -121,7 +121,7 @@
         "observation.images.left_center": {
             "dtype": "video",
             "shape": [
-                280,
+                240,
                 320,
                 3
             ],
@@ -131,9 +131,9 @@
                 "channels"
             ],
             "info": {
-                "video.height": 280,
+                "video.height": 240,
                 "video.width": 320,
-                "video.codec": "av1",
+                "video.codec": "h264",
                 "video.pix_fmt": "yuv420p",
                 "video.is_depth_map": false,
                 "video.fps": 15,
@@ -144,7 +144,7 @@
         "observation.images.right_center": {
             "dtype": "video",
             "shape": [
-                280,
+                240,
                 320,
                 3
             ],
@@ -154,9 +154,9 @@
                 "channels"
             ],
             "info": {
-                "video.height": 280,
+                "video.height": 240,
                 "video.width": 320,
-                "video.codec": "av1",
+                "video.codec": "h264",
                 "video.pix_fmt": "yuv420p",
                 "video.is_depth_map": false,
                 "video.fps": 15,
