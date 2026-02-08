@@ -65,6 +65,14 @@
     csv_log_path: "/tmp/groot_client_debug.csv"
 
     # ==========================================================================
+    # Back Initialization
+    # ==========================================================================
+    # Height (meters) to move the back to on startup (0.0 to 0.390).
+    # Will calibrate the back first if not already calibrated.
+    # Set to -1.0 to disable back initialization entirely.
+    back_init_height: 0.1
+
+    # ==========================================================================
     # Debug Settings
     # ==========================================================================
     # Save first few observation images to /tmp/groot_debug_images/ for
