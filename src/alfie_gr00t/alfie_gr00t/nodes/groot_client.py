@@ -25,6 +25,9 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
 
+from alfie_msgs.msg import BackCmd, RobotLowCmd, RobotLowState
+from alfie_msgs.srv import BackRequestCalibration
+
 from ..core.action_publisher import ActionPublisher
 from ..core.observation_bridge import Observation, ObservationBridge
 from ..core.zmq_client import ZMQClient, build_server_address, DEFAULT_IPC_PATH
@@ -99,6 +102,7 @@ class GrootClientNode(Node):
         self.base_velocity_decay = self.get_parameter('base_velocity_decay').value
         self.max_joint_delta = self.get_parameter('max_joint_delta').value
         self.debug_save_images = self.get_parameter('debug_save_images').value
+        self.back_init_height = self.get_parameter('back_init_height').value
 
         # Build server address from transport parameters
         self.server_address = build_server_address(
@@ -197,6 +201,10 @@ class GrootClientNode(Node):
         # Test server connection
         self._test_server_connection()
 
+        # Initialize back (calibrate if needed, move to target height)
+        if self.back_init_height >= 0.0:
+            self._initialize_back()
+
         # Start inference on a background thread (after all setup is complete)
         self._inference_thread = threading.Thread(
             target=self._inference_loop,
@@ -230,6 +238,7 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Base Vel Decay:       {self.base_velocity_decay}')
         self.get_logger().info(f'  Max Joint Delta:      {self.max_joint_delta} rad')
         self.get_logger().info(f'  Debug Save Images:    {self.debug_save_images}')
+        self.get_logger().info(f'  Back Init Height:     {self.back_init_height} m')
         self.get_logger().info('=' * 60)
 
     def _test_server_connection(self):
@@ -245,6 +254,73 @@ class GrootClientNode(Node):
                 f'Could not connect to server at {self.server_address}. '
                 'Server may not be running. Will retry on activation.'
             )
+
+    def _initialize_back(self):
+        """Calibrate the back if needed and move it to back_init_height.
+
+        Uses spin_once to pump the executor since this runs during __init__
+        before the main spin loop starts.
+        """
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+
+        # Wait for a RobotLowState message to check calibration status
+        self.get_logger().info('Waiting for robot state to check back calibration...')
+        received_msg = [None]
+
+        def _state_cb(msg):
+            received_msg[0] = msg
+
+        sub = self.create_subscription(RobotLowState, '/alfie/robotlowstate', _state_cb, qos)
+
+        deadline = time.monotonic() + 10.0
+        while received_msg[0] is None and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+
+        self.destroy_subscription(sub)
+
+        if received_msg[0] is None:
+            self.get_logger().warn('Timed out waiting for robot state — skipping back init')
+            return
+
+        robot_state = received_msg[0]
+
+        if not robot_state.back_state.is_calibrated:
+            self.get_logger().info('Back not calibrated, calling calibration service...')
+            calibrate_client = self.create_client(
+                BackRequestCalibration, '/alfie/low/calibrate_back'
+            )
+            if calibrate_client.wait_for_service(timeout_sec=5.0):
+                request = BackRequestCalibration.Request()
+                future = calibrate_client.call_async(request)
+                rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+                if future.result() is not None:
+                    if future.result().success:
+                        self.get_logger().info('Back calibration successful')
+                    else:
+                        self.get_logger().warn('Back calibration returned failure')
+                else:
+                    self.get_logger().warn('Back calibration service call failed')
+            else:
+                self.get_logger().warn('Back calibration service not available')
+        else:
+            self.get_logger().info('Back already calibrated')
+
+        # Command the back to the target height
+        self.get_logger().info(f'Setting back height to {self.back_init_height:.3f} m')
+        cmd = RobotLowCmd()
+        cmd.back_cmd = BackCmd()
+        cmd.back_cmd.position = self.back_init_height
+        cmd.back_cmd.velocity = 0.2
+        cmd.back_cmd.acceleration = 0.1
+        # Publish a few times to ensure delivery on best-effort QoS
+        for _ in range(10):
+            self.action_publisher.cmd_pub.publish(cmd)
+            time.sleep(0.01)
+        self.get_logger().info('Back initialization complete')
 
     def _declare_parameters(self):
         """Declare all ROS2 parameters."""
@@ -279,6 +355,11 @@ class GrootClientNode(Node):
         # Debug: save first few observation images to disk for visual comparison
         # with training data. Images saved to /tmp/groot_debug_images/
         self.declare_parameter('debug_save_images', False)
+
+        # Back initialization height (meters). On startup, the back is
+        # calibrated if needed and moved to this position before inference.
+        # Set to -1.0 to disable back initialization entirely.
+        self.declare_parameter('back_init_height', 0.1)
 
     def _activate_callback(self, msg: Bool):
         """Handle activation/deactivation requests."""
