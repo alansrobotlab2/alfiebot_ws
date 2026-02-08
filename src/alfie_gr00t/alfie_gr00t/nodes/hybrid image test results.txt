@@ -1,0 +1,138 @@
+python3 src/alfie_gr00t/alfie_gr00t/scripts/hybrid_image_test.py --host 192.168.50.108 --port 5555
+
+Server: tcp://192.168.50.108:5555
+
+Loading GT state from training episode...
+  GT state (22D): head=(-0.114,-0.038,0.005)
+    r_arm=(-0.003,0.115,-1.479,-0.138,-0.005)
+    r_grip=0.005 back=0.098
+
+  [zmq] Connected to server: tcp://192.168.50.108:5555
+  [zmq] Server ping successful
+
+============================================================
+TEST 1a: GT training images from MP4 (post-H.264) + GT state
+============================================================
+Extracting frame 0 from training MP4 videos...
+  Extracted left_wide: (240, 320, 3) from MP4
+  Extracted right_wide: (240, 320, 3) from MP4
+  Extracted left_center: (240, 320, 3) from MP4
+  Extracted right_center: (240, 320, 3) from MP4
+  Got 16 actions
+  Action[0]:
+    head=(-0.029, 0.157, -0.044)
+    r_arm=(-0.032, 0.302, -1.562, -0.258, -0.037)
+    r_grip=0.037  back=0.100  fwd=0.006
+  Action[7]:
+    head=(-0.309, 0.071, -0.094)
+    r_arm=(0.020, 0.105, -1.489, 0.132, 0.280)
+    r_grip=0.000  back=0.100  fwd=0.035
+  Action[15]:
+    head=(-0.275, -0.394, -0.097)
+    r_arm=(-0.007, 0.118, -1.562, 0.074, -0.027)
+    r_grip=0.000  back=0.100  fwd=0.020
+
+============================================================
+TEST 1b: GT training images from rosbag (pre-H.264) + GT state
+============================================================
+  Extracting frame 0 from rosbag: demo_20260102_195919_0.mcap
+  Loaded left_center: (240, 320, 3) ts=1767412760577934294
+  Loaded left_wide: (240, 320, 3) ts=1767412760582277256
+  Loaded right_center: (240, 320, 3) ts=1767412760643858243
+  Loaded right_wide: (240, 320, 3) ts=1767412760648332101
+  Got 16 actions
+  Action[0]:
+    head=(0.070, 0.196, -0.037)
+    r_arm=(-0.018, 0.365, -1.562, -0.030, 0.126)
+    r_grip=0.000  back=0.100  fwd=0.040
+  Action[7]:
+    head=(-0.130, -0.123, -0.114)
+    r_arm=(0.040, 0.112, -1.562, -0.233, -0.134)
+    r_grip=0.000  back=0.100  fwd=0.008
+  Action[15]:
+    head=(-0.191, -0.614, -0.102)
+    r_arm=(0.053, 0.627, -1.429, -0.408, 0.338)
+    r_grip=0.000  back=0.100  fwd=0.035
+
+============================================================
+TEST 2: LIVE images + GT state (hybrid test)
+============================================================
+Loading live images...
+  Loaded left_wide: (240, 320, 3)
+  Loaded right_wide: (240, 320, 3)
+  Loaded left_center: (240, 320, 3)
+  Loaded right_center: (240, 320, 3)
+  Got 16 actions
+  Action[0]:
+    head=(0.111, -0.002, -0.051)
+    r_arm=(0.080, 0.208, -1.562, 0.415, 0.005)
+    r_grip=0.000  back=0.100  fwd=0.008
+  Action[7]:
+    head=(-0.511, -0.542, 0.041)
+    r_arm=(0.106, -0.145, -1.381, -0.292, 0.072)
+    r_grip=0.000  back=0.100  fwd=0.011
+  Action[15]:
+    head=(-0.160, -0.566, 0.001)
+    r_arm=(-0.021, 0.121, -1.562, -0.192, 0.230)
+    r_grip=0.080  back=0.100  fwd=0.045
+
+============================================================
+TEST 3: LIVE images (frames 0-4) + GT state (consistency)
+============================================================
+  Loaded left_wide: (240, 320, 3)
+  Loaded right_wide: (240, 320, 3)
+  Loaded left_center: (240, 320, 3)
+  Loaded right_center: (240, 320, 3)
+  Frame 0: head=(-0.021,-0.071,-0.006) r_grip=0.000 fwd=0.032
+  Loaded left_wide: (240, 320, 3)
+  Loaded right_wide: (240, 320, 3)
+  Loaded left_center: (240, 320, 3)
+  Loaded right_center: (240, 320, 3)
+  Frame 1: head=(0.244,0.075,-0.046) r_grip=0.000 fwd=0.051
+  Loaded left_wide: (240, 320, 3)
+  Loaded right_wide: (240, 320, 3)
+  Loaded left_center: (240, 320, 3)
+  Loaded right_center: (240, 320, 3)
+  Frame 2: head=(0.145,0.092,0.017) r_grip=0.000 fwd=-0.006
+  Loaded left_wide: (240, 320, 3)
+  Loaded right_wide: (240, 320, 3)
+  Loaded left_center: (240, 320, 3)
+  Loaded right_center: (240, 320, 3)
+  Frame 3: head=(-0.080,0.153,0.019) r_grip=0.000 fwd=0.010
+  Loaded left_wide: (240, 320, 3)
+  Loaded right_wide: (240, 320, 3)
+  Loaded left_center: (240, 320, 3)
+  Loaded right_center: (240, 320, 3)
+  Frame 4: head=(-0.584,0.157,-0.026) r_grip=0.000 fwd=-0.021
+
+============================================================
+TEST 4: Similar training ep (ep_031) images + GT state
+============================================================
+  SKIPPED: Not all 4 similar episode images available
+
+============================================================
+TEST 5: H.264-conditioned LIVE images + GT state (on-the-fly)
+============================================================
+  Conditioned left_wide: (240, 320, 3)
+  Conditioned right_wide: (240, 320, 3)
+  Conditioned left_center: (240, 320, 3)
+  Conditioned right_center: (240, 320, 3)
+  Got 16 actions
+  Action[0]:
+    head=(-0.314, 0.286, -0.030)
+    r_arm=(0.066, -0.045, -1.562, 0.330, 0.069)
+    r_grip=0.000  back=0.100  fwd=-0.008
+  Action[7]:
+    head=(-0.286, -0.142, -0.086)
+    r_arm=(0.020, 0.121, -1.562, 0.257, 0.043)
+    r_grip=0.000  back=0.100  fwd=0.041
+  Action[15]:
+    head=(-1.100, -0.291, -0.024)
+    r_arm=(0.013, -0.198, -1.562, 0.091, 0.186)
+    r_grip=0.000  back=0.100  fwd=0.017
+
+============================================================
+TEST 6: Blended images (0%=train, 100%=live) + GT state
+============================================================
+
+Done.
