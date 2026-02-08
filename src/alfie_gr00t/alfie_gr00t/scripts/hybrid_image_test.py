@@ -15,11 +15,13 @@ Usage:
 """
 
 import argparse
+import io
 import json
 import sys
 import time
 from pathlib import Path
 
+import av
 import cv2
 import numpy as np
 import pandas as pd
@@ -40,7 +42,7 @@ from alfie_gr00t.core.zmq_client import ZMQClient, build_server_address
 
 CAMERA_NAMES = ['left_wide', 'right_wide', 'left_center', 'right_center']
 IMAGE_WIDTH = 320
-IMAGE_HEIGHT = 240
+IMAGE_HEIGHT = 240  # Must match training data MP4s (320x240)
 JPEG_QUALITY = 95  # Match live pipeline
 
 # Rosbag topic to camera name mapping (from rosbag_to_groot.py)
@@ -149,6 +151,76 @@ def load_rosbag_images(mcap_path: str) -> dict[str, bytes]:
     return found
 
 
+def extract_mp4_frame0(dataset_path: str, episode_index: int = 0) -> dict[str, bytes]:
+    """Extract first frame from training MP4 videos (post-H.264).
+
+    These are the exact images the model was trained on — they've been through
+    the full rosbag_to_groot.py pipeline including H.264 yuv420p encode/decode.
+    """
+    videos_dir = Path(dataset_path) / 'videos' / 'chunk-000'
+    images = {}
+    for cam in CAMERA_NAMES:
+        mp4_path = videos_dir / f'observation.images.{cam}' / f'episode_{episode_index:06d}.mp4'
+        if not mp4_path.exists():
+            print(f'  WARNING: Missing {mp4_path}')
+            continue
+        container = av.open(str(mp4_path))
+        for frame in container.decode(video=0):
+            img_rgb = frame.to_ndarray(format='rgb24')
+            # Convert to BGR for JPEG encoding (server decodes JPEG → BGR → RGB)
+            img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+            _, encoded = cv2.imencode('.jpg', img_bgr,
+                                     [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+            images[cam] = encoded.tobytes()
+            print(f'  Extracted {cam}: {img_rgb.shape} from MP4')
+            break  # only first frame
+        container.close()
+    return images
+
+
+def h264_condition_frame(img_rgb: np.ndarray) -> np.ndarray:
+    """Apply H.264 encode/decode round-trip to match training data pipeline.
+
+    Replicates the exact encoding used in rosbag_to_groot.py:
+    libx264, yuv420p, CRF=23, preset=fast.
+
+    Args:
+        img_rgb: RGB numpy array (H, W, 3), uint8.
+
+    Returns:
+        H.264-conditioned RGB numpy array, same shape.
+    """
+    h, w = img_rgb.shape[:2]
+    buf = io.BytesIO()
+
+    # Encode: RGB → H.264 yuv420p
+    output = av.open(buf, mode='w', format='mp4')
+    stream = output.add_stream('libx264', rate=1)
+    stream.width = w
+    stream.height = h
+    stream.pix_fmt = 'yuv420p'
+    stream.options = {'crf': '23', 'preset': 'fast'}
+
+    frame = av.VideoFrame.from_ndarray(img_rgb, format='rgb24')
+    frame = frame.reformat(format='yuv420p')
+    for packet in stream.encode(frame):
+        output.mux(packet)
+    for packet in stream.encode():
+        output.mux(packet)
+    output.close()
+
+    # Decode: H.264 → RGB
+    buf.seek(0)
+    container = av.open(buf, mode='r', format='mp4')
+    for frame in container.decode(video=0):
+        result = frame.to_ndarray(format='rgb24')
+        container.close()
+        return result
+
+    container.close()
+    return img_rgb
+
+
 def load_gt_state(dataset_path: str, episode_index: int = 0) -> np.ndarray:
     """Load GT state from training episode."""
     # LeRobot v2 format: data/chunk-000/episode_NNNNNN.parquet
@@ -208,13 +280,13 @@ def main():
 
     print()
     print('=' * 60)
-    print('TEST 1: GT training images + GT state (baseline)')
+    print('TEST 1a: GT training images from MP4 (post-H.264) + GT state')
     print('=' * 60)
-    print('Loading training images...')
-    train_images = load_training_images(args.debug_dir)
-    if len(train_images) == 4:
+    print('Extracting frame 0 from training MP4 videos...')
+    mp4_images = extract_mp4_frame0(args.dataset_path, args.episode)
+    if len(mp4_images) == 4:
         response = client.send_observation(
-            images=train_images,
+            images=mp4_images,
             state=gt_state,
             language=args.task,
         )
@@ -227,7 +299,40 @@ def main():
         else:
             print(f'  ERROR: {response}')
     else:
-        print('  SKIPPED: Not all 4 training images available')
+        print('  SKIPPED: Not all 4 MP4 videos found')
+
+    print()
+    print('=' * 60)
+    print('TEST 1b: GT training images from rosbag (pre-H.264) + GT state')
+    print('=' * 60)
+    rosbag_path = Path(args.rosbag)
+    if not rosbag_path.exists():
+        zstd_path = Path(str(rosbag_path) + '.zstd')
+        if zstd_path.exists():
+            rosbag_path = zstd_path
+        else:
+            rosbag_path = None
+    if rosbag_path is not None:
+        print(f'  Extracting frame 0 from rosbag: {rosbag_path.name}')
+        rosbag_raw_images = load_rosbag_images(str(rosbag_path))
+        if len(rosbag_raw_images) == 4:
+            response = client.send_observation(
+                images=rosbag_raw_images,
+                state=gt_state,
+                language=args.task,
+            )
+            if response and 'actions' in response:
+                actions = np.array(response['actions'])
+                print(f'  Got {actions.shape[0]} actions')
+                format_action(actions[0], 'Action[0]')
+                format_action(actions[7], 'Action[7]')
+                format_action(actions[15], 'Action[15]')
+            else:
+                print(f'  ERROR: {response}')
+        else:
+            print('  SKIPPED: Not all 4 cameras found in rosbag')
+    else:
+        print(f'  SKIPPED: Rosbag not found: {args.rosbag}')
 
     print()
     print('=' * 60)
@@ -307,20 +412,27 @@ def main():
         print('  SKIPPED: Not all 4 similar episode images available')
 
     # Test 5: Live images after H.264 roundtrip + GT state
-    # If training images always go through H.264 encode/decode (yuv420p),
-    # the model may rely on those color subsampling artifacts.
+    # Training images go through libx264 yuv420p CRF=23 encode/decode in MP4.
+    # This test applies the same round-trip to live images on-the-fly.
     print()
     print('=' * 60)
-    print('TEST 5: H.264-conditioned LIVE images + GT state')
+    print('TEST 5: H.264-conditioned LIVE images + GT state (on-the-fly)')
     print('=' * 60)
     h264_images = {}
     for cam in CAMERA_NAMES:
-        path = Path(args.debug_dir) / f'live_h264_{cam}.png'
-        if path.exists():
-            img = cv2.imread(str(path))  # BGR
-            _, encoded = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            h264_images[cam] = encoded.tobytes()
-            print(f'  Loaded {cam}: {img.shape}')
+        path = Path(args.debug_dir) / f'live_0_{cam}.png'
+        if not path.exists():
+            print(f'  WARNING: Missing {path}')
+            continue
+        img = cv2.imread(str(path))  # BGR
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # Apply H.264 encode/decode round-trip (libx264 yuv420p CRF=23)
+        img_conditioned = h264_condition_frame(img_rgb)
+        # Convert back to BGR for JPEG encoding
+        img_bgr = cv2.cvtColor(img_conditioned, cv2.COLOR_RGB2BGR)
+        _, encoded = cv2.imencode('.jpg', img_bgr, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+        h264_images[cam] = encoded.tobytes()
+        print(f'  Conditioned {cam}: {img.shape}')
     if len(h264_images) == 4:
         response = client.send_observation(
             images=h264_images,
@@ -336,7 +448,7 @@ def main():
         else:
             print(f'  ERROR: {response}')
     else:
-        print('  SKIPPED: Not all 4 h264-conditioned images available')
+        print('  SKIPPED: Not all 4 live images available for H.264 conditioning')
 
     # Test 6: Blended images (train→live) to find sensitivity threshold
     print()
@@ -363,44 +475,6 @@ def main():
                 pitches = [f'{a[i,20]:.2f}' for i in [0, 4, 8, 12, 15]]
                 print(f'  {blend_pct:3d}% live: head_pitch=[{", ".join(pitches)}]  '
                       f'r_grip[0]={a[0,18]:.3f}')
-
-    # Test 7: Rosbag raw images (pre-H.264) + GT state
-    # These images went through JPEG decode + resize but NOT H.264 encode/decode.
-    # If this fails like live → H.264 is confirmed as the cause.
-    # If this works like training → something else changed between capture and live.
-    print()
-    print('=' * 60)
-    print('TEST 7: Rosbag raw images (pre-H.264) + GT state')
-    print('=' * 60)
-    rosbag_path = Path(args.rosbag)
-    if not rosbag_path.exists():
-        # Try .zstd variant
-        zstd_path = Path(str(rosbag_path) + '.zstd')
-        if zstd_path.exists():
-            rosbag_path = zstd_path
-        else:
-            print(f'  SKIPPED: Rosbag not found: {args.rosbag}')
-            rosbag_path = None
-
-    if rosbag_path is not None:
-        print(f'  Loading from: {rosbag_path.name}')
-        rosbag_images = load_rosbag_images(str(rosbag_path))
-        if len(rosbag_images) == 4:
-            response = client.send_observation(
-                images=rosbag_images,
-                state=gt_state,
-                language=args.task,
-            )
-            if response and 'actions' in response:
-                actions = np.array(response['actions'])
-                print(f'  Got {actions.shape[0]} actions')
-                format_action(actions[0], 'Action[0]')
-                format_action(actions[7], 'Action[7]')
-                format_action(actions[15], 'Action[15]')
-            else:
-                print(f'  ERROR: {response}')
-        else:
-            print('  SKIPPED: Not all 4 camera images found in rosbag')
 
     client.close()
     print()

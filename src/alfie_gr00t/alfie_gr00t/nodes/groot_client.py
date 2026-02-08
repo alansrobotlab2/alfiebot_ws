@@ -102,6 +102,7 @@ class GrootClientNode(Node):
         self.base_velocity_decay = self.get_parameter('base_velocity_decay').value
         self.max_joint_delta = self.get_parameter('max_joint_delta').value
         self.debug_save_images = self.get_parameter('debug_save_images').value
+        self.h264_conditioning = self.get_parameter('h264_conditioning').value
         self.back_init_height = self.get_parameter('back_init_height').value
 
         # Build server address from transport parameters
@@ -141,6 +142,7 @@ class GrootClientNode(Node):
         self.observation_bridge = ObservationBridge(
             node=self,
             debug_save_images=self.debug_save_images,
+            h264_conditioning=self.h264_conditioning,
         )
 
         # Initialize action publisher
@@ -238,6 +240,7 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Base Vel Decay:       {self.base_velocity_decay}')
         self.get_logger().info(f'  Max Joint Delta:      {self.max_joint_delta} rad')
         self.get_logger().info(f'  Debug Save Images:    {self.debug_save_images}')
+        self.get_logger().info(f'  H.264 Conditioning:   {self.h264_conditioning}')
         self.get_logger().info(f'  Back Init Height:     {self.back_init_height} m')
         self.get_logger().info('=' * 60)
 
@@ -355,6 +358,11 @@ class GrootClientNode(Node):
         # Debug: save first few observation images to disk for visual comparison
         # with training data. Images saved to /tmp/groot_debug_images/
         self.declare_parameter('debug_save_images', False)
+
+        # H.264 conditioning: apply libx264 yuv420p CRF=23 encode/decode to
+        # live camera frames so they match the training data pipeline
+        # (rosbag_to_groot.py encodes to MP4 with these exact settings).
+        self.declare_parameter('h264_conditioning', False)
 
         # Back initialization height (meters). On startup, the back is
         # calibrated if needed and moved to this position before inference.

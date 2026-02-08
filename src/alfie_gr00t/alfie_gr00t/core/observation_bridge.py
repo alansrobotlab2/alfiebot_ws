@@ -1,10 +1,12 @@
 """Observation bridge for collecting and synchronizing ROS2 sensor data."""
 
+import io
 import os
 import threading
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+import av
 import cv2
 import message_filters
 import numpy as np
@@ -49,7 +51,7 @@ class ObservationBridge:
     # Camera topic names (in order matching modality config)
     CAMERA_NAMES = ['left_wide', 'right_wide', 'left_center', 'right_center']
 
-    # Target image size for inference
+    # Target image size for inference (must match training data MP4s: 320x240)
     IMAGE_WIDTH = 320
     IMAGE_HEIGHT = 240
 
@@ -64,6 +66,7 @@ class ObservationBridge:
         sync_slop: float = 0.05,
         jpeg_quality: int = 95,
         debug_save_images: bool = False,
+        h264_conditioning: bool = False,
     ):
         """Initialize observation bridge.
 
@@ -74,10 +77,17 @@ class ObservationBridge:
             sync_slop: Time synchronization tolerance in seconds.
             jpeg_quality: JPEG compression quality (0-100).
             debug_save_images: Save first N frames to /tmp/groot_debug_images/ for comparison.
+            h264_conditioning: Apply H.264 yuv420p encode/decode round-trip to match
+                training data pipeline (rosbag_to_groot.py uses libx264 CRF=23).
         """
         self.node = node
         self.jpeg_quality = jpeg_quality
         self._debug_save_images = debug_save_images
+        self._h264_conditioning = h264_conditioning
+
+        if self._h264_conditioning:
+            node.get_logger().info('H.264 conditioning enabled: live frames will be '
+                                  'encoded/decoded through libx264 yuv420p CRF=23')
 
         # Create debug image directory if needed
         if self._debug_save_images:
@@ -247,6 +257,10 @@ class ObservationBridge:
             # Convert BGR to RGB
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+            # Apply H.264 conditioning to match training data pipeline
+            if self._h264_conditioning:
+                img = self._h264_condition_frame(img)
+
             return img
 
         except Exception:
@@ -269,6 +283,51 @@ class ObservationBridge:
         _, encoded = cv2.imencode('.jpg', img_bgr, encode_params)
 
         return encoded.tobytes()
+
+    def _h264_condition_frame(self, img: np.ndarray) -> np.ndarray:
+        """Apply H.264 encode/decode round-trip to match training data pipeline.
+
+        Training data in rosbag_to_groot.py goes through libx264 yuv420p CRF=23
+        encoding into MP4 files. This introduces chroma subsampling and DCT
+        compression artifacts. This method replicates that pipeline on live frames
+        so the model sees the same pixel distribution it was trained on.
+
+        Args:
+            img: RGB numpy array (H, W, 3), uint8.
+
+        Returns:
+            H.264-conditioned RGB numpy array, same shape.
+        """
+        h, w = img.shape[:2]
+        buf = io.BytesIO()
+
+        # Encode: RGB → H.264 yuv420p (same params as rosbag_to_groot.py lines 504-521)
+        output = av.open(buf, mode='w', format='mp4')
+        stream = output.add_stream('libx264', rate=1)
+        stream.width = w
+        stream.height = h
+        stream.pix_fmt = 'yuv420p'
+        stream.options = {'crf': '23', 'preset': 'fast'}
+
+        frame = av.VideoFrame.from_ndarray(img, format='rgb24')
+        frame = frame.reformat(format='yuv420p')
+        for packet in stream.encode(frame):
+            output.mux(packet)
+        for packet in stream.encode():
+            output.mux(packet)
+        output.close()
+
+        # Decode: H.264 → RGB
+        buf.seek(0)
+        container = av.open(buf, mode='r', format='mp4')
+        for frame in container.decode(video=0):
+            result = frame.to_ndarray(format='rgb24')
+            container.close()
+            return result
+
+        # Fallback: return original if decode fails
+        container.close()
+        return img
 
     def _extract_state(self, msg: RobotLowState) -> np.ndarray:
         """Extract 22-dimensional state vector from RobotLowState message.
