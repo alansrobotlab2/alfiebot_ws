@@ -8,7 +8,7 @@ the corresponding parquet files to have the correct task_index value.
 Usage:
     python3 update_task_index.py [--data-dir PATH] [--dry-run]
 
-python3 update_task_index.py --data-dir ~/Projects/alfiebot_ws/data/alfiebot.CanDoChallenge
+python3 ./src/alfie_gr00t/scripts/update_task_index.py --data-dir ./data/alfiebot.CanDoChallenge
 
 """
 
