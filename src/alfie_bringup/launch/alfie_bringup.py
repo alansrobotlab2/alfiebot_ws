@@ -122,53 +122,53 @@ def generate_launch_description():
             respawn=True
         ),
 
-        Node(
-            package='alfie_tts',
-            namespace='alfie',
-            executable='alfietts',
-            name='tts_node',
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
-        ),
+        # Node(
+        #     package='alfie_tts',
+        #     namespace='alfie',
+        #     executable='alfietts',
+        #     name='tts_node',
+        #     output='screen',
+        #     emulate_tty=True,
+        #     sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+        #     sigkill_timeout='10',  # Force kill after 10 seconds
+        #     respawn=True
+        # ),
 
-        Node(
-            package='alfie_mic',
-            namespace='alfie',
-            executable='audio_publisher',
-            name='audio_publisher_node',
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
-        ),
+        # Node(
+        #     package='alfie_mic',
+        #     namespace='alfie',
+        #     executable='audio_publisher',
+        #     name='audio_publisher_node',
+        #     output='screen',
+        #     emulate_tty=True,
+        #     sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+        #     sigkill_timeout='10',  # Force kill after 10 seconds
+        #     respawn=True
+        # ),
 
-        Node(
-            package='alfie_asr',
-            namespace='alfie',
-            executable='parakeet_asr_node',
-            name='asr_node',
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
-        ),
+        # Node(
+        #     package='alfie_asr',
+        #     namespace='alfie',
+        #     executable='parakeet_asr_node',
+        #     name='asr_node',
+        #     output='screen',
+        #     emulate_tty=True,
+        #     sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+        #     sigkill_timeout='10',  # Force kill after 10 seconds
+        #     respawn=True
+        # ),
 
-        Node(
-            package='alfie_llm',
-            namespace='alfie',
-            executable='mlc_llm_serve_node',
-            name='mlc_llm_node',
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
-        ),
+        # Node(
+        #     package='alfie_llm',
+        #     namespace='alfie',
+        #     executable='mlc_llm_serve_node',
+        #     name='mlc_llm_node',
+        #     output='screen',
+        #     emulate_tty=True,
+        #     sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+        #     sigkill_timeout='10',  # Force kill after 10 seconds
+        #     respawn=True
+        # ),
 
 
 
