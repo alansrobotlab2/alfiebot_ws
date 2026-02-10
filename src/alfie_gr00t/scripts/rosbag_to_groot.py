@@ -186,6 +186,28 @@ class RosbagToGrootConverter:
         print(f"Found {len(existing)} existing episodes in episodes.jsonl")
         return existing
 
+    def _episode_files_exist(self, episode_meta: Dict) -> bool:
+        """Check whether the parquet and video files for an episode exist on disk."""
+        ep_idx = episode_meta['episode_index']
+        chunk_idx = ep_idx // self.chunk_size
+
+        # Check parquet
+        parquet_path = self.data_dir / f'chunk-{chunk_idx:03d}' / f'episode_{ep_idx:06d}.parquet'
+        if not parquet_path.exists():
+            return False
+
+        # Check videos for all 4 cameras
+        for cam_key in ['left_wide', 'right_wide', 'left_center', 'right_center']:
+            video_path = (
+                self.videos_dir / f'chunk-{chunk_idx:03d}'
+                / f'observation.images.{cam_key}'
+                / f'episode_{ep_idx:06d}.mp4'
+            )
+            if not video_path.exists():
+                return False
+
+        return True
+
     def remove_episode_files(self, episode_meta: Dict) -> None:
         """Delete all output files for an episode (parquet + videos)."""
         ep_idx = episode_meta['episode_index']
@@ -644,14 +666,14 @@ class RosbagToGrootConverter:
 
         return num_frames, metadata
 
-    def convert_all(self, task_index: int = 0) -> Tuple[int, int, int]:
+    def convert_all(self, task_index: int = 0) -> Tuple[int, int, int, int]:
         """Incrementally sync demonstrations to GR00T format.
 
         Compares source demos against existing episodes.jsonl to determine
-        what to skip, remove, or add.
+        what to skip, remove, rebuild (missing output files), or add.
 
         Returns:
-            Tuple of (num_skipped, num_removed, num_added)
+            Tuple of (num_skipped, num_removed, num_rebuilt, num_added)
         """
         # Phase 1: Load existing state
         existing_episodes = self.load_existing_episodes()
@@ -666,12 +688,30 @@ class RosbagToGrootConverter:
         demo_dir_map = {d.name: d for d in demos}
 
         # Phase 2: Diff
-        unchanged_names = existing_demo_names & current_demo_names
+        common_names = existing_demo_names & current_demo_names
         removed_names = existing_demo_names - current_demo_names
         added_names = current_demo_names - existing_demo_names
 
+        # Check that "common" episodes actually have their output files on disk
+        unchanged_names = set()
+        rebuild_names = set()
+        for name in common_names:
+            ep_meta = existing_episodes[name]
+            if self._episode_files_exist(ep_meta):
+                unchanged_names.add(name)
+            else:
+                rebuild_names.add(name)
+                print(f"  Episode {ep_meta['episode_index']} ({name}): "
+                      f"missing output files, will rebuild")
+
+        # Rebuild episodes keep their existing index but need reprocessing
+        # Treat them like added episodes but reuse their episode_index
+        added_names = added_names | rebuild_names
+
         print(f"\nSync plan: Skip {len(unchanged_names)}, "
-              f"Remove {len(removed_names)}, Add {len(added_names)}")
+              f"Remove {len(removed_names)}, "
+              f"Rebuild {len(rebuild_names)}, "
+              f"Add {len(added_names - rebuild_names)}")
 
         # Phase 3: Remove deleted episodes
         for name in sorted(removed_names):
@@ -685,42 +725,59 @@ class RosbagToGrootConverter:
         if unchanged_names:
             print(f"\nSkipping {len(unchanged_names)} unchanged episodes")
 
-        # Phase 5: Add new episodes
+        # Phase 5: Process new and rebuild episodes
         num_added = 0
+        num_rebuilt = 0
         if added_names:
-            # Determine next episode index
-            if existing_episodes:
-                next_idx = max(ep['episode_index'] for ep in existing_episodes.values()) + 1
-            else:
-                next_idx = 0
+            # Determine next episode index for truly new episodes
+            all_existing_indices = [
+                ep['episode_index'] for ep in existing_episodes.values()
+            ]
+            next_idx = (max(all_existing_indices) + 1) if all_existing_indices else 0
 
+            # Build list of (demo_dir, episode_index) pairs
+            # Rebuilds reuse their existing index; new demos get sequential indices
+            work_items = []  # (demo_dir, episode_index)
             added_demos = sorted([demo_dir_map[n] for n in added_names], key=lambda d: d.name)
-            total_to_add = len(added_demos)
+            new_idx_counter = next_idx
+            for demo_dir in added_demos:
+                if demo_dir.name in rebuild_names:
+                    ep_idx = existing_episodes[demo_dir.name]['episode_index']
+                else:
+                    ep_idx = new_idx_counter
+                    new_idx_counter += 1
+                work_items.append((demo_dir, ep_idx))
+
+            total_to_process = len(work_items)
 
             if self.num_threads <= 1:
                 # Single-threaded
-                for i, demo_dir in enumerate(added_demos):
-                    episode_index = next_idx + i
+                for i, (demo_dir, episode_index) in enumerate(work_items):
+                    is_rebuild = demo_dir.name in rebuild_names
                     result = self.process_single_episode(
-                        demo_dir, episode_index, task_index, i + 1, total_to_add
+                        demo_dir, episode_index, task_index, i + 1, total_to_process
                     )
                     if result is not None:
                         num_frames, metadata = result
                         self.episode_metadata.append(metadata)
-                        num_added += 1
+                        if is_rebuild:
+                            # Remove stale entry so it gets replaced by new metadata
+                            del existing_episodes[demo_dir.name]
+                            num_rebuilt += 1
+                        else:
+                            num_added += 1
             else:
                 # Multi-threaded
                 with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
                     futures = {}
-                    for i, demo_dir in enumerate(added_demos):
-                        episode_index = next_idx + i
+                    for i, (demo_dir, episode_index) in enumerate(work_items):
                         future = executor.submit(
                             self.process_single_episode,
                             demo_dir,
                             episode_index,
                             task_index,
                             i + 1,
-                            total_to_add,
+                            total_to_process,
                         )
                         futures[future] = i
 
@@ -732,10 +789,16 @@ class RosbagToGrootConverter:
                             completed_metadata[futures[future]] = metadata
 
                     # Add metadata in order
-                    for i in range(len(added_demos)):
+                    for i in range(len(work_items)):
                         if i in completed_metadata:
+                            demo_dir = work_items[i][0]
+                            is_rebuild = demo_dir.name in rebuild_names
                             self.episode_metadata.append(completed_metadata[i])
-                            num_added += 1
+                            if is_rebuild:
+                                del existing_episodes[demo_dir.name]
+                                num_rebuilt += 1
+                            else:
+                                num_added += 1
 
         # Phase 6: Merge and save episodes metadata
         all_episodes = list(existing_episodes.values()) + self.episode_metadata
@@ -747,7 +810,7 @@ class RosbagToGrootConverter:
                 f.write(json.dumps(ep) + '\n')
         print(f"\nSaved {len(all_episodes)} episodes to {episodes_path}")
 
-        return (len(unchanged_names), len(removed_names), num_added)
+        return (len(unchanged_names), len(removed_names), num_rebuilt, num_added)
 
     def save_episodes_metadata(self):
         """Save episodes.jsonl with per-episode metadata."""
@@ -997,7 +1060,7 @@ examples:
     print(f"GPU acceleration: {'Enabled' if args.use_gpu else 'Disabled'}")
     print("="*60)
 
-    num_skipped, num_removed, num_added = converter.convert_all(
+    num_skipped, num_removed, num_rebuilt, num_added = converter.convert_all(
         task_index=args.task_index,
     )
 
@@ -1015,7 +1078,7 @@ examples:
                     total_frames += ep.get('length', 0)
 
     # Update info.json with current totals
-    if num_removed > 0 or num_added > 0:
+    if num_removed > 0 or num_rebuilt > 0 or num_added > 0:
         converter.update_info_json(
             num_episodes=total_episodes,
             total_frames=total_frames
@@ -1025,6 +1088,7 @@ examples:
     print("Sync complete!")
     print(f"  Skipped:  {num_skipped}")
     print(f"  Removed:  {num_removed}")
+    print(f"  Rebuilt:  {num_rebuilt}")
     print(f"  Added:    {num_added}")
     print(f"  Total episodes: {total_episodes}")
     print(f"  Total frames:   {total_frames}")
