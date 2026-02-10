@@ -598,21 +598,13 @@ class GrootClientNode(Node):
         if self.base_velocity_decay > 0.0:
             action[0:6] *= (1.0 - self.base_velocity_decay)
 
-        # Use LIVE robot state for delta limiting instead of the stale chunk
-        # state (which was captured ~300ms ago when inference was requested).
-        # The robot has moved since then; using stale state causes delta limits
-        # to clamp ABSOLUTE targets incorrectly, producing wrong movements.
-        live_obs = self.observation_bridge.get_latest_observation()
-        live_state = live_obs.state if (live_obs is not None and live_obs.valid) else state
-
         # Publish action to robot at 100 Hz
         # EMA smoothing bridges transitions between action steps and chunks
+        # Hardware servos enforce their own joint limits — no software clamping needed
         self.action_publisher.publish_action(
             action=action,
-            current_state=live_state,
             apply_smoothing=True,
             apply_safety=self.enable_safety_limits,
-            max_joint_delta=self.max_joint_delta,
         )
 
     def _extract_action_chunk(self, response: dict) -> Optional[np.ndarray]:

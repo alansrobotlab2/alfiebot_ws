@@ -49,7 +49,7 @@ class SafetyMonitor:
         11: JointLimits(0.0, 0.8),    # right_gripper
         # Head (servos 12-14)
         12: JointLimits(-1.0, 0.5),   # head_yaw
-        13: JointLimits(-1.1, 0.2),   # head_pitch
+        13: JointLimits(-1.1, 0.5),   # head_pitch
         14: JointLimits(-0.2, 0.1),   # head_roll
     }
 

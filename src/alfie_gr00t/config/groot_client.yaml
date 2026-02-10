@@ -58,7 +58,7 @@
     # Maximum allowed joint position change per command cycle (radians)
     # With ABSOLUTE actions, servos self-limit via target_speed/acceleration,
     # so this is a safety backstop. 0.5 rad at 100Hz = 50 rad/s theoretical max.
-    max_joint_delta: 0.5
+    max_joint_delta: 2.0
 
     # CSV log path for action diagnostics (empty = disabled)
     # Logs raw, smoothed, final actions and state at 100 Hz
