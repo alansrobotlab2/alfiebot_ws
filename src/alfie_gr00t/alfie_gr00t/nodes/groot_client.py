@@ -119,8 +119,12 @@ class GrootClientNode(Node):
         self._running = True  # Controls inference thread lifetime
 
         # Action chunk state (protected by lock for thread safety)
-        # The inference thread writes a full chunk; the command timer reads it
+        # The inference thread writes a full chunk; the command timer reads it.
+        # _pending_chunk buffers the next chunk until the current one is
+        # fully consumed, matching open-loop eval behavior where each
+        # 16-action horizon plays to completion before the next inference.
         self._action_chunk: Optional[np.ndarray] = None  # shape (N, 22)
+        self._pending_chunk: Optional[np.ndarray] = None # next chunk, waiting to be promoted
         self._chunk_state: Optional[np.ndarray] = None   # state when chunk arrived
         self._chunk_timestamp: float = 0.0               # time.monotonic() when chunk arrived
         self._action_lock = threading.Lock()
@@ -427,6 +431,7 @@ class GrootClientNode(Node):
         # Clear action chunk
         with self._action_lock:
             self._action_chunk = None
+            self._pending_chunk = None
             self._chunk_state = None
 
         # Send stop command
@@ -445,6 +450,7 @@ class GrootClientNode(Node):
         # Clear action chunk
         with self._action_lock:
             self._action_chunk = None
+            self._pending_chunk = None
             self._chunk_state = None
 
         # Send stop command
@@ -463,6 +469,7 @@ class GrootClientNode(Node):
         # Clear action chunk
         with self._action_lock:
             self._action_chunk = None
+            self._pending_chunk = None
             self._chunk_state = None
 
         # Reset smoothing
@@ -525,7 +532,7 @@ class GrootClientNode(Node):
                 time.sleep(0.05)
                 continue
 
-            # Wait until the current chunk is mostly consumed before
+            # Wait until the current chunk is nearly consumed before
             # requesting a new one. This lets the model's full trajectory
             # play out instead of replacing it after 1-2 actions.
             with self._action_lock:
@@ -605,51 +612,67 @@ class GrootClientNode(Node):
                     )
             self._total_chunks += 1
 
-            # Store chunk for command loop
-            now = time.monotonic()
+            # Buffer the new chunk — the command callback will promote it
+            # once the current chunk is fully consumed, matching open-loop
+            # eval behavior (full 16-action horizon before next inference).
             with self._action_lock:
-                self._action_chunk = chunk
-                self._chunk_state = obs.state.copy()
-                self._chunk_timestamp = now
+                if self._action_chunk is None:
+                    # No current chunk — install immediately (first chunk)
+                    self._action_chunk = chunk
+                    self._chunk_state = obs.state.copy()
+                    self._chunk_timestamp = time.monotonic()
+                else:
+                    # Buffer until current chunk finishes
+                    self._pending_chunk = chunk
 
     def _command_callback(self):
         """Command publishing callback (runs at exactly 100 Hz).
 
         Steps through the action chunk at the training data rate (67ms per
-        action). Between action steps, republishes the current action with
-        EMA smoothing for smooth servo motion.
+        action). When the current chunk is fully consumed and a pending
+        chunk is available, promotes it immediately. EMA smoothing at
+        100 Hz handles any discontinuity at chunk boundaries.
         """
         if not self._active or self._state != ClientState.ACTIVE:
             return
 
-        # Get current chunk (thread-safe)
+        now = time.monotonic()
+
+        # Check if current chunk is exhausted and a pending chunk is ready
         with self._action_lock:
             chunk = self._action_chunk
-            state = self._chunk_state
             timestamp = self._chunk_timestamp
+            pending = self._pending_chunk
+
+            if chunk is not None and pending is not None:
+                elapsed = now - timestamp
+                chunk_duration = len(chunk) * ACTION_STEP_PERIOD
+                if elapsed >= chunk_duration:
+                    # Current chunk fully consumed — promote pending
+                    self._action_chunk = pending
+                    self._pending_chunk = None
+                    self._chunk_timestamp = now
+                    # Re-read after promotion
+                    chunk = self._action_chunk
+                    timestamp = self._chunk_timestamp
 
         if chunk is None:
-            # No actions yet, skip this cycle
             return
 
         # Select action from chunk based on elapsed time
         if self.action_chunk_enabled:
-            elapsed = time.monotonic() - timestamp
+            elapsed = now - timestamp
             idx = min(int(elapsed / ACTION_STEP_PERIOD), len(chunk) - 1)
         else:
-            # Chunking disabled — always use first action (original behavior)
             idx = 0
 
         action = chunk[idx].copy()
 
         # Apply base velocity drift correction.
-        # Decay pulls base velocity toward zero to counteract prediction noise.
         if self.base_velocity_decay > 0.0:
             action[0:6] *= (1.0 - self.base_velocity_decay)
 
         # Publish action to robot at 100 Hz
-        # EMA smoothing bridges transitions between action steps and chunks
-        # Hardware servos enforce their own joint limits — no software clamping needed
         self.action_publisher.publish_action(
             action=action,
             apply_smoothing=True,
