@@ -124,10 +124,13 @@ class GrootClientNode(Node):
         self._chunk_state: Optional[np.ndarray] = None   # state when chunk arrived
         self._chunk_timestamp: float = 0.0               # time.monotonic() when chunk arrived
         self._action_lock = threading.Lock()
+        self._total_chunks = 0                            # for diagnostic logging
 
         # Initialize safety monitor
+        # Watchdog timeout must exceed the chunk duration (16 actions * 67ms ≈ 1.07s)
+        # plus inference latency (~130ms), since inference only runs once per chunk.
         self.safety = SafetyMonitor(
-            watchdog_timeout=0.5,
+            watchdog_timeout=2.0,
             max_consecutive_failures=5,
         )
 
@@ -505,15 +508,40 @@ class GrootClientNode(Node):
     def _inference_loop(self):
         """Background inference loop (runs on dedicated thread).
 
-        Runs inference continuously — the server round-trip (~300ms) is the
-        natural throttle. Each response provides a full action chunk that
-        the 100 Hz command timer steps through at the training rate.
+        Waits until the current action chunk is nearly consumed before
+        requesting a new one. This ensures each 16-step action horizon
+        actually plays out — matching how open-loop eval steps through
+        the full horizon before calling inference again.
+
+        Without this, ~130ms inference latency means chunks get replaced
+        after only ~2 actions execute, causing stuttering/wiggling.
         """
+        # How long a full chunk takes to execute at the training rate
+        chunk_duration = self.action_chunk_size * ACTION_STEP_PERIOD  # 16 * 67ms ≈ 1.07s
+
         while self._running:
             # Idle-poll when not active
             if not self._active or self._state != ClientState.ACTIVE:
                 time.sleep(0.05)
                 continue
+
+            # Wait until the current chunk is mostly consumed before
+            # requesting a new one. This lets the model's full trajectory
+            # play out instead of replacing it after 1-2 actions.
+            with self._action_lock:
+                chunk_ts = self._chunk_timestamp
+                has_chunk = self._action_chunk is not None
+
+            if has_chunk:
+                elapsed = time.monotonic() - chunk_ts
+                remaining = chunk_duration - elapsed
+                # Start inference early enough that the new chunk arrives
+                # roughly when the current one runs out. Allow some overlap
+                # to avoid gaps (inference takes ~130ms).
+                lookahead = 0.15  # start inference ~150ms before chunk ends
+                if remaining > lookahead:
+                    time.sleep(min(remaining - lookahead, 0.05))
+                    continue
 
             # Get latest observation
             obs = self.observation_bridge.get_latest_observation()
@@ -522,7 +550,7 @@ class GrootClientNode(Node):
                 continue
 
             # Send raw state — Gr00tPolicy normalizes internally
-            # This is the blocking call (~300ms) that motivated the thread
+            # This is the blocking call (~130ms) that motivated the thread
             response = self.zmq_client.send_observation(
                 images=obs.images,
                 state=obs.state,
@@ -550,13 +578,34 @@ class GrootClientNode(Node):
                 self.get_logger().warn('Invalid action response from server')
                 continue
 
-            # Log state/action for drift diagnostics
+            # Log chunk timing and diagnostics
+            with self._action_lock:
+                old_ts = self._chunk_timestamp
+            gap = time.monotonic() - old_ts if has_chunk else 0.0
             self.get_logger().info(
-                f'[drift] state_base={np.array2string(obs.state[0:6], precision=4, suppress_small=True)}, '
+                f'[chunk] new chunk after {gap:.3f}s '
+                f'({gap/ACTION_STEP_PERIOD:.1f} actions consumed), '
+                f'state_base={np.array2string(obs.state[0:6], precision=4, suppress_small=True)}, '
                 f'action_base={np.array2string(chunk[0, 0:6], precision=4, suppress_small=True)}'
             )
 
-            # Store chunk for command loop — immediate swap
+            # Dump full chunk trajectory for first 3 chunks to diagnose
+            # whether the model produces temporal structure within a chunk
+            if self._total_chunks < 3:
+                self.get_logger().info(f'[chunk_dump] state: {np.array2string(obs.state, precision=3, suppress_small=True)}')
+                for i in range(len(chunk)):
+                    a = chunk[i]
+                    self.get_logger().info(
+                        f'[chunk_dump] action[{i:2d}]: '
+                        f'base=({a[0]:+.4f},{a[1]:+.4f},{a[5]:+.4f}) '
+                        f'back={a[6]:.3f} '
+                        f'r_arm=({a[13]:+.3f},{a[14]:+.3f},{a[15]:+.3f}) '
+                        f'r_grip={a[18]:.3f} '
+                        f'head=({a[19]:+.3f},{a[20]:+.3f},{a[21]:+.3f})'
+                    )
+            self._total_chunks += 1
+
+            # Store chunk for command loop
             now = time.monotonic()
             with self._action_lock:
                 self._action_chunk = chunk

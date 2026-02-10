@@ -212,6 +212,11 @@ class ObservationBridge:
                 path = f'/tmp/groot_debug_images/raw_{self._observation_count}_{name}.jpg'
                 with open(path, 'wb') as f:
                     f.write(bytes(msg.data))
+            # Save state vector for hybrid_image_test.py Test 11
+            np.save(
+                f'/tmp/groot_debug_images/live_state_{self._observation_count}.npy',
+                obs.state,
+            )
             if self._observation_count == 0:
                 self.node.get_logger().info(
                     f'Saved debug images to /tmp/groot_debug_images/ '
