@@ -245,6 +245,81 @@ class ZMQClient:
             self._log(f'Msgpack decode error: {e}')
             return None
 
+    def send_raw_observation(
+        self,
+        raw_images: dict[str, np.ndarray],
+        state: np.ndarray,
+        language: str,
+    ) -> Optional[dict[str, Any]]:
+        """Send observation with raw RGB arrays (no JPEG compression).
+
+        Sends raw image bytes with shape metadata so the server can
+        reconstruct numpy arrays directly, avoiding lossy JPEG encoding.
+
+        Args:
+            raw_images: Dictionary mapping camera names to RGB uint8 numpy arrays (H, W, 3).
+            state: State vector (22D).
+            language: Task description string.
+
+        Returns:
+            Action response dictionary, or None on failure.
+        """
+        if not self._connected:
+            if not self.connect():
+                return None
+
+        # Serialize images as raw bytes with shape metadata
+        raw_images_packed = {}
+        for cam_name, img in raw_images.items():
+            raw_images_packed[cam_name] = {
+                'data': img.tobytes(),
+                'shape': list(img.shape),
+                'dtype': str(img.dtype),
+            }
+
+        observation = {
+            'timestamp': time.time(),
+            'frame_id': self._frame_id,
+            'raw_images': raw_images_packed,
+            'state': state.tolist() if isinstance(state, np.ndarray) else state,
+            'language': language,
+        }
+
+        try:
+            start_time = time.monotonic()
+
+            packed = msgpack.packb(observation, use_bin_type=True)
+            self._socket.send(packed)
+
+            response_packed = self._socket.recv()
+            response = msgpack.unpackb(response_packed, raw=False)
+
+            latency_ms = (time.monotonic() - start_time) * 1000
+            self._latency_history.append(latency_ms)
+            self._message_sizes.append((len(packed), len(response_packed)))
+
+            self._consecutive_failures = 0
+            self._frame_id += 1
+
+            return response
+
+        except zmq.Again:
+            self._consecutive_failures += 1
+            self._log(f'Inference timeout ({self.timeout_ms}ms)')
+            self._reset_socket()
+            return None
+
+        except zmq.ZMQError as e:
+            self._consecutive_failures += 1
+            self._log(f'ZMQ error: {e}')
+            self._reset_socket()
+            return None
+
+        except msgpack.exceptions.UnpackException as e:
+            self._consecutive_failures += 1
+            self._log(f'Msgpack decode error: {e}')
+            return None
+
     def ping(self, timeout_ms: int = 3000) -> bool:
         """Send a ping to verify the server is reachable and responding.
 

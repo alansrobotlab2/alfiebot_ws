@@ -23,12 +23,14 @@ DEMOS_DIR = str(Path("~/alfiebot_ws/data/demonstrations").expanduser())
 
 
 def load_episodes():
-    episodes = []
+    """Load episodes.jsonl as a dict keyed by episode_index."""
+    episodes = {}
     with open(META_DIR / "episodes.jsonl") as f:
         for line in f:
             line = line.strip()
             if line:
-                episodes.append(json.loads(line))
+                ep = json.loads(line)
+                episodes[ep["episode_index"]] = ep
     return episodes
 
 
@@ -66,11 +68,11 @@ def get_video_path(idx, cam):
     return str(vp) if vp.exists() else None
 
 
-def get_episode_details(episode_name, episodes, tasks):
-    if not episode_name:
+def get_episode_details(ep_idx, episodes, tasks):
+    if ep_idx is None or ep_idx not in episodes:
         return "Select an episode to view details."
 
-    idx = int(episode_name.split("_")[1])
+    idx = ep_idx
     ep = episodes[idx]
 
     task_name = tasks.get(ep["task_index"], "unknown")
@@ -80,6 +82,7 @@ def get_episode_details(episode_name, episodes, tasks):
 
     parquet_path = DATA_DIR / f"episode_{idx:06d}.parquet"
 
+    episode_name = f"episode_{idx:06d}"
     details = f"""## {episode_name}
 
 | Field | Value |
@@ -105,7 +108,7 @@ def get_episode_details(episode_name, episodes, tasks):
     return details
 
 
-def update_episode_task(episode_index: int, new_task_index: int, episodes: list) -> str:
+def update_episode_task(episode_index: int, new_task_index: int, episodes: dict) -> str:
     """Update task_index in episodes.jsonl and the corresponding parquet file.
 
     Returns a log string with update status and verification results.
@@ -118,7 +121,7 @@ def update_episode_task(episode_index: int, new_task_index: int, episodes: list)
     # Update episodes.jsonl
     episodes[episode_index]["task_index"] = new_task_index
     with open(META_DIR / "episodes.jsonl", "w") as f:
-        for ep in episodes:
+        for ep in sorted(episodes.values(), key=lambda e: e["episode_index"]):
             f.write(json.dumps(ep) + "\n")
     log_lines.append("episodes.jsonl written.")
 
@@ -241,7 +244,7 @@ CSS = """
 def build_ui():
     episodes = load_episodes()
     tasks = load_tasks()
-    episode_names = sorted([format_episode_name(ep) for ep in episodes], reverse=True)
+    episode_names = sorted([format_episode_name(ep) for ep in episodes.values()], reverse=True)
 
     with gr.Blocks(title="Alfiebot Episode Manager", fill_height=True) as app:
         gr.Markdown("# Alfiebot Episode Manager")
@@ -310,44 +313,29 @@ def build_ui():
         # Wire up episode selection
         videos = [vid_lw, vid_rw, vid_lc, vid_rc]
 
-        def do_convert_and_reload(extra_log=""):
-            """Run rosbag_to_groot, reload metadata, select top episode.
+        def do_reload(log_text=""):
+            """Reload metadata from disk and select top episode.
 
             Returns tuple matching refresh_outputs.
             """
             nonlocal episodes, tasks, episode_names
-            gr.Info("Running rosbag_to_groot conversion...")
-            try:
-                returncode, output = run_rosbag_to_groot()
-                if returncode == 0:
-                    gr.Info("Conversion complete.")
-                else:
-                    gr.Warning(f"Conversion finished with errors (exit code {returncode})")
-            except subprocess.TimeoutExpired:
-                gr.Warning("Conversion timed out after 10 minutes")
-                output = "TIMED OUT"
-            except Exception as e:
-                gr.Warning(f"Conversion failed: {e}")
-                output = str(e)
-
-            # Reload metadata
             episodes = load_episodes()
             tasks = load_tasks()
-            episode_names = sorted([format_episode_name(ep) for ep in episodes], reverse=True)
+            episode_names = sorted([format_episode_name(ep) for ep in episodes.values()], reverse=True)
 
-            log_text = extra_log + output if extra_log else output
             status_text = (
                 f"**Dataset:** {DATASET_DIR}  \n"
-                f"**Episodes:** {len(episodes)} | **Tasks:** {len(tasks)}\n\n"
-                f"### Last Output\n```\n{log_text}\n```"
+                f"**Episodes:** {len(episodes)} | **Tasks:** {len(tasks)}"
             )
+            if log_text:
+                status_text += f"\n\n### Last Output\n```\n{log_text}\n```"
 
             # Auto-select top episode
             if episode_names:
                 top_name = episode_names[0]
                 top_idx = int(top_name.split("_")[1])
                 video_paths = [get_video_path(top_idx, cam) for cam in CAMERAS]
-                detail_text = get_episode_details(top_name, episodes, tasks)
+                detail_text = get_episode_details(top_idx, episodes, tasks)
                 ep = episodes[top_idx]
                 task_value = f"{ep['task_index']}: {tasks.get(ep['task_index'], 'unknown')}"
             else:
@@ -367,8 +355,25 @@ def build_ui():
 
         refresh_outputs = [episode_list, status, *videos, details, task_dropdown, selected_idx]
 
+        def on_refresh():
+            """Run rosbag_to_groot conversion, then reload UI."""
+            gr.Info("Running rosbag_to_groot conversion...")
+            try:
+                returncode, output = run_rosbag_to_groot()
+                if returncode == 0:
+                    gr.Info("Conversion complete.")
+                else:
+                    gr.Warning(f"Conversion finished with errors (exit code {returncode})")
+            except subprocess.TimeoutExpired:
+                gr.Warning("Conversion timed out after 10 minutes")
+                output = "TIMED OUT"
+            except Exception as e:
+                gr.Warning(f"Conversion failed: {e}")
+                output = str(e)
+            return do_reload(log_text=output)
+
         refresh_btn.click(
-            fn=do_convert_and_reload,
+            fn=on_refresh,
             outputs=refresh_outputs,
         )
 
@@ -376,7 +381,7 @@ def build_ui():
             name = episode_names[evt.index[0]]
             idx = int(name.split("_")[1])
             video_paths = [get_video_path(idx, cam) for cam in CAMERAS]
-            detail_text = get_episode_details(name, episodes, tasks)
+            detail_text = get_episode_details(idx, episodes, tasks)
             ep = episodes[idx]
             task_idx = ep["task_index"]
             task_value = f"{task_idx}: {tasks.get(task_idx, 'unknown')}"
@@ -392,8 +397,7 @@ def build_ui():
                 return "No episode selected or no task chosen."
             new_task_index = int(task_selection.split(":")[0])
             log = update_episode_task(ep_idx, new_task_index, episodes)
-            name = format_episode_name(episodes[ep_idx])
-            detail_text = get_episode_details(name, episodes, tasks)
+            detail_text = get_episode_details(ep_idx, episodes, tasks)
             detail_text += f"\n\n### Update Log\n```\n{log}\n```"
             return detail_text
 
@@ -412,19 +416,38 @@ def build_ui():
                     None, None, None, None,
                     "No episode selected.", None, None,
                 )
-            ep = episodes[ep_idx]
+            ep = episodes.get(ep_idx)
+            if ep is None:
+                gr.Warning(f"Episode index {ep_idx} not found.")
+                return do_reload()
             source = ep["source"]
             source_dir = Path(DEMOS_DIR) / source
-            delete_log = ""
+            log_parts = []
             if source_dir.exists():
                 shutil.rmtree(source_dir)
-                delete_log = f"Deleted {source_dir}\n"
+                log_parts.append(f"Deleted {source_dir}")
                 gr.Info(f"Deleted source: {source}")
             else:
-                delete_log = f"Source dir not found: {source_dir}\n"
+                log_parts.append(f"Source dir not found: {source_dir}")
                 gr.Warning(f"Source dir not found: {source}")
 
-            return do_convert_and_reload(extra_log=delete_log)
+            # Run rosbag_to_groot to regenerate dataset without deleted episode
+            gr.Info("Running rosbag_to_groot conversion...")
+            try:
+                returncode, output = run_rosbag_to_groot()
+                log_parts.append(output)
+                if returncode == 0:
+                    gr.Info("Conversion complete.")
+                else:
+                    gr.Warning(f"Conversion finished with errors (exit code {returncode})")
+            except subprocess.TimeoutExpired:
+                gr.Warning("Conversion timed out after 10 minutes")
+                log_parts.append("TIMED OUT")
+            except Exception as e:
+                gr.Warning(f"Conversion failed: {e}")
+                log_parts.append(str(e))
+
+            return do_reload(log_text="\n".join(log_parts))
 
         delete_episode_btn.click(
             fn=on_delete,

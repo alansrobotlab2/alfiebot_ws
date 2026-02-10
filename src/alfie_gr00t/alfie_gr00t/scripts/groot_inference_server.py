@@ -367,9 +367,22 @@ class GrootInferenceServer:
                 return True
 
             # Extract observation data
+            raw_images = obs.get('raw_images', {})
             images = obs.get('images', {})
             state = np.array(obs.get('state', []), dtype=np.float32)
             language = obs.get('language', '')
+
+            # If raw images provided, reconstruct numpy arrays directly
+            # (skips lossy JPEG encode/decode round-trip)
+            if raw_images:
+                images_for_inference = {}
+                for key, meta in raw_images.items():
+                    arr = np.frombuffer(meta['data'], dtype=np.uint8)
+                    images_for_inference[key] = arr.reshape(meta['shape'])
+                use_raw = True
+            else:
+                images_for_inference = images
+                use_raw = False
 
             # Run inference
             start_time = time.monotonic()
@@ -389,7 +402,9 @@ class GrootInferenceServer:
             elif self.mock_mode:
                 actions = self._mock_inference(state)
             else:
-                actions = self._run_inference(images, state, language)
+                actions = self._run_inference(
+                    images_for_inference, state, language, raw_rgb=use_raw
+                )
 
             inference_time_ms = (time.monotonic() - start_time) * 1000
 
@@ -586,37 +601,47 @@ class GrootInferenceServer:
 
     def _run_inference(
         self,
-        images: dict[str, bytes],
+        images: dict,
         state: np.ndarray,
         language: str,
+        raw_rgb: bool = False,
     ) -> np.ndarray:
         """Run GR00T model inference.
 
         Args:
-            images: Dictionary of JPEG-compressed images.
+            images: Dictionary of JPEG-compressed images (bytes) or raw RGB
+                    numpy arrays (if raw_rgb=True).
             state: Raw state vector (22D) — Gr00tPolicy normalizes internally.
             language: Task description string.
+            raw_rgb: If True, images are already RGB uint8 numpy arrays (H, W, C).
+                     If False, images are JPEG bytes requiring decode.
 
         Returns:
             Action horizon (16 x 22D), unnormalized.
         """
         # First-call banner to confirm new code is loaded
         if self._total_requests == 0:
+            mode_str = "RAW_RGB" if raw_rgb else "JPEG"
             print("="*60, flush=True)
-            print("[groot_server] FIRST INFERENCE REQUEST — diagnostic logging active", flush=True)
+            print(f"[groot_server] FIRST INFERENCE REQUEST — {mode_str} mode", flush=True)
             print(f"[groot_server] state shape={state.shape}, images={list(images.keys())}, lang='{language}'", flush=True)
             print("="*60, flush=True)
 
-        # Decode images from JPEG and format for Gr00tPolicy
+        # Format images for Gr00tPolicy
         # Expected format: video[key] = np.ndarray[np.uint8, (B, T, H, W, C)]
         video_dict = {}
-        for key, jpeg_bytes in images.items():
-            img_array = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-            # Convert BGR to RGB
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            # Add batch and temporal dimensions: (H, W, C) -> (1, 1, H, W, C)
-            video_dict[key] = img[np.newaxis, np.newaxis, ...].astype(np.uint8)
+        if raw_rgb:
+            # Images are already RGB uint8 numpy arrays (H, W, C)
+            for key, img in images.items():
+                video_dict[key] = img[np.newaxis, np.newaxis, ...].astype(np.uint8)
+        else:
+            # Decode JPEG bytes
+            for key, jpeg_bytes in images.items():
+                img_array = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+                img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                # Convert BGR to RGB
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                video_dict[key] = img[np.newaxis, np.newaxis, ...].astype(np.uint8)
 
         # Format state for Gr00tPolicy
         # Expected format: state[key] = np.ndarray[np.float32, (B, T, D)]
