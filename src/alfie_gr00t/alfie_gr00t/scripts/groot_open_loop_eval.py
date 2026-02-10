@@ -33,6 +33,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
+import torchcodec.decoders
 from matplotlib import pyplot as plt
 
 # Import ZMQ client (no ROS2 dependency)
@@ -134,6 +135,9 @@ def load_episode(dataset_path: str, episode_index: int):
 def load_video_frames(dataset_path: str, episode_index: int, num_frames: int):
     """Load video frames for all 4 cameras from MP4 files.
 
+    Uses torchcodec to match the standard GR00T open_loop_eval.py decoder
+    exactly (same pixel values). Falls back to cv2 if torchcodec unavailable.
+
     Returns:
         List of dicts mapping camera_name -> RGB numpy array (H, W, 3),
         one dict per frame.
@@ -151,19 +155,13 @@ def load_video_frames(dataset_path: str, episode_index: int, num_frames: int):
         if not video_path.exists():
             raise FileNotFoundError(f'Video not found: {video_path}')
 
-        cap = cv2.VideoCapture(str(video_path))
-        cam_frames = []
-        while len(cam_frames) < num_frames:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            # Resize if needed
-            if frame.shape[1] != IMAGE_WIDTH or frame.shape[0] != IMAGE_HEIGHT:
-                frame = cv2.resize(frame, (IMAGE_WIDTH, IMAGE_HEIGHT))
-            # Convert BGR to RGB
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            cam_frames.append(frame)
-        cap.release()
+        # Use torchcodec with NHWC ordering — matches standard GR00T eval exactly
+        indices = list(range(num_frames))
+        decoder = torchcodec.decoders.VideoDecoder(
+            str(video_path), device="cpu", dimension_order="NHWC", num_ffmpeg_threads=0
+        )
+        frames_tensor = decoder.get_frames_at(indices=indices).data  # (N, H, W, C) uint8 RGB
+        cam_frames = [frames_tensor[i].numpy() for i in range(len(frames_tensor))]
 
         if len(cam_frames) < num_frames:
             logger.warning(
