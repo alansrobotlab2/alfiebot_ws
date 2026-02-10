@@ -476,6 +476,167 @@ def main():
                 print(f'  {blend_pct:3d}% live: head_pitch=[{", ".join(pitches)}]  '
                       f'r_grip[0]={a[0,18]:.3f}')
 
+    # Test 7: Consistency test — same input 5 times (detects stochastic noise)
+    # If head_yaw varies by more than ±0.05 across identical inputs,
+    # something is wrong (TRT bf16, wrong backend, etc.)
+    print()
+    print('=' * 60)
+    print('TEST 7: Consistency — same GT images + GT state sent 5 times')
+    print('=' * 60)
+    if len(mp4_images) == 4:
+        head_yaws = []
+        for trial in range(5):
+            response = client.send_observation(
+                images=mp4_images,
+                state=gt_state,
+                language=args.task,
+            )
+            if response and 'actions' in response:
+                a = np.array(response['actions'])[0]
+                head_yaws.append(a[19])
+                print(f'  Trial {trial}: head_yaw={a[19]:+.4f}  head_pitch={a[20]:+.4f}  '
+                      f'r_arm[0]={a[13]:+.4f}  fwd={a[0]:+.4f}')
+        if len(head_yaws) > 1:
+            spread = max(head_yaws) - min(head_yaws)
+            print(f'  HEAD_YAW SPREAD: {spread:.4f}  '
+                  f'(OK if <0.05, BAD if >0.2 — indicates TRT/backend issue)')
+    else:
+        print('  SKIPPED: No MP4 images')
+
+    # Test 8: Raw RGB path — match eval pipeline exactly (no JPEG)
+    print()
+    print('=' * 60)
+    print('TEST 8: GT training images as RAW RGB (no JPEG) + GT state')
+    print('       (matches groot_open_loop_eval.py send_raw_observation path)')
+    print('=' * 60)
+    raw_images = {}
+    try:
+        import torchcodec.decoders
+        for cam in CAMERA_NAMES:
+            mp4_path = (Path(args.dataset_path) / 'videos' / 'chunk-000'
+                        / f'observation.images.{cam}' / f'episode_{args.episode:06d}.mp4')
+            if mp4_path.exists():
+                decoder = torchcodec.decoders.VideoDecoder(
+                    str(mp4_path), device="cpu", dimension_order="NHWC", num_ffmpeg_threads=0
+                )
+                frame_tensor = decoder.get_frames_at(indices=[0]).data  # (1, H, W, C)
+                raw_images[cam] = frame_tensor[0].numpy()  # (H, W, C) uint8 RGB
+                print(f'  Loaded {cam}: {raw_images[cam].shape} via torchcodec')
+    except ImportError:
+        print('  torchcodec not available — falling back to PyAV for MP4 decode')
+        for cam in CAMERA_NAMES:
+            mp4_path = (Path(args.dataset_path) / 'videos' / 'chunk-000'
+                        / f'observation.images.{cam}' / f'episode_{args.episode:06d}.mp4')
+            if mp4_path.exists():
+                container = av.open(str(mp4_path))
+                for frame in container.decode(video=0):
+                    raw_images[cam] = frame.to_ndarray(format='rgb24')
+                    print(f'  Loaded {cam}: {raw_images[cam].shape} via PyAV')
+                    break
+                container.close()
+    if len(raw_images) == 4:
+        response = client.send_raw_observation(
+            raw_images=raw_images,
+            state=gt_state,
+            language=args.task,
+        )
+        if response and 'actions' in response:
+            actions = np.array(response['actions'])
+            print(f'  Got {actions.shape[0]} actions')
+            format_action(actions[0], 'Action[0]')
+            format_action(actions[7], 'Action[7]')
+            format_action(actions[15], 'Action[15]')
+        else:
+            print(f'  ERROR: {response}')
+    else:
+        print('  SKIPPED: Not all 4 MP4 videos found for raw path')
+
+    # Test 9: Live images as RAW RGB (no JPEG) + GT state
+    # If Test 2 (live JPEG) ≠ Test 1a (GT JPEG) but Test 9 ≈ Test 8,
+    # then JPEG compression of live images is the issue.
+    # If Test 9 also differs from Test 8, then the images themselves are OOD.
+    print()
+    print('=' * 60)
+    print('TEST 9: LIVE images as RAW RGB (no JPEG) + GT state')
+    print('=' * 60)
+    raw_live_images = {}
+    for cam in CAMERA_NAMES:
+        path = Path(args.debug_dir) / f'live_0_{cam}.png'
+        if path.exists():
+            img_bgr = cv2.imread(str(path))
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            raw_live_images[cam] = img_rgb
+            print(f'  Loaded {cam}: {img_rgb.shape}')
+    if len(raw_live_images) == 4:
+        response = client.send_raw_observation(
+            raw_images=raw_live_images,
+            state=gt_state,
+            language=args.task,
+        )
+        if response and 'actions' in response:
+            actions = np.array(response['actions'])
+            print(f'  Got {actions.shape[0]} actions')
+            format_action(actions[0], 'Action[0]')
+            format_action(actions[7], 'Action[7]')
+            format_action(actions[15], 'Action[15]')
+        else:
+            print(f'  ERROR: {response}')
+    else:
+        print('  SKIPPED: Not all 4 live images available')
+
+    # Test 10: Consistency with LIVE images (detects if live input causes noise)
+    print()
+    print('=' * 60)
+    print('TEST 10: Consistency — same LIVE images + GT state sent 5 times')
+    print('=' * 60)
+    if len(raw_live_images) == 4:
+        head_yaws = []
+        for trial in range(5):
+            response = client.send_raw_observation(
+                raw_images=raw_live_images,
+                state=gt_state,
+                language=args.task,
+            )
+            if response and 'actions' in response:
+                a = np.array(response['actions'])[0]
+                head_yaws.append(a[19])
+                print(f'  Trial {trial}: head_yaw={a[19]:+.4f}  head_pitch={a[20]:+.4f}  '
+                      f'r_arm[0]={a[13]:+.4f}  fwd={a[0]:+.4f}')
+        if len(head_yaws) > 1:
+            spread = max(head_yaws) - min(head_yaws)
+            print(f'  HEAD_YAW SPREAD: {spread:.4f}  '
+                  f'(OK if <0.05, BAD if >0.2)')
+    else:
+        print('  SKIPPED: No live images')
+
+    # Test 11: Live state from debug — check if live state values are OOD
+    print()
+    print('=' * 60)
+    print('TEST 11: GT training images + LIVE state (isolate state effect)')
+    print('=' * 60)
+    # Try to load the live state from the latest observation bridge output
+    live_state_path = Path(args.debug_dir) / 'live_state_0.npy'
+    if not live_state_path.exists():
+        # No saved state — construct from the observation log
+        # The user can save it by adding a line to observation_bridge
+        print('  SKIPPED: No saved live state at /tmp/groot_debug_images/live_state_0.npy')
+        print('  (To enable: save obs.state in observation_bridge debug_save_images)')
+    else:
+        live_state = np.load(str(live_state_path))
+        print(f'  Live state head=({live_state[19]:.3f},{live_state[20]:.3f},{live_state[21]:.3f})')
+        print(f'  GT state   head=({gt_state[19]:.3f},{gt_state[20]:.3f},{gt_state[21]:.3f})')
+        if len(mp4_images) == 4:
+            response = client.send_observation(
+                images=mp4_images,
+                state=live_state,
+                language=args.task,
+            )
+            if response and 'actions' in response:
+                actions = np.array(response['actions'])
+                format_action(actions[0], 'Action[0]')
+            else:
+                print(f'  ERROR: {response}')
+
     client.close()
     print()
     print('Done.')
