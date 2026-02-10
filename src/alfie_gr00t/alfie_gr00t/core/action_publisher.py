@@ -199,29 +199,11 @@ class ActionPublisher:
         # Capture smoothed action for CSV
         smoothed_action = action.copy()
 
-        # Apply safety limits
+        # Safety check: e-stop and watchdog only (hardware enforces joint limits)
         if apply_safety:
-            # Check if safe to publish
             if not self.safety.is_safe():
                 logger.warn('Safety check failed, not publishing')
                 return False
-
-            pre_safety = action[0:6].copy()
-            # Apply velocity and joint limits
-            action = self.safety.apply_limits(action)
-
-            # Apply delta limits if we have current state
-            if current_state is not None:
-                action = self.safety.compute_delta_limits(
-                    action, current_state, max_joint_delta=max_joint_delta,
-                )
-
-            if log_this:
-                logger.info(
-                    f'[base_debug] post_safety base[0:6]='
-                    f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
-                    f' (pre_safety={np.array2string(pre_safety, precision=4, suppress_small=True)})'
-                )
 
         # Final twist values that will be published
         if log_this:
