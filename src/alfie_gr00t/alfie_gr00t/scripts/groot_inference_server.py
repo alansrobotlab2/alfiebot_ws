@@ -26,6 +26,7 @@ from typing import Any
 import cv2
 import numpy as np
 import torch
+import zmq
 
 from gr00t.data.embodiment_tags import EmbodimentTag
 from gr00t.policy.gr00t_policy import Gr00tPolicy
@@ -316,7 +317,7 @@ def main():
     # Wrap with JPEG translation layer
     wrapped = JpegPolicyWrapper(policy, language_key=language_key)
 
-    # Create and run server using NVIDIA's PolicyServer
+    # Create server using NVIDIA's PolicyServer (sets up socket + endpoints)
     logger.info(f'Starting PolicyServer on {args.host}:{args.port}')
     server = PolicyServer(
         policy=wrapped,
@@ -324,17 +325,58 @@ def main():
         port=args.port,
     )
 
+    # Run our own loop instead of server.run() so we can handle Ctrl-C.
+    # PolicyServer.run() blocks on socket.recv() with no timeout, making
+    # it impossible to shut down cleanly via signal.
+    server.socket.setsockopt(zmq.RCVTIMEO, 1000)  # 1s timeout for clean shutdown
+    running = True
+
     def signal_handler(signum, frame):
+        nonlocal running
         logger.info(f'Received signal {signum}, shutting down...')
-        server.running = False
+        running = False
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    try:
-        server.run()
-    except KeyboardInterrupt:
-        logger.info('Shutting down...')
+    from gr00t.policy.server_client import MsgSerializer
+
+    addr = server.socket.getsockopt_string(zmq.LAST_ENDPOINT)
+    logger.info(f'Server is ready and listening on {addr}')
+
+    while running:
+        try:
+            message = server.socket.recv()
+        except zmq.Again:
+            continue  # Timeout — check running flag and loop
+        except zmq.ZMQError:
+            if not running:
+                break
+            raise
+
+        try:
+            request = MsgSerializer.from_bytes(message)
+            endpoint = request.get("endpoint", "get_action")
+
+            if endpoint not in server._endpoints:
+                raise ValueError(f"Unknown endpoint: {endpoint}")
+
+            handler = server._endpoints[endpoint]
+            result = (
+                handler.handler(**request.get("data", {}))
+                if handler.requires_input
+                else handler.handler()
+            )
+            server.socket.send(MsgSerializer.to_bytes(result))
+        except Exception as e:
+            logger.error(f'Error processing request: {e}')
+            import traceback
+            traceback.print_exc()
+            server.socket.send(MsgSerializer.to_bytes({"error": str(e)}))
+
+    server.socket.close()
+    server.context.term()
+    logger.info('Server stopped.')
 
 
 if __name__ == '__main__':
