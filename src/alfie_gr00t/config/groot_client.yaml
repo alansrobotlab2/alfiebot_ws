@@ -57,7 +57,7 @@
 
     # Base velocity scale-down factor (0-1). Applied as v *= (1 - decay).
     # 0.0 = no change, 0.1 = 10% reduction, helps fine-tune approach distance.
-    base_velocity_decay: 0.15
+    base_velocity_decay: 0.25
 
     # Per-body-part latency skip: base velocity reads ahead by this many
     # actions in the chunk to compensate for ~200ms observation-to-action
