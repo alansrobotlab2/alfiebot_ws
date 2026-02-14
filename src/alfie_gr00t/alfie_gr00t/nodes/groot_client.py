@@ -685,59 +685,18 @@ class GrootClientNode(Node):
         # Clamp to valid chunk range
         idx = min(idx, len(chunk) - 1)
 
-        # --- Joint action (no latency skip) ---
+        # --- Action selection: interpolate between consecutive chunk actions ---
         if self.interpolate_actions and idx < len(chunk) - 1:
             alpha = t_frac - int(t_frac)
             action = (1.0 - alpha) * chunk[idx] + alpha * chunk[idx + 1]
         else:
             action = chunk[idx].copy()
 
-        # --- Chunk transition blending (DISABLED) ---
-        # Previously blended joints from old chunk's last action to new chunk
-        # over 3 steps to prevent snapping. However, during grasping this fights
-        # model course corrections — biasing the arm toward the previous chunk's
-        # endpoint and contributing to lateral reach offset. The model's own
-        # trajectory planning should handle smooth transitions.
-        # if self._blend_from is not None and idx < self._blend_steps:
-        #     blend_alpha = (t_frac + 1.0) / (self._blend_steps + 1.0)
-        #     action[6:] = (1.0 - blend_alpha) * self._blend_from[6:] + blend_alpha * action[6:]
-        # elif self._blend_from is not None and idx >= self._blend_steps:
-        #     self._blend_from = None
-        self._blend_from = None  # Clear any saved blend state
-
-        # --- Base velocity (with per-component latency skip) ---
-        # Forward (x) velocity reads ahead by latency_skip_base actions to
-        # compensate for ~200ms observation-to-action delay. Lateral (y) and
-        # yaw (az) play from the SAME index as joints — advancing these causes
-        # yaw overshoot during approach, which shifts the robot's heading and
-        # makes the arm reach to the wrong side of the can.
-        fwd_idx = idx + self.latency_skip_base
-        fwd_exhausted = fwd_idx >= len(chunk)
-        fwd_idx = min(fwd_idx, len(chunk) - 1)
-
-        # Forward velocity from look-ahead index
-        if not fwd_exhausted:
-            if self.interpolate_actions and fwd_idx < len(chunk) - 1:
-                alpha = t_frac - int(t_frac)
-                action[0] = (1.0 - alpha) * chunk[fwd_idx][0] + alpha * chunk[fwd_idx + 1][0]
-            else:
-                action[0] = chunk[fwd_idx][0]
-        # Lateral/vertical/angular base velocity from joint index (no skip)
-        # already set by the joint interpolation above (action = chunk[idx])
-
-        # Zero base velocity when either the forward range or the full chunk
-        # is exhausted. Forward zeros out when its look-ahead range ends;
-        # lateral/yaw zero out when the full chunk is exhausted.
+        # --- Zero base velocity when chunk is exhausted ---
+        # When all n_action_steps have been consumed, zero base velocity
+        # immediately to prevent coasting. Hold joint positions as-is.
         if chunk_exhausted:
             action[0:6] = 0.0
-        elif fwd_exhausted:
-            action[0] = 0.0
-
-        # Apply base velocity decay to forward (x) only.
-        # Decaying lateral/yaw distorts the model's approach trajectory —
-        # causing the robot to arrive off-center (can ends up too far left).
-        if self.base_velocity_decay > 0.0:
-            action[0] *= (1.0 - self.base_velocity_decay)
 
         # Publish action to robot at 100 Hz
         self.action_publisher.publish_action(
