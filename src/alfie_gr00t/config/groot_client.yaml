@@ -31,11 +31,12 @@
 
     # n_action_steps: how many of the 16 predicted actions to execute
     # before re-querying with a fresh observation.
-    #   16 = execute full chunk (least responsive, 1.07s between queries)
+    #   16 = execute full chunk (1.07s between queries, best for manipulation)
     #   12 = 0.80s between queries
-    #    8 = NVIDIA sim eval default, 0.53s between queries (recommended)
-    #    4 = most responsive, 0.27s between queries (high inference load)
-    n_action_steps: 8
+    #    8 = NVIDIA sim eval default, 0.53s between queries
+    # NOTE: Values < 16 cause arm trajectory repetition ("praying mantis")
+    # during manipulation. Use latency_skip_base instead for responsive base.
+    n_action_steps: 16
 
     # ==========================================================================
     # Task Configuration
@@ -57,6 +58,14 @@
     # Base velocity scale-down factor (0-1). Applied as v *= (1 - decay).
     # 0.0 = no change, 0.1 = 10% reduction, helps fine-tune approach distance.
     base_velocity_decay: 0.15
+
+    # Per-body-part latency skip: base velocity reads ahead by this many
+    # actions in the chunk to compensate for ~200ms observation-to-action
+    # delay. Joints always play from action[0] (no skip) because skipping
+    # joints causes trajectory repetition during manipulation.
+    # With skip=3 and n_action_steps=16, base effectively uses actions 3-15
+    # and the effective re-query interval is (16-3)*67ms = 0.87s.
+    latency_skip_base: 3
 
     # Maximum allowed joint position change per command cycle (radians)
     max_joint_delta: 2.0
