@@ -95,6 +95,7 @@ class GrootClientNode(Node):
         self.n_action_steps = self.get_parameter('n_action_steps').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
         self.base_velocity_decay = self.get_parameter('base_velocity_decay').value
+        self.latency_skip_base = self.get_parameter('latency_skip_base').value
         self.max_joint_delta = self.get_parameter('max_joint_delta').value
         self.debug_save_images = self.get_parameter('debug_save_images').value
         self.h264_conditioning = self.get_parameter('h264_conditioning').value
@@ -246,6 +247,7 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Action Step Period:   {ACTION_STEP_PERIOD * 1000:.1f} ms ({TRAINING_FPS} FPS)')
         self.get_logger().info(f'  CSV Log Path:         {self.csv_log_path or "(disabled)"}')
         self.get_logger().info(f'  Base Vel Decay:       {self.base_velocity_decay}')
+        self.get_logger().info(f'  Latency Skip (base):  {self.latency_skip_base} actions')
         self.get_logger().info(f'  Max Joint Delta:      {self.max_joint_delta} rad')
         self.get_logger().info(f'  Debug Save Images:    {self.debug_save_images}')
         self.get_logger().info(f'  H.264 Conditioning:   {self.h264_conditioning}')
@@ -391,6 +393,12 @@ class GrootClientNode(Node):
         # Base velocity drift correction (0-1). Applied as v *= (1 - decay).
         self.declare_parameter('base_velocity_decay', 0.15)
 
+        # Per-body-part latency skip: base velocity reads ahead by this many
+        # actions to compensate for ~200ms observation-to-action delay.
+        # Joints play from action[0] — skipping joints causes trajectory
+        # repetition during manipulation. Only base benefits from look-ahead.
+        self.declare_parameter('latency_skip_base', 3)
+
         # Maximum allowed joint position change per command cycle (radians).
         self.declare_parameter('max_joint_delta', 2.0)
 
@@ -525,11 +533,14 @@ class GrootClientNode(Node):
     def _inference_loop(self):
         """Background inference loop (runs on dedicated thread).
 
-        Waits until n_action_steps of the current chunk are consumed,
-        then captures a fresh observation and requests a new chunk.
-        This ensures the model sees the RESULT of its executed plan.
+        Waits until the effective chunk duration is consumed, then captures
+        a fresh observation and requests a new chunk. With latency skip on
+        base, the effective duration is (n_action_steps - latency_skip_base)
+        actions — because the base has already reached the end of the chunk
+        by that point. This ensures the model sees the RESULT of its plan.
         """
-        chunk_duration = self.n_action_steps * ACTION_STEP_PERIOD
+        effective_steps = max(1, self.n_action_steps - self.latency_skip_base)
+        chunk_duration = effective_steps * ACTION_STEP_PERIOD
 
         while self._running:
             if not self._active or self._state != ClientState.ACTIVE:
@@ -615,10 +626,14 @@ class GrootClientNode(Node):
     def _command_callback(self):
         """Command publishing callback (runs at exactly 100 Hz).
 
-        Steps through the first n_action_steps of the action chunk at
-        the training data rate (67ms per action). When n_action_steps are
-        consumed, promotes pending chunk or zeros base velocity while
-        holding joint positions.
+        Steps through the action chunk at the training data rate (67ms per
+        action). When n_action_steps are consumed, promotes pending chunk or
+        zeros base velocity while holding joint positions.
+
+        Per-body-part latency skip: base velocity reads from action[idx+skip]
+        (3 actions ahead by default) to compensate for ~200ms observation-to-
+        action delay. Joints play from action[idx] — skipping joints causes
+        trajectory repetition during manipulation.
 
         Inter-action interpolation: linearly interpolates between consecutive
         actions for smooth 100Hz output.
@@ -657,12 +672,24 @@ class GrootClientNode(Node):
         # Clamp to valid chunk range
         idx = min(idx, len(chunk) - 1)
 
-        # Inter-action interpolation for smooth 100Hz output
+        # --- Joint action (no latency skip) ---
         if self.interpolate_actions and idx < len(chunk) - 1:
             alpha = t_frac - int(t_frac)
             action = (1.0 - alpha) * chunk[idx] + alpha * chunk[idx + 1]
         else:
             action = chunk[idx].copy()
+
+        # --- Base velocity (with latency skip) ---
+        # Base reads ahead in the chunk to compensate for observation-to-action
+        # delay (~200ms). This makes the base more responsive to corrections
+        # while joints play the full smooth trajectory.
+        base_idx = min(idx + self.latency_skip_base, len(chunk) - 1)
+        if self.interpolate_actions and base_idx < len(chunk) - 1:
+            alpha = t_frac - int(t_frac)
+            base_action = (1.0 - alpha) * chunk[base_idx] + alpha * chunk[base_idx + 1]
+        else:
+            base_action = chunk[base_idx]
+        action[0:6] = base_action[0:6]
 
         # When chunk is exhausted, zero base velocity but hold joint positions.
         # Velocity commands persist at 100Hz — holding the last velocity means
