@@ -533,14 +533,16 @@ class GrootClientNode(Node):
     def _inference_loop(self):
         """Background inference loop (runs on dedicated thread).
 
-        Waits until the effective chunk duration is consumed, then captures
-        a fresh observation and requests a new chunk. With latency skip on
-        base, the effective duration is (n_action_steps - latency_skip_base)
-        actions — because the base has already reached the end of the chunk
-        by that point. This ensures the model sees the RESULT of its plan.
+        Waits until the FULL chunk (all n_action_steps) is consumed, then
+        captures a fresh observation and requests a new chunk. The model must
+        see the RESULT of the entire joint trajectory, not mid-trajectory
+        state — otherwise it re-plans from a stale arm position and causes
+        repeating "praying mantis" motions.
+
+        The latency_skip_base only affects when the BASE zeros out in
+        _command_callback, not the observation/re-query timing.
         """
-        effective_steps = max(1, self.n_action_steps - self.latency_skip_base)
-        chunk_duration = effective_steps * ACTION_STEP_PERIOD
+        chunk_duration = self.n_action_steps * ACTION_STEP_PERIOD
 
         while self._running:
             if not self._active or self._state != ClientState.ACTIVE:
