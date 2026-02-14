@@ -726,9 +726,11 @@ class GrootClientNode(Node):
         if chunk_exhausted or base_exhausted:
             action[0:6] = 0.0
 
-        # Apply base velocity decay
+        # Apply base velocity decay to forward (x) only.
+        # Decaying lateral/yaw distorts the model's approach trajectory —
+        # causing the robot to arrive off-center (can ends up too far left).
         if self.base_velocity_decay > 0.0:
-            action[0:6] *= (1.0 - self.base_velocity_decay)
+            action[0] *= (1.0 - self.base_velocity_decay)
 
         # Publish action to robot at 100 Hz
         self.action_publisher.publish_action(
