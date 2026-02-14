@@ -133,6 +133,14 @@ class GrootClientNode(Node):
         self._action_lock = threading.Lock()
         self._total_chunks = 0                            # for diagnostic logging
 
+        # Chunk transition blending: when a new chunk starts, its action[0]
+        # may not match where the joints ended up from the previous chunk.
+        # We blend joints (not base) from the old chunk's last action to the
+        # new chunk's trajectory over BLEND_STEPS actions to avoid snapping.
+        BLEND_STEPS = 3  # blend over ~200ms (3 actions at 67ms each)
+        self._blend_steps = BLEND_STEPS
+        self._blend_from: Optional[np.ndarray] = None  # last action of previous chunk (22D)
+
         # Initialize safety monitor
         # Watchdog timeout must exceed the chunk execution time plus inference latency
         execution_time = self.n_action_steps * ACTION_STEP_PERIOD
@@ -655,6 +663,8 @@ class GrootClientNode(Node):
                 elapsed = now - timestamp
                 chunk_duration = self.n_action_steps * ACTION_STEP_PERIOD
                 if elapsed >= chunk_duration:
+                    # Save last action of old chunk for transition blending
+                    self._blend_from = chunk[min(self.n_action_steps - 1, len(chunk) - 1)].copy()
                     # Promote pending chunk
                     self._action_chunk = pending
                     self._pending_chunk = None
@@ -680,6 +690,17 @@ class GrootClientNode(Node):
             action = (1.0 - alpha) * chunk[idx] + alpha * chunk[idx + 1]
         else:
             action = chunk[idx].copy()
+
+        # --- Chunk transition blending (joints only) ---
+        # When a new chunk starts, action[0] may jump from where the arm was.
+        # Blend joints from the old chunk's last action to the new chunk over
+        # a few steps to prevent snapping. Base velocity is handled separately.
+        if self._blend_from is not None and idx < self._blend_steps:
+            blend_alpha = (t_frac + 1.0) / (self._blend_steps + 1.0)  # ramp 0→1
+            # Blend joints only (indices 6:22), not base velocity (0:6)
+            action[6:] = (1.0 - blend_alpha) * self._blend_from[6:] + blend_alpha * action[6:]
+        elif self._blend_from is not None and idx >= self._blend_steps:
+            self._blend_from = None  # Done blending
 
         # --- Base velocity (with latency skip) ---
         # Base reads ahead in the chunk to compensate for observation-to-action
