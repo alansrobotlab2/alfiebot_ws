@@ -770,24 +770,32 @@ class GrootClientNode(Node):
             chunk_exhausted = False
             idx = 0
 
-        # Latency skip: offset the read index into the chunk to compensate
-        # for the ~160ms observation-to-action delay. The model planned its
-        # trajectory from where the robot was 160ms ago — skipping 2 actions
-        # (134ms) starts execution from roughly where the robot actually is.
-        # Applied to ALL dimensions uniformly (base velocity + joint positions).
-        # This prevents the grab-release-grab pattern where the new chunk's
-        # action[0] targets a more-open gripper position than the robot has
-        # already reached during the 130ms inference gap.
-        skip = self.latency_skip_actions
-        skipped_frac = t_frac + skip
-        skipped_idx = min(int(skipped_frac), len(chunk) - 1)
-
-        # Inter-action interpolation: lerp between consecutive actions
-        if self.interpolate_actions and skipped_idx < len(chunk) - 1:
-            alpha = skipped_frac - int(skipped_frac)  # fractional part [0, 1)
-            action = (1.0 - alpha) * chunk[skipped_idx] + alpha * chunk[skipped_idx + 1]
+        # Inter-action interpolation for joints: play from action[0]
+        # (no skip). Joints are ABSOLUTE positions — the model plans the
+        # full trajectory from the observed state, and skipping causes the
+        # arm to jump to a mid-trajectory position, losing the beginning
+        # of the planned motion and causing repeated partial descents.
+        if self.interpolate_actions and idx < len(chunk) - 1:
+            alpha = t_frac - int(t_frac)  # fractional part [0, 1)
+            action = (1.0 - alpha) * chunk[idx] + alpha * chunk[idx + 1]
         else:
-            action = chunk[skipped_idx].copy()
+            action = chunk[idx].copy()
+
+        # Latency skip for base velocity ONLY: the robot moves during the
+        # ~160ms observation-to-action delay, so base velocity should be
+        # read from further into the chunk to compensate. Joint positions
+        # don't need this — skipping joints causes trajectory repetition
+        # (the "praying mantis" / repeated descent problem).
+        skip = self.latency_skip_actions
+        if skip > 0:
+            base_frac = t_frac + skip
+            base_idx = min(int(base_frac), len(chunk) - 1)
+            if self.interpolate_actions and base_idx < len(chunk) - 1:
+                base_alpha = base_frac - int(base_frac)
+                action[0:6] = ((1.0 - base_alpha) * chunk[base_idx][0:6]
+                               + base_alpha * chunk[base_idx + 1][0:6])
+            else:
+                action[0:6] = chunk[base_idx][0:6].copy()
 
         # When the chunk is exhausted (waiting for next inference), zero
         # base velocity but hold joint positions. Velocity commands persist
