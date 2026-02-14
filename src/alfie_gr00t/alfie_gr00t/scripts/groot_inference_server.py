@@ -830,7 +830,7 @@ class GrootInferenceServer:
             f'embodiment={self.embodiment_tag_str}'
         )
         if self._enable_viz:
-            self.logger.info(f'Gradio visualization available at http://localhost:{self._viz_port}')
+            self.logger.info(f'Gradio visualization available at http://0.0.0.0:{self._viz_port} (accessible from any device on the network)')
 
 
     def spin_once(self) -> bool:
