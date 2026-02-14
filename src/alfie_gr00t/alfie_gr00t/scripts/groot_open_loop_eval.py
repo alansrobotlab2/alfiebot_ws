@@ -30,11 +30,17 @@ import sys
 import time
 from pathlib import Path
 
+import av
 import cv2
 import numpy as np
 import pandas as pd
-import torchcodec.decoders
 from matplotlib import pyplot as plt
+
+try:
+    import torchcodec.decoders
+    HAS_TORCHCODEC = True
+except ImportError:
+    HAS_TORCHCODEC = False
 
 # Import ZMQ client (no ROS2 dependency)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -155,13 +161,23 @@ def load_video_frames(dataset_path: str, episode_index: int, num_frames: int):
         if not video_path.exists():
             raise FileNotFoundError(f'Video not found: {video_path}')
 
-        # Use torchcodec with NHWC ordering — matches standard GR00T eval exactly
-        indices = list(range(num_frames))
-        decoder = torchcodec.decoders.VideoDecoder(
-            str(video_path), device="cpu", dimension_order="NHWC", num_ffmpeg_threads=0
-        )
-        frames_tensor = decoder.get_frames_at(indices=indices).data  # (N, H, W, C) uint8 RGB
-        cam_frames = [frames_tensor[i].numpy() for i in range(len(frames_tensor))]
+        if HAS_TORCHCODEC:
+            # Use torchcodec with NHWC ordering — matches standard GR00T eval exactly
+            indices = list(range(num_frames))
+            decoder = torchcodec.decoders.VideoDecoder(
+                str(video_path), device="cpu", dimension_order="NHWC", num_ffmpeg_threads=0
+            )
+            frames_tensor = decoder.get_frames_at(indices=indices).data  # (N, H, W, C) uint8 RGB
+            cam_frames = [frames_tensor[i].numpy() for i in range(len(frames_tensor))]
+        else:
+            # Fallback to PyAV
+            cam_frames = []
+            container = av.open(str(video_path))
+            for frame in container.decode(video=0):
+                cam_frames.append(frame.to_ndarray(format='rgb24'))
+                if len(cam_frames) >= num_frames:
+                    break
+            container.close()
 
         if len(cam_frames) < num_frames:
             logger.warning(
@@ -196,6 +212,7 @@ def plot_trajectory_results(
     episode_index: int,
     action_horizon: int,
     save_plot_path: str,
+    eval_mode: str = 'Open-Loop',
 ):
     """Plot ground truth vs predicted actions per joint dimension."""
     actual_steps = len(gt_action_across_time)
@@ -206,7 +223,7 @@ def plot_trajectory_results(
         axes = [axes]
 
     fig.suptitle(
-        f'Episode {episode_index} — Open-Loop Eval via ZMQ Client',
+        f'Episode {episode_index} — {eval_mode} Eval via ZMQ Client',
         fontsize=16, color='blue',
     )
 
@@ -244,6 +261,7 @@ def plot_grouped_results(
     episode_index: int,
     action_horizon: int,
     save_plot_path: str,
+    eval_mode: str = 'Open-Loop',
 ):
     """Plot GT vs predicted actions grouped by body part, with per-group error metrics.
 
@@ -259,7 +277,7 @@ def plot_grouped_results(
         axes = [axes]
 
     fig.suptitle(
-        f'Episode {episode_index} — GT vs Predicted by Body Part',
+        f'Episode {episode_index} — {eval_mode} GT vs Predicted by Body Part',
         fontsize=16, color='blue', y=1.0,
     )
 
@@ -612,6 +630,7 @@ def run_eval(args):
         episode_index=episode_index,
         action_horizon=action_horizon,
         save_plot_path=save_plot,
+        eval_mode=eval_mode,
     )
 
     # Grouped body-part plot
@@ -623,6 +642,7 @@ def run_eval(args):
         episode_index=episode_index,
         action_horizon=action_horizon,
         save_plot_path=grouped_plot,
+        eval_mode=eval_mode,
     )
 
     # Comms diagnostics
