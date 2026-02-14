@@ -36,7 +36,7 @@
     # When enabled, inference runs continuously and each new chunk
     # immediately replaces the previous one.
     action_chunk_enabled: true
-    action_chunk_size: 10     # Execute first N of 16 actions (1-16)
+    action_chunk_size: 16     # Execute first N of 16 actions (1-16)
 
     # ==========================================================================
     # Task Configuration
@@ -53,7 +53,7 @@
     # Action smoothing - Exponential moving average coefficient (0-1)
     # Higher = less smoothing, more responsive
     # Lower = more smoothing, smoother but laggier
-    action_smoothing_alpha: 0.3
+    action_smoothing_alpha: 0.5
 
     # Maximum allowed joint position change per command cycle (radians)
     # With ABSOLUTE actions, servos self-limit via target_speed/acceleration,
