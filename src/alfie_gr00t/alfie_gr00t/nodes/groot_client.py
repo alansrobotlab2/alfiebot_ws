@@ -609,12 +609,15 @@ class GrootClientNode(Node):
             if has_chunk:
                 elapsed = time.monotonic() - chunk_ts
                 remaining = chunk_duration - elapsed
-                # Start inference early enough that the new chunk arrives
-                # roughly when the current one runs out. Allow some overlap
-                # to avoid gaps (inference takes ~130ms).
-                lookahead = 0.15  # start inference ~150ms before chunk ends
-                if remaining > lookahead:
-                    time.sleep(min(remaining - lookahead, 0.05))
+                # Wait until the chunk has FULLY played out before capturing
+                # a new observation. This ensures the model sees the RESULT
+                # of its 16-action plan, not an in-progress state. Without
+                # this, the model sees a mid-trajectory state and re-plans
+                # from there, creating overlapping/oscillating trajectories.
+                # The ~130ms inference gap is covered by the velocity-zeroing
+                # and joint-holding in _command_callback.
+                if remaining > 0:
+                    time.sleep(min(remaining, 0.05))
                     continue
 
             # Get latest observation
