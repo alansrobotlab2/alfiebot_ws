@@ -22,21 +22,20 @@
     # ==========================================================================
     # Inference Settings
     # ==========================================================================
-    # Max inference rate (FPS) — ceiling to avoid flooding WiFi/TCP
-    # Server inference time is the floor; this caps the max send rate
-    # Command publishing always runs at 100 Hz regardless of this setting
-    target_fps: 6
-
     # Inference timeout in milliseconds
     # If server doesn't respond within this time, the request fails
     inference_timeout_ms: 5000
 
-    # Action chunking - step through the 16-action horizon sequentially
-    # at the training data rate (15 FPS = 67ms per action).
-    # When enabled, inference runs continuously and each new chunk
-    # immediately replaces the previous one.
-    action_chunk_enabled: true
-    action_chunk_size: 16     # Execute first N of 16 actions (1-16)
+    # Action chunk size — always 16 (must match training horizon)
+    action_chunk_size: 16
+
+    # n_action_steps: how many of the 16 predicted actions to execute
+    # before re-querying with a fresh observation.
+    #   16 = execute full chunk (least responsive, 1.07s between queries)
+    #   12 = 0.80s between queries
+    #    8 = NVIDIA sim eval default, 0.53s between queries (recommended)
+    #    4 = most responsive, 0.27s between queries (high inference load)
+    n_action_steps: 16
 
     # ==========================================================================
     # Task Configuration
@@ -55,24 +54,12 @@
     # Lower = more smoothing, smoother but laggier
     action_smoothing_alpha: 0.95
 
-    # Maximum allowed joint position change per command cycle (radians)
-    # With ABSOLUTE actions, servos self-limit via target_speed/acceleration,
-    # so this is a safety backstop. 0.5 rad at 100Hz = 50 rad/s theoretical max.
     # Base velocity scale-down factor (0-1). Applied as v *= (1 - decay).
     # 0.0 = no change, 0.1 = 10% reduction, helps fine-tune approach distance.
     base_velocity_decay: 0.15
 
+    # Maximum allowed joint position change per command cycle (radians)
     max_joint_delta: 2.0
-
-    # Latency compensation: skip first N actions from new chunks to account
-    # for observation-to-action delay (~160ms). Each action = 67ms.
-    # 2 = skip 134ms (good starting point). 0 = disabled.
-    latency_skip_actions: 3
-
-    # Chunk blending: crossfade window (in actions) at chunk boundaries.
-    # Prevents discontinuities that cause hand twitching.
-    # 4 actions = ~268ms blend. 0 = disabled (hard switch).
-    chunk_blend_actions: 0
 
     # Inter-action interpolation: smooth 100Hz output by interpolating
     # between consecutive actions in the chunk.
@@ -96,4 +83,3 @@
     # Save first few observation images to /tmp/groot_debug_images/ for
     # visual comparison with training data (helps diagnose domain gap)
     debug_save_images: true
-

@@ -1,4 +1,8 @@
-"""ZeroMQ client for communication with GR00T inference server."""
+"""ZeroMQ client for communication with GR00T inference server.
+
+Speaks the NVIDIA PolicyServer protocol (MsgSerializer format).
+Sends JPEG-compressed images for efficient bandwidth over WiFi.
+"""
 
 import time
 from collections import deque
@@ -11,6 +15,39 @@ import zmq
 
 # Default IPC socket path for on-device inference
 DEFAULT_IPC_PATH = "/tmp/groot_inference.sock"
+
+# MsgSerializer-compatible encoding/decoding
+# Matches gr00t.policy.server_client.MsgSerializer but without
+# requiring the full gr00t package on the Jetson client.
+import io
+
+
+def _encode_custom(obj):
+    """Msgpack encoder for numpy arrays (MsgSerializer compatible)."""
+    if isinstance(obj, np.ndarray):
+        output = io.BytesIO()
+        np.save(output, obj, allow_pickle=False)
+        return {"__ndarray_class__": True, "as_npy": output.getvalue()}
+    return obj
+
+
+def _decode_custom(obj):
+    """Msgpack decoder for numpy arrays (MsgSerializer compatible)."""
+    if not isinstance(obj, dict):
+        return obj
+    if "__ndarray_class__" in obj:
+        return np.load(io.BytesIO(obj["as_npy"]), allow_pickle=False)
+    return obj
+
+
+def msg_to_bytes(data: Any) -> bytes:
+    """Serialize data in MsgSerializer format."""
+    return msgpack.packb(data, default=_encode_custom)
+
+
+def msg_from_bytes(data: bytes) -> Any:
+    """Deserialize data from MsgSerializer format."""
+    return msgpack.unpackb(data, object_hook=_decode_custom)
 
 
 def build_server_address(
@@ -41,15 +78,15 @@ def build_server_address(
 class ZMQClient:
     """ZeroMQ client for GR00T inference server communication.
 
+    Speaks the NVIDIA PolicyServer protocol (MsgSerializer format).
     Uses REQ/REP pattern for synchronous request-response inference.
+
     Observations are sent as msgpack-serialized dictionaries with
     JPEG-compressed images for efficient bandwidth usage.
 
     Supports two transport modes:
     - TCP: For remote inference server (e.g., tcp://192.168.1.100:5555)
     - IPC: For on-device inference (e.g., ipc:///tmp/groot_inference.sock)
-
-    IPC is ~5x faster than TCP localhost and recommended for on-device use.
     """
 
     def __init__(
@@ -172,6 +209,67 @@ class ZMQClient:
         time.sleep(self.reconnect_delay_ms / 1000.0)
         self.connect()
 
+    def _call_endpoint(
+        self,
+        endpoint: str,
+        data: Optional[dict] = None,
+    ) -> Optional[Any]:
+        """Call a PolicyServer endpoint.
+
+        Args:
+            endpoint: Endpoint name (e.g., 'get_action', 'ping', 'reset').
+            data: Optional data dict for the endpoint.
+
+        Returns:
+            Response from server, or None on failure.
+        """
+        if not self._connected:
+            if not self.connect():
+                return None
+
+        request = {"endpoint": endpoint}
+        if data is not None:
+            request["data"] = data
+
+        try:
+            start_time = time.monotonic()
+
+            packed = msg_to_bytes(request)
+            self._socket.send(packed)
+
+            response_packed = self._socket.recv()
+            response = msg_from_bytes(response_packed)
+
+            latency_ms = (time.monotonic() - start_time) * 1000
+            self._latency_history.append(latency_ms)
+            self._message_sizes.append((len(packed), len(response_packed)))
+
+            self._consecutive_failures = 0
+
+            # Check for server error
+            if isinstance(response, dict) and "error" in response:
+                self._log(f'Server error: {response["error"]}')
+                return None
+
+            return response
+
+        except zmq.Again:
+            self._consecutive_failures += 1
+            self._log(f'Request timeout ({self.timeout_ms}ms)')
+            self._reset_socket()
+            return None
+
+        except zmq.ZMQError as e:
+            self._consecutive_failures += 1
+            self._log(f'ZMQ error: {e}')
+            self._reset_socket()
+            return None
+
+        except Exception as e:
+            self._consecutive_failures += 1
+            self._log(f'Decode error: {e}')
+            return None
+
     def send_observation(
         self,
         images: dict[str, bytes],
@@ -183,67 +281,42 @@ class ZMQClient:
         Args:
             images: Dictionary mapping camera names to JPEG bytes.
                    Keys: 'left_wide', 'right_wide', 'left_center', 'right_center'
-            state: Normalized state vector (22D).
+            state: State vector (22D).
             language: Task description string.
 
         Returns:
             Action response dictionary with 'actions' key containing
             16x22 action horizon, or None on failure.
         """
-        if not self._connected:
-            if not self.connect():
-                return None
-
-        # Build observation message
+        # Build observation in wire format — JpegPolicyWrapper handles translation
         observation = {
-            'timestamp': time.time(),
-            'frame_id': self._frame_id,
-            'images': images,
+            **images,  # {left_wide: jpeg_bytes, ...}
             'state': state.tolist() if isinstance(state, np.ndarray) else state,
             'language': language,
         }
 
-        try:
-            start_time = time.monotonic()
+        # Call get_action endpoint via PolicyServer protocol
+        response = self._call_endpoint(
+            endpoint='get_action',
+            data={'observation': observation},
+        )
 
-            # Serialize and send
-            packed = msgpack.packb(observation, use_bin_type=True)
-            self._socket.send(packed)
+        if response is None:
+            return None
 
-            # Receive response
-            response_packed = self._socket.recv()
-            response = msgpack.unpackb(response_packed, raw=False)
-
-            # Track latency and message sizes
-            latency_ms = (time.monotonic() - start_time) * 1000
-            self._latency_history.append(latency_ms)
-            self._message_sizes.append((len(packed), len(response_packed)))
-
-            # Success - reset failure count and increment frame
-            self._consecutive_failures = 0
-            self._frame_id += 1
-
+        # PolicyServer returns (action_dict, info) as a list from msgpack
+        # action_dict contains {'actions': [[22D], ...]}
+        if isinstance(response, (list, tuple)):
+            action_dict = response[0]  # First element is action dict
+            # Wrap in standard response format
+            return {
+                'actions': action_dict.get('actions', []),
+                'status': 'ok',
+            }
+        elif isinstance(response, dict):
             return response
 
-        except zmq.Again:
-            # Timeout
-            self._consecutive_failures += 1
-            self._log(f'Inference timeout ({self.timeout_ms}ms)')
-
-            # Reset socket on timeout (REQ/REP requires strict send-recv order)
-            self._reset_socket()
-            return None
-
-        except zmq.ZMQError as e:
-            self._consecutive_failures += 1
-            self._log(f'ZMQ error: {e}')
-            self._reset_socket()
-            return None
-
-        except msgpack.exceptions.UnpackException as e:
-            self._consecutive_failures += 1
-            self._log(f'Msgpack decode error: {e}')
-            return None
+        return None
 
     def send_raw_observation(
         self,
@@ -264,10 +337,6 @@ class ZMQClient:
         Returns:
             Action response dictionary, or None on failure.
         """
-        if not self._connected:
-            if not self.connect():
-                return None
-
         # Serialize images as raw bytes with shape metadata
         raw_images_packed = {}
         for cam_name, img in raw_images.items():
@@ -278,47 +347,29 @@ class ZMQClient:
             }
 
         observation = {
-            'timestamp': time.time(),
-            'frame_id': self._frame_id,
             'raw_images': raw_images_packed,
             'state': state.tolist() if isinstance(state, np.ndarray) else state,
             'language': language,
         }
 
-        try:
-            start_time = time.monotonic()
+        response = self._call_endpoint(
+            endpoint='get_action',
+            data={'observation': observation},
+        )
 
-            packed = msgpack.packb(observation, use_bin_type=True)
-            self._socket.send(packed)
+        if response is None:
+            return None
 
-            response_packed = self._socket.recv()
-            response = msgpack.unpackb(response_packed, raw=False)
-
-            latency_ms = (time.monotonic() - start_time) * 1000
-            self._latency_history.append(latency_ms)
-            self._message_sizes.append((len(packed), len(response_packed)))
-
-            self._consecutive_failures = 0
-            self._frame_id += 1
-
+        if isinstance(response, (list, tuple)):
+            action_dict = response[0]
+            return {
+                'actions': action_dict.get('actions', []),
+                'status': 'ok',
+            }
+        elif isinstance(response, dict):
             return response
 
-        except zmq.Again:
-            self._consecutive_failures += 1
-            self._log(f'Inference timeout ({self.timeout_ms}ms)')
-            self._reset_socket()
-            return None
-
-        except zmq.ZMQError as e:
-            self._consecutive_failures += 1
-            self._log(f'ZMQ error: {e}')
-            self._reset_socket()
-            return None
-
-        except msgpack.exceptions.UnpackException as e:
-            self._consecutive_failures += 1
-            self._log(f'Msgpack decode error: {e}')
-            return None
+        return None
 
     def ping(self, timeout_ms: int = 3000) -> bool:
         """Send a ping to verify the server is reachable and responding.
@@ -337,20 +388,8 @@ class ZMQClient:
         self._socket.setsockopt(zmq.RCVTIMEO, timeout_ms)
 
         try:
-            ping_msg = msgpack.packb({'ping': True}, use_bin_type=True)
-            self._socket.send(ping_msg)
-            response_packed = self._socket.recv()
-            msgpack.unpackb(response_packed, raw=False)
-            self._log('Server ping successful')
-            return True
-        except zmq.Again:
-            self._log(f'Server ping timed out ({timeout_ms}ms)')
-            self._reset_socket()
-            return False
-        except zmq.ZMQError as e:
-            self._log(f'Server ping failed: {e}')
-            self._reset_socket()
-            return False
+            response = self._call_endpoint(endpoint='ping')
+            return response is not None
         finally:
             # Restore original timeout if still connected
             if self._socket is not None:
