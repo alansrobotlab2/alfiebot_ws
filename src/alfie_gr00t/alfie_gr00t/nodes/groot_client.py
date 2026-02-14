@@ -692,16 +692,18 @@ class GrootClientNode(Node):
         else:
             action = chunk[idx].copy()
 
-        # --- Chunk transition blending (joints only) ---
-        # When a new chunk starts, action[0] may jump from where the arm was.
-        # Blend joints from the old chunk's last action to the new chunk over
-        # a few steps to prevent snapping. Base velocity is handled separately.
-        if self._blend_from is not None and idx < self._blend_steps:
-            blend_alpha = (t_frac + 1.0) / (self._blend_steps + 1.0)  # ramp 0→1
-            # Blend joints only (indices 6:22), not base velocity (0:6)
-            action[6:] = (1.0 - blend_alpha) * self._blend_from[6:] + blend_alpha * action[6:]
-        elif self._blend_from is not None and idx >= self._blend_steps:
-            self._blend_from = None  # Done blending
+        # --- Chunk transition blending (DISABLED) ---
+        # Previously blended joints from old chunk's last action to new chunk
+        # over 3 steps to prevent snapping. However, during grasping this fights
+        # model course corrections — biasing the arm toward the previous chunk's
+        # endpoint and contributing to lateral reach offset. The model's own
+        # trajectory planning should handle smooth transitions.
+        # if self._blend_from is not None and idx < self._blend_steps:
+        #     blend_alpha = (t_frac + 1.0) / (self._blend_steps + 1.0)
+        #     action[6:] = (1.0 - blend_alpha) * self._blend_from[6:] + blend_alpha * action[6:]
+        # elif self._blend_from is not None and idx >= self._blend_steps:
+        #     self._blend_from = None
+        self._blend_from = None  # Clear any saved blend state
 
         # --- Base velocity (with per-component latency skip) ---
         # Forward (x) velocity reads ahead by latency_skip_base actions to
