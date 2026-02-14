@@ -590,8 +590,12 @@ class GrootClientNode(Node):
         Without this, ~130ms inference latency means chunks get replaced
         after only ~2 actions execute, causing stuttering/wiggling.
         """
-        # How long a full chunk takes to execute at the training rate
-        chunk_duration = self.action_chunk_size * ACTION_STEP_PERIOD  # 16 * 67ms ≈ 1.07s
+        # How long a chunk takes to execute at the training rate.
+        # With latency skip, the effective trajectory is shorter because
+        # we start reading from action[skip] — the last `skip` actions
+        # worth of time would just hold the final position.
+        effective_actions = self.action_chunk_size - self.latency_skip_actions
+        chunk_duration = effective_actions * ACTION_STEP_PERIOD  # (16-2) * 67ms ≈ 0.93s
 
         while self._running:
             # Idle-poll when not active
@@ -727,7 +731,8 @@ class GrootClientNode(Node):
 
             if chunk is not None and pending is not None:
                 elapsed = now - timestamp
-                chunk_duration = len(chunk) * ACTION_STEP_PERIOD
+                effective_len = len(chunk) - self.latency_skip_actions
+                chunk_duration = effective_len * ACTION_STEP_PERIOD
                 if elapsed >= chunk_duration:
                     # Save tail of old chunk for blending
                     blend_n = self.chunk_blend_actions
@@ -750,39 +755,39 @@ class GrootClientNode(Node):
         if chunk is None:
             return
 
-        # Compute fractional position within the chunk
+        # Compute fractional position within the chunk.
+        # With latency skip, the effective playable actions are (chunk_size - skip),
+        # so the chunk is exhausted earlier.
         if self.action_chunk_enabled:
             elapsed = now - timestamp
+            skip = self.latency_skip_actions
+            effective_len = len(chunk) - skip
             t_frac = elapsed / ACTION_STEP_PERIOD  # fractional action index
-            chunk_exhausted = t_frac >= len(chunk)
-            idx = min(int(t_frac), len(chunk) - 1)
+            chunk_exhausted = t_frac >= effective_len
+            idx = min(int(t_frac), effective_len - 1)
         else:
             t_frac = 0.0
             chunk_exhausted = False
             idx = 0
 
-        # Inter-action interpolation: lerp between consecutive actions
-        if self.interpolate_actions and idx < len(chunk) - 1:
-            alpha = t_frac - int(t_frac)  # fractional part [0, 1)
-            action = (1.0 - alpha) * chunk[idx] + alpha * chunk[idx + 1]
-        else:
-            action = chunk[idx].copy()
-
-        # Latency skip for base velocity only: the robot moves during the
-        # ~160ms observation-to-action delay, so base velocity should be
-        # read from further into the chunk. Joint positions don't need this
-        # because the scene barely changes during manipulation — skipping
-        # joints causes trajectory repetition (the "creeping" problem).
+        # Latency skip: offset the read index into the chunk to compensate
+        # for the ~160ms observation-to-action delay. The model planned its
+        # trajectory from where the robot was 160ms ago — skipping 2 actions
+        # (134ms) starts execution from roughly where the robot actually is.
+        # Applied to ALL dimensions uniformly (base velocity + joint positions).
+        # This prevents the grab-release-grab pattern where the new chunk's
+        # action[0] targets a more-open gripper position than the robot has
+        # already reached during the 130ms inference gap.
         skip = self.latency_skip_actions
-        if skip > 0:
-            base_idx = min(idx + skip, len(chunk) - 1)
-            if self.interpolate_actions and base_idx < len(chunk) - 1:
-                base_frac = t_frac + skip
-                base_alpha = base_frac - int(base_frac)
-                action[0:6] = ((1.0 - base_alpha) * chunk[base_idx][0:6]
-                               + base_alpha * chunk[base_idx + 1][0:6])
-            else:
-                action[0:6] = chunk[base_idx][0:6].copy()
+        skipped_frac = t_frac + skip
+        skipped_idx = min(int(skipped_frac), len(chunk) - 1)
+
+        # Inter-action interpolation: lerp between consecutive actions
+        if self.interpolate_actions and skipped_idx < len(chunk) - 1:
+            alpha = skipped_frac - int(skipped_frac)  # fractional part [0, 1)
+            action = (1.0 - alpha) * chunk[skipped_idx] + alpha * chunk[skipped_idx + 1]
+        else:
+            action = chunk[skipped_idx].copy()
 
         # When the chunk is exhausted (waiting for next inference), zero
         # base velocity but hold joint positions. Velocity commands persist
