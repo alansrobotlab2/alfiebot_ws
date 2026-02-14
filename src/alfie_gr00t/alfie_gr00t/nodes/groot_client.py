@@ -733,13 +733,11 @@ class GrootClientNode(Node):
                     else:
                         self._prev_chunk_tail = None
 
-                    # Apply latency skip: advance into the new chunk to
-                    # compensate for observation-to-action delay.
-                    skip = self.latency_skip_actions
-                    if 0 < skip < len(pending):
-                        self._action_chunk = pending[skip:]
-                    else:
-                        self._action_chunk = pending
+                    # Store full chunk — latency skip is applied per-body-part
+                    # in the action selection below (base velocity is offset
+                    # by skip actions to compensate for observation delay,
+                    # but joints use the full trajectory from action[0]).
+                    self._action_chunk = pending
                     self._pending_chunk = None
                     self._chunk_timestamp = now
                     # Re-read after promotion
@@ -766,6 +764,22 @@ class GrootClientNode(Node):
             action = (1.0 - alpha) * chunk[idx] + alpha * chunk[idx + 1]
         else:
             action = chunk[idx].copy()
+
+        # Latency skip for base velocity only: the robot moves during the
+        # ~160ms observation-to-action delay, so base velocity should be
+        # read from further into the chunk. Joint positions don't need this
+        # because the scene barely changes during manipulation — skipping
+        # joints causes trajectory repetition (the "creeping" problem).
+        skip = self.latency_skip_actions
+        if skip > 0:
+            base_idx = min(idx + skip, len(chunk) - 1)
+            if self.interpolate_actions and base_idx < len(chunk) - 1:
+                base_frac = t_frac + skip
+                base_alpha = base_frac - int(base_frac)
+                action[0:6] = ((1.0 - base_alpha) * chunk[base_idx][0:6]
+                               + base_alpha * chunk[base_idx + 1][0:6])
+            else:
+                action[0:6] = chunk[base_idx][0:6].copy()
 
         # When the chunk is exhausted (waiting for next inference), zero
         # base velocity but hold joint positions. Velocity commands persist
