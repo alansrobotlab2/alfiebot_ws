@@ -42,12 +42,12 @@ def _decode_custom(obj):
 
 def msg_to_bytes(data: Any) -> bytes:
     """Serialize data in MsgSerializer format."""
-    return msgpack.packb(data, default=_encode_custom)
+    return msgpack.packb(data, default=_encode_custom, use_bin_type=True)
 
 
 def msg_from_bytes(data: bytes) -> Any:
     """Deserialize data from MsgSerializer format."""
-    return msgpack.unpackb(data, object_hook=_decode_custom)
+    return msgpack.unpackb(data, object_hook=_decode_custom, raw=False)
 
 
 def build_server_address(
