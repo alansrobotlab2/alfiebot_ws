@@ -110,8 +110,8 @@ def generate_launch_description():
 
     smoothing_alpha_arg = DeclareLaunchArgument(
         'action_smoothing_alpha',
-        default_value='0.7',
-        description='Action smoothing EMA coefficient (0-1)'
+        default_value='0.5',
+        description='Action smoothing EMA coefficient for joints (0-1)'
     )
 
     action_chunk_enabled_arg = DeclareLaunchArgument(
@@ -124,6 +124,24 @@ def generate_launch_description():
         'action_chunk_size',
         default_value='16',
         description='Number of actions to execute from the 16-step horizon (1-16)'
+    )
+
+    latency_skip_arg = DeclareLaunchArgument(
+        'latency_skip_actions',
+        default_value='2',
+        description='Actions to skip at chunk start for latency compensation (0=disabled)'
+    )
+
+    chunk_blend_arg = DeclareLaunchArgument(
+        'chunk_blend_actions',
+        default_value='4',
+        description='Crossfade window (in actions) at chunk boundaries (0=disabled)'
+    )
+
+    interpolate_arg = DeclareLaunchArgument(
+        'interpolate_actions',
+        default_value='true',
+        description='Interpolate between actions for smooth 100Hz output'
     )
 
     # Launch arguments - Replay mode
@@ -185,6 +203,9 @@ def generate_launch_description():
                 'action_smoothing_alpha': LaunchConfiguration('action_smoothing_alpha'),
                 'action_chunk_enabled': LaunchConfiguration('action_chunk_enabled'),
                 'action_chunk_size': LaunchConfiguration('action_chunk_size'),
+                'latency_skip_actions': LaunchConfiguration('latency_skip_actions'),
+                'chunk_blend_actions': LaunchConfiguration('chunk_blend_actions'),
+                'interpolate_actions': LaunchConfiguration('interpolate_actions'),
             }
         ],
     )
@@ -211,6 +232,9 @@ def generate_launch_description():
         smoothing_alpha_arg,
         action_chunk_enabled_arg,
         action_chunk_size_arg,
+        latency_skip_arg,
+        chunk_blend_arg,
+        interpolate_arg,
 
         # Replay arguments
         dataset_path_arg,

@@ -12,7 +12,7 @@
     transport: "tcp"
 
     # TCP settings (only used when transport: "tcp")
-    server_host: "192.168.50.108"
+    server_host: "192.168.50.201"
     server_port: 5555
 
     # IPC settings (only used when transport: "ipc")
@@ -36,7 +36,7 @@
     # When enabled, inference runs continuously and each new chunk
     # immediately replaces the previous one.
     action_chunk_enabled: true
-    action_chunk_size: 16     # Execute first N of 16 actions (1-16)
+    action_chunk_size: 10     # Execute first N of 16 actions (1-16)
 
     # ==========================================================================
     # Task Configuration
@@ -53,12 +53,30 @@
     # Action smoothing - Exponential moving average coefficient (0-1)
     # Higher = less smoothing, more responsive
     # Lower = more smoothing, smoother but laggier
-    action_smoothing_alpha: 0.7
+    action_smoothing_alpha: 0.3
 
     # Maximum allowed joint position change per command cycle (radians)
     # With ABSOLUTE actions, servos self-limit via target_speed/acceleration,
     # so this is a safety backstop. 0.5 rad at 100Hz = 50 rad/s theoretical max.
+    # Base velocity scale-down factor (0-1). Applied as v *= (1 - decay).
+    # 0.0 = no change, 0.1 = 10% reduction, helps fine-tune approach distance.
+    base_velocity_decay: 0.1
+
     max_joint_delta: 2.0
+
+    # Latency compensation: skip first N actions from new chunks to account
+    # for observation-to-action delay (~160ms). Each action = 67ms.
+    # 2 = skip 134ms (good starting point). 0 = disabled.
+    latency_skip_actions: 2
+
+    # Chunk blending: crossfade window (in actions) at chunk boundaries.
+    # Prevents discontinuities that cause hand twitching.
+    # 4 actions = ~268ms blend. 0 = disabled (hard switch).
+    chunk_blend_actions: 0
+
+    # Inter-action interpolation: smooth 100Hz output by interpolating
+    # between consecutive actions in the chunk.
+    interpolate_actions: true
 
     # CSV log path for action diagnostics (empty = disabled)
     # Logs raw, smoothed, final actions and state at 100 Hz

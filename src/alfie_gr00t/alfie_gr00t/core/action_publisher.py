@@ -182,13 +182,18 @@ class ActionPublisher:
                 f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
             )
 
-        # Apply smoothing
+        # Apply per-body-part EMA smoothing:
+        # Base velocity (0:6) uses near pass-through alpha (0.95) for fast
+        # response — overshoot prevention depends on the base reacting quickly.
+        # Joint positions (6:22) use the configured alpha for stability.
         if apply_smoothing and self._last_action is not None:
             pre_smooth = action[0:6].copy()
-            action = (
-                self.smoothing_alpha * action +
-                (1 - self.smoothing_alpha) * self._last_action
-            )
+            base_alpha = 0.95
+            joint_alpha = self.smoothing_alpha
+            smoothed = action.copy()
+            smoothed[0:6] = base_alpha * action[0:6] + (1.0 - base_alpha) * self._last_action[0:6]
+            smoothed[6:] = joint_alpha * action[6:] + (1.0 - joint_alpha) * self._last_action[6:]
+            action = smoothed
             if log_this:
                 logger.info(
                     f'[base_debug] smoothed base[0:6]='

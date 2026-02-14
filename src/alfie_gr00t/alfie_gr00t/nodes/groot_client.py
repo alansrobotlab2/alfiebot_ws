@@ -103,6 +103,9 @@ class GrootClientNode(Node):
         self.max_joint_delta = self.get_parameter('max_joint_delta').value
         self.debug_save_images = self.get_parameter('debug_save_images').value
         self.h264_conditioning = self.get_parameter('h264_conditioning').value
+        self.latency_skip_actions = self.get_parameter('latency_skip_actions').value
+        self.chunk_blend_actions = self.get_parameter('chunk_blend_actions').value
+        self.interpolate_actions = self.get_parameter('interpolate_actions').value
         self.back_init_height = self.get_parameter('back_init_height').value
 
         # Build server address from transport parameters
@@ -127,6 +130,7 @@ class GrootClientNode(Node):
         self._pending_chunk: Optional[np.ndarray] = None # next chunk, waiting to be promoted
         self._chunk_state: Optional[np.ndarray] = None   # state when chunk arrived
         self._chunk_timestamp: float = 0.0               # time.monotonic() when chunk arrived
+        self._prev_chunk_tail: Optional[np.ndarray] = None  # tail of old chunk for blending
         self._action_lock = threading.Lock()
         self._total_chunks = 0                            # for diagnostic logging
 
@@ -249,6 +253,9 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Debug Save Images:    {self.debug_save_images}')
         self.get_logger().info(f'  H.264 Conditioning:   {self.h264_conditioning}')
         self.get_logger().info(f'  Back Init Height:     {self.back_init_height} m')
+        self.get_logger().info(f'  Latency Skip:         {self.latency_skip_actions} actions ({self.latency_skip_actions * ACTION_STEP_PERIOD * 1000:.0f} ms)')
+        self.get_logger().info(f'  Chunk Blend:          {self.chunk_blend_actions} actions ({self.chunk_blend_actions * ACTION_STEP_PERIOD * 1000:.0f} ms)')
+        self.get_logger().info(f'  Interpolate Actions:  {self.interpolate_actions}')
         self.get_logger().info('=' * 60)
 
     def _test_server_connection(self):
@@ -268,36 +275,43 @@ class GrootClientNode(Node):
     def _initialize_back(self):
         """Calibrate the back if needed and move it to back_init_height.
 
+        Continuously publishes back commands at 100Hz until the back reaches
+        the target height (within tolerance), or a timeout expires.
+
         Uses spin_once to pump the executor since this runs during __init__
         before the main spin loop starts.
         """
+        POSITION_TOLERANCE = 0.005  # 5mm
+        MOVE_TIMEOUT = 15.0  # seconds to reach target height
+
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
 
-        # Wait for a RobotLowState message to check calibration status
-        self.get_logger().info('Waiting for robot state to check back calibration...')
-        received_msg = [None]
+        # Shared state updated by subscription callback
+        latest_state = [None]
 
         def _state_cb(msg):
-            received_msg[0] = msg
+            latest_state[0] = msg
 
         sub = self.create_subscription(RobotLowState, '/alfie/robotlowstate', _state_cb, qos)
 
+        # Wait for first RobotLowState message
+        self.get_logger().info('Waiting for robot state to check back calibration...')
         deadline = time.monotonic() + 10.0
-        while received_msg[0] is None and time.monotonic() < deadline:
+        while latest_state[0] is None and time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.1)
 
-        self.destroy_subscription(sub)
-
-        if received_msg[0] is None:
+        if latest_state[0] is None:
             self.get_logger().warn('Timed out waiting for robot state — skipping back init')
+            self.destroy_subscription(sub)
             return
 
-        robot_state = received_msg[0]
+        robot_state = latest_state[0]
 
+        # Calibrate if needed
         if not robot_state.back_state.is_calibrated:
             self.get_logger().info('Back not calibrated, calling calibration service...')
             calibrate_client = self.create_client(
@@ -312,25 +326,61 @@ class GrootClientNode(Node):
                         self.get_logger().info('Back calibration successful')
                     else:
                         self.get_logger().warn('Back calibration returned failure')
+                        self.destroy_subscription(sub)
+                        return
                 else:
                     self.get_logger().warn('Back calibration service call failed')
+                    self.destroy_subscription(sub)
+                    return
             else:
                 self.get_logger().warn('Back calibration service not available')
+                self.destroy_subscription(sub)
+                return
         else:
             self.get_logger().info('Back already calibrated')
 
-        # Command the back to the target height
-        self.get_logger().info(f'Setting back height to {self.back_init_height:.3f} m')
+        # Move to target height — publish at 100Hz until position is reached
+        target = self.back_init_height
+        self.get_logger().info(f'Moving back to {target:.3f} m ...')
+
         cmd = RobotLowCmd()
         cmd.back_cmd = BackCmd()
-        cmd.back_cmd.position = self.back_init_height
+        cmd.back_cmd.position = target
         cmd.back_cmd.velocity = 0.2
         cmd.back_cmd.acceleration = 0.1
-        # Publish a few times to ensure delivery on best-effort QoS
-        for _ in range(10):
+
+        move_deadline = time.monotonic() + MOVE_TIMEOUT
+        reached = False
+
+        while time.monotonic() < move_deadline:
+            # Pump executor to receive fresh state messages
+            rclpy.spin_once(self, timeout_sec=0.0)
+
+            # Publish command at ~100Hz
             self.action_publisher.cmd_pub.publish(cmd)
-            time.sleep(0.01)
-        self.get_logger().info('Back initialization complete')
+
+            # Check current position
+            if latest_state[0] is not None:
+                current_pos = latest_state[0].back_state.current_position
+                if abs(current_pos - target) <= POSITION_TOLERANCE:
+                    reached = True
+                    break
+
+            time.sleep(0.01)  # 100Hz
+
+        self.destroy_subscription(sub)
+
+        if reached:
+            self.get_logger().info(
+                f'Back reached target height {target:.3f} m '
+                f'(current: {latest_state[0].back_state.current_position:.3f} m)'
+            )
+        else:
+            current_pos = latest_state[0].back_state.current_position if latest_state[0] else float('nan')
+            self.get_logger().warn(
+                f'Back did not reach target {target:.3f} m within {MOVE_TIMEOUT:.0f}s '
+                f'(current: {current_pos:.3f} m)'
+            )
 
     def _declare_parameters(self):
         """Declare all ROS2 parameters."""
@@ -346,7 +396,7 @@ class GrootClientNode(Node):
         self.declare_parameter('inference_timeout_ms', 100)
         self.declare_parameter('task_description', 'find the can and pick it up')
         self.declare_parameter('enable_safety_limits', True)
-        self.declare_parameter('action_smoothing_alpha', 0.7)
+        self.declare_parameter('action_smoothing_alpha', 0.5)
         self.declare_parameter('action_chunk_enabled', True)
         self.declare_parameter('action_chunk_size', 16)
         self.declare_parameter('csv_log_path', '')
@@ -370,6 +420,20 @@ class GrootClientNode(Node):
         # live camera frames so they match the training data pipeline
         # (rosbag_to_groot.py encodes to MP4 with these exact settings).
         self.declare_parameter('h264_conditioning', False)
+
+        # Latency compensation: skip first N actions from new chunks to
+        # account for observation-to-action delay (~160ms at 67ms/action).
+        # 2 = skip 134ms (good starting point). 0 = disabled.
+        self.declare_parameter('latency_skip_actions', 2)
+
+        # Chunk blending: crossfade window (in actions) at chunk boundaries.
+        # Prevents discontinuities that cause hand/gripper twitching.
+        # 4 actions = ~268ms blend. 0 = disabled (hard switch).
+        self.declare_parameter('chunk_blend_actions', 4)
+
+        # Inter-action interpolation: linearly interpolate between
+        # consecutive actions in the chunk for smooth 100Hz output.
+        self.declare_parameter('interpolate_actions', True)
 
         # Back initialization height (meters). On startup, the back is
         # calibrated if needed and moved to this position before inference.
@@ -433,6 +497,7 @@ class GrootClientNode(Node):
             self._action_chunk = None
             self._pending_chunk = None
             self._chunk_state = None
+            self._prev_chunk_tail = None
 
         # Send stop command
         self.action_publisher.publish_stop()
@@ -452,6 +517,7 @@ class GrootClientNode(Node):
             self._action_chunk = None
             self._pending_chunk = None
             self._chunk_state = None
+            self._prev_chunk_tail = None
 
         # Send stop command
         self.action_publisher.publish_stop()
@@ -471,6 +537,7 @@ class GrootClientNode(Node):
             self._action_chunk = None
             self._pending_chunk = None
             self._chunk_state = None
+            self._prev_chunk_tail = None
 
         # Reset smoothing
         self.action_publisher.reset_smoothing()
@@ -574,6 +641,7 @@ class GrootClientNode(Node):
                     self._active = False
                     with self._action_lock:
                         self._action_chunk = None
+                        self._prev_chunk_tail = None
                 continue
 
             # Update safety watchdog
@@ -629,9 +697,19 @@ class GrootClientNode(Node):
         """Command publishing callback (runs at exactly 100 Hz).
 
         Steps through the action chunk at the training data rate (67ms per
-        action). When the current chunk is fully consumed and a pending
-        chunk is available, promotes it immediately. EMA smoothing at
-        100 Hz handles any discontinuity at chunk boundaries.
+        action) with three smoothing mechanisms:
+
+        1. **Latency skip**: When a new chunk is promoted, skip the first N
+           actions to compensate for the ~160ms observation-to-action delay.
+           This prevents overshoot during approach.
+
+        2. **Chunk blending**: Crossfade between the tail of the old chunk
+           and the head of the new chunk over a configurable window. This
+           prevents twitching at chunk boundaries.
+
+        3. **Inter-action interpolation**: Linearly interpolate between
+           consecutive actions for smooth 100Hz output instead of holding
+           each 67ms action constant.
         """
         if not self._active or self._state != ClientState.ACTIVE:
             return
@@ -648,8 +726,20 @@ class GrootClientNode(Node):
                 elapsed = now - timestamp
                 chunk_duration = len(chunk) * ACTION_STEP_PERIOD
                 if elapsed >= chunk_duration:
-                    # Current chunk fully consumed — promote pending
-                    self._action_chunk = pending
+                    # Save tail of old chunk for blending
+                    blend_n = self.chunk_blend_actions
+                    if blend_n > 0:
+                        self._prev_chunk_tail = chunk[-blend_n:].copy()
+                    else:
+                        self._prev_chunk_tail = None
+
+                    # Apply latency skip: advance into the new chunk to
+                    # compensate for observation-to-action delay.
+                    skip = self.latency_skip_actions
+                    if 0 < skip < len(pending):
+                        self._action_chunk = pending[skip:]
+                    else:
+                        self._action_chunk = pending
                     self._pending_chunk = None
                     self._chunk_timestamp = now
                     # Re-read after promotion
@@ -659,14 +749,44 @@ class GrootClientNode(Node):
         if chunk is None:
             return
 
-        # Select action from chunk based on elapsed time
+        # Compute fractional position within the chunk
         if self.action_chunk_enabled:
             elapsed = now - timestamp
-            idx = min(int(elapsed / ACTION_STEP_PERIOD), len(chunk) - 1)
+            t_frac = elapsed / ACTION_STEP_PERIOD  # fractional action index
+            chunk_exhausted = t_frac >= len(chunk)
+            idx = min(int(t_frac), len(chunk) - 1)
         else:
+            t_frac = 0.0
+            chunk_exhausted = False
             idx = 0
 
-        action = chunk[idx].copy()
+        # Inter-action interpolation: lerp between consecutive actions
+        if self.interpolate_actions and idx < len(chunk) - 1:
+            alpha = t_frac - int(t_frac)  # fractional part [0, 1)
+            action = (1.0 - alpha) * chunk[idx] + alpha * chunk[idx + 1]
+        else:
+            action = chunk[idx].copy()
+
+        # When the chunk is exhausted (waiting for next inference), zero
+        # base velocity but hold joint positions. Velocity commands persist
+        # at 100Hz — holding the last velocity means the robot keeps driving
+        # indefinitely, causing overshoot. Joint positions are ABSOLUTE so
+        # holding them just keeps the servos in place.
+        if chunk_exhausted:
+            action[0:6] = 0.0
+
+        # Chunk boundary blending: crossfade from old chunk tail to new
+        blend_n = self.chunk_blend_actions
+        if blend_n > 0 and self._prev_chunk_tail is not None and t_frac < blend_n:
+            # Weight ramps from ~0 (old chunk) to 1 (new chunk)
+            w_new = min((t_frac + 0.5) / blend_n, 1.0)
+            old_idx = min(idx, len(self._prev_chunk_tail) - 1)
+            old_action = self._prev_chunk_tail[old_idx]
+            action = w_new * action + (1.0 - w_new) * old_action
+
+        # Clear blend state once past the blend window
+        if self._prev_chunk_tail is not None and t_frac >= blend_n:
+            self._prev_chunk_tail = None
 
         # Apply base velocity drift correction.
         if self.base_velocity_decay > 0.0:

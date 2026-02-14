@@ -3,6 +3,7 @@
 import io
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -35,6 +36,9 @@ class Observation:
 
     # Whether observation is valid (all sensors received)
     valid: bool = False
+
+    # Monotonic capture time (for latency measurement)
+    capture_time_mono: float = 0.0
 
 
 class ObservationBridge:
@@ -196,6 +200,7 @@ class ObservationBridge:
 
         # Check validity (all cameras received)
         obs.valid = len(obs.images) == len(self.CAMERA_NAMES)
+        obs.capture_time_mono = time.monotonic()
 
         # Save debug images for visual comparison with training data
         if self._debug_save_images and self._observation_count < 5:
