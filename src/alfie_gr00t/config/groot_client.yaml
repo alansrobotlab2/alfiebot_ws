@@ -53,7 +53,7 @@
     # Action smoothing - Exponential moving average coefficient (0-1)
     # Higher = less smoothing, more responsive
     # Lower = more smoothing, smoother but laggier
-    action_smoothing_alpha: 0.5
+    action_smoothing_alpha: 0.7
 
     # Maximum allowed joint position change per command cycle (radians)
     # With ABSOLUTE actions, servos self-limit via target_speed/acceleration,
