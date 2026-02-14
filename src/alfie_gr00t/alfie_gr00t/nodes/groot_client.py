@@ -683,19 +683,24 @@ class GrootClientNode(Node):
         # Base reads ahead in the chunk to compensate for observation-to-action
         # delay (~200ms). This makes the base more responsive to corrections
         # while joints play the full smooth trajectory.
-        base_idx = min(idx + self.latency_skip_base, len(chunk) - 1)
-        if self.interpolate_actions and base_idx < len(chunk) - 1:
+        base_idx = idx + self.latency_skip_base
+        base_exhausted = base_idx >= len(chunk)
+        base_idx = min(base_idx, len(chunk) - 1)
+        if not base_exhausted and self.interpolate_actions and base_idx < len(chunk) - 1:
             alpha = t_frac - int(t_frac)
             base_action = (1.0 - alpha) * chunk[base_idx] + alpha * chunk[base_idx + 1]
-        else:
+        elif not base_exhausted:
             base_action = chunk[base_idx]
-        action[0:6] = base_action[0:6]
+        else:
+            base_action = None
+        if base_action is not None:
+            action[0:6] = base_action[0:6]
 
-        # When chunk is exhausted, zero base velocity but hold joint positions.
-        # Velocity commands persist at 100Hz — holding the last velocity means
-        # the robot keeps driving indefinitely, causing overshoot. Joint
-        # positions are ABSOLUTE so holding them keeps servos in place.
-        if chunk_exhausted:
+        # Zero base velocity when either the base range or the full chunk is
+        # exhausted. With latency_skip_base=3, the base runs out of unique
+        # actions 3 steps before the chunk ends — zeroing here prevents the
+        # robot from coasting on the last velocity for ~200ms extra.
+        if chunk_exhausted or base_exhausted:
             action[0:6] = 0.0
 
         # Apply base velocity decay
