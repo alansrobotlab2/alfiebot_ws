@@ -35,7 +35,7 @@
     #   12 = 0.80s between queries
     #    8 = NVIDIA sim eval default, 0.53s between queries (recommended)
     #    4 = most responsive, 0.27s between queries (high inference load)
-    n_action_steps: 16
+    n_action_steps: 8
 
     # ==========================================================================
     # Task Configuration
