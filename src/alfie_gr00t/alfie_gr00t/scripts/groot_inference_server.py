@@ -17,16 +17,29 @@ Usage:
 """
 
 import argparse
+import gc
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
 from typing import Any
 
+# Jetson unified memory optimization: configure PyTorch CUDA allocator before any CUDA ops.
+# NOTE: expandable_segments:True is BROKEN on Jetson (PyTorch 2.8 + CUDA 12.6 + r36.5).
+os.environ.setdefault(
+    "PYTORCH_CUDA_ALLOC_CONF",
+    "garbage_collection_threshold:0.6",
+)
+
 import cv2
 import numpy as np
 import torch
 import zmq
+
+# Enable TF32 tensor cores for FP32 matmuls (~2x speedup, negligible precision loss).
+# Orin SM87 supports TF32 but PyTorch doesn't enable it by default.
+torch.set_float32_matmul_precision("high")
 
 from gr00t.data.embodiment_tags import EmbodimentTag
 from gr00t.policy.gr00t_policy import Gr00tPolicy
@@ -45,6 +58,234 @@ STATE_PARTS = [
     ('right_hand', 18, 19),
     ('head', 19, 22),
 ]
+
+
+###############################################################################
+# TensorRT DiT Wrapper
+###############################################################################
+
+
+class TensorRTDiTWrapper:
+    """Wrapper for TensorRT DiT engine.
+
+    Optimized for Orin AGX (SM87) with Jetson unified memory:
+    - Dedicated CUDA stream for TRT execution (avoids default stream sync overhead)
+    - Auto-detects engine input/output dtypes (no hardcoded assumptions)
+    - Pre-allocated output buffer reused across diffusion steps (avoids alloc/free churn)
+    - Event-based synchronization (non-blocking)
+    - Engine file buffer freed immediately after deserialization (unified memory)
+    """
+
+    def __init__(self, engine_path: str, device: int = 0):
+        import tensorrt as trt
+
+        self.device = device
+
+        if torch.cuda.is_available():
+            torch.cuda.init()
+            torch.cuda.set_device(device)
+        else:
+            raise RuntimeError("CUDA not available for TensorRT")
+
+        self.trt_logger = trt.Logger(trt.Logger.WARNING)
+        self.runtime = trt.Runtime(self.trt_logger)
+
+        # Read and deserialize separately so we can free the file buffer immediately.
+        # On Jetson unified memory, the file buffer competes with GPU allocation.
+        with open(engine_path, "rb") as f:
+            engine_data = f.read()
+        self.engine = self.runtime.deserialize_cuda_engine(engine_data)
+        del engine_data
+        gc.collect()
+
+        if self.engine is None:
+            raise RuntimeError(f"Failed to load TensorRT engine from {engine_path}")
+
+        self.context = self.engine.create_execution_context()
+
+        # Dedicated CUDA stream for TRT execution (avoids default stream sync overhead)
+        self.stream = torch.cuda.Stream(device=device)
+
+        # Detect input dtypes from engine so we can cast inputs to match
+        self.input_dtypes = {}
+        for i in range(self.engine.num_io_tensors):
+            name = self.engine.get_tensor_name(i)
+            if self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                self.input_dtypes[name] = self._trt_dtype_to_torch(self.engine.get_tensor_dtype(name))
+
+        # Detect output dtype from engine
+        output_dtype = self.engine.get_tensor_dtype("output")
+        self.engine_output_dtype = self._trt_dtype_to_torch(output_dtype)
+
+        # When model runs BF16 (flash_attention_2) and TRT outputs FP16, convert to match.
+        self.convert_to_bf16 = (self.engine_output_dtype == torch.float16)
+        if self.convert_to_bf16:
+            logging.info(f"TRT output dtype: {output_dtype} -> will convert FP16 to BF16 for action decoder")
+        else:
+            logging.info(f"TRT output dtype: {output_dtype} -> torch {self.engine_output_dtype}")
+
+        # Pre-allocated output buffer — reused across diffusion steps to avoid
+        # repeated alloc/free on Jetson unified memory. Reallocated only on shape change.
+        self._output_buf = None
+        self._output_shape = None
+
+        logging.info(f"TensorRT engine loaded: {engine_path}")
+
+    def _trt_dtype_to_torch(self, trt_dtype):
+        """Convert TensorRT dtype to PyTorch dtype."""
+        import tensorrt as trt
+
+        dtype_map = {
+            trt.float32: torch.float32,
+            trt.float16: torch.float16,
+            trt.bfloat16: torch.bfloat16,
+            trt.int8: torch.int8,
+            trt.int32: torch.int32,
+            trt.int64: torch.int64,
+            trt.bool: torch.bool,
+        }
+        return dtype_map.get(trt_dtype, torch.float32)  # Default to fp32 (safe fallback)
+
+    def __call__(self, sa_embs, vl_embs, timestep, image_mask=None, backbone_attention_mask=None):
+        """Forward pass through TensorRT DiT."""
+        # Ensure default stream ops (backbone, action_encoder, etc.) complete
+        self.stream.wait_stream(torch.cuda.current_stream())
+
+        with torch.cuda.stream(self.stream):
+            # Cast to engine's expected dtypes (no device move — Jetson unified memory)
+            sa_embs = sa_embs.to(dtype=self.input_dtypes.get("sa_embs", sa_embs.dtype))
+            if not sa_embs.is_contiguous():
+                sa_embs = sa_embs.contiguous()
+            vl_embs = vl_embs.to(dtype=self.input_dtypes.get("vl_embs", vl_embs.dtype))
+            if not vl_embs.is_contiguous():
+                vl_embs = vl_embs.contiguous()
+            timestep = timestep.to(dtype=self.input_dtypes.get("timestep", timestep.dtype))
+            if not timestep.is_contiguous():
+                timestep = timestep.contiguous()
+
+            if image_mask is not None:
+                image_mask = image_mask.to(dtype=self.input_dtypes.get("image_mask", image_mask.dtype))
+                if not image_mask.is_contiguous():
+                    image_mask = image_mask.contiguous()
+            if backbone_attention_mask is not None:
+                backbone_attention_mask = backbone_attention_mask.to(dtype=self.input_dtypes.get("backbone_attention_mask", backbone_attention_mask.dtype))
+                if not backbone_attention_mask.is_contiguous():
+                    backbone_attention_mask = backbone_attention_mask.contiguous()
+
+            self.context.set_input_shape("sa_embs", sa_embs.shape)
+            self.context.set_input_shape("vl_embs", vl_embs.shape)
+            self.context.set_input_shape("timestep", timestep.shape)
+            if image_mask is not None:
+                self.context.set_input_shape("image_mask", image_mask.shape)
+            if backbone_attention_mask is not None:
+                self.context.set_input_shape("backbone_attention_mask", backbone_attention_mask.shape)
+
+            self.context.set_tensor_address("sa_embs", sa_embs.data_ptr())
+            self.context.set_tensor_address("vl_embs", vl_embs.data_ptr())
+            self.context.set_tensor_address("timestep", timestep.data_ptr())
+            if image_mask is not None:
+                self.context.set_tensor_address("image_mask", image_mask.data_ptr())
+            if backbone_attention_mask is not None:
+                self.context.set_tensor_address(
+                    "backbone_attention_mask", backbone_attention_mask.data_ptr()
+                )
+
+            # Reuse output buffer across diffusion steps (avoids alloc/free churn)
+            output_shape = tuple(self.context.get_tensor_shape("output"))
+            if self._output_shape != output_shape:
+                self._output_buf = torch.empty(
+                    output_shape, dtype=self.engine_output_dtype, device=f"cuda:{self.device}"
+                )
+                self._output_shape = output_shape
+            self.context.set_tensor_address("output", self._output_buf.data_ptr())
+
+            # Execute on dedicated stream
+            success = self.context.execute_async_v3(self.stream.cuda_stream)
+            if not success:
+                raise RuntimeError("TensorRT inference failed")
+
+            # Convert FP16 -> BF16 if needed (action decoder requires BF16)
+            if self.convert_to_bf16:
+                output = self._output_buf.to(torch.bfloat16)
+            else:
+                output = self._output_buf.clone()
+
+        # Record event on TRT stream and make default stream wait for it
+        event = self.stream.record_event()
+        torch.cuda.current_stream().wait_event(event)
+
+        return output
+
+
+def replace_dit_with_tensorrt(policy, trt_engine_path: str, device: int = 0, preloaded_trt: TensorRTDiTWrapper | None = None):
+    """Replace the DiT forward method with TensorRT inference.
+
+    Args:
+        policy: The Gr00tPolicy instance
+        trt_engine_path: Path to the TensorRT engine file
+        device: CUDA device index
+        preloaded_trt: Optional pre-loaded TensorRT wrapper (for memory-constrained systems)
+    """
+    # Free the PyTorch DiT weights to reclaim memory before TRT load
+    if hasattr(policy.model.action_head, 'model') and policy.model.action_head.model is not None:
+        if torch.cuda.is_available():
+            mem_before = torch.cuda.memory_allocated() / 1024**3
+            logging.info(f"GPU memory before DiT deletion: {mem_before:.2f} GB")
+
+        del policy.model.action_head.model
+        gc.collect()
+        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            mem_after = torch.cuda.memory_allocated() / 1024**3
+            logging.info(f"GPU memory after DiT deletion: {mem_after:.2f} GB (freed {mem_before - mem_after:.2f} GB)")
+
+    # Use preloaded TRT engine if provided, otherwise load now
+    if preloaded_trt is not None:
+        trt_dit = preloaded_trt
+        logging.info("Using pre-loaded TensorRT engine")
+    else:
+        trt_dit = TensorRTDiTWrapper(trt_engine_path, device=device)
+
+    def trt_forward(
+        hidden_states,
+        encoder_hidden_states,
+        timestep,
+        encoder_attention_mask=None,
+        return_all_hidden_states=False,
+        image_mask=None,
+        backbone_attention_mask=None,
+    ):
+        output = trt_dit(
+            sa_embs=hidden_states,
+            vl_embs=encoder_hidden_states,
+            timestep=timestep,
+            image_mask=image_mask,
+            backbone_attention_mask=backbone_attention_mask,
+        )
+
+        if return_all_hidden_states:
+            raise RuntimeError("TensorRT only returns the final output. Check inference config")
+        return output
+
+    # Wrap in a proper class so policy.model.action_head.model is a callable object
+    class TRTModel:
+        def __init__(self, forward_fn):
+            self._forward = forward_fn
+
+        def forward(self, *args, **kwargs):
+            return self._forward(*args, **kwargs)
+
+        def __call__(self, *args, **kwargs):
+            return self._forward(*args, **kwargs)
+
+    policy.model.action_head.model = TRTModel(trt_forward)
+    logging.info("DiT replaced with TensorRT engine")
+
+
+###############################################################################
+# JpegPolicyWrapper
+###############################################################################
 
 
 class JpegPolicyWrapper(BasePolicy):
@@ -224,8 +465,15 @@ examples:
                         help='Actions per replay step (default: %(default)s)')
     parser.add_argument('--denoising-steps', type=int, default=0,
                         help='Override denoising steps (0=model default)')
+    parser.add_argument('--trt-engine-path', default='',
+                        help='Path to TensorRT engine file (.trt) for DiT. Enables TRT mode.')
+    parser.add_argument('--compile-backbone', action='store_true',
+                        help='Apply torch.compile to backbone for kernel fusion (~10%% speedup)')
+    parser.add_argument('--compile-backbone-mode', default='default',
+                        help='torch.compile mode (default: %(default)s). '
+                             'Only "default" works on Orin.')
     parser.add_argument('--torch-compile', action='store_true',
-                        help='Apply torch.compile to DiT for speedup')
+                        help='Apply torch.compile to DiT (PyTorch mode only)')
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Verbose logging')
 
@@ -285,28 +533,90 @@ def main():
             logger.error(f'Checkpoint not found: {checkpoint}')
             sys.exit(1)
 
-        logger.info(f'Loading Gr00tPolicy from {checkpoint}...')
-        policy = Gr00tPolicy(
-            embodiment_tag=embodiment_tag,
-            model_path=str(checkpoint),
-            device=args.device,
-            strict=False,
-        )
+        device_idx = int(args.device.split(':')[-1]) if ':' in args.device else 0
+
+        if args.trt_engine_path and torch.cuda.is_available():
+            # TRT-first loading order: load TRT engine while GPU is empty to avoid
+            # memory fragmentation on Jetson unified memory.
+            logger.info('TensorRT mode: loading TRT engine first while GPU is empty...')
+
+            trt_dit = TensorRTDiTWrapper(args.trt_engine_path, device=device_idx)
+            gc.collect()
+            torch.cuda.empty_cache()
+            mem_used = torch.cuda.memory_allocated() / 1024**3
+            logger.info(f'GPU memory after TRT engine load: {mem_used:.2f} GB')
+
+            # Load PyTorch model WITHOUT DiT weights (skip_dit=True saves ~2GB)
+            logger.info(f'Loading Gr00tPolicy from {checkpoint} (skip_dit=True)...')
+            policy = Gr00tPolicy(
+                embodiment_tag=embodiment_tag,
+                model_path=str(checkpoint),
+                device=args.device,
+                skip_dit=True,
+                strict=False,
+            )
+            gc.collect()
+            torch.cuda.empty_cache()
+            mem_used = torch.cuda.memory_allocated() / 1024**3
+            logger.info(f'GPU memory after PyTorch model load: {mem_used:.2f} GB')
+
+            # Wire up pre-loaded TRT engine
+            replace_dit_with_tensorrt(
+                policy, args.trt_engine_path, device=device_idx,
+                preloaded_trt=trt_dit,
+            )
+            gc.collect()
+            torch.cuda.empty_cache()
+            mem_used = torch.cuda.memory_allocated() / 1024**3
+            mem_reserved = torch.cuda.memory_reserved() / 1024**3
+            logger.info(
+                f'GPU memory after TRT wiring: allocated={mem_used:.2f} GB, '
+                f'reserved={mem_reserved:.2f} GB'
+            )
+        else:
+            # PyTorch-only mode (no TRT)
+            logger.info(f'Loading Gr00tPolicy from {checkpoint}...')
+            policy = Gr00tPolicy(
+                embodiment_tag=embodiment_tag,
+                model_path=str(checkpoint),
+                device=args.device,
+                strict=False,
+            )
 
         # Get language key from loaded policy
         language_key = policy.modality_configs['language'].modality_keys[0]
 
         # Override denoising steps
         if args.denoising_steps > 0:
+            model_denoise = policy.model.action_head.num_inference_timesteps
             policy.model.action_head.num_inference_timesteps = args.denoising_steps
-            logger.info(f'Denoising steps: {args.denoising_steps}')
+            logger.info(f'Denoising steps: {model_denoise} -> {args.denoising_steps}')
 
-        # Apply torch.compile for inference speedup
-        if args.torch_compile:
+        # torch.compile on backbone for kernel fusion
+        if args.compile_backbone:
+            logger.info(
+                f'Compiling backbone with torch.compile(mode={args.compile_backbone_mode!r})...'
+            )
+            policy.model.backbone.forward = torch.compile(
+                policy.model.backbone.forward,
+                mode=args.compile_backbone_mode,
+            )
+            logger.info('Backbone compiled (will warmup on first inference)')
+
+        # Apply torch.compile to DiT (PyTorch mode only, not with TRT)
+        if args.torch_compile and not args.trt_engine_path:
             logger.info('Applying torch.compile to DiT (first inference will be slow)...')
             policy.model.action_head.model.forward = torch.compile(
                 policy.model.action_head.model.forward, mode="max-autotune"
             )
+
+        # Runtime CUDA optimizations
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            # Cap PyTorch's CUDA cache at 60% of total memory to leave headroom for
+            # TensorRT internal buffers, numpy, OS, and other allocations on unified memory
+            torch.cuda.set_per_process_memory_fraction(0.6)
+            logger.info('CUDA optimizations: cudnn.benchmark=True, memory cap=60%')
 
         logger.info(f'Model loaded (embodiment={embodiment_tag.value}, '
                      f'language_key={language_key})')
