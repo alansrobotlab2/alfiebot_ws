@@ -93,7 +93,8 @@ class GrootClientNode(Node):
         self.inference_timeout_ms = self.get_parameter('inference_timeout_ms').value
         self.task_description = self.get_parameter('task_description').value
         self.enable_safety_limits = self.get_parameter('enable_safety_limits').value
-        self.action_smoothing_alpha = self.get_parameter('action_smoothing_alpha').value
+        self.base_smoothing_alpha = self.get_parameter('base_smoothing_alpha').value
+        self.joint_smoothing_alpha = self.get_parameter('joint_smoothing_alpha').value
         self.action_chunk_size = self.get_parameter('action_chunk_size').value
         self.n_action_steps = self.get_parameter('n_action_steps').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
@@ -143,6 +144,7 @@ class GrootClientNode(Node):
         self._action_chunk: Optional[np.ndarray] = None  # shape (N, 22)
         self._pending_chunk: Optional[np.ndarray] = None  # next chunk, waiting
         self._chunk_timestamp: float = 0.0                # time.monotonic() when chunk started
+        self._effective_skip: int = self.latency_skip     # dynamic skip for current chunk
         self._action_lock = threading.Lock()
         self._total_chunks = 0                            # for diagnostic logging
 
@@ -177,7 +179,8 @@ class GrootClientNode(Node):
         self.action_publisher = ActionPublisher(
             node=self,
             safety=self.safety if self.enable_safety_limits else None,
-            smoothing_alpha=self.action_smoothing_alpha,
+            base_smoothing_alpha=self.base_smoothing_alpha,
+            joint_smoothing_alpha=self.joint_smoothing_alpha,
             csv_log_path=self.csv_log_path,
         )
 
@@ -266,7 +269,8 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Inference Timeout:    {self.inference_timeout_ms} ms')
         self.get_logger().info(f'  Task Description:     "{self.task_description}"')
         self.get_logger().info(f'  Safety Limits:        {self.enable_safety_limits}')
-        self.get_logger().info(f'  Action Smoothing:     {self.action_smoothing_alpha}')
+        self.get_logger().info(f'  Base Smoothing:       {self.base_smoothing_alpha}')
+        self.get_logger().info(f'  Joint Smoothing:      {self.joint_smoothing_alpha}')
         self.get_logger().info(f'  --- Execution Strategy: {mode} ---')
         self.get_logger().info(f'  Action Chunk Size:    {self.action_chunk_size}')
         self.get_logger().info(f'  n_action_steps:       {self.n_action_steps} ({exec_ms:.0f} ms)')
@@ -408,7 +412,8 @@ class GrootClientNode(Node):
         self.declare_parameter('inference_timeout_ms', 5000)
         self.declare_parameter('task_description', 'find the can and pick it up')
         self.declare_parameter('enable_safety_limits', True)
-        self.declare_parameter('action_smoothing_alpha', 0.95)
+        self.declare_parameter('base_smoothing_alpha', 1.0)
+        self.declare_parameter('joint_smoothing_alpha', 0.95)
         self.declare_parameter('action_chunk_size', 16)
 
         # n_action_steps: how many actions to execute per chunk.
@@ -673,9 +678,10 @@ class GrootClientNode(Node):
             # Install or buffer the new chunk
             with self._action_lock:
                 if self._action_chunk is None:
-                    # First chunk — install directly
+                    # First chunk — install directly, use base latency skip
                     self._action_chunk = chunk
                     self._chunk_timestamp = time.monotonic()
+                    self._effective_skip = self.latency_skip
                 else:
                     # Buffer as pending (promoted when current chunk exhausts)
                     self._pending_chunk = chunk
@@ -710,10 +716,18 @@ class GrootClientNode(Node):
                 if elapsed >= exec_duration:
                     # Save last executed action for transition blending
                     last_exec_idx = min(
-                        self.latency_skip + self.n_action_steps - 1,
+                        self._effective_skip + self.n_action_steps - 1,
                         len(chunk) - 1,
                     )
                     self._blend_from = chunk[last_exec_idx].copy()
+                    # Dynamic latency skip: if we coasted past the execution
+                    # window, the observation is proportionally more stale.
+                    overshoot_steps = int((elapsed - exec_duration) / ACTION_STEP_PERIOD)
+                    self._effective_skip = self.latency_skip + overshoot_steps
+                    if overshoot_steps > 0:
+                        self.get_logger().info(
+                            f'[chunk] late promotion: coasted {overshoot_steps} extra steps, '
+                            f'effective_skip={self._effective_skip} (base={self.latency_skip})')
                     # Promote pending chunk
                     self._action_chunk = pending
                     self._pending_chunk = None
@@ -724,14 +738,16 @@ class GrootClientNode(Node):
         if chunk is None:
             return
 
-        # Compute position within the execution window
+        # Compute position within the chunk timeline
+        # exec_idx advances freely — steps through the execution window [4:12],
+        # then continues into tail actions [12:16] if inference is late.
+        # abs_idx clamps to the last action in the chunk (holds if all 16 exhausted).
         elapsed = now - timestamp
-        t_frac = elapsed / ACTION_STEP_PERIOD  # fractional step in exec window
-        exec_exhausted = t_frac >= self.n_action_steps
-        exec_idx = min(int(t_frac), self.n_action_steps - 1)
+        t_frac = elapsed / ACTION_STEP_PERIOD
+        exec_idx = int(t_frac)
 
-        # Map to absolute chunk index (apply universal latency skip)
-        abs_idx = self.latency_skip + exec_idx
+        # Map to absolute chunk index (apply dynamic latency skip)
+        abs_idx = self._effective_skip + exec_idx
         abs_idx = min(abs_idx, len(chunk) - 1)
 
         # --- Action selection: interpolate between consecutive chunk actions ---
@@ -740,7 +756,6 @@ class GrootClientNode(Node):
             action = (1.0 - alpha) * chunk[abs_idx] + alpha * chunk[abs_idx + 1]
         else:
             action = chunk[abs_idx].copy()
-
 
         # --- Chunk transition blending (joints only, not base velocity) ---
         # Prevents joint position jumps when a new chunk promotes. Base must
@@ -751,11 +766,6 @@ class GrootClientNode(Node):
             blend_alpha = (exec_idx + 1) / (self.chunk_blend_steps + 1)
             action[6:] = ((1.0 - blend_alpha) * self._blend_from[6:]
                           + blend_alpha * action[6:])
-
-        # --- Zero base velocity when execution window is exhausted ---
-        # Prevents indefinite coasting. Hold joint positions as-is.
-        if exec_exhausted:
-            action[0:6] = 0.0
 
         # Publish action to robot at 100 Hz
         obs = self.observation_bridge.get_latest_observation()
