@@ -546,16 +546,15 @@ def run_eval(args):
         else:
             state_raw = gt_states[step]
 
-        # Send raw RGB arrays (no JPEG lossy compression)
-        # to match the standard eval pipeline as closely as possible
-        raw_images = {}
+        # Compress images to JPEG for efficient transport
+        images = {}
         frame_dict = video_frames[step] if step < len(video_frames) else {}
         for cam_name, img in frame_dict.items():
-            raw_images[cam_name] = img  # RGB uint8 numpy array
+            images[cam_name] = compress_jpeg(img, quality=JPEG_QUALITY)
 
-        # Send raw state — Gr00tPolicy normalizes internally
-        response = client.send_raw_observation(
-            raw_images=raw_images,
+        # Send state — Gr00tPolicy normalizes internally
+        response = client.send_observation(
+            images=images,
             state=state_raw,
             language=args.task,
         )
