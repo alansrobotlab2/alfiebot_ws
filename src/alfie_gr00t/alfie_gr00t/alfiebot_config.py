@@ -39,7 +39,7 @@ alfiebot_config = {
         ],
     ),
     "action": ModalityConfig(
-        delta_indices=list(range(16)),
+        delta_indices=list(range(4)),
         modality_keys=[
             "base",
             "back",
