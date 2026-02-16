@@ -71,10 +71,6 @@
     # Lower = more smoothing, smoother but laggier
     action_smoothing_alpha: 0.95
 
-    # Base velocity scale-down factor (0-1). Applied as v *= (1 - decay).
-    # 0.0 = no change, 0.15 = 15% reduction. Fine-tunes approach distance.
-    # Too high (0.35) crushes velocity — approach takes 64s instead of ~10s.
-    base_velocity_decay: 0.15
 
     # Inter-action interpolation: smooth 100Hz output by interpolating
     # between consecutive actions in the chunk.

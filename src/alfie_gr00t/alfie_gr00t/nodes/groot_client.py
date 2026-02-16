@@ -97,7 +97,7 @@ class GrootClientNode(Node):
         self.action_chunk_size = self.get_parameter('action_chunk_size').value
         self.n_action_steps = self.get_parameter('n_action_steps').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
-        self.base_velocity_decay = self.get_parameter('base_velocity_decay').value
+
         self.latency_skip = self.get_parameter('latency_skip').value
         self.inference_trigger_step = self.get_parameter('inference_trigger_step').value
         self.chunk_blend_steps = self.get_parameter('chunk_blend_steps').value
@@ -273,7 +273,7 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Latency Skip:         {self.latency_skip} (exec window: [{skip_start}:{skip_end+1}])')
         self.get_logger().info(f'  Inference Trigger:    step {self.inference_trigger_step} ({trigger_ms:.0f} ms into chunk)')
         self.get_logger().info(f'  Re-planning Rate:     {replan_hz:.2f} Hz')
-        self.get_logger().info(f'  Base Vel Decay:       {self.base_velocity_decay}')
+
         self.get_logger().info(f'  Chunk Blend Steps:    {self.chunk_blend_steps}')
         self.get_logger().info(f'  Action Step Period:   {ACTION_STEP_PERIOD * 1000:.1f} ms ({TRAINING_FPS} FPS)')
         self.get_logger().info(f'  --- Other ---')
@@ -418,8 +418,6 @@ class GrootClientNode(Node):
 
         self.declare_parameter('csv_log_path', '')
 
-        # Base velocity drift correction (0-1). Applied as v *= (1 - decay).
-        self.declare_parameter('base_velocity_decay', 0.15)
 
         # Universal latency skip: all body parts read from action[skip + idx]
         # to compensate for observation-to-action delay (~280ms = 4 steps).
@@ -743,9 +741,6 @@ class GrootClientNode(Node):
         else:
             action = chunk[abs_idx].copy()
 
-        # --- Apply base velocity decay ---
-        if self.base_velocity_decay > 0.0:
-            action[0:6] *= (1.0 - self.base_velocity_decay)
 
         # --- Chunk transition blending (joints only, not base velocity) ---
         # Prevents joint position jumps when a new chunk promotes. Base must

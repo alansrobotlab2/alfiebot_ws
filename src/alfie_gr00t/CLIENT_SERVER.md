@@ -117,7 +117,7 @@ t=1.34   install chunk, start executing
 | Parameter | Value | Was Tuned For | Status |
 |-----------|-------|---------------|--------|
 | `latency_skip_base` | 3 | Base velocity reads ahead to compensate for obs-to-action delay | Dead — removed during refactor |
-| `base_velocity_decay` | 0.15 | Scale down base velocity to prevent approach overshoot | Dead — never applied |
+
 | `max_joint_delta` | 2.0 | Per-step joint position change limit | Dead — never enforced |
 | `_blend_from` | (set) | Smooth chunk transitions by blending old→new trajectory | Dead write — never read |
 | `_blend_steps` | 3 | Number of actions to blend over (~200ms) | Dead — never read |
@@ -148,15 +148,7 @@ action[0:6] = chunk[base_idx, 0:6]
 
 **VALIDATED (Phase 0):** At k=4, all body parts exceed the 0.9 correlation threshold — base r=0.969, right arm r=0.974, gripper r=0.915, head r=0.988. **Universal latency skip is viable** — apply skip=4 to all channels, not just base.
 
-### 2. Re-enable `base_velocity_decay`
-
-**What:** `action[0:6] *= (1.0 - decay)` — scales down all base velocity commands.
-
-**Why:** Even with latency skip, the model's base velocity predictions can overshoot the target position. A small decay factor trims approach distance without changing trajectory shape.
-
-**Parameter:** Start at `base_velocity_decay: 0.15` (the previously tuned value). Increase if robot overshoots approach, decrease if robot doesn't reach the can.
-
-### 3. Improve gap behavior
+### 2. Improve gap behavior
 
 **Current:** When chunk exhausts, base velocity hard-zeros instantly. Joints hold last position.
 
@@ -580,7 +572,7 @@ For each parameter change:
 | Priority | Change | Metric | Risk | Phase 0 Status |
 |----------|--------|--------|------|----------------|
 | 1 | Universal `latency_skip=6` (all parts except gripper) | Trajectory tracking | Low | **VALIDATED** — r>0.95 for base/arm/head at k=6 |
-| 2 | Re-enable `base_velocity_decay=0.15` | Approach distance | Low — easily reversible | Unchanged |
+
 | 3 | Gripper threshold (no skip) | Grasp timing | Low | **VALIDATED** — gripper r=0.87, skip unreliable |
 | 4 | Re-enable chunk blending (steps=2) | Joint discontinuity at boundaries | Medium — may fight corrections | Unchanged |
 | 5 | Gap decay (150ms coast) | Motion smoothness at chunk end | Medium — potential overshoot | Unchanged |
@@ -614,7 +606,7 @@ Phase A: AH=16 Overlapped Implementation (no retraining) ← CURRENT
 ├── Implement overlapped inference in groot_client.py:
 │   n_exec=8, trigger@step4, skip=4 (universal, all chunks)
 ├── Re-enable universal latency_skip (Phase 0 confirmed r>0.91+)
-├── Re-enable base_velocity_decay in _command_callback
+
 ├── CSV validation on live robot
 └── Remove dead parameter cleanup (they're alive again)
 
