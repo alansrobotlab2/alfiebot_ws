@@ -112,11 +112,6 @@ def generate_launch_description():
         description='Interpolate between actions for smooth 100Hz output'
     )
 
-    base_velocity_decay_arg = DeclareLaunchArgument(
-        'base_velocity_decay',
-        default_value='0.15',
-        description='Base velocity decay factor (0-1)'
-    )
 
     # GR00T client node
     groot_client_node = Node(
@@ -142,7 +137,7 @@ def generate_launch_description():
                 'inference_trigger_step': LaunchConfiguration('inference_trigger_step'),
                 'chunk_blend_steps': LaunchConfiguration('chunk_blend_steps'),
                 'interpolate_actions': LaunchConfiguration('interpolate_actions'),
-                'base_velocity_decay': LaunchConfiguration('base_velocity_decay'),
+
             }
         ],
     )
@@ -164,7 +159,7 @@ def generate_launch_description():
         inference_trigger_step_arg,
         chunk_blend_steps_arg,
         interpolate_arg,
-        base_velocity_decay_arg,
+
 
         # Log startup info
         LogInfo(msg=['=========================================']),
@@ -176,7 +171,7 @@ def generate_launch_description():
         LogInfo(msg=['n_exec=', LaunchConfiguration('n_action_steps'),
                      ' skip=', LaunchConfiguration('latency_skip'),
                      ' trigger@', LaunchConfiguration('inference_trigger_step'),
-                     ' decay=', LaunchConfiguration('base_velocity_decay')]),
+]),
         LogInfo(msg=['=========================================']),
 
         # Nodes

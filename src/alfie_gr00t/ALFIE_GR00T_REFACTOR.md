@@ -108,15 +108,15 @@ Several parameters are declared, read, logged on startup, and present in config/
 | Parameter | Declared | Used? | Notes |
 |-----------|----------|-------|-------|
 | `latency_skip_base` | `groot_client.py:98` | **NO** | Read and logged but never referenced in `_command_callback`. The per-body-part latency skip logic was removed during refactoring. |
-| `base_velocity_decay` | `groot_client.py:97` | **NO** | Read and logged but never applied. Was `v *= (1 - decay)` in the old code. |
+
 | `max_joint_delta` | `groot_client.py:99` | **NO** | Read and logged but never passed to `publish_action()`. `ActionPublisher.publish_action()` has the parameter with default 0.3 but also doesn't call `safety.compute_delta_limits()`. |
 | `_blend_from` | `groot_client.py:142` | **Partial** | SET when promoting a chunk (line 668) but never READ in the command callback. Dead write. |
 | `_blend_steps` | `groot_client.py:141` | **NO** | Set to 3 but never read anywhere. |
 
 **Files affected:**
 - `nodes/groot_client.py` — remove dead parameter declarations, reads, and logging
-- `config/groot_client.yaml` — remove `latency_skip_base` and `max_joint_delta` entries (keep `base_velocity_decay` if we plan to re-enable it)
-- `launch/groot_inference.launch.py` — remove `base_velocity_decay` launch arg (already the only dead one exposed)
+- `config/groot_client.yaml` — remove `latency_skip_base` and `max_joint_delta` entries
+- `launch/groot_inference.launch.py` — remove dead launch args
 
 ### Dead Safety Methods
 
@@ -257,7 +257,7 @@ Effective inference Hz: ~0.83 Hz
 | Parameter | Default | Where | Was Used For |
 |-----------|---------|-------|-------------|
 | `latency_skip_base` | 3 | client yaml | Base velocity read-ahead for latency compensation |
-| `base_velocity_decay` | 0.0 (yaml) / 0.15 (launch) | client yaml/launch | Scaling down base velocity for approach tuning |
+
 | `max_joint_delta` | 2.0 | client yaml | Per-step joint position change limit |
 
 ---
@@ -390,23 +390,14 @@ action[0:6] = chunk[base_idx, 0:6]  # base velocity reads ahead
 
 With AH=4 and `latency_skip_base=1`: base reads 1 action ahead (67ms compensation). Start conservative — with 4 actions total, skip=2 leaves only 2 usable base actions before the chunk ends. Skip=1 is likely the right value.
 
-**4. Re-enable base velocity decay**
-
-With shorter chunks, the base moves less per chunk. But cumulative overshoot across many rapid chunks can still cause approach distance errors. Re-enable:
-```python
-action[0:6] *= (1.0 - self.base_velocity_decay)
-```
-
-Start at 0.0 (disabled) and tune empirically. The effect may be less necessary with AH=4 since the model gets fresh observations every 267ms and can self-correct.
-
-**5. Parameter updates**
+**4. Parameter updates**
 
 | Parameter | AH=16 value | AH=4 value | Reason |
 |-----------|-------------|------------|--------|
 | `action_chunk_size` | 16 | 4 | Match training horizon |
 | `n_action_steps` | 16 | 4 | Execute all (full chunk) |
 | `latency_skip_base` | 3 (dead) | 1 | 120ms / 67ms ≈ 2, but conservative |
-| `base_velocity_decay` | 0.0 (dead) | 0.0 (tune) | Start disabled, tune empirically |
+
 | `_blend_steps` | 3 (dead) | 2 | ~134ms blend at chunk transitions |
 | Watchdog timeout | 2.07s | 0.7s | chunk_duration (0.267s) + 0.4s margin |
 
