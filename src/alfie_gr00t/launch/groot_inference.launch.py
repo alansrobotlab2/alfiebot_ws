@@ -11,8 +11,8 @@ Usage:
     # Custom task
     ros2 launch alfie_gr00t groot_inference.launch.py task_description:="pick up the red can"
 
-    # With n_action_steps=8 for more responsive closed-loop
-    ros2 launch alfie_gr00t groot_inference.launch.py n_action_steps:=8
+    # Sequential mode (disable overlapped inference)
+    ros2 launch alfie_gr00t groot_inference.launch.py n_action_steps:=16 inference_trigger_step:=16
 
     # On-device inference (IPC) — if server runs on same machine
     ros2 launch alfie_gr00t groot_inference.launch.py transport:=ipc
@@ -84,8 +84,26 @@ def generate_launch_description():
 
     n_action_steps_arg = DeclareLaunchArgument(
         'n_action_steps',
-        default_value='16',
-        description='Actions to execute before re-querying (16=full chunk, 8=NVIDIA default)'
+        default_value='8',
+        description='Actions to execute per chunk (8=overlapped, 16=sequential)'
+    )
+
+    latency_skip_arg = DeclareLaunchArgument(
+        'latency_skip',
+        default_value='4',
+        description='Universal latency skip (all body parts, ~280ms at 15 FPS)'
+    )
+
+    inference_trigger_step_arg = DeclareLaunchArgument(
+        'inference_trigger_step',
+        default_value='4',
+        description='Fire inference at this step within execution window'
+    )
+
+    chunk_blend_steps_arg = DeclareLaunchArgument(
+        'chunk_blend_steps',
+        default_value='2',
+        description='Blend joints (not base) over N steps at chunk transitions'
     )
 
     interpolate_arg = DeclareLaunchArgument(
@@ -120,6 +138,9 @@ def generate_launch_description():
                 'action_smoothing_alpha': LaunchConfiguration('action_smoothing_alpha'),
                 'action_chunk_size': LaunchConfiguration('action_chunk_size'),
                 'n_action_steps': LaunchConfiguration('n_action_steps'),
+                'latency_skip': LaunchConfiguration('latency_skip'),
+                'inference_trigger_step': LaunchConfiguration('inference_trigger_step'),
+                'chunk_blend_steps': LaunchConfiguration('chunk_blend_steps'),
                 'interpolate_actions': LaunchConfiguration('interpolate_actions'),
                 'base_velocity_decay': LaunchConfiguration('base_velocity_decay'),
             }
@@ -139,6 +160,9 @@ def generate_launch_description():
         smoothing_alpha_arg,
         action_chunk_size_arg,
         n_action_steps_arg,
+        latency_skip_arg,
+        inference_trigger_step_arg,
+        chunk_blend_steps_arg,
         interpolate_arg,
         base_velocity_decay_arg,
 
@@ -149,7 +173,10 @@ def generate_launch_description():
         LogInfo(msg=['Transport: ', LaunchConfiguration('transport')]),
         LogInfo(msg=['Server: ', LaunchConfiguration('server_host'), ':', LaunchConfiguration('server_port')]),
         LogInfo(msg=['Task: ', LaunchConfiguration('task_description')]),
-        LogInfo(msg=['n_action_steps: ', LaunchConfiguration('n_action_steps')]),
+        LogInfo(msg=['n_exec=', LaunchConfiguration('n_action_steps'),
+                     ' skip=', LaunchConfiguration('latency_skip'),
+                     ' trigger@', LaunchConfiguration('inference_trigger_step'),
+                     ' decay=', LaunchConfiguration('base_velocity_decay')]),
         LogInfo(msg=['=========================================']),
 
         # Nodes

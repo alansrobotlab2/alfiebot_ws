@@ -30,13 +30,29 @@
     action_chunk_size: 16
 
     # n_action_steps: how many of the 16 predicted actions to execute
-    # before re-querying with a fresh observation.
-    #   16 = execute full chunk (1.07s between queries, best for manipulation)
-    #   12 = 0.80s between queries
-    #    8 = NVIDIA sim eval default, 0.53s between queries
-    # NOTE: Values < 16 cause arm trajectory repetition ("praying mantis")
-    # during manipulation. Use latency_skip_base instead for responsive base.
-    n_action_steps: 16
+    # per chunk before promoting the next pending chunk.
+    # With overlapped inference (inference fires mid-chunk at trigger step):
+    #   8 = 536ms per chunk, ~1.87 Hz re-planning, near-zero dead time
+    #  16 = sequential mode (1.07s, 0.75 Hz, 270ms dead time per cycle)
+    n_action_steps: 8
+
+    # Universal latency skip: all body parts read from action[skip + idx]
+    # to compensate for observation-to-action delay (~280ms = 4 steps at 15 FPS).
+    # Phase 0 validated: r>0.91 for all body parts at k=4.
+    # With skip=4 and n_action_steps=8, execution window is actions[4:12].
+    latency_skip: 4
+
+    # Inference trigger step: fire inference at this step within the execution
+    # window for overlapped execution. With n_action_steps=8 and trigger=4,
+    # inference fires at 268ms into the chunk. Set equal to n_action_steps
+    # for sequential mode (waits for full chunk exhaust before firing).
+    inference_trigger_step: 4
+
+    # Chunk transition blend steps: blend joints (not base velocity) from
+    # the previous chunk's last executed action to the new chunk's trajectory
+    # over N steps (~134ms for 2). Prevents joint position jumps at boundaries.
+    # 0 = disabled.
+    chunk_blend_steps: 2
 
     # ==========================================================================
     # Task Configuration
@@ -56,19 +72,9 @@
     action_smoothing_alpha: 0.95
 
     # Base velocity scale-down factor (0-1). Applied as v *= (1 - decay).
-    # 0.0 = no change, 0.1 = 10% reduction, helps fine-tune approach distance.
-    base_velocity_decay: 0.0
-
-    # Per-body-part latency skip: base velocity reads ahead by this many
-    # actions in the chunk to compensate for ~200ms observation-to-action
-    # delay. Joints always play from action[0] (no skip) because skipping
-    # joints causes trajectory repetition during manipulation.
-    # With skip=3 and n_action_steps=16, base effectively uses actions 3-15
-    # and the effective re-query interval is (16-3)*67ms = 0.87s.
-    latency_skip_base: 3
-
-    # Maximum allowed joint position change per command cycle (radians)
-    max_joint_delta: 2.0
+    # 0.0 = no change, 0.15 = 15% reduction. Fine-tunes approach distance.
+    # Too high (0.35) crushes velocity — approach takes 64s instead of ~10s.
+    base_velocity_decay: 0.15
 
     # Inter-action interpolation: smooth 100Hz output by interpolating
     # between consecutive actions in the chunk.

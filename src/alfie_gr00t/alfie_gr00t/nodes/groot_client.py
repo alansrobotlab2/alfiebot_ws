@@ -5,16 +5,17 @@ This node connects to a remote GR00T inference server via ZeroMQ,
 sends synchronized observations, and publishes action predictions
 to control the robot.
 
-Key timing:
-- Server returns a 16-step action horizon; the command loop steps through
-  the first `n_action_steps` at the training data rate (15 FPS = 67ms/action)
-- After n_action_steps are consumed, a fresh observation is captured and
-  a new inference request is sent
+Key timing (overlapped mode, n_exec=8, trigger@4, skip=4):
+- Server returns a 16-step action horizon
+- Universal latency skip: execution window is actions[skip : skip + n_exec]
+- Inference fires mid-chunk at trigger_step (268ms), not at chunk exhaust
+- Pending chunk buffered; promoted when current chunk's n_exec actions consumed
+- Near-zero dead time: ~1.87 Hz re-planning rate vs 0.75 Hz sequential
 - Command publishing runs at exactly 100 Hz on the ROS2 executor
 - Inter-action interpolation smooths 15 FPS actions to 100 Hz output
 
 Threading model:
-- Inference runs on a dedicated background thread (blocking ZMQ ~130ms)
+- Inference runs on a dedicated background thread (blocking ZMQ ~280ms RTT)
 - Command publishing runs at 100 Hz on the single-threaded ROS2 executor
 - _action_lock protects the shared action chunk between threads
 """
@@ -63,17 +64,19 @@ class GrootClientNode(Node):
     Orchestrates:
     - Observation collection from cameras and robot state
     - ZeroMQ communication with inference server (background thread)
+    - Overlapped inference: fires mid-chunk for near-zero dead time
     - Action chunk execution at training rate (15 FPS)
     - Action publishing to robot (100 Hz on ROS2 executor)
     - Safety monitoring and state management
 
-    Action chunking (n_action_steps):
+    Overlapped execution (n_action_steps, latency_skip, inference_trigger_step):
     - Server returns 16 actions per inference call (the action_horizon)
-    - n_action_steps controls how many are EXECUTED before re-querying
-    - n_action_steps=16: execute full chunk (current behavior, least responsive)
-    - n_action_steps=8: execute half, re-query with fresh observation (more responsive)
-    - The 100 Hz command timer steps through actions at 67ms each (training rate)
-    - After n_action_steps consumed, zero base velocity, hold joints, request new chunk
+    - latency_skip accounts for observation staleness: exec starts at action[skip]
+    - n_action_steps controls how many actions are EXECUTED per chunk
+    - inference_trigger_step fires inference mid-chunk (overlapped) or at exhaust
+    - n_action_steps=8, skip=4: execution window is actions[4:12] over 536ms
+    - trigger_step=4: inference fires at 268ms, result arrives as pending ~548ms
+    - After n_action_steps consumed, promote pending or zero base + hold joints
     """
 
     def __init__(self):
@@ -95,20 +98,30 @@ class GrootClientNode(Node):
         self.n_action_steps = self.get_parameter('n_action_steps').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
         self.base_velocity_decay = self.get_parameter('base_velocity_decay').value
-        self.latency_skip_base = self.get_parameter('latency_skip_base').value
-        self.max_joint_delta = self.get_parameter('max_joint_delta').value
+        self.latency_skip = self.get_parameter('latency_skip').value
+        self.inference_trigger_step = self.get_parameter('inference_trigger_step').value
+        self.chunk_blend_steps = self.get_parameter('chunk_blend_steps').value
         self.debug_save_images = self.get_parameter('debug_save_images').value
         self.h264_conditioning = self.get_parameter('h264_conditioning').value
         self.interpolate_actions = self.get_parameter('interpolate_actions').value
         self.back_init_height = self.get_parameter('back_init_height').value
 
-        # Validate n_action_steps
-        if self.n_action_steps < 1 or self.n_action_steps > self.action_chunk_size:
+        # Validate overlapped execution parameters
+        max_n_steps = self.action_chunk_size - self.latency_skip
+        if self.n_action_steps < 1 or self.n_action_steps > max_n_steps:
             self.get_logger().warn(
-                f'n_action_steps={self.n_action_steps} out of range [1, {self.action_chunk_size}], '
-                f'clamping to {self.action_chunk_size}'
+                f'n_action_steps={self.n_action_steps} out of range [1, {max_n_steps}] '
+                f'(chunk_size={self.action_chunk_size}, skip={self.latency_skip}), '
+                f'clamping to {max_n_steps}'
             )
-            self.n_action_steps = min(max(self.n_action_steps, 1), self.action_chunk_size)
+            self.n_action_steps = min(max(self.n_action_steps, 1), max_n_steps)
+
+        if self.inference_trigger_step < 1 or self.inference_trigger_step > self.n_action_steps:
+            self.get_logger().warn(
+                f'inference_trigger_step={self.inference_trigger_step} out of range '
+                f'[1, {self.n_action_steps}], clamping to {self.n_action_steps}'
+            )
+            self.inference_trigger_step = min(max(self.inference_trigger_step, 1), self.n_action_steps)
 
         # Build server address from transport parameters
         self.server_address = build_server_address(
@@ -133,13 +146,10 @@ class GrootClientNode(Node):
         self._action_lock = threading.Lock()
         self._total_chunks = 0                            # for diagnostic logging
 
-        # Chunk transition blending: when a new chunk starts, its action[0]
-        # may not match where the joints ended up from the previous chunk.
-        # We blend joints (not base) from the old chunk's last action to the
-        # new chunk's trajectory over BLEND_STEPS actions to avoid snapping.
-        BLEND_STEPS = 3  # blend over ~200ms (3 actions at 67ms each)
-        self._blend_steps = BLEND_STEPS
-        self._blend_from: Optional[np.ndarray] = None  # last action of previous chunk (22D)
+        # Chunk transition blending: when a new chunk promotes, blend joints
+        # (not base velocity) from the old chunk's last executed action to the
+        # new chunk's trajectory over chunk_blend_steps actions to avoid snapping.
+        self._blend_from: Optional[np.ndarray] = None  # last executed action of previous chunk (22D)
 
         # Initialize safety monitor
         # Watchdog timeout must exceed the chunk execution time plus inference latency
@@ -234,7 +244,14 @@ class GrootClientNode(Node):
 
     def _log_parameters(self):
         """Log all parameter values on startup."""
-        execution_time_ms = self.n_action_steps * ACTION_STEP_PERIOD * 1000
+        exec_ms = self.n_action_steps * ACTION_STEP_PERIOD * 1000
+        trigger_ms = self.inference_trigger_step * ACTION_STEP_PERIOD * 1000
+        skip_start = self.latency_skip
+        skip_end = self.latency_skip + self.n_action_steps - 1
+        overlapped = self.inference_trigger_step < self.n_action_steps
+        mode = 'overlapped' if overlapped else 'sequential'
+        replan_hz = 1.0 / (self.n_action_steps * ACTION_STEP_PERIOD) if self.n_action_steps > 0 else 0
+
         self.get_logger().info('=' * 60)
         self.get_logger().info('GR00T Client Parameters:')
         self.get_logger().info('=' * 60)
@@ -250,13 +267,17 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Task Description:     "{self.task_description}"')
         self.get_logger().info(f'  Safety Limits:        {self.enable_safety_limits}')
         self.get_logger().info(f'  Action Smoothing:     {self.action_smoothing_alpha}')
+        self.get_logger().info(f'  --- Execution Strategy: {mode} ---')
         self.get_logger().info(f'  Action Chunk Size:    {self.action_chunk_size}')
-        self.get_logger().info(f'  n_action_steps:       {self.n_action_steps} ({execution_time_ms:.0f} ms)')
-        self.get_logger().info(f'  Action Step Period:   {ACTION_STEP_PERIOD * 1000:.1f} ms ({TRAINING_FPS} FPS)')
-        self.get_logger().info(f'  CSV Log Path:         {self.csv_log_path or "(disabled)"}')
+        self.get_logger().info(f'  n_action_steps:       {self.n_action_steps} ({exec_ms:.0f} ms)')
+        self.get_logger().info(f'  Latency Skip:         {self.latency_skip} (exec window: [{skip_start}:{skip_end+1}])')
+        self.get_logger().info(f'  Inference Trigger:    step {self.inference_trigger_step} ({trigger_ms:.0f} ms into chunk)')
+        self.get_logger().info(f'  Re-planning Rate:     {replan_hz:.2f} Hz')
         self.get_logger().info(f'  Base Vel Decay:       {self.base_velocity_decay}')
-        self.get_logger().info(f'  Latency Skip (base):  {self.latency_skip_base} actions')
-        self.get_logger().info(f'  Max Joint Delta:      {self.max_joint_delta} rad')
+        self.get_logger().info(f'  Chunk Blend Steps:    {self.chunk_blend_steps}')
+        self.get_logger().info(f'  Action Step Period:   {ACTION_STEP_PERIOD * 1000:.1f} ms ({TRAINING_FPS} FPS)')
+        self.get_logger().info(f'  --- Other ---')
+        self.get_logger().info(f'  CSV Log Path:         {self.csv_log_path or "(disabled)"}')
         self.get_logger().info(f'  Debug Save Images:    {self.debug_save_images}')
         self.get_logger().info(f'  H.264 Conditioning:   {self.h264_conditioning}')
         self.get_logger().info(f'  Interpolate Actions:  {self.interpolate_actions}')
@@ -390,25 +411,27 @@ class GrootClientNode(Node):
         self.declare_parameter('action_smoothing_alpha', 0.95)
         self.declare_parameter('action_chunk_size', 16)
 
-        # n_action_steps: how many of the 16 predicted actions to execute
-        # before re-querying with a fresh observation.
-        # 16 = execute full chunk (least responsive, 1.07s between queries)
-        # 8 = execute half (NVIDIA sim default, 0.53s between queries)
-        self.declare_parameter('n_action_steps', 16)
+        # n_action_steps: how many actions to execute per chunk.
+        # 8 = overlapped (536ms, ~1.87 Hz re-planning, near-zero dead time)
+        # 16 = sequential (1.07s, 0.75 Hz, 270ms dead time)
+        self.declare_parameter('n_action_steps', 8)
 
         self.declare_parameter('csv_log_path', '')
 
         # Base velocity drift correction (0-1). Applied as v *= (1 - decay).
         self.declare_parameter('base_velocity_decay', 0.15)
 
-        # Per-body-part latency skip: base velocity reads ahead by this many
-        # actions to compensate for ~200ms observation-to-action delay.
-        # Joints play from action[0] — skipping joints causes trajectory
-        # repetition during manipulation. Only base benefits from look-ahead.
-        self.declare_parameter('latency_skip_base', 3)
+        # Universal latency skip: all body parts read from action[skip + idx]
+        # to compensate for observation-to-action delay (~280ms = 4 steps).
+        # Phase 0 validated r>0.91 for all body parts at k=4.
+        self.declare_parameter('latency_skip', 4)
 
-        # Maximum allowed joint position change per command cycle (radians).
-        self.declare_parameter('max_joint_delta', 2.0)
+        # Fire inference at this step within the execution window (overlapped).
+        # Set equal to n_action_steps for sequential mode.
+        self.declare_parameter('inference_trigger_step', 4)
+
+        # Blend joints (not base) over N steps at chunk transitions.
+        self.declare_parameter('chunk_blend_steps', 2)
 
         # Debug: save observation images to /tmp/groot_debug_images/
         self.declare_parameter('debug_save_images', False)
@@ -539,43 +562,58 @@ class GrootClientNode(Node):
             self.get_logger().info('Starting pose check: all joints within training range')
 
     def _inference_loop(self):
-        """Background inference loop (runs on dedicated thread).
+        """Background inference loop with overlapped execution.
 
-        Waits until the FULL chunk (all n_action_steps) is consumed, then
-        captures a fresh observation and requests a new chunk. The model must
-        see the RESULT of the entire joint trajectory, not mid-trajectory
-        state — otherwise it re-plans from a stale arm position and causes
-        repeating "praying mantis" motions.
+        Fires inference mid-chunk (at inference_trigger_step) instead of
+        waiting for full chunk exhaust. This eliminates dead time and
+        approximately doubles the re-planning rate.
 
-        The latency_skip_base only affects when the BASE zeros out in
-        _command_callback, not the observation/re-query timing.
+        First chunk: no prior chunk → fire inference immediately.
+        Subsequent chunks: fire at trigger_step into the execution window,
+        while the robot is still executing the current chunk's actions.
+        The result arrives as _pending_chunk before the current chunk exhausts.
+
+        Timing (n_exec=8, trigger@4, skip=4, ~280ms inference):
+          t=0      start executing chunk actions[4:12]
+          t=268ms  capture observation, fire inference (trigger step 4)
+          t=536ms  chunk exhausts → promote pending → start next chunk
+          t=548ms  inference result arrives (buffered or installed)
         """
-        chunk_duration = self.n_action_steps * ACTION_STEP_PERIOD
+        trigger_time = self.inference_trigger_step * ACTION_STEP_PERIOD
 
         while self._running:
             if not self._active or self._state != ClientState.ACTIVE:
                 time.sleep(0.05)
                 continue
 
-            # Wait until current chunk's n_action_steps are consumed
+            # Decide whether to fire inference now:
+            # 1. No chunk at all → fire immediately (first chunk)
+            # 2. Has chunk, no pending, trigger time reached → fire (overlapped)
+            # 3. Has pending → wait (don't overwrite buffered chunk)
             with self._action_lock:
-                chunk_ts = self._chunk_timestamp
                 has_chunk = self._action_chunk is not None
+                has_pending = self._pending_chunk is not None
+                chunk_ts = self._chunk_timestamp
+
+            if has_pending:
+                # Next chunk already buffered — nothing to do
+                time.sleep(0.01)
+                continue
 
             if has_chunk:
+                # Wait until trigger point within execution window
                 elapsed = time.monotonic() - chunk_ts
-                remaining = chunk_duration - elapsed
-                if remaining > 0:
-                    time.sleep(min(remaining, 0.05))
+                if elapsed < trigger_time:
+                    time.sleep(min(trigger_time - elapsed, 0.05))
                     continue
 
-            # Get latest observation AFTER chunk is consumed
+            # Capture observation (mid-chunk for overlapped, fresh for first chunk)
             obs = self.observation_bridge.get_latest_observation()
             if obs is None or not obs.valid:
                 time.sleep(0.01)
                 continue
 
-            # Send observation to server (blocking ~130ms)
+            # Send observation to server (blocking ~280ms RTT)
             response = self.zmq_client.send_observation(
                 images=obs.images,
                 state=obs.state,
@@ -600,21 +638,29 @@ class GrootClientNode(Node):
                 continue
 
             # Log chunk diagnostics
-            with self._action_lock:
-                old_ts = self._chunk_timestamp
-            gap = time.monotonic() - old_ts if has_chunk else 0.0
+            skip = self.latency_skip
+            skip_idx = min(skip, len(chunk) - 1)
             self.get_logger().info(
-                f'[chunk] new chunk after {gap:.3f}s '
-                f'({gap/ACTION_STEP_PERIOD:.1f} actions consumed), '
-                f'state_base={np.array2string(obs.state[0:6], precision=4, suppress_small=True)}, '
-                f'action_base={np.array2string(chunk[0, 0:6], precision=4, suppress_small=True)}'
+                f'[chunk] {"pending" if has_chunk else "first"} chunk, '
+                f'skip={skip}, n_exec={self.n_action_steps}, '
+                f'exec_window=[{skip}:{skip + self.n_action_steps}], '
+                f'action_base[{skip}]='
+                f'{np.array2string(chunk[skip_idx, 0:6], precision=4, suppress_small=True)}'
             )
 
             # Dump full trajectory for first 3 chunks
             if self._total_chunks < 3:
-                self.get_logger().info(f'[chunk_dump] state: {np.array2string(obs.state, precision=3, suppress_small=True)}')
+                self.get_logger().info(
+                    f'[chunk_dump] state: '
+                    f'{np.array2string(obs.state, precision=3, suppress_small=True)}'
+                )
                 for i in range(len(chunk)):
                     a = chunk[i]
+                    marker = ''
+                    if i == skip:
+                        marker = ' ◄ exec start'
+                    elif i == skip + self.n_action_steps - 1:
+                        marker = ' ◄ exec end'
                     self.get_logger().info(
                         f'[chunk_dump] action[{i:2d}]: '
                         f'base=({a[0]:+.4f},{a[1]:+.4f},{a[5]:+.4f}) '
@@ -622,39 +668,39 @@ class GrootClientNode(Node):
                         f'r_arm=({a[13]:+.3f},{a[14]:+.3f},{a[15]:+.3f}) '
                         f'r_grip={a[18]:.3f} '
                         f'head=({a[19]:+.3f},{a[20]:+.3f},{a[21]:+.3f})'
+                        f'{marker}'
                     )
             self._total_chunks += 1
 
             # Install or buffer the new chunk
             with self._action_lock:
                 if self._action_chunk is None:
+                    # First chunk — install directly
                     self._action_chunk = chunk
                     self._chunk_timestamp = time.monotonic()
                 else:
+                    # Buffer as pending (promoted when current chunk exhausts)
                     self._pending_chunk = chunk
 
     def _command_callback(self):
         """Command publishing callback (runs at exactly 100 Hz).
 
-        Steps through the action chunk at the training data rate (67ms per
-        action). When n_action_steps are consumed, promotes pending chunk or
-        zeros base velocity while holding joint positions.
+        Steps through the execution window [skip : skip + n_action_steps]
+        at the training data rate (67ms per action). When the window exhausts,
+        promotes pending chunk or zeros base velocity while holding joints.
 
-        Per-component latency skip: forward (x) velocity reads from
-        action[idx+skip] (3 actions ahead by default) to compensate for ~200ms
-        observation-to-action delay. Lateral/yaw base velocities and joints
-        play from action[idx] — advancing yaw causes heading overshoot that
-        shifts the arm reach point laterally.
-
-        Inter-action interpolation: linearly interpolates between consecutive
-        actions for smooth 100Hz output.
+        Applies:
+        - Universal latency skip: all body parts read from action[skip + idx]
+        - Base velocity decay: v *= (1 - decay)
+        - Chunk transition blending: joints (not base) smoothed over blend_steps
+        - Inter-action interpolation: lerp between consecutive actions for 100Hz
         """
         if not self._active or self._state != ClientState.ACTIVE:
             return
 
         now = time.monotonic()
 
-        # Check if current chunk's n_action_steps are consumed
+        # Check if current execution window is exhausted → promote pending
         with self._action_lock:
             chunk = self._action_chunk
             timestamp = self._chunk_timestamp
@@ -662,10 +708,14 @@ class GrootClientNode(Node):
 
             if chunk is not None and pending is not None:
                 elapsed = now - timestamp
-                chunk_duration = self.n_action_steps * ACTION_STEP_PERIOD
-                if elapsed >= chunk_duration:
-                    # Save last action of old chunk for transition blending
-                    self._blend_from = chunk[min(self.n_action_steps - 1, len(chunk) - 1)].copy()
+                exec_duration = self.n_action_steps * ACTION_STEP_PERIOD
+                if elapsed >= exec_duration:
+                    # Save last executed action for transition blending
+                    last_exec_idx = min(
+                        self.latency_skip + self.n_action_steps - 1,
+                        len(chunk) - 1,
+                    )
+                    self._blend_from = chunk[last_exec_idx].copy()
                     # Promote pending chunk
                     self._action_chunk = pending
                     self._pending_chunk = None
@@ -676,31 +726,48 @@ class GrootClientNode(Node):
         if chunk is None:
             return
 
-        # Compute position within the chunk
+        # Compute position within the execution window
         elapsed = now - timestamp
-        t_frac = elapsed / ACTION_STEP_PERIOD  # fractional action index
-        chunk_exhausted = t_frac >= self.n_action_steps
-        idx = min(int(t_frac), self.n_action_steps - 1)
+        t_frac = elapsed / ACTION_STEP_PERIOD  # fractional step in exec window
+        exec_exhausted = t_frac >= self.n_action_steps
+        exec_idx = min(int(t_frac), self.n_action_steps - 1)
 
-        # Clamp to valid chunk range
-        idx = min(idx, len(chunk) - 1)
+        # Map to absolute chunk index (apply universal latency skip)
+        abs_idx = self.latency_skip + exec_idx
+        abs_idx = min(abs_idx, len(chunk) - 1)
 
         # --- Action selection: interpolate between consecutive chunk actions ---
-        if self.interpolate_actions and idx < len(chunk) - 1:
+        if self.interpolate_actions and abs_idx < len(chunk) - 1:
             alpha = t_frac - int(t_frac)
-            action = (1.0 - alpha) * chunk[idx] + alpha * chunk[idx + 1]
+            action = (1.0 - alpha) * chunk[abs_idx] + alpha * chunk[abs_idx + 1]
         else:
-            action = chunk[idx].copy()
+            action = chunk[abs_idx].copy()
 
-        # --- Zero base velocity when chunk is exhausted ---
-        # When all n_action_steps have been consumed, zero base velocity
-        # immediately to prevent coasting. Hold joint positions as-is.
-        if chunk_exhausted:
+        # --- Apply base velocity decay ---
+        if self.base_velocity_decay > 0.0:
+            action[0:6] *= (1.0 - self.base_velocity_decay)
+
+        # --- Chunk transition blending (joints only, not base velocity) ---
+        # Prevents joint position jumps when a new chunk promotes. Base must
+        # respond immediately to the model's course corrections.
+        if (self._blend_from is not None
+                and self.chunk_blend_steps > 0
+                and exec_idx < self.chunk_blend_steps):
+            blend_alpha = (exec_idx + 1) / (self.chunk_blend_steps + 1)
+            action[6:] = ((1.0 - blend_alpha) * self._blend_from[6:]
+                          + blend_alpha * action[6:])
+
+        # --- Zero base velocity when execution window is exhausted ---
+        # Prevents indefinite coasting. Hold joint positions as-is.
+        if exec_exhausted:
             action[0:6] = 0.0
 
         # Publish action to robot at 100 Hz
+        obs = self.observation_bridge.get_latest_observation()
+        current_state = obs.state if obs is not None else None
         self.action_publisher.publish_action(
             action=action,
+            current_state=current_state,
             apply_smoothing=True,
             apply_safety=self.enable_safety_limits,
         )
