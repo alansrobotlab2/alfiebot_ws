@@ -44,7 +44,8 @@ class ActionPublisher:
         node: Node,
         cmd_topic: str = '/alfie/robotlowcmd',
         safety: Optional[SafetyMonitor] = None,
-        smoothing_alpha: float = 0.7,
+        base_smoothing_alpha: float = 1.0,
+        joint_smoothing_alpha: float = 0.95,
         default_servo_speed: float = 1.5,
         default_servo_acceleration: float = 5.0,
         default_servo_torque: float = 0.5,
@@ -56,7 +57,8 @@ class ActionPublisher:
             node: ROS2 node for creating publisher.
             cmd_topic: Topic to publish RobotLowCmd.
             safety: Safety monitor for limit enforcement.
-            smoothing_alpha: EMA smoothing coefficient (0-1, higher = less smoothing).
+            base_smoothing_alpha: EMA coefficient for base velocity (1.0 = no smoothing).
+            joint_smoothing_alpha: EMA coefficient for joint positions (0.95 = near pass-through).
             default_servo_speed: Default servo speed in rad/s.
             default_servo_acceleration: Default servo acceleration in rad/s^2.
             default_servo_torque: Default servo torque (0-1 fraction of max).
@@ -64,7 +66,8 @@ class ActionPublisher:
         self.node = node
         self.safety = safety or SafetyMonitor()
 
-        self.smoothing_alpha = smoothing_alpha
+        self.base_smoothing_alpha = base_smoothing_alpha
+        self.joint_smoothing_alpha = joint_smoothing_alpha
         self.default_servo_speed = default_servo_speed
         self.default_servo_acceleration = default_servo_acceleration
         self.default_servo_torque = default_servo_torque
@@ -183,13 +186,12 @@ class ActionPublisher:
             )
 
         # Apply per-body-part EMA smoothing:
-        # Base velocity (0:6) uses near pass-through alpha (0.95) for fast
-        # response — overshoot prevention depends on the base reacting quickly.
-        # Joint positions (6:22) use the configured alpha for stability.
+        # Base velocity (0:6) and joint positions (6:22) use separate
+        # configurable alphas. Higher alpha = less smoothing.
         if apply_smoothing and self._last_action is not None:
             pre_smooth = action[0:6].copy()
-            base_alpha = 0.95
-            joint_alpha = self.smoothing_alpha
+            base_alpha = self.base_smoothing_alpha
+            joint_alpha = self.joint_smoothing_alpha
             smoothed = action.copy()
             smoothed[0:6] = base_alpha * action[0:6] + (1.0 - base_alpha) * self._last_action[0:6]
             smoothed[6:] = joint_alpha * action[6:] + (1.0 - joint_alpha) * self._last_action[6:]
@@ -206,8 +208,9 @@ class ActionPublisher:
 
         # Safety check: e-stop and watchdog only (hardware enforces joint limits)
         if apply_safety:
-            if not self.safety.is_safe():
-                logger.warn('Safety check failed, not publishing')
+            reason = self.safety.unsafe_reason()
+            if reason is not None:
+                logger.warn(f'Safety check failed: {reason}')
                 return False
 
         # Final twist values that will be published
@@ -356,5 +359,6 @@ class ActionPublisher:
         return {
             'publish_count': self._publish_count,
             'has_last_action': self._last_action is not None,
-            'smoothing_alpha': self.smoothing_alpha,
+            'base_smoothing_alpha': self.base_smoothing_alpha,
+            'joint_smoothing_alpha': self.joint_smoothing_alpha,
         }

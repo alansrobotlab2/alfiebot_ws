@@ -115,21 +115,24 @@ class SafetyMonitor:
         Returns:
             True if safe to publish, False otherwise.
         """
-        # E-stop check
+        return self.unsafe_reason() is None
+
+    def unsafe_reason(self) -> Optional[str]:
+        """Return a description of why it's unsafe, or None if safe."""
         if self._e_stop_active:
-            return False
+            return 'E-stop active'
 
-        # Safe mode check
         if self._in_safe_mode:
-            return False
+            return (f'Safe mode: {self._consecutive_failures} consecutive '
+                    f'failures (max={self.max_consecutive_failures})')
 
-        # Watchdog check
         if self._last_inference_time is not None:
             elapsed = time.monotonic() - self._last_inference_time
             if elapsed > self.watchdog_timeout:
-                return False
+                return (f'Watchdog timeout: {elapsed:.3f}s since last '
+                        f'inference (limit={self.watchdog_timeout:.3f}s)')
 
-        return True
+        return None
 
     def get_status(self) -> dict:
         """Get current safety status.

@@ -148,21 +148,24 @@ action[0:6] = chunk[base_idx, 0:6]
 
 **VALIDATED (Phase 0):** At k=4, all body parts exceed the 0.9 correlation threshold — base r=0.969, right arm r=0.974, gripper r=0.915, head r=0.988. **Universal latency skip is viable** — apply skip=4 to all channels, not just base.
 
-### 2. Improve gap behavior
+### 2. Dynamic latency skip (IMPLEMENTED)
 
-**Current:** When chunk exhausts, base velocity hard-zeros instantly. Joints hold last position.
+**Problem:** With overlapped inference (trigger at step 4, ~280ms RTT), the pending chunk normally arrives before the execution window exhausts at step 8. But if inference is late (WiFi jitter, server load), the robot waits at zero base velocity until the pending chunk arrives. When it does arrive, the observation is more stale than the base `latency_skip=4` accounts for.
 
-**Better:** Instead of hard-zeroing, apply a fast exponential decay over the gap:
-```python
-if chunk_exhausted:
-    gap_elapsed = elapsed - chunk_duration
-    gap_decay = max(0.0, 1.0 - gap_elapsed / 0.15)  # decay to 0 over 150ms
-    action[0:6] = chunk[-1, 0:6] * gap_decay
+**Solution:** When promoting a late pending chunk, increase the effective latency skip by the number of extra steps waited:
+
+```
+effective_skip = latency_skip + overshoot_steps
+overshoot_steps = int((elapsed - exec_duration) / ACTION_STEP_PERIOD)
 ```
 
-This gives 150ms of decelerating coast instead of instant stop, creating smoother motion at chunk boundaries. The remaining ~120ms of the gap is fully stopped (safe). Joints continue holding (correct — no risk of drift).
+**Example:**
+- Normal: pending arrives before step 8 → promote at step 8, `effective_skip = 4`
+- Late by 2 steps: pending arrives at step 10 → promote at step 10, `effective_skip = 6`
 
-**Risk:** If the next chunk reverses direction, the 150ms coast adds a small overshoot. Start with hard-zero and only enable this if chunk boundary jerk is the dominant smoothness issue.
+**Gap behavior:** Base velocity zeros at exec window exhaust (step 8). Joints hold last position. This gap should be ~12ms normally — no tail coasting needed.
+
+**Logged:** When overshoot > 0, a `[chunk] late promotion` message shows extra steps and effective skip.
 
 ### 4. Re-enable chunk transition blending
 

@@ -70,10 +70,16 @@ def generate_launch_description():
         description='Enable joint and velocity safety limits'
     )
 
-    smoothing_alpha_arg = DeclareLaunchArgument(
-        'action_smoothing_alpha',
+    base_smoothing_alpha_arg = DeclareLaunchArgument(
+        'base_smoothing_alpha',
+        default_value='1.0',
+        description='Base velocity EMA coefficient (1.0 = no smoothing)'
+    )
+
+    joint_smoothing_alpha_arg = DeclareLaunchArgument(
+        'joint_smoothing_alpha',
         default_value='0.95',
-        description='Action smoothing EMA coefficient (0-1)'
+        description='Joint position EMA coefficient (0-1)'
     )
 
     action_chunk_size_arg = DeclareLaunchArgument(
@@ -130,7 +136,8 @@ def generate_launch_description():
                 'ipc_path': LaunchConfiguration('ipc_path'),
                 'task_description': LaunchConfiguration('task_description'),
                 'enable_safety_limits': LaunchConfiguration('enable_safety_limits'),
-                'action_smoothing_alpha': LaunchConfiguration('action_smoothing_alpha'),
+                'base_smoothing_alpha': LaunchConfiguration('base_smoothing_alpha'),
+                'joint_smoothing_alpha': LaunchConfiguration('joint_smoothing_alpha'),
                 'action_chunk_size': LaunchConfiguration('action_chunk_size'),
                 'n_action_steps': LaunchConfiguration('n_action_steps'),
                 'latency_skip': LaunchConfiguration('latency_skip'),
@@ -152,7 +159,8 @@ def generate_launch_description():
         # Inference arguments
         task_description_arg,
         enable_safety_arg,
-        smoothing_alpha_arg,
+        base_smoothing_alpha_arg,
+        joint_smoothing_alpha_arg,
         action_chunk_size_arg,
         n_action_steps_arg,
         latency_skip_arg,

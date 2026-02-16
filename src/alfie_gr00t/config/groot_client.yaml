@@ -52,7 +52,7 @@
     # the previous chunk's last executed action to the new chunk's trajectory
     # over N steps (~134ms for 2). Prevents joint position jumps at boundaries.
     # 0 = disabled.
-    chunk_blend_steps: 2
+    chunk_blend_steps: 0
 
     # ==========================================================================
     # Task Configuration
@@ -66,10 +66,11 @@
     # Enable joint position and velocity limit enforcement
     enable_safety_limits: true
 
-    # Action smoothing - Exponential moving average coefficient (0-1)
-    # Higher = less smoothing, more responsive
-    # Lower = more smoothing, smoother but laggier
-    action_smoothing_alpha: 0.95
+    # EMA smoothing coefficients (0-1). Higher = less smoothing.
+    # Base velocity: 1.0 = no smoothing (recommended, interpolation handles it)
+    # Joint positions: 0.95 = near pass-through for stability
+    base_smoothing_alpha: 1.0
+    joint_smoothing_alpha: 1.0
 
 
     # Inter-action interpolation: smooth 100Hz output by interpolating
