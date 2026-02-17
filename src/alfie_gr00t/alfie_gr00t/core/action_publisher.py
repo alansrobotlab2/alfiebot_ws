@@ -1,4 +1,10 @@
-"""Action publisher for converting GR00T actions to ROS2 robot commands."""
+"""Action publisher for converting GR00T actions to ROS2 robot commands.
+
+Includes:
+- Base velocity capping and acceleration limiting (BEHAVIOR R1Pro-inspired)
+- Per-joint servo speed/acceleration/torque configuration
+- CSV logging at 100 Hz for diagnostics
+"""
 
 import csv
 import time
@@ -15,13 +21,40 @@ from alfie_msgs.msg import BackCmd, RobotLowCmd, ServoCmd
 from ..utils.safety import SafetyMonitor
 
 
+# Per-servo config: (speed rad/s, acceleration rad/s², torque 0-1)
+# Indexed by servo number (0-14)
+DEFAULT_SERVO_CONFIG = {
+    # Left arm (servos 0-4): fast for manipulation
+    0: (2.0, 5.0, 0.5),
+    1: (2.0, 5.0, 0.5),
+    2: (2.0, 5.0, 0.5),
+    3: (2.0, 5.0, 0.5),
+    4: (2.0, 5.0, 0.5),
+    # Left gripper (servo 5): quick open/close
+    5: (3.0, 8.0, 0.4),
+    # Right arm (servos 6-10): fast for manipulation
+    6: (2.0, 5.0, 0.5),
+    7: (2.0, 5.0, 0.5),
+    8: (2.0, 5.0, 0.5),
+    9: (2.0, 5.0, 0.5),
+    10: (2.0, 5.0, 0.5),
+    # Right gripper (servo 11): quick open/close
+    11: (3.0, 8.0, 0.4),
+    # Head (servos 12-14): slow, smooth tracking
+    12: (1.0, 3.0, 0.3),
+    13: (1.0, 3.0, 0.3),
+    14: (1.0, 3.0, 0.3),
+}
+
+
 class ActionPublisher:
     """Publishes GR00T action predictions to /alfie/robotlowcmd.
 
     Converts 22D raw action vectors (physical units) to RobotLowCmd messages with:
-    - Exponential moving average smoothing
+    - Base velocity capping and acceleration limiting
+    - Per-joint servo speed/acceleration/torque
     - Safety limit enforcement
-    - Servo parameter configuration
+    - CSV logging
     """
 
     ACTION_DIM = 22
@@ -50,27 +83,53 @@ class ActionPublisher:
         default_servo_acceleration: float = 5.0,
         default_servo_torque: float = 0.5,
         csv_log_path: str = '',
+        # Base velocity limits (BEHAVIOR-inspired)
+        max_base_linear_x: float = 0.15,
+        max_base_linear_y: float = 0.15,
+        max_base_angular_z: float = 0.8,
+        max_base_linear_accel: float = 0.3,
+        max_base_angular_accel: float = 1.5,
+        # Per-group servo config overrides
+        servo_speed_arms: float = 2.0,
+        servo_speed_grippers: float = 3.0,
+        servo_speed_head: float = 1.0,
+        servo_accel_arms: float = 5.0,
+        servo_accel_grippers: float = 8.0,
+        servo_accel_head: float = 3.0,
+        servo_torque_arms: float = 0.5,
+        servo_torque_grippers: float = 0.4,
+        servo_torque_head: float = 0.3,
     ):
-        """Initialize action publisher.
-
-        Args:
-            node: ROS2 node for creating publisher.
-            cmd_topic: Topic to publish RobotLowCmd.
-            safety: Safety monitor for limit enforcement.
-            base_smoothing_alpha: EMA coefficient for base velocity (1.0 = no smoothing).
-            joint_smoothing_alpha: EMA coefficient for joint positions (0.95 = near pass-through).
-            default_servo_speed: Default servo speed in rad/s.
-            default_servo_acceleration: Default servo acceleration in rad/s^2.
-            default_servo_torque: Default servo torque (0-1 fraction of max).
-        """
         self.node = node
         self.safety = safety or SafetyMonitor()
 
+        # Legacy EMA params (kept for backward compat, default 1.0 = disabled)
         self.base_smoothing_alpha = base_smoothing_alpha
         self.joint_smoothing_alpha = joint_smoothing_alpha
-        self.default_servo_speed = default_servo_speed
-        self.default_servo_acceleration = default_servo_acceleration
-        self.default_servo_torque = default_servo_torque
+
+        # Base velocity limits
+        self._max_base_vel = np.array([
+            max_base_linear_x,   # lx
+            max_base_linear_y,   # ly
+            0.5,                 # lz (rarely used, generous limit)
+            1.5,                 # ax (rarely used)
+            1.5,                 # ay (rarely used)
+            max_base_angular_z,  # az
+        ], dtype=np.float32)
+        self._max_base_linear_accel = max_base_linear_accel
+        self._max_base_angular_accel = max_base_angular_accel
+        self._base_dt = 1.0 / 100.0  # 100 Hz command rate
+
+        # Build per-servo config from group parameters
+        self._servo_config = {}
+        for i in range(5):      # left arm servos 0-4
+            self._servo_config[i] = (servo_speed_arms, servo_accel_arms, servo_torque_arms)
+        self._servo_config[5] = (servo_speed_grippers, servo_accel_grippers, servo_torque_grippers)
+        for i in range(6, 11):  # right arm servos 6-10
+            self._servo_config[i] = (servo_speed_arms, servo_accel_arms, servo_torque_arms)
+        self._servo_config[11] = (servo_speed_grippers, servo_accel_grippers, servo_torque_grippers)
+        for i in range(12, 15): # head servos 12-14
+            self._servo_config[i] = (servo_speed_head, servo_accel_head, servo_torque_head)
 
         # QoS profile for commands (best effort for real-time)
         qos_cmd = QoSProfile(
@@ -85,10 +144,13 @@ class ActionPublisher:
         # Action smoothing state
         self._last_action: Optional[np.ndarray] = None
         self._last_state: Optional[np.ndarray] = None
+        self._last_base_vel: Optional[np.ndarray] = None
 
         # Statistics
         self._publish_count = 0
         self._inference_step = 0
+        self._base_clips = 0
+        self._accel_clips = 0
 
         # CSV logging
         self._csv_file = None
@@ -100,6 +162,36 @@ class ActionPublisher:
         """Reset action smoothing state."""
         self._last_action = None
         self._last_state = None
+        self._last_base_vel = None
+
+    def _limit_base_velocity(self, base_vel: np.ndarray) -> np.ndarray:
+        """Clamp base velocity magnitude and acceleration.
+
+        BEHAVIOR R1Pro-inspired: magnitude capping + acceleration limiting.
+        Physics-based, no phase lag (unlike EMA).
+        """
+        result = base_vel.copy()
+
+        # 1. Clamp magnitude per-axis
+        clipped = np.clip(result, -self._max_base_vel, self._max_base_vel)
+        if not np.array_equal(result, clipped):
+            self._base_clips += 1
+        result = clipped
+
+        # 2. Clamp acceleration (dv/dt) to prevent jerk
+        if self._last_base_vel is not None:
+            dv = result - self._last_base_vel
+            max_dv_linear = self._max_base_linear_accel * self._base_dt
+            max_dv_angular = self._max_base_angular_accel * self._base_dt
+            dv[0:3] = np.clip(dv[0:3], -max_dv_linear, max_dv_linear)
+            dv[3:6] = np.clip(dv[3:6], -max_dv_angular, max_dv_angular)
+            new_result = self._last_base_vel + dv
+            if not np.allclose(result, new_result, atol=1e-6):
+                self._accel_clips += 1
+            result = new_result
+
+        self._last_base_vel = result.copy()
+        return result
 
     def _init_csv_log(self, csv_log_path: str):
         """Initialize CSV log file with headers."""
@@ -156,11 +248,14 @@ class ActionPublisher:
         """Publish action to robot.
 
         Actions are expected in raw physical units (server returns unnormalized).
+        Base velocity is magnitude-capped and acceleration-limited.
+        Joint positions pass through (rate limiting handled by RateLimitedInterpolator
+        upstream in groot_client.py).
 
         Args:
             action: 22D action vector in raw physical units.
             current_state: Current 22D state vector (for delta limits).
-            apply_smoothing: Whether to apply EMA smoothing.
+            apply_smoothing: Whether to apply base velocity limiting.
             apply_safety: Whether to apply safety limits.
             max_joint_delta: Maximum joint position change per step (radians).
             chunk_id: Which inference chunk this action comes from.
@@ -190,22 +285,15 @@ class ActionPublisher:
                 f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
             )
 
-        # Apply per-body-part EMA smoothing:
-        # Base velocity (0:6) and joint positions (6:22) use separate
-        # configurable alphas. Higher alpha = less smoothing.
-        if apply_smoothing and self._last_action is not None:
-            pre_smooth = action[0:6].copy()
-            base_alpha = self.base_smoothing_alpha
-            joint_alpha = self.joint_smoothing_alpha
-            smoothed = action.copy()
-            smoothed[0:6] = base_alpha * action[0:6] + (1.0 - base_alpha) * self._last_action[0:6]
-            smoothed[6:] = joint_alpha * action[6:] + (1.0 - joint_alpha) * self._last_action[6:]
-            action = smoothed
+        # Apply base velocity limiting (magnitude cap + acceleration limit)
+        if apply_smoothing:
+            pre_limit = action[0:6].copy()
+            action[0:6] = self._limit_base_velocity(action[0:6])
             if log_this:
                 logger.info(
-                    f'[base_debug] smoothed base[0:6]='
+                    f'[base_debug] limited base[0:6]='
                     f'{np.array2string(action[0:6], precision=4, suppress_small=True)}'
-                    f' (pre_smooth={np.array2string(pre_smooth, precision=4, suppress_small=True)})'
+                    f' (pre_limit={np.array2string(pre_limit, precision=4, suppress_small=True)})'
                 )
 
         # Capture smoothed action for CSV
@@ -269,7 +357,22 @@ class ActionPublisher:
         # Zero back command
         msg.back_cmd = BackCmd()
 
+        # Reset base velocity tracking
+        self._last_base_vel = None
+
         self.cmd_pub.publish(msg)
+
+    def _build_servo_cmd(self, servo_idx: int, position: float) -> ServoCmd:
+        """Build a ServoCmd with per-joint speed/accel/torque config."""
+        speed, accel, torque = self._servo_config.get(
+            servo_idx, (1.5, 5.0, 0.5))
+        cmd = ServoCmd()
+        cmd.enabled = True
+        cmd.target_location = position
+        cmd.target_speed = speed
+        cmd.target_acceleration = accel
+        cmd.target_torque = torque
+        return cmd
 
     def _build_robot_low_cmd(self, action: np.ndarray) -> RobotLowCmd:
         """Build RobotLowCmd message from action vector.
@@ -282,12 +385,6 @@ class ActionPublisher:
         [13-17]: servo_cmd[6-10].target_location (right arm)
         [18]:    servo_cmd[11].target_location (right gripper)
         [19-21]: servo_cmd[12-14].target_location (head)
-
-        Args:
-            action: 22D action vector in raw physical units.
-
-        Returns:
-            RobotLowCmd message.
         """
         msg = RobotLowCmd()
 
@@ -305,51 +402,21 @@ class ActionPublisher:
 
         # Left arm servos (indices 7-11 -> servos 0-4)
         for i in range(5):
-            servo_cmd = ServoCmd()
-            servo_cmd.enabled = True
-            servo_cmd.target_location = float(action[7 + i])
-            servo_cmd.target_speed = self.default_servo_speed
-            servo_cmd.target_acceleration = self.default_servo_acceleration
-            servo_cmd.target_torque = self.default_servo_torque
-            msg.servo_cmd[i] = servo_cmd
+            msg.servo_cmd[i] = self._build_servo_cmd(i, float(action[7 + i]))
 
         # Left gripper (index 12 -> servo 5)
-        servo_cmd = ServoCmd()
-        servo_cmd.enabled = True
-        servo_cmd.target_location = float(action[12])
-        servo_cmd.target_speed = self.default_servo_speed
-        servo_cmd.target_acceleration = self.default_servo_acceleration
-        servo_cmd.target_torque = self.default_servo_torque
-        msg.servo_cmd[5] = servo_cmd
+        msg.servo_cmd[5] = self._build_servo_cmd(5, float(action[12]))
 
         # Right arm servos (indices 13-17 -> servos 6-10)
         for i in range(5):
-            servo_cmd = ServoCmd()
-            servo_cmd.enabled = True
-            servo_cmd.target_location = float(action[13 + i])
-            servo_cmd.target_speed = self.default_servo_speed
-            servo_cmd.target_acceleration = self.default_servo_acceleration
-            servo_cmd.target_torque = self.default_servo_torque
-            msg.servo_cmd[6 + i] = servo_cmd
+            msg.servo_cmd[6 + i] = self._build_servo_cmd(6 + i, float(action[13 + i]))
 
         # Right gripper (index 18 -> servo 11)
-        servo_cmd = ServoCmd()
-        servo_cmd.enabled = True
-        servo_cmd.target_location = float(action[18])
-        servo_cmd.target_speed = self.default_servo_speed
-        servo_cmd.target_acceleration = self.default_servo_acceleration
-        servo_cmd.target_torque = self.default_servo_torque
-        msg.servo_cmd[11] = servo_cmd
+        msg.servo_cmd[11] = self._build_servo_cmd(11, float(action[18]))
 
         # Head servos (indices 19-21 -> servos 12-14)
         for i in range(3):
-            servo_cmd = ServoCmd()
-            servo_cmd.enabled = True
-            servo_cmd.target_location = float(action[19 + i])
-            servo_cmd.target_speed = self.default_servo_speed
-            servo_cmd.target_acceleration = self.default_servo_acceleration
-            servo_cmd.target_torque = self.default_servo_torque
-            msg.servo_cmd[12 + i] = servo_cmd
+            msg.servo_cmd[12 + i] = self._build_servo_cmd(12 + i, float(action[19 + i]))
 
         # Eye PWM (not controlled by policy)
         msg.eye_pwm = [0, 0]
@@ -357,14 +424,12 @@ class ActionPublisher:
         return msg
 
     def get_stats(self) -> dict:
-        """Get publisher statistics.
-
-        Returns:
-            Dictionary with publishing stats.
-        """
+        """Get publisher statistics."""
         return {
             'publish_count': self._publish_count,
             'has_last_action': self._last_action is not None,
             'base_smoothing_alpha': self.base_smoothing_alpha,
             'joint_smoothing_alpha': self.joint_smoothing_alpha,
+            'base_vel_clips': self._base_clips,
+            'base_accel_clips': self._accel_clips,
         }
