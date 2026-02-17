@@ -41,6 +41,7 @@ from ..core.action_smoother import ActionSmoother
 from ..core.action_interpolator import ActionInterpolator
 from ..core.chunk_buffer import ChunkBuffer, TimestampedChunk
 from ..core.observation_bridge import Observation, ObservationBridge
+from ..core.rate_limited_interpolator import RateLimitedInterpolator
 from ..core.zmq_client import ZMQClient, build_server_address, DEFAULT_IPC_PATH
 from ..utils.safety import SafetyMonitor
 
@@ -122,6 +123,9 @@ class GrootClientNode(Node):
         self._smoothing_method = self.get_parameter('smoothing_method').value
         self._interpolation_method = self.get_parameter('interpolation_method').value
 
+        # Rate-limited interpolation
+        self.rate_limit_enabled = self.get_parameter('rate_limit_enabled').value
+
         # Validate overlapped execution parameters
         max_n_steps = self.action_chunk_size - self.latency_skip
         if self.n_action_steps < 1 or self.n_action_steps > max_n_steps:
@@ -195,7 +199,7 @@ class GrootClientNode(Node):
             except Exception as e:
                 self.get_logger().error(f'Failed to init smoother: {e}')
 
-        # Interpolation method (linear or cubic_spline)
+        # Interpolation method (linear or cubic_spline) — legacy fallback
         self._action_interpolator = ActionInterpolator(method='linear')
         if self._interpolation_method != 'linear':
             try:
@@ -208,6 +212,25 @@ class GrootClientNode(Node):
                 )
             except Exception as e:
                 self.get_logger().error(f'Failed to init interpolator: {e}')
+
+        # Rate-limited interpolator (G1-style velocity-capped joint transitions)
+        self._rate_limiter: Optional[RateLimitedInterpolator] = None
+        if self.rate_limit_enabled:
+            max_speeds = {
+                'back': self.get_parameter('rate_limit_back').value,
+                'left_arm': self.get_parameter('rate_limit_left_arm').value,
+                'left_gripper': self.get_parameter('rate_limit_left_gripper').value,
+                'right_arm': self.get_parameter('rate_limit_right_arm').value,
+                'right_gripper': self.get_parameter('rate_limit_right_gripper').value,
+                'head': self.get_parameter('rate_limit_head').value,
+            }
+            self._rate_limiter = RateLimitedInterpolator(
+                max_speeds=max_speeds,
+                dt=1.0 / COMMAND_RATE_HZ,
+            )
+            self.get_logger().info(
+                f'Rate-limited interpolator enabled: {max_speeds}'
+            )
 
         # Per-action CSV logger (one row per action step, not per 100Hz tick)
         self._action_csv_file = None
@@ -246,6 +269,22 @@ class GrootClientNode(Node):
             base_smoothing_alpha=self.base_smoothing_alpha,
             joint_smoothing_alpha=self.joint_smoothing_alpha,
             csv_log_path=self.csv_log_path,
+            # Base velocity limits
+            max_base_linear_x=self.get_parameter('max_base_linear_x').value,
+            max_base_linear_y=self.get_parameter('max_base_linear_y').value,
+            max_base_angular_z=self.get_parameter('max_base_angular_z').value,
+            max_base_linear_accel=self.get_parameter('max_base_linear_accel').value,
+            max_base_angular_accel=self.get_parameter('max_base_angular_accel').value,
+            # Per-group servo config
+            servo_speed_arms=self.get_parameter('servo_speed_arms').value,
+            servo_speed_grippers=self.get_parameter('servo_speed_grippers').value,
+            servo_speed_head=self.get_parameter('servo_speed_head').value,
+            servo_accel_arms=self.get_parameter('servo_accel_arms').value,
+            servo_accel_grippers=self.get_parameter('servo_accel_grippers').value,
+            servo_accel_head=self.get_parameter('servo_accel_head').value,
+            servo_torque_arms=self.get_parameter('servo_torque_arms').value,
+            servo_torque_grippers=self.get_parameter('servo_torque_grippers').value,
+            servo_torque_head=self.get_parameter('servo_torque_head').value,
         )
 
         # QoS for control topics
@@ -353,11 +392,21 @@ class GrootClientNode(Node):
             self.get_logger().info(f'  Smoothing Strategy:   {self.smoothing_strategy}')
             self.get_logger().info(f'  Decay M:              {self.smoothing_decay_m}')
             self.get_logger().info(f'  Max Buffer Chunks:    {self.max_buffer_chunks}')
+        self.get_logger().info(f'  --- Smoothing (G1-style) ---')
+        self.get_logger().info(f'  Rate Limiter:         {self.rate_limit_enabled}')
+        if self.rate_limit_enabled:
+            self.get_logger().info(f'    back:               {self.get_parameter("rate_limit_back").value} m/s')
+            self.get_logger().info(f'    arms:               {self.get_parameter("rate_limit_left_arm").value} rad/s')
+            self.get_logger().info(f'    grippers:           {self.get_parameter("rate_limit_left_gripper").value} rad/s')
+            self.get_logger().info(f'    head:               {self.get_parameter("rate_limit_head").value} rad/s')
+        self.get_logger().info(f'  Base Vel Limits:      lx={self.get_parameter("max_base_linear_x").value} ly={self.get_parameter("max_base_linear_y").value} az={self.get_parameter("max_base_angular_z").value}')
+        self.get_logger().info(f'  Base Accel Limits:    lin={self.get_parameter("max_base_linear_accel").value} ang={self.get_parameter("max_base_angular_accel").value}')
+        self.get_logger().info(f'  Servo Speed:          arms={self.get_parameter("servo_speed_arms").value} grippers={self.get_parameter("servo_speed_grippers").value} head={self.get_parameter("servo_speed_head").value}')
         self.get_logger().info(f'  --- Other ---')
         self.get_logger().info(f'  CSV Log Path:         {self.csv_log_path or "(disabled)"}')
         self.get_logger().info(f'  Debug Save Images:    {self.debug_save_images}')
         self.get_logger().info(f'  H.264 Conditioning:   {self.h264_conditioning}')
-        self.get_logger().info(f'  Interpolate Actions:  {self.interpolate_actions}')
+        self.get_logger().info(f'  Interpolate Actions:  {self.interpolate_actions} {"(superseded by rate limiter)" if self.rate_limit_enabled else ""}')
         self.get_logger().info(f'  Back Init Height:     {self.back_init_height} m')
         self.get_logger().info('=' * 60)
 
@@ -540,6 +589,33 @@ class GrootClientNode(Node):
         self.declare_parameter('interpolation_method', 'linear')
         self.declare_parameter('spline_window', 6)
 
+        # Rate-limited interpolation (G1-style): velocity-capped joint transitions
+        self.declare_parameter('rate_limit_enabled', True)
+        self.declare_parameter('rate_limit_back', 0.3)
+        self.declare_parameter('rate_limit_left_arm', 2.0)
+        self.declare_parameter('rate_limit_left_gripper', 3.0)
+        self.declare_parameter('rate_limit_right_arm', 2.0)
+        self.declare_parameter('rate_limit_right_gripper', 3.0)
+        self.declare_parameter('rate_limit_head', 1.0)
+
+        # Base velocity limits (BEHAVIOR R1Pro-inspired)
+        self.declare_parameter('max_base_linear_x', 0.15)
+        self.declare_parameter('max_base_linear_y', 0.15)
+        self.declare_parameter('max_base_angular_z', 0.8)
+        self.declare_parameter('max_base_linear_accel', 0.3)
+        self.declare_parameter('max_base_angular_accel', 1.5)
+
+        # Per-group servo configuration
+        self.declare_parameter('servo_speed_arms', 2.0)
+        self.declare_parameter('servo_speed_grippers', 3.0)
+        self.declare_parameter('servo_speed_head', 1.0)
+        self.declare_parameter('servo_accel_arms', 5.0)
+        self.declare_parameter('servo_accel_grippers', 8.0)
+        self.declare_parameter('servo_accel_head', 3.0)
+        self.declare_parameter('servo_torque_arms', 0.5)
+        self.declare_parameter('servo_torque_grippers', 0.4)
+        self.declare_parameter('servo_torque_head', 0.3)
+
     def _activate_callback(self, msg: Bool):
         """Handle activation/deactivation requests."""
         if msg.data:
@@ -598,6 +674,8 @@ class GrootClientNode(Node):
 
         if self._chunk_buffer is not None:
             self._chunk_buffer.reset()
+        if self._rate_limiter is not None:
+            self._rate_limiter.reset()
 
         self.action_publisher.publish_stop()
         self.action_publisher.reset_smoothing()
@@ -615,6 +693,8 @@ class GrootClientNode(Node):
 
         if self._chunk_buffer is not None:
             self._chunk_buffer.reset()
+        if self._rate_limiter is not None:
+            self._rate_limiter.reset()
 
         self.action_publisher.publish_stop()
 
@@ -632,6 +712,8 @@ class GrootClientNode(Node):
             self._action_chunk = None
             self._pending_chunk = None
 
+        if self._rate_limiter is not None:
+            self._rate_limiter.reset()
         self.action_publisher.reset_smoothing()
 
     def _check_starting_pose(self):
@@ -1046,6 +1128,12 @@ class GrootClientNode(Node):
                 self._hold_logged = True
             last_action = chunk[-1].copy()
             last_action[0:6] = 0.0  # zero base velocity
+            # Feed hold target through rate limiter for smooth deceleration
+            if self._rate_limiter is not None:
+                self._rate_limiter.set_target(last_action)
+                hold_action = self._rate_limiter.step()
+                if hold_action is not None:
+                    last_action = hold_action
             obs = self.observation_bridge.get_latest_observation()
             current_state = obs.state if obs is not None else None
             self.action_publisher.publish_action(
@@ -1063,36 +1151,45 @@ class GrootClientNode(Node):
         # Clamp to valid range
         abs_idx = min(abs_idx, len(chunk) - 1)
 
+        # Select raw target from chunk
+        target = chunk[abs_idx].copy()
+
         # Action selection with chunk transition blend.
         # On promotion, the first step blends from old chunk's last action
         # to the new chunk's first executed action over ~67ms.
-        action = None
         if self._blend_from is not None:
             if exec_idx == 0:
                 alpha = t_frac  # 0→1 over one step (~67ms)
-                target = chunk[abs_idx]
-                action = (1.0 - alpha) * self._blend_from + alpha * target
+                target = (1.0 - alpha) * self._blend_from + alpha * target
             else:
                 self._blend_from = None  # blend complete
 
-        if action is None:
-            if self.interpolate_actions and abs_idx < len(chunk) - 1:
-                # Feed surrounding waypoints for spline fitting
-                for wi in range(max(0, abs_idx - 2), min(len(chunk), abs_idx + 4)):
-                    self._action_interpolator.update_waypoint(wi, chunk[wi])
-                frac_t = abs_idx + (t_frac - int(t_frac))
-                interp = self._action_interpolator.evaluate(frac_t)
-                action = interp if interp is not None else chunk[abs_idx].copy()
-            else:
-                action = chunk[abs_idx].copy()
+        # Smoothing pipeline: rate-limited interpolator OR legacy ActionInterpolator
+        if self._rate_limiter is not None:
+            # G1-style: feed target, step rate limiter at 100 Hz.
+            # Position joints are velocity-capped; base velocity passes through.
+            self._rate_limiter.set_target(target)
+            action = self._rate_limiter.step()
+            if action is None:
+                action = target
+        elif self.interpolate_actions and abs_idx < len(chunk) - 1:
+            # Legacy: ActionInterpolator lerps between chunk actions
+            for wi in range(max(0, abs_idx - 2), min(len(chunk), abs_idx + 4)):
+                self._action_interpolator.update_waypoint(wi, chunk[wi])
+            frac_t = abs_idx + (t_frac - int(t_frac))
+            interp = self._action_interpolator.evaluate(frac_t)
+            action = interp if interp is not None else target
+        else:
+            action = target
 
-        # Log raw chunk action once per action step (before interpolation/smoothing)
+        # Log raw chunk action once per action step (before smoothing)
         obs = self.observation_bridge.get_latest_observation()
         current_state = obs.state if obs is not None else None
         self._log_action_step(
             self._total_chunks, abs_idx, chunk[abs_idx], current_state)
 
         # Publish action to robot at 100 Hz
+        # apply_smoothing=True triggers base velocity limiting in ActionPublisher
         self.action_publisher.publish_action(
             action=action,
             current_state=current_state,

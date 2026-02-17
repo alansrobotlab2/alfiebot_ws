@@ -55,7 +55,7 @@
     # Chunk transition blend steps: blend joints (not base velocity) from
     # the previous chunk's last executed action to the new chunk's trajectory
     # over N steps (~134ms for 2). Prevents joint position jumps at boundaries.
-    # 0 = disabled.
+    # 0 = disabled (rate-limited interpolator handles smoothing instead).
     chunk_blend_steps: 0
 
     # ==========================================================================
@@ -70,20 +70,69 @@
     # Enable joint position and velocity limit enforcement
     enable_safety_limits: true
 
-    # EMA smoothing coefficients (0-1). Higher = less smoothing.
-    # Base velocity: 1.0 = no smoothing (recommended, interpolation handles it)
-    # Joint positions: 0.95 = near pass-through for stability
+    # Legacy EMA smoothing coefficients (0-1). Higher = less smoothing.
+    # Kept for backward compatibility. 1.0 = disabled (recommended).
+    # Rate-limited interpolator + base accel limiting now handle smoothing.
     base_smoothing_alpha: 1.0
     joint_smoothing_alpha: 1.0
 
-
     # Inter-action interpolation: smooth 100Hz output by interpolating
-    # between consecutive actions in the chunk.
+    # between consecutive actions in the chunk. Superseded by rate-limited
+    # interpolator when rate_limit_enabled=true.
     interpolate_actions: true
 
     # CSV log path for action diagnostics (empty = disabled)
     # Logs raw, smoothed, final actions and state at 100 Hz
     csv_log_path: "/tmp/groot_client_debug.csv"
+
+    # ==========================================================================
+    # Rate-Limited Interpolation (G1-style, Phase A-1)
+    # ==========================================================================
+    # When enabled, position-commanded joints (arms, grippers, head, back)
+    # pass through a velocity-capped interpolator that prevents discontinuous
+    # jumps at chunk boundaries. Replaces ActionInterpolator for classic mode.
+    # Inspired by G1 WholeBodyControl's InterpolationPolicy.
+    rate_limit_enabled: true
+
+    # Per-body-part max speeds (rad/s for joints, m/s for back).
+    # Software limit should be at or below hardware servo speed for
+    # predictable behavior. Rate limiter is the active constraint;
+    # hardware servo speed is the safety backstop.
+    rate_limit_back: 0.3            # m/s — slow, heavy linear actuator
+    rate_limit_left_arm: 2.0        # rad/s — fast for manipulation
+    rate_limit_left_gripper: 3.0    # rad/s — quick open/close
+    rate_limit_right_arm: 2.0       # rad/s
+    rate_limit_right_gripper: 3.0   # rad/s
+    rate_limit_head: 1.0            # rad/s — slow, smooth tracking
+
+    # ==========================================================================
+    # Base Velocity Limits (BEHAVIOR R1Pro-inspired, Phase A-2)
+    # ==========================================================================
+    # Magnitude capping + acceleration limiting for the mecanum base.
+    # Physics-based, no phase lag (unlike EMA).
+    # BEHAVIOR R1Pro uses ±[0.75, 0.75, 1.0] for a larger robot;
+    # Alfie values are more conservative for indoor navigation.
+    max_base_linear_x: 0.15      # m/s — forward/backward
+    max_base_linear_y: 0.15      # m/s — strafe
+    max_base_angular_z: 0.8      # rad/s — rotation
+    max_base_linear_accel: 0.3   # m/s² — limits jerk on velocity changes
+    max_base_angular_accel: 1.5  # rad/s² — limits rotational jerk
+
+    # ==========================================================================
+    # Per-Joint Servo Configuration (Phase A-3)
+    # ==========================================================================
+    # Hardware servo speed/acceleration/torque per body-part group.
+    # The servo firmware velocity-limits to these values as a safety backstop.
+    # Software rate limiter (above) should be the active constraint.
+    servo_speed_arms: 2.0          # rad/s
+    servo_speed_grippers: 3.0      # rad/s
+    servo_speed_head: 1.0          # rad/s
+    servo_accel_arms: 5.0          # rad/s²
+    servo_accel_grippers: 8.0      # rad/s²
+    servo_accel_head: 3.0          # rad/s²
+    servo_torque_arms: 0.5         # 0-1 fraction of max
+    servo_torque_grippers: 0.4
+    servo_torque_head: 0.3
 
     # ==========================================================================
     # Continuous Inference & Temporal Ensembling
@@ -128,6 +177,7 @@
     # Interpolation method for upsampling 15 FPS → 100 Hz:
     #   'linear'       — linear lerp between consecutive actions (current default)
     #   'cubic_spline' — C2-continuous cubic spline through waypoints (smoother)
+    # Only used when rate_limit_enabled=false (legacy fallback).
     interpolation_method: "linear"
     spline_window: 6          # Waypoints for spline fitting (only for cubic_spline)
 
