@@ -43,6 +43,8 @@ import pandas as pd
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from alfie_gr00t.core.chunk_buffer import ChunkBuffer, TimestampedChunk
+from alfie_gr00t.core.action_smoother import ActionSmoother
+from alfie_gr00t.core.action_interpolator import ActionInterpolator
 from alfie_gr00t.scripts.overlapped_execution_test import (
     BODY_PART_GROUPS,
     JOINT_NAMES,
@@ -118,6 +120,66 @@ STRATEGY_PRESETS = {
         'ema_alpha_base': 1.0,
         'ema_alpha_joints': 0.9,
     },
+    # ── Advanced: temporal ensembling + post-processing filter ──
+    'exp_m01_savgol5_p2': {
+        'strategy': 'exp_decay',
+        'decay_m': 0.01,
+        'ema_alpha_base': 1.0,
+        'ema_alpha_joints': 1.0,
+        'smoother': {'method': 'savgol', 'savgol_window': 5, 'savgol_polyorder': 2},
+    },
+    'exp_m01_savgol7_p3': {
+        'strategy': 'exp_decay',
+        'decay_m': 0.01,
+        'ema_alpha_base': 1.0,
+        'ema_alpha_joints': 1.0,
+        'smoother': {'method': 'savgol', 'savgol_window': 7, 'savgol_polyorder': 3},
+    },
+    'exp_m01_butter_c3': {
+        'strategy': 'exp_decay',
+        'decay_m': 0.01,
+        'ema_alpha_base': 1.0,
+        'ema_alpha_joints': 1.0,
+        'smoother': {'method': 'butterworth', 'butter_cutoff_hz': 3.0},
+    },
+    'exp_m01_butter_c5': {
+        'strategy': 'exp_decay',
+        'decay_m': 0.01,
+        'ema_alpha_base': 1.0,
+        'ema_alpha_joints': 1.0,
+        'smoother': {'method': 'butterworth', 'butter_cutoff_hz': 5.0},
+    },
+    'exp_m01_butter_c7': {
+        'strategy': 'exp_decay',
+        'decay_m': 0.01,
+        'ema_alpha_base': 1.0,
+        'ema_alpha_joints': 1.0,
+        'smoother': {'method': 'butterworth', 'butter_cutoff_hz': 7.0},
+    },
+    # ── Advanced: cubic spline interpolation (requires --output-rate 100) ──
+    'exp_m01_spline': {
+        'strategy': 'exp_decay',
+        'decay_m': 0.01,
+        'ema_alpha_base': 1.0,
+        'ema_alpha_joints': 1.0,
+        'interpolator': {'method': 'cubic_spline', 'spline_window': 6},
+    },
+    'exp_m01_spline_savgol5': {
+        'strategy': 'exp_decay',
+        'decay_m': 0.01,
+        'ema_alpha_base': 1.0,
+        'ema_alpha_joints': 1.0,
+        'smoother': {'method': 'savgol', 'savgol_window': 5, 'savgol_polyorder': 2},
+        'interpolator': {'method': 'cubic_spline', 'spline_window': 6},
+    },
+    'exp_m01_spline_butter5': {
+        'strategy': 'exp_decay',
+        'decay_m': 0.01,
+        'ema_alpha_base': 1.0,
+        'ema_alpha_joints': 1.0,
+        'smoother': {'method': 'butterworth', 'butter_cutoff_hz': 5.0},
+        'interpolator': {'method': 'cubic_spline', 'spline_window': 6},
+    },
 }
 
 
@@ -186,26 +248,39 @@ def run_strategy(
     num_frames: int,
     strategy_config: dict,
     latency_skip: int,
+    output_rate_hz: float = 0.0,
 ) -> np.ndarray:
     """Run a smoothing strategy over all frames.
 
-    Returns (num_frames, 22) array of smoothed actions.
-    NaN for frames with no prediction available.
+    When output_rate_hz == 0 (default), returns (num_frames, 22) at 15 FPS.
+    When output_rate_hz > 0, returns (num_output_samples, 22) at that rate,
+    using the configured interpolator for sub-frame sampling.
+
+    NaN for frames/samples with no prediction available.
     """
+    # Separate smoother/interpolator config from ChunkBuffer config
+    config = dict(strategy_config)
+    smoother_config = config.pop('smoother', None)
+    interpolator_config = config.pop('interpolator', None)
+
     buffer = ChunkBuffer(
         max_chunks=8,
         latency_skip=latency_skip,
-        **strategy_config,
+        **config,
     )
 
-    actions = np.full((num_frames, 22), np.nan)
+    # Build optional post-processing smoother
+    smoother = None
+    if smoother_config:
+        smoother = ActionSmoother(**smoother_config)
 
-    # Sort chunks by arrival frame
+    # Get 15 FPS ensembled actions first
+    raw_actions = np.full((num_frames, 22), np.nan)
+
     sorted_chunks = sorted(chunks, key=lambda c: c.arrival_frame)
     chunk_idx = 0
 
     for frame in range(num_frames):
-        # Add chunks that have arrived by this frame
         while (chunk_idx < len(sorted_chunks)
                and sorted_chunks[chunk_idx].arrival_frame <= frame):
             buffer.add_chunk(sorted_chunks[chunk_idx])
@@ -213,9 +288,45 @@ def run_strategy(
 
         action = buffer.get_action(frame)
         if action is not None:
-            actions[frame] = action
+            raw_actions[frame] = action
 
-    return actions
+    # Apply post-processing filter (causal, sample-by-sample)
+    if smoother is not None:
+        smoothed_actions = smoother.smooth_batch(raw_actions)
+    else:
+        smoothed_actions = raw_actions
+
+    # If no upsampling requested, return 15 FPS result
+    if output_rate_hz <= 0:
+        return smoothed_actions
+
+    # Upsample to target output rate using interpolator
+    interp_method = 'linear'
+    interp_kwargs = {}
+    if interpolator_config:
+        interp_method = interpolator_config.get('method', 'linear')
+        interp_kwargs = {k: v for k, v in interpolator_config.items() if k != 'method'}
+
+    # Collect valid waypoints
+    valid_frames = np.where(~np.isnan(smoothed_actions[:, 0]))[0]
+    if len(valid_frames) < 2:
+        return smoothed_actions
+
+    valid_waypoints = smoothed_actions[valid_frames]
+
+    # Generate evaluation times at output_rate_hz
+    total_duration = (num_frames - 1) / TRAINING_FPS  # seconds
+    num_samples = int(total_duration * output_rate_hz) + 1
+    eval_times_sec = np.linspace(0, total_duration, num_samples)
+    eval_times_frames = eval_times_sec * TRAINING_FPS  # fractional frame indices
+
+    interpolator = ActionInterpolator(method=interp_method, **interp_kwargs)
+    result = interpolator.evaluate_batch(
+        valid_waypoints,
+        valid_frames.astype(np.float64),
+        eval_times_frames,
+    )
+    return result
 
 
 # ── Metrics ───────────────────────────────────────────────────────────
@@ -224,8 +335,13 @@ def compute_metrics(
     strategy_actions: np.ndarray,
     gt_actions: np.ndarray,
     chunks: list[TimestampedChunk],
+    output_rate_hz: float = 0.0,
 ) -> dict:
-    """Compute all metrics for a strategy's output vs GT."""
+    """Compute all metrics for a strategy's output vs GT.
+
+    When output_rate_hz > 0, strategy_actions is at that rate and gt_actions
+    is at 15 FPS. MAE is computed by resampling GT to match.
+    """
     valid = ~np.isnan(strategy_actions[:, 0])
     n_valid = valid.sum()
 
@@ -234,24 +350,35 @@ def compute_metrics(
     if n_valid == 0:
         return metrics
 
+    # For high-rate output, resample GT to match for MAE comparison
+    if output_rate_hz > 0:
+        gt_resampled = _resample_gt(gt_actions, len(strategy_actions), output_rate_hz)
+    else:
+        gt_resampled = gt_actions
+
+    # Align lengths
+    n = min(len(strategy_actions), len(gt_resampled))
+    sa = strategy_actions[:n]
+    gt = gt_resampled[:n]
+    valid = ~np.isnan(sa[:, 0]) & ~np.isnan(gt[:, 0])
+
+    if valid.sum() == 0:
+        return metrics
+
     # Per-body-part MAE
     for name, start, end in BODY_PART_GROUPS:
         mask = valid
         if mask.sum() > 0:
-            mae = float(np.mean(np.abs(
-                strategy_actions[mask, start:end] - gt_actions[mask, start:end]
-            )))
+            mae = float(np.mean(np.abs(sa[mask, start:end] - gt[mask, start:end])))
         else:
             mae = float('nan')
         metrics[f'mae_{name}'] = mae
 
     # Overall MAE
-    metrics['mae_overall'] = float(np.mean(np.abs(
-        strategy_actions[valid] - gt_actions[valid]
-    )))
+    metrics['mae_overall'] = float(np.mean(np.abs(sa[valid] - gt[valid])))
 
     # Smoothness: action jerk RMS (2nd derivative)
-    diffs = np.diff(strategy_actions[valid], axis=0)
+    diffs = np.diff(sa[valid], axis=0)
     if len(diffs) > 1:
         jerk = np.diff(diffs, axis=0)
         metrics['jerk_rms'] = float(np.sqrt(np.mean(jerk ** 2)))
@@ -259,12 +386,19 @@ def compute_metrics(
         metrics['jerk_rms'] = 0.0
 
     # Boundary discontinuity (at chunk arrival frames)
+    # For high-rate output, scale arrival frames to sample indices
     arrival_frames = sorted(set(c.arrival_frame for c in chunks))
+    if output_rate_hz > 0:
+        scale = output_rate_hz / TRAINING_FPS
+        arrival_indices = [int(af * scale) for af in arrival_frames]
+    else:
+        arrival_indices = arrival_frames
+
     jumps = []
-    for af in arrival_frames:
-        if 0 < af < len(strategy_actions):
-            prev = strategy_actions[af - 1]
-            curr = strategy_actions[af]
+    for ai in arrival_indices:
+        if 0 < ai < len(sa):
+            prev = sa[ai - 1]
+            curr = sa[ai]
             if not np.isnan(prev).any() and not np.isnan(curr).any():
                 jumps.append(np.abs(curr - prev))
 
@@ -281,10 +415,10 @@ def compute_metrics(
     # Pogo score: sign alternation at chunk boundaries (right arm focus)
     for jname, jidx in [('right_shoulder_pitch', 14), ('right_elbow_pitch', 15)]:
         boundary_jumps = []
-        for af in arrival_frames:
-            if 0 < af < len(strategy_actions):
-                prev = strategy_actions[af - 1, jidx]
-                curr = strategy_actions[af, jidx]
+        for ai in arrival_indices:
+            if 0 < ai < len(sa):
+                prev = sa[ai - 1, jidx]
+                curr = sa[ai, jidx]
                 if not np.isnan(prev) and not np.isnan(curr):
                     boundary_jumps.append(curr - prev)
 
@@ -302,7 +436,31 @@ def compute_metrics(
     else:
         metrics['action_delta_rms'] = 0.0
 
+    # Velocity continuity (100 Hz specific): RMS of velocity discontinuities
+    # at 15 FPS waypoint boundaries
+    if output_rate_hz > 0 and len(diffs) > 2:
+        # Second derivative = acceleration; its discontinuities reveal
+        # interpolation quality
+        accel = np.diff(diffs, axis=0)
+        metrics['accel_rms'] = float(np.sqrt(np.mean(accel ** 2)))
+
     return metrics
+
+
+def _resample_gt(gt_actions: np.ndarray, num_samples: int, output_rate_hz: float) -> np.ndarray:
+    """Resample 15 FPS GT actions to match high-rate output for MAE comparison.
+
+    Uses linear interpolation of GT to the output timestamps.
+    """
+    num_gt = len(gt_actions)
+    gt_times = np.arange(num_gt, dtype=np.float64) / TRAINING_FPS
+    out_duration = (num_gt - 1) / TRAINING_FPS
+    out_times = np.linspace(0, out_duration, num_samples)
+
+    result = np.empty((num_samples, gt_actions.shape[1]))
+    for dim in range(gt_actions.shape[1]):
+        result[:, dim] = np.interp(out_times, gt_times, gt_actions[:, dim])
+    return result
 
 
 # ── CSV output (compatible with live debug CSV format) ────────────────
@@ -365,24 +523,31 @@ def plot_strategy_comparison(
     gt_actions: np.ndarray,
     inference_rate: float,
     output_path: Path,
+    output_rate_hz: float = 0.0,
 ):
     """Overlay multiple strategy trajectories for key joints."""
     n_joints = len(PLOT_JOINTS)
     fig, axes = plt.subplots(n_joints, 1, figsize=(18, 6.0 * n_joints),
                              sharex=True)
-    time_s = np.arange(len(gt_actions)) * ACTION_STEP_PERIOD
+    gt_time_s = np.arange(len(gt_actions)) * ACTION_STEP_PERIOD
 
     for i, (idx, jname, title) in enumerate(PLOT_JOINTS):
         ax = axes[i]
 
         # GT reference
-        ax.plot(time_s, gt_actions[:, idx], color='black', alpha=0.3,
+        ax.plot(gt_time_s, gt_actions[:, idx], color='black', alpha=0.3,
                 linewidth=1.5, label='GT', zorder=1)
 
-        # Strategies
+        # Strategies (may be at different sample rate)
         for ci, (sname, sactions) in enumerate(results.items()):
+            n_samples = len(sactions)
+            if output_rate_hz > 0 and n_samples != len(gt_actions):
+                total_dur = (len(gt_actions) - 1) * ACTION_STEP_PERIOD
+                s_time = np.linspace(0, total_dur, n_samples)
+            else:
+                s_time = np.arange(n_samples) * ACTION_STEP_PERIOD
             valid = ~np.isnan(sactions[:, idx])
-            ax.plot(time_s[valid], sactions[valid, idx],
+            ax.plot(s_time[valid], sactions[valid, idx],
                     color=COLORS[ci % len(COLORS)],
                     alpha=0.8, linewidth=1.0, label=sname, zorder=2)
 
@@ -456,28 +621,37 @@ def plot_zoomed_comparison(
     results: dict[str, np.ndarray],
     gt_actions: np.ndarray,
     output_path: Path,
+    output_rate_hz: float = 0.0,
 ):
     """Zoomed view on the highest-activity region of right_shoulder_pitch."""
     jidx = 14  # right_shoulder_pitch
     gt_series = gt_actions[:, jidx]
-    time_s = np.arange(len(gt_actions)) * ACTION_STEP_PERIOD
+    gt_time_s = np.arange(len(gt_actions)) * ACTION_STEP_PERIOD
 
-    # Find peak activity region
+    # Find peak activity region (in GT time)
     rolling_std = pd.Series(gt_series).rolling(window=30, center=True).std()
     peak_idx = int(rolling_std.idxmax()) if not rolling_std.isna().all() else len(gt_series) // 2
-    zoom_start = max(0, peak_idx - 60)
-    zoom_end = min(len(gt_actions), peak_idx + 60)
+    zoom_start_t = max(0, (peak_idx - 60)) * ACTION_STEP_PERIOD
+    zoom_end_t = min(len(gt_actions), peak_idx + 60) * ACTION_STEP_PERIOD
 
     fig, ax = plt.subplots(figsize=(16, 12))
-    sl = slice(zoom_start, zoom_end)
 
-    ax.plot(time_s[sl], gt_series[sl], color='black', alpha=0.4,
+    # GT
+    gt_mask = (gt_time_s >= zoom_start_t) & (gt_time_s <= zoom_end_t)
+    ax.plot(gt_time_s[gt_mask], gt_series[gt_mask], color='black', alpha=0.4,
             linewidth=2, label='GT')
 
+    # Strategies
     for ci, (sname, sactions) in enumerate(results.items()):
-        valid = ~np.isnan(sactions[sl, jidx])
-        t_valid = time_s[sl][valid]
-        ax.plot(t_valid, sactions[sl, jidx][valid],
+        n_samples = len(sactions)
+        if output_rate_hz > 0 and n_samples != len(gt_actions):
+            total_dur = (len(gt_actions) - 1) * ACTION_STEP_PERIOD
+            s_time = np.linspace(0, total_dur, n_samples)
+        else:
+            s_time = np.arange(n_samples) * ACTION_STEP_PERIOD
+        s_mask = (s_time >= zoom_start_t) & (s_time <= zoom_end_t)
+        valid = s_mask & ~np.isnan(sactions[:, jidx])
+        ax.plot(s_time[valid], sactions[valid, jidx],
                 color=COLORS[ci % len(COLORS)],
                 alpha=0.85, linewidth=1.2, label=sname)
 
@@ -509,11 +683,12 @@ def print_scoreboard(
     strategy_names = list(all_metrics.keys())
 
     # Header
+    W = 26  # strategy name column width
     print()
-    print(f'  {"Strategy":<18} {"MAE":>8} {"Jerk":>8} '
+    print(f'  {"Strategy":<{W}} {"MAE":>8} {"Jerk":>8} '
           f'{"BndJmp":>8} {"DeltaRMS":>8} '
           f'{"PogoRSP":>8} {"PogoREP":>8}')
-    print(f'  {"-"*18} {"-"*8} {"-"*8} {"-"*8} {"-"*8} {"-"*8} {"-"*8}')
+    print(f'  {"-"*W} {"-"*8} {"-"*8} {"-"*8} {"-"*8} {"-"*8} {"-"*8}')
 
     # Sort by overall MAE
     sorted_names = sorted(
@@ -523,7 +698,7 @@ def print_scoreboard(
 
     for sname in sorted_names:
         m = all_metrics[sname]
-        print(f'  {sname:<18} '
+        print(f'  {sname:<{W}} '
               f'{m.get("mae_overall", float("nan")):>8.5f} '
               f'{m.get("jerk_rms", float("nan")):>8.5f} '
               f'{m.get("boundary_jump_mean", float("nan")):>8.5f} '
@@ -533,15 +708,15 @@ def print_scoreboard(
 
     # Per-body-part MAE breakdown
     print()
-    header = f'  {"Strategy":<18}'
+    header = f'  {"Strategy":<{W}}'
     for name, _, _ in BODY_PART_GROUPS:
         header += f' {name:>10}'
     print(header)
-    print(f'  {"-"*18}' + f' {"-"*10}' * len(BODY_PART_GROUPS))
+    print(f'  {"-"*W}' + f' {"-"*10}' * len(BODY_PART_GROUPS))
 
     for sname in sorted_names:
         m = all_metrics[sname]
-        line = f'  {sname:<18}'
+        line = f'  {sname:<{W}}'
         for name, _, _ in BODY_PART_GROUPS:
             val = m.get(f'mae_{name}', float('nan'))
             line += f' {val:>10.5f}'
@@ -623,6 +798,8 @@ def process_episode(
     strategy_metrics = {}
     strategy_chunks = {}
 
+    output_rate = getattr(args, 'output_rate', 0.0)
+
     for sname in strategy_names:
         preset = STRATEGY_PRESETS.get(sname)
         if preset is None:
@@ -633,16 +810,19 @@ def process_episode(
         sactions = run_strategy(
             chunks, num_frames, preset,
             latency_skip=args.latency_skip,
+            output_rate_hz=output_rate,
         )
         elapsed = time.monotonic() - t0
 
-        metrics = compute_metrics(sactions, gt_actions, chunks)
+        metrics = compute_metrics(
+            sactions, gt_actions, chunks, output_rate_hz=output_rate,
+        )
         strategy_results[sname] = sactions
         strategy_metrics[sname] = metrics
         strategy_chunks[sname] = chunks
 
         logger.info(
-            f'  {sname:<18} MAE={metrics.get("mae_overall", 0):.5f}  '
+            f'  {sname:<24} MAE={metrics.get("mae_overall", 0):.5f}  '
             f'jerk={metrics.get("jerk_rms", 0):.5f}  '
             f'bnd_jump={metrics.get("boundary_jump_mean", 0):.5f}  '
             f'({elapsed*1000:.0f}ms)'
@@ -721,6 +901,10 @@ def main():
                              'horizons already account for observation timing)')
     parser.add_argument('--output-dir', default='/tmp/smoothing_results/',
                         help='Output directory')
+    parser.add_argument('--output-rate', type=float, default=0.0,
+                        help='Output sample rate in Hz (0 = 15 FPS native, '
+                             '100 = 100 Hz upsampled). Use 100 to benchmark '
+                             'interpolation methods (spline vs linear).')
     parser.add_argument('--save-csv', action='store_true',
                         help='Save per-strategy CSVs (compatible with pogo analysis)')
     parser.add_argument('--verbose', '-v', action='store_true')
@@ -764,6 +948,7 @@ def main():
     print(f'  Strategies:      {strategy_names}')
     print(f'  Latency:         {args.latency_ms}ms ({latency_frames} frames)')
     print(f'  Latency skip:    {args.latency_skip}')
+    print(f'  Output rate:     {"15 FPS (native)" if args.output_rate <= 0 else f"{args.output_rate:.0f} Hz"}')
     print(f'  Output:          {output_dir}')
     print('=' * 70)
     print()
@@ -793,6 +978,7 @@ def main():
                 result['gt_actions'],
                 rate,
                 ep_dir / 'trajectory_comparison.png',
+                output_rate_hz=args.output_rate,
             )
 
             # Zoomed view
@@ -800,6 +986,7 @@ def main():
                 result['strategy_results'],
                 result['gt_actions'],
                 ep_dir / 'zoomed_comparison.png',
+                output_rate_hz=args.output_rate,
             )
 
             # Boundary jumps
