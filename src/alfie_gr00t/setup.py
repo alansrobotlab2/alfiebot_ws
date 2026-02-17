@@ -40,6 +40,8 @@ setup(
             'groot_server = alfie_gr00t.nodes.groot_server:main',
             'groot_inference_server = alfie_gr00t.scripts.groot_inference_server:main',
             'groot_open_loop_eval = alfie_gr00t.scripts.groot_open_loop_eval:main',
+            'smoothing_simulator = alfie_gr00t.scripts.smoothing_simulator:main',
+            'smoothing_analysis = alfie_gr00t.scripts.smoothing_analysis:main',
         ],
     },
 )

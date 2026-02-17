@@ -37,6 +37,7 @@ from alfie_msgs.msg import BackCmd, RobotLowCmd, RobotLowState
 from alfie_msgs.srv import BackRequestCalibration
 
 from ..core.action_publisher import ActionPublisher
+from ..core.chunk_buffer import ChunkBuffer, TimestampedChunk
 from ..core.observation_bridge import Observation, ObservationBridge
 from ..core.zmq_client import ZMQClient, build_server_address, DEFAULT_IPC_PATH
 from ..utils.safety import SafetyMonitor
@@ -109,6 +110,12 @@ class GrootClientNode(Node):
         self.interpolate_actions = self.get_parameter('interpolate_actions').value
         self.back_init_height = self.get_parameter('back_init_height').value
 
+        # Continuous inference parameters
+        self.continuous_inference = self.get_parameter('continuous_inference').value
+        self.smoothing_strategy = self.get_parameter('smoothing_strategy').value
+        self.smoothing_decay_m = self.get_parameter('smoothing_decay_m').value
+        self.max_buffer_chunks = self.get_parameter('max_buffer_chunks').value
+
         # Validate overlapped execution parameters
         max_n_steps = self.action_chunk_size - self.latency_skip
         if self.n_action_steps < 1 or self.n_action_steps > max_n_steps:
@@ -150,6 +157,20 @@ class GrootClientNode(Node):
 
         self._action_lock = threading.Lock()
         self._total_chunks = 0                            # for diagnostic logging
+
+        # Continuous inference: ChunkBuffer for temporal ensembling
+        self._chunk_buffer: Optional[ChunkBuffer] = None
+        self._activation_time: Optional[float] = None  # monotonic ref for frame counting
+        if self.continuous_inference:
+            self._chunk_buffer = ChunkBuffer(
+                max_chunks=self.max_buffer_chunks,
+                strategy=self.smoothing_strategy,
+                decay_m=self.smoothing_decay_m,
+                latency_skip=self.latency_skip,
+                chunk_size=self.action_chunk_size,
+                ema_alpha_base=self.base_smoothing_alpha,
+                ema_alpha_joints=self.joint_smoothing_alpha,
+            )
 
         # Per-action CSV logger (one row per action step, not per 100Hz tick)
         self._action_csv_file = None
@@ -244,8 +265,12 @@ class GrootClientNode(Node):
             self._initialize_back()
 
         # Start inference on a background thread (after all setup is complete)
+        inference_target = (
+            self._continuous_inference_loop if self.continuous_inference
+            else self._inference_loop
+        )
         self._inference_thread = threading.Thread(
-            target=self._inference_loop,
+            target=inference_target,
             name='groot_inference',
             daemon=True,
         )
@@ -286,6 +311,11 @@ class GrootClientNode(Node):
 
         self.get_logger().info(f'  Chunk Blend Steps:    {self.chunk_blend_steps}')
         self.get_logger().info(f'  Action Step Period:   {ACTION_STEP_PERIOD * 1000:.1f} ms ({TRAINING_FPS} FPS)')
+        if self.continuous_inference:
+            self.get_logger().info(f'  --- Continuous Inference (ACTIVE) ---')
+            self.get_logger().info(f'  Smoothing Strategy:   {self.smoothing_strategy}')
+            self.get_logger().info(f'  Decay M:              {self.smoothing_decay_m}')
+            self.get_logger().info(f'  Max Buffer Chunks:    {self.max_buffer_chunks}')
         self.get_logger().info(f'  --- Other ---')
         self.get_logger().info(f'  CSV Log Path:         {self.csv_log_path or "(disabled)"}')
         self.get_logger().info(f'  Debug Save Images:    {self.debug_save_images}')
@@ -454,6 +484,14 @@ class GrootClientNode(Node):
         # Back initialization height (meters). Set to -1.0 to disable.
         self.declare_parameter('back_init_height', 0.1)
 
+        # Continuous inference mode: always-churning inference with temporal
+        # ensembling via ChunkBuffer. When false, uses the existing
+        # trigger-step / pending-chunk / promote execution model.
+        self.declare_parameter('continuous_inference', False)
+        self.declare_parameter('smoothing_strategy', 'latest')
+        self.declare_parameter('smoothing_decay_m', 0.01)
+        self.declare_parameter('max_buffer_chunks', 8)
+
     def _activate_callback(self, msg: Bool):
         """Handle activation/deactivation requests."""
         if msg.data:
@@ -488,6 +526,9 @@ class GrootClientNode(Node):
         if self.zmq_client.connect():
             self._state = ClientState.ACTIVE
             self._active = True
+            self._activation_time = time.monotonic()
+            if self._chunk_buffer is not None:
+                self._chunk_buffer.reset()
             self.get_logger().info('GR00T inference active')
             self._check_starting_pose()
         else:
@@ -507,6 +548,9 @@ class GrootClientNode(Node):
             self._action_chunk = None
             self._pending_chunk = None
 
+        if self._chunk_buffer is not None:
+            self._chunk_buffer.reset()
+
         self.action_publisher.publish_stop()
         self.action_publisher.reset_smoothing()
 
@@ -520,6 +564,9 @@ class GrootClientNode(Node):
         with self._action_lock:
             self._action_chunk = None
             self._pending_chunk = None
+
+        if self._chunk_buffer is not None:
+            self._chunk_buffer.reset()
 
         self.action_publisher.publish_stop()
 
@@ -696,6 +743,135 @@ class GrootClientNode(Node):
                     # Buffer as pending (promoted when current chunk exhausts)
                     self._pending_chunk = chunk
 
+    def _continuous_inference_loop(self):
+        """Continuous inference: always-churning loop.
+
+        Captures observation and fires inference immediately after receiving
+        each chunk result. No trigger-step timing — just keep the pipeline
+        full. Yields ~3.3Hz at 280ms RTT, ~5Hz at 200ms RTT.
+
+        Chunks are added to the ChunkBuffer for temporal ensembling.
+        The command callback queries the buffer at 100Hz.
+        """
+        while self._running:
+            if not self._active or self._state != ClientState.ACTIVE:
+                time.sleep(0.05)
+                continue
+
+            # Capture observation NOW
+            obs = self.observation_bridge.get_latest_observation()
+            if obs is None or not obs.valid:
+                time.sleep(0.01)
+                continue
+
+            obs_time = time.monotonic()
+            obs_frame = self._time_to_frame(obs_time)
+
+            # Blocking inference call (~280ms RTT)
+            response = self.zmq_client.send_observation(
+                images=obs.images,
+                state=obs.state,
+                language=self.task_description,
+            )
+
+            if response is None:
+                self.safety.record_failure()
+                if self.safety.in_safe_mode:
+                    self.get_logger().error('Too many failures, entering safe mode')
+                    self._state = ClientState.ERROR
+                    self._active = False
+                continue
+
+            self.safety.update_inference_time()
+
+            chunk = self._extract_action_chunk(response)
+            if chunk is None:
+                self.get_logger().warn('Invalid action response from server')
+                continue
+
+            arrival_time = time.monotonic()
+            arrival_frame = self._time_to_frame(arrival_time)
+
+            # Add to rolling buffer
+            self._chunk_buffer.add_chunk(TimestampedChunk(
+                actions=chunk,
+                obs_frame=obs_frame,
+                arrival_frame=arrival_frame,
+                chunk_id=self._total_chunks,
+                obs_timestamp=obs_time,
+                arrival_timestamp=arrival_time,
+            ))
+
+            if self._total_chunks % 10 == 0:
+                self.get_logger().info(
+                    f'[continuous] chunk {self._total_chunks}: '
+                    f'obs_frame={obs_frame}, arrival_frame={arrival_frame}, '
+                    f'buffer={self._chunk_buffer.num_chunks}, '
+                    f'latency={((arrival_time - obs_time) * 1000):.0f}ms'
+                )
+
+            self._total_chunks += 1
+            # Immediately loop back — no waiting
+
+    def _continuous_command_callback(self):
+        """100Hz command callback for continuous inference mode.
+
+        Queries ChunkBuffer for the current frame's action,
+        applies inter-action interpolation for smooth output.
+        """
+        if not self._active or self._state != ClientState.ACTIVE:
+            return
+
+        now = time.monotonic()
+        current_frame = self._time_to_frame(now)
+
+        action = self._chunk_buffer.get_action(current_frame)
+        if action is None:
+            return
+
+        # Inter-action interpolation: get next frame's action and lerp
+        if self.interpolate_actions:
+            next_action = self._chunk_buffer.get_action_raw(current_frame + 1)
+            if next_action is not None:
+                # Fractional position within current action step
+                frac = (now - self._activation_time) / ACTION_STEP_PERIOD
+                alpha = frac - int(frac)
+                # Re-query raw (pre-EMA) for current frame to interpolate
+                raw_current = self._chunk_buffer.get_action_raw(current_frame)
+                if raw_current is not None:
+                    interp = (1.0 - alpha) * raw_current + alpha * next_action
+                    # Re-apply EMA to the interpolated result via a direct call
+                    # The buffer's EMA state tracks the 15Hz output, so for 100Hz
+                    # interpolated frames we just use the buffer's output directly
+                    action = interp
+
+        obs = self.observation_bridge.get_latest_observation()
+        current_state = obs.state if obs is not None else None
+
+        # Log per-action step
+        self._log_action_step(
+            self._chunk_buffer.current_chunk_id,
+            current_frame,
+            action,
+            current_state,
+        )
+
+        # Publish — smoothing already handled by ChunkBuffer
+        self.action_publisher.publish_action(
+            action=action,
+            current_state=current_state,
+            apply_smoothing=False,  # ChunkBuffer handles smoothing
+            apply_safety=self.enable_safety_limits,
+            chunk_id=self._chunk_buffer.current_chunk_id,
+            action_idx=current_frame % self.action_chunk_size,
+        )
+
+    def _time_to_frame(self, mono_time: float) -> int:
+        """Convert monotonic time to frame index since activation."""
+        if self._activation_time is None:
+            return 0
+        return int((mono_time - self._activation_time) / ACTION_STEP_PERIOD)
+
     def _init_action_csv(self, base_path: str):
         """Initialize per-action CSV log (one row per action step)."""
         p = Path(base_path)
@@ -739,6 +915,15 @@ class GrootClientNode(Node):
 
     def _command_callback(self):
         """Command publishing callback (runs at exactly 100 Hz).
+
+        Dispatches to continuous mode or classic overlapped mode.
+        """
+        if self.continuous_inference:
+            return self._continuous_command_callback()
+        return self._classic_command_callback()
+
+    def _classic_command_callback(self):
+        """Classic overlapped command callback (original behavior).
 
         Steps through the action chunk at the training data rate (67ms per
         action step). All body parts share the same chunk and timeline.
