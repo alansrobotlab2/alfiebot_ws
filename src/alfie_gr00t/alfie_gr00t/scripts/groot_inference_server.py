@@ -627,6 +627,26 @@ def main():
     # Wrap with JPEG translation layer
     wrapped = JpegPolicyWrapper(policy, language_key=language_key)
 
+    # Warmup inference to trigger torch.compile and other first-call overhead
+    if not args.dataset_path:
+        import time
+        logger.info('Running warmup inference (triggers torch.compile if enabled)...')
+        black_img = np.zeros((240, 320, 3), dtype=np.uint8)
+        _, jpeg_bytes = cv2.imencode('.jpg', black_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        jpeg_bytes = jpeg_bytes.tobytes()
+        warmup_obs = {
+            'left_wide': jpeg_bytes,
+            'right_wide': jpeg_bytes,
+            'left_center': jpeg_bytes,
+            'right_center': jpeg_bytes,
+            'state': [0.0] * 22,
+            'language': '',
+        }
+        t0 = time.monotonic()
+        wrapped._get_action(warmup_obs)
+        elapsed = time.monotonic() - t0
+        logger.info(f'Warmup complete in {elapsed:.1f}s')
+
     # Create server using NVIDIA's PolicyServer (sets up socket + endpoints)
     logger.info(f'Starting PolicyServer on {args.host}:{args.port}')
     server = PolicyServer(
