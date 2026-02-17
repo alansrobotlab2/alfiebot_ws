@@ -20,7 +20,9 @@ Threading model:
 - _action_lock protects the shared action chunk between threads
 """
 
+import csv
 from enum import Enum
+from pathlib import Path
 import threading
 import time
 from typing import Optional
@@ -148,6 +150,14 @@ class GrootClientNode(Node):
 
         self._action_lock = threading.Lock()
         self._total_chunks = 0                            # for diagnostic logging
+
+        # Per-action CSV logger (one row per action step, not per 100Hz tick)
+        self._action_csv_file = None
+        self._action_csv_writer = None
+        self._last_logged_chunk_id = -1
+        self._last_logged_abs_idx = -1
+        if self.csv_log_path:
+            self._init_action_csv(self.csv_log_path)
 
         # Initialize safety monitor
         # Watchdog timeout must exceed the chunk execution time plus inference latency
@@ -686,6 +696,47 @@ class GrootClientNode(Node):
                     # Buffer as pending (promoted when current chunk exhausts)
                     self._pending_chunk = chunk
 
+    def _init_action_csv(self, base_path: str):
+        """Initialize per-action CSV log (one row per action step)."""
+        p = Path(base_path)
+        action_path = p.parent / f'{p.stem}_actions{p.suffix}'
+        action_path.parent.mkdir(parents=True, exist_ok=True)
+        self._action_csv_file = open(action_path, 'w', newline='')
+        self._action_csv_writer = csv.writer(self._action_csv_file)
+
+        joint_names = ActionPublisher.JOINT_NAMES
+        header = ['timestamp', 'chunk_id', 'action_idx', 'effective_skip']
+        for prefix in ['action', 'state']:
+            for name in joint_names:
+                header.append(f'{prefix}_{name}')
+        self._action_csv_writer.writerow(header)
+        self._action_csv_file.flush()
+        self.get_logger().info(f'Per-action CSV logging enabled: {action_path}')
+
+    def _log_action_step(self, chunk_id: int, abs_idx: int,
+                         action: np.ndarray, state: Optional[np.ndarray]):
+        """Write one row to the per-action CSV when action index changes."""
+        if self._action_csv_writer is None:
+            return
+        if chunk_id == self._last_logged_chunk_id and abs_idx == self._last_logged_abs_idx:
+            return
+        self._last_logged_chunk_id = chunk_id
+        self._last_logged_abs_idx = abs_idx
+
+        state_vals = state if state is not None else np.zeros(22)
+        row = [time.time(), chunk_id, abs_idx, self._effective_skip]
+        row.extend(action.tolist())
+        row.extend(state_vals.tolist() if isinstance(state_vals, np.ndarray) else state_vals)
+        self._action_csv_writer.writerow(row)
+        self._action_csv_file.flush()
+
+    def _close_action_csv(self):
+        """Close per-action CSV log file."""
+        if self._action_csv_file is not None:
+            self._action_csv_file.close()
+            self._action_csv_file = None
+            self._action_csv_writer = None
+
     def _command_callback(self):
         """Command publishing callback (runs at exactly 100 Hz).
 
@@ -797,9 +848,13 @@ class GrootClientNode(Node):
             else:
                 action = chunk[abs_idx].copy()
 
-        # Publish action to robot at 100 Hz
+        # Log raw chunk action once per action step (before interpolation/smoothing)
         obs = self.observation_bridge.get_latest_observation()
         current_state = obs.state if obs is not None else None
+        self._log_action_step(
+            self._total_chunks, abs_idx, chunk[abs_idx], current_state)
+
+        # Publish action to robot at 100 Hz
         self.action_publisher.publish_action(
             action=action,
             current_state=current_state,
@@ -864,6 +919,7 @@ class GrootClientNode(Node):
 
         self.action_publisher.publish_stop()
         self.action_publisher.close_csv()
+        self._close_action_csv()
         self.zmq_client.close()
 
         super().destroy_node()

@@ -17,10 +17,25 @@
 - DONE look ahead to the first action in the next chunk and smooth to it instead of immediately jumping to it
 
 
+
+
+TOP PRIORITY
+
+- SMOOTHING ACTIONS 
+
+
+- ADDRESSING INTER CHUNK DISCONTINUITIES 
+
+
+
+
+
+
+
 - pogo in elbow and shoulder during pick up behavior
 - pogo in elbow and shoulder, oscillations in arm and head at conclusion of behavior
 
-
+- look at more aggressive smoothing options for joint positions, 
 
 
 - several right elbox action discontinuities between -0.9 and -1.5 during behavior
