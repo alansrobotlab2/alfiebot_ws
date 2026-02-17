@@ -106,6 +106,29 @@
     max_buffer_chunks: 8
 
     # ==========================================================================
+    # Post-Ensembling Filter & Interpolation
+    # ==========================================================================
+    # Causal filter applied to the 15 FPS ensembled output BEFORE interpolation.
+    #   'none'        — no post-processing (default)
+    #   'savgol'      — Savitzky-Golay polynomial smoothing (preserves trajectory shape)
+    #   'butterworth' — low-pass filter (frequency-domain cutoff)
+    smoothing_method: "none"
+
+    # Savitzky-Golay parameters (only used when smoothing_method: "savgol")
+    savgol_window: 5          # Window size (must be odd, >= 3)
+    savgol_polyorder: 2       # Polynomial order (< window)
+
+    # Butterworth parameters (only used when smoothing_method: "butterworth")
+    butterworth_order: 2      # Filter order
+    butterworth_cutoff_hz: 5.0  # Cutoff frequency (Nyquist at 15 FPS = 7.5 Hz)
+
+    # Interpolation method for upsampling 15 FPS → 100 Hz:
+    #   'linear'       — linear lerp between consecutive actions (current default)
+    #   'cubic_spline' — C2-continuous cubic spline through waypoints (smoother)
+    interpolation_method: "linear"
+    spline_window: 6          # Waypoints for spline fitting (only for cubic_spline)
+
+    # ==========================================================================
     # Back Initialization
     # ==========================================================================
     # Height (meters) to move the back to on startup (0.0 to 0.390).

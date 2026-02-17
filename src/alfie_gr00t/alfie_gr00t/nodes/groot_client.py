@@ -37,6 +37,8 @@ from alfie_msgs.msg import BackCmd, RobotLowCmd, RobotLowState
 from alfie_msgs.srv import BackRequestCalibration
 
 from ..core.action_publisher import ActionPublisher
+from ..core.action_smoother import ActionSmoother
+from ..core.action_interpolator import ActionInterpolator
 from ..core.chunk_buffer import ChunkBuffer, TimestampedChunk
 from ..core.observation_bridge import Observation, ObservationBridge
 from ..core.zmq_client import ZMQClient, build_server_address, DEFAULT_IPC_PATH
@@ -116,6 +118,10 @@ class GrootClientNode(Node):
         self.smoothing_decay_m = self.get_parameter('smoothing_decay_m').value
         self.max_buffer_chunks = self.get_parameter('max_buffer_chunks').value
 
+        # Post-ensembling filter and interpolation
+        self._smoothing_method = self.get_parameter('smoothing_method').value
+        self._interpolation_method = self.get_parameter('interpolation_method').value
+
         # Validate overlapped execution parameters
         max_n_steps = self.action_chunk_size - self.latency_skip
         if self.n_action_steps < 1 or self.n_action_steps > max_n_steps:
@@ -171,6 +177,37 @@ class GrootClientNode(Node):
                 ema_alpha_base=self.base_smoothing_alpha,
                 ema_alpha_joints=self.joint_smoothing_alpha,
             )
+
+        # Post-ensembling filter (Savitzky-Golay or Butterworth)
+        self._action_smoother = ActionSmoother(method='none')
+        if self._smoothing_method != 'none':
+            try:
+                self._action_smoother = ActionSmoother(
+                    method=self._smoothing_method,
+                    savgol_window=self.get_parameter('savgol_window').value,
+                    savgol_polyorder=self.get_parameter('savgol_polyorder').value,
+                    butter_order=self.get_parameter('butterworth_order').value,
+                    butter_cutoff_hz=self.get_parameter('butterworth_cutoff_hz').value,
+                )
+                self.get_logger().info(
+                    f'Action smoother: {self._smoothing_method}'
+                )
+            except Exception as e:
+                self.get_logger().error(f'Failed to init smoother: {e}')
+
+        # Interpolation method (linear or cubic_spline)
+        self._action_interpolator = ActionInterpolator(method='linear')
+        if self._interpolation_method != 'linear':
+            try:
+                self._action_interpolator = ActionInterpolator(
+                    method=self._interpolation_method,
+                    spline_window=self.get_parameter('spline_window').value,
+                )
+                self.get_logger().info(
+                    f'Action interpolator: {self._interpolation_method}'
+                )
+            except Exception as e:
+                self.get_logger().error(f'Failed to init interpolator: {e}')
 
         # Per-action CSV logger (one row per action step, not per 100Hz tick)
         self._action_csv_file = None
@@ -491,6 +528,17 @@ class GrootClientNode(Node):
         self.declare_parameter('smoothing_strategy', 'latest')
         self.declare_parameter('smoothing_decay_m', 0.01)
         self.declare_parameter('max_buffer_chunks', 8)
+
+        # Post-ensembling filter: 'none', 'savgol', 'butterworth'
+        self.declare_parameter('smoothing_method', 'none')
+        self.declare_parameter('savgol_window', 5)
+        self.declare_parameter('savgol_polyorder', 2)
+        self.declare_parameter('butterworth_order', 2)
+        self.declare_parameter('butterworth_cutoff_hz', 5.0)
+
+        # Interpolation method: 'linear', 'cubic_spline'
+        self.declare_parameter('interpolation_method', 'linear')
+        self.declare_parameter('spline_window', 6)
 
     def _activate_callback(self, msg: Bool):
         """Handle activation/deactivation requests."""
@@ -816,8 +864,7 @@ class GrootClientNode(Node):
     def _continuous_command_callback(self):
         """100Hz command callback for continuous inference mode.
 
-        Queries ChunkBuffer for the current frame's action,
-        applies inter-action interpolation for smooth output.
+        Pipeline: ChunkBuffer → ActionSmoother → ActionInterpolator → publish.
         """
         if not self._active or self._state != ClientState.ACTIVE:
             return
@@ -825,25 +872,27 @@ class GrootClientNode(Node):
         now = time.monotonic()
         current_frame = self._time_to_frame(now)
 
+        # Get ensembled action from ChunkBuffer (15 FPS)
         action = self._chunk_buffer.get_action(current_frame)
         if action is None:
             return
 
-        # Inter-action interpolation: get next frame's action and lerp
+        # Apply post-ensembling filter (Savitzky-Golay or Butterworth)
+        action = self._action_smoother.smooth(action)
+
+        # Feed waypoint to interpolator and evaluate at sub-frame time
         if self.interpolate_actions:
-            next_action = self._chunk_buffer.get_action_raw(current_frame + 1)
-            if next_action is not None:
-                # Fractional position within current action step
-                frac = (now - self._activation_time) / ACTION_STEP_PERIOD
-                alpha = frac - int(frac)
-                # Re-query raw (pre-EMA) for current frame to interpolate
-                raw_current = self._chunk_buffer.get_action_raw(current_frame)
-                if raw_current is not None:
-                    interp = (1.0 - alpha) * raw_current + alpha * next_action
-                    # Re-apply EMA to the interpolated result via a direct call
-                    # The buffer's EMA state tracks the 15Hz output, so for 100Hz
-                    # interpolated frames we just use the buffer's output directly
-                    action = interp
+            self._action_interpolator.update_waypoint(current_frame, action)
+            # Also feed the next frame's action if available
+            next_raw = self._chunk_buffer.get_action(current_frame + 1)
+            if next_raw is not None:
+                next_smoothed = self._action_smoother.smooth(next_raw)
+                self._action_interpolator.update_waypoint(current_frame + 1, next_smoothed)
+
+            frac_time = (now - self._activation_time) / ACTION_STEP_PERIOD
+            interp = self._action_interpolator.evaluate(frac_time)
+            if interp is not None:
+                action = interp
 
         obs = self.observation_bridge.get_latest_observation()
         current_state = obs.state if obs is not None else None
@@ -856,11 +905,11 @@ class GrootClientNode(Node):
             current_state,
         )
 
-        # Publish — smoothing already handled by ChunkBuffer
+        # Publish — smoothing handled by the pipeline above
         self.action_publisher.publish_action(
             action=action,
             current_state=current_state,
-            apply_smoothing=False,  # ChunkBuffer handles smoothing
+            apply_smoothing=False,
             apply_safety=self.enable_safety_limits,
             chunk_id=self._chunk_buffer.current_chunk_id,
             action_idx=current_frame % self.action_chunk_size,
@@ -1028,8 +1077,12 @@ class GrootClientNode(Node):
 
         if action is None:
             if self.interpolate_actions and abs_idx < len(chunk) - 1:
-                alpha = t_frac - int(t_frac)
-                action = (1.0 - alpha) * chunk[abs_idx] + alpha * chunk[abs_idx + 1]
+                # Feed surrounding waypoints for spline fitting
+                for wi in range(max(0, abs_idx - 2), min(len(chunk), abs_idx + 4)):
+                    self._action_interpolator.update_waypoint(wi, chunk[wi])
+                frac_t = abs_idx + (t_frac - int(t_frac))
+                interp = self._action_interpolator.evaluate(frac_t)
+                action = interp if interp is not None else chunk[abs_idx].copy()
             else:
                 action = chunk[abs_idx].copy()
 
