@@ -110,7 +110,7 @@ class ActionPublisher:
 
         # Build header row
         header = ['timestamp', 'step', 'chunk_id', 'base_action_idx', 'joint_action_idx']
-        for prefix in ['raw', 'smoothed', 'final', 'state']:
+        for prefix in ['action', 'smoothed', 'state']:
             for name in self.JOINT_NAMES:
                 header.append(f'{prefix}_{name}')
         self._csv_writer.writerow(header)
@@ -119,9 +119,8 @@ class ActionPublisher:
 
     def _write_csv_row(
         self,
-        raw: np.ndarray,
+        action: np.ndarray,
         smoothed: np.ndarray,
-        final: np.ndarray,
         state: Optional[np.ndarray],
         chunk_id: int = 0,
         base_action_idx: int = 0,
@@ -132,7 +131,7 @@ class ActionPublisher:
             return
         state_vals = state if state is not None else np.zeros(self.ACTION_DIM)
         row = [time.time(), self._inference_step, chunk_id, base_action_idx, joint_action_idx]
-        for arr in [raw, smoothed, final, state_vals]:
+        for arr in [action, smoothed, state_vals]:
             row.extend(arr.tolist())
         self._csv_writer.writerow(row)
         self._csv_file.flush()
@@ -234,9 +233,8 @@ class ActionPublisher:
         # Write CSV row on every publish (100Hz) for full fidelity
         if self._csv_writer is not None:
             self._write_csv_row(
-                raw=raw_action,
+                action=raw_action,
                 smoothed=smoothed_action,
-                final=action,
                 state=current_state,
                 chunk_id=chunk_id,
                 base_action_idx=base_action_idx,

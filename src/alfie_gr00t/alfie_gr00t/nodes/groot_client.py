@@ -153,6 +153,7 @@ class GrootClientNode(Node):
         self._joint_chunk_timestamp: float = 0.0
         self._joint_effective_skip: int = self.latency_skip
         self._next_joint_chunk: Optional[np.ndarray] = None  # queued for when joints exhaust
+        self._joint_blend_from: Optional[np.ndarray] = None  # old chunk's last action for blend
 
         self._action_lock = threading.Lock()
         self._total_chunks = 0                            # for diagnostic logging
@@ -682,14 +683,17 @@ class GrootClientNode(Node):
             # Install or buffer the new chunk
             with self._action_lock:
                 if self._action_chunk is None:
-                    # First chunk — install for both base and joints
+                    # First chunk — no latency skip. The observation was
+                    # captured immediately before inference (no mid-chunk
+                    # trigger), so there's no staleness to compensate for.
+                    # Start executing from action[0].
                     now = time.monotonic()
                     self._action_chunk = chunk
                     self._chunk_timestamp = now
-                    self._effective_skip = self.latency_skip
+                    self._effective_skip = 0
                     self._joint_chunk = chunk
                     self._joint_chunk_timestamp = now
-                    self._joint_effective_skip = self.latency_skip
+                    self._joint_effective_skip = 0
                 else:
                     # Buffer as pending (promoted when current chunk exhausts)
                     self._pending_chunk = chunk
@@ -780,19 +784,23 @@ class GrootClientNode(Node):
             with self._action_lock:
                 next_jc = self._next_joint_chunk
                 if next_jc is not None:
+                    # Save old chunk's last action for blend transition
+                    self._joint_blend_from = joint_chunk[-1].copy()
                     self._joint_chunk = next_jc
                     self._joint_chunk_timestamp = now
-                    self._joint_effective_skip = self.latency_skip
+                    # Skip one extra action — use that 67ms to blend from
+                    # old chunk's last action to new chunk's action[skip+1]
+                    self._joint_effective_skip = self.latency_skip + 1
                     self._next_joint_chunk = None
                 else:
-                    # No next chunk available — all 16 actions exhausted
+                    # No next chunk available — all 16 actions exhausted.
+                    # This should never happen; hard exit.
                     reason = (
                         f'Joint chunk exhausted all {len(joint_chunk)} actions '
                         f'with no next chunk queued (elapsed={joint_elapsed:.3f}s)')
-                    self.get_logger().error(f'[safety] {reason}')
-                    self.safety.record_failure()
+                    self.get_logger().fatal(f'[safety] {reason}')
                     self.action_publisher.publish_stop()
-                    return
+                    raise RuntimeError(reason)
 
             # Recompute joint index on the fresh chunk
             joint_chunk = self._joint_chunk
@@ -804,11 +812,26 @@ class GrootClientNode(Node):
             joint_abs_idx = joint_skip + joint_exec_idx
             joint_abs_idx = min(joint_abs_idx, len(joint_chunk) - 1)
 
-        if self.interpolate_actions and joint_abs_idx < len(joint_chunk) - 1:
-            alpha = joint_t_frac - int(joint_t_frac)
-            joint_action = (1.0 - alpha) * joint_chunk[joint_abs_idx] + alpha * joint_chunk[joint_abs_idx + 1]
-        else:
-            joint_action = joint_chunk[joint_abs_idx].copy()
+        # Joint action selection with chunk transition blending.
+        # On chunk switch, the first step blends from old chunk's last action
+        # to the new chunk's first executed action over ~67ms.
+        joint_action = None
+        if self._joint_blend_from is not None:
+            if joint_exec_idx == 0:
+                alpha = joint_t_frac  # 0→1 over one step period (~67ms)
+                target = joint_chunk[joint_abs_idx]
+                joint_action = target.copy()
+                joint_action[6:] = ((1.0 - alpha) * self._joint_blend_from[6:]
+                                    + alpha * target[6:])
+            else:
+                self._joint_blend_from = None  # blend complete
+
+        if joint_action is None:
+            if self.interpolate_actions and joint_abs_idx < len(joint_chunk) - 1:
+                alpha = joint_t_frac - int(joint_t_frac)
+                joint_action = (1.0 - alpha) * joint_chunk[joint_abs_idx] + alpha * joint_chunk[joint_abs_idx + 1]
+            else:
+                joint_action = joint_chunk[joint_abs_idx].copy()
 
         # Compose: base velocity from new chunk, joints from joint chunk
         action = base_action.copy()
