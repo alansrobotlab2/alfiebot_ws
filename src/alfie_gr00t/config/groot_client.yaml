@@ -43,10 +43,11 @@
     latency_skip: 4
 
     # Inference trigger step: fire inference at this step within the execution
-    # window for overlapped execution. With n_action_steps=8 and trigger=4,
-    # inference fires at 268ms into the chunk. Set equal to n_action_steps
-    # for sequential mode (waits for full chunk exhaust before firing).
-    inference_trigger_step: 4
+    # window for overlapped execution. With n_action_steps=8 and trigger=2,
+    # inference fires at 134ms into the chunk. This gives pending chunks
+    # enough time to arrive before n_action_steps exhausts (134+400=534ms < 536ms).
+    # Set equal to n_action_steps for sequential mode.
+    inference_trigger_step: 2
 
     # Chunk transition blend steps: blend joints (not base velocity) from
     # the previous chunk's last executed action to the new chunk's trajectory

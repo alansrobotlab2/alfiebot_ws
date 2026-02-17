@@ -729,13 +729,14 @@ class GrootClientNode(Node):
                     f'[chunk] late promotion: coasted {overshoot_steps} extra steps, '
                     f'effective_skip={new_skip} (base={self.latency_skip})')
 
-            # Save current action for blend transition
-            blend_idx = min(abs_idx, len(chunk) - 1)
-            self._blend_from = chunk[blend_idx].copy()
+            # Save current action for blend transition (only if blending enabled)
+            if self.chunk_blend_steps > 0:
+                blend_idx = min(abs_idx, len(chunk) - 1)
+                self._blend_from = chunk[blend_idx].copy()
 
             with self._action_lock:
-                # +1 skip: use that 67ms to blend from old action to new
-                self._effective_skip = new_skip + 1
+                # +1 skip when blending: use that 67ms to lerp from old→new
+                self._effective_skip = new_skip + (1 if self.chunk_blend_steps > 0 else 0)
                 self._action_chunk = pending
                 self._pending_chunk = None
                 self._chunk_timestamp = now
@@ -748,14 +749,31 @@ class GrootClientNode(Node):
             exec_idx = 0
             abs_idx = self._effective_skip
 
-        # Fatal if all 16 actions exhausted with no pending
+        # Hold position if all 16 actions exhausted with no pending.
+        # Zero base velocity, hold last joint positions. The safety watchdog
+        # will catch genuinely stuck situations (timeout = exec_time + 1.0s).
         if abs_idx >= len(chunk):
-            reason = (
-                f'Chunk exhausted all {len(chunk)} actions '
-                f'with no pending chunk (elapsed={elapsed:.3f}s)')
-            self.get_logger().fatal(f'[safety] {reason}')
-            self.action_publisher.publish_stop()
-            raise RuntimeError(reason)
+            if not hasattr(self, '_hold_logged') or not self._hold_logged:
+                self.get_logger().warn(
+                    f'[chunk] Holding: exhausted all {len(chunk)} actions '
+                    f'with no pending chunk (elapsed={elapsed:.3f}s, '
+                    f'effective_skip={self._effective_skip})')
+                self._hold_logged = True
+            last_action = chunk[-1].copy()
+            last_action[0:6] = 0.0  # zero base velocity
+            obs = self.observation_bridge.get_latest_observation()
+            current_state = obs.state if obs is not None else None
+            self.action_publisher.publish_action(
+                action=last_action,
+                current_state=current_state,
+                apply_smoothing=True,
+                apply_safety=self.enable_safety_limits,
+                chunk_id=self._total_chunks,
+                action_idx=len(chunk) - 1,
+            )
+            return
+
+        self._hold_logged = False
 
         # Clamp to valid range
         abs_idx = min(abs_idx, len(chunk) - 1)

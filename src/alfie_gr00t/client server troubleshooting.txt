@@ -1,0 +1,36 @@
+
+
+- DONE stopping a bit too far away from the can
+
+- DONE turning and roll forward was smooth and definitive in the training data, 
+
+- DONE doesn't reach quite far enough to make complete contact with the can.
+
+- DONE safety check failed when transition from pick up to put down
+
+- DONE add safety check for exhausing all 16 actions
+
+- DONE first execution needs to run from action 0 not action 4
+
+- DONE chunk blending does not help pogo / mantis behavior for can pickup
+
+- DONE look ahead to the first action in the next chunk and smooth to it instead of immediately jumping to it
+
+
+- pogo in elbow and shoulder during pick up behavior
+- pogo in elbow and shoulder, oscillations in arm and head at conclusion of behavior
+
+
+
+
+- several right elbox action discontinuities between -0.9 and -1.5 during behavior
+
+
+
+
+
+- does not let go of can during put down and other repetitions
+
+- mantis repetition during put down and doesn't let go of the can
+
+
