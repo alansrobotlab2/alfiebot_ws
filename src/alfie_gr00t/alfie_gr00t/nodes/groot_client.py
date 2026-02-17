@@ -139,21 +139,12 @@ class GrootClientNode(Node):
 
         # Action chunk state (protected by lock for thread safety)
         # The inference thread writes a full chunk; the command timer reads it.
-        # _pending_chunk buffers the next chunk until the current one is
-        # fully consumed (n_action_steps executed).
-        self._action_chunk: Optional[np.ndarray] = None  # shape (N, 22) — base velocity chunk
+        # _pending_chunk buffers the next chunk until the current one is consumed.
+        self._action_chunk: Optional[np.ndarray] = None   # shape (N, 22)
         self._pending_chunk: Optional[np.ndarray] = None  # next chunk, waiting
-        self._chunk_timestamp: float = 0.0                # time.monotonic() when base chunk started
-        self._effective_skip: int = self.latency_skip     # dynamic skip for base chunk
-
-        # Per-body-part chunk management: joints play through the full 16-step
-        # trajectory (like open-loop eval) while base switches at n_action_steps.
-        # This prevents joint oscillations from mid-trajectory replanning.
-        self._joint_chunk: Optional[np.ndarray] = None    # joint trajectory chunk
-        self._joint_chunk_timestamp: float = 0.0
-        self._joint_effective_skip: int = self.latency_skip
-        self._next_joint_chunk: Optional[np.ndarray] = None  # queued for when joints exhaust
-        self._joint_blend_from: Optional[np.ndarray] = None  # old chunk's last action for blend
+        self._chunk_timestamp: float = 0.0                # time.monotonic() when chunk started
+        self._effective_skip: int = self.latency_skip     # dynamic skip (latency + overshoot + blend)
+        self._blend_from: Optional[np.ndarray] = None     # last action from old chunk for blend
 
         self._action_lock = threading.Lock()
         self._total_chunks = 0                            # for diagnostic logging
@@ -691,9 +682,6 @@ class GrootClientNode(Node):
                     self._action_chunk = chunk
                     self._chunk_timestamp = now
                     self._effective_skip = 0
-                    self._joint_chunk = chunk
-                    self._joint_chunk_timestamp = now
-                    self._joint_effective_skip = 0
                 else:
                     # Buffer as pending (promoted when current chunk exhausts)
                     self._pending_chunk = chunk
@@ -701,141 +689,95 @@ class GrootClientNode(Node):
     def _command_callback(self):
         """Command publishing callback (runs at exactly 100 Hz).
 
-        Steps through the execution window [skip : skip + n_action_steps]
-        at the training data rate (67ms per action). When the window exhausts,
-        promotes pending chunk or zeros base velocity while holding joints.
+        Steps through the action chunk at the training data rate (67ms per
+        action step). All body parts share the same chunk and timeline.
 
-        Per-body-part chunk management:
-        - Base velocity (0:6): from current chunk, re-plans at n_action_steps
-        - Joints (6:22): from joint chunk, plays full 16-step trajectory
-        - Inter-action interpolation: lerp between consecutive actions for 100Hz
+        When n_action_steps are consumed and a pending chunk is available,
+        promotes with a one-step blend (67ms lerp from old last action to
+        new chunk's first action). If no pending, continues executing up
+        to all 16 actions. Fatal exit if all 16 exhaust with no pending.
+
+        Inter-action interpolation lerps between consecutive actions for
+        smooth 100 Hz output within each chunk.
         """
         if not self._active or self._state != ClientState.ACTIVE:
             return
 
         now = time.monotonic()
 
-        # Check if current execution window is exhausted → promote pending
         with self._action_lock:
             chunk = self._action_chunk
             timestamp = self._chunk_timestamp
             pending = self._pending_chunk
 
-            if chunk is not None and pending is not None:
-                elapsed = now - timestamp
-                exec_duration = self.n_action_steps * ACTION_STEP_PERIOD
-                if elapsed >= exec_duration:
-                    # Dynamic latency skip: if we coasted past the execution
-                    # window, the observation is proportionally more stale.
-                    overshoot_steps = int((elapsed - exec_duration) / ACTION_STEP_PERIOD)
-                    new_skip = self.latency_skip + overshoot_steps
-                    if overshoot_steps > 0:
-                        self.get_logger().info(
-                            f'[chunk] late promotion: coasted {overshoot_steps} extra steps, '
-                            f'effective_skip={new_skip} (base={self.latency_skip})')
-
-                    # Queue this chunk for joints — they'll switch to it
-                    # when their current chunk exhausts all 16 actions.
-                    self._next_joint_chunk = pending
-
-                    # Base switches to new chunk immediately
-                    self._effective_skip = new_skip
-                    self._action_chunk = pending
-                    self._pending_chunk = None
-                    self._chunk_timestamp = now
-                    chunk = self._action_chunk
-                    timestamp = self._chunk_timestamp
-
         if chunk is None:
             return
 
-        # Also grab joint chunk state (may differ from base chunk)
-        joint_chunk = self._joint_chunk
-        joint_timestamp = self._joint_chunk_timestamp
-        joint_skip = self._joint_effective_skip
+        # Compute current position in chunk
+        elapsed = now - timestamp
+        t_frac = elapsed / ACTION_STEP_PERIOD
+        exec_idx = int(t_frac)
+        abs_idx = self._effective_skip + exec_idx
 
-        if joint_chunk is None:
-            return
+        # Promote pending chunk when execution window consumed
+        if pending is not None and elapsed >= self.n_action_steps * ACTION_STEP_PERIOD:
+            overshoot_steps = int(
+                (elapsed - self.n_action_steps * ACTION_STEP_PERIOD) / ACTION_STEP_PERIOD)
+            new_skip = self.latency_skip + overshoot_steps
+            if overshoot_steps > 0:
+                self.get_logger().info(
+                    f'[chunk] late promotion: coasted {overshoot_steps} extra steps, '
+                    f'effective_skip={new_skip} (base={self.latency_skip})')
 
-        # --- Base velocity: from current (new) chunk ---
-        base_elapsed = now - timestamp
-        base_t_frac = base_elapsed / ACTION_STEP_PERIOD
-        base_exec_idx = int(base_t_frac)
-        base_abs_idx = self._effective_skip + base_exec_idx
-        base_abs_idx = min(base_abs_idx, len(chunk) - 1)
+            # Save current action for blend transition
+            blend_idx = min(abs_idx, len(chunk) - 1)
+            self._blend_from = chunk[blend_idx].copy()
 
-        if self.interpolate_actions and base_abs_idx < len(chunk) - 1:
-            alpha = base_t_frac - int(base_t_frac)
-            base_action = (1.0 - alpha) * chunk[base_abs_idx] + alpha * chunk[base_abs_idx + 1]
-        else:
-            base_action = chunk[base_abs_idx].copy()
-
-        # --- Joints: from joint chunk (plays full 16-step trajectory) ---
-        joint_elapsed = now - joint_timestamp
-        joint_t_frac = joint_elapsed / ACTION_STEP_PERIOD
-        joint_exec_idx = int(joint_t_frac)
-        joint_abs_idx = joint_skip + joint_exec_idx
-        joint_abs_idx = min(joint_abs_idx, len(joint_chunk) - 1)
-
-        # If joint chunk fully exhausted (all 16 actions played), switch to
-        # the queued next joint chunk. If none queued, safety fail — inference
-        # should never take >1.07s to deliver the next chunk.
-        if joint_abs_idx >= len(joint_chunk) - 1:
             with self._action_lock:
-                next_jc = self._next_joint_chunk
-                if next_jc is not None:
-                    # Save old chunk's last action for blend transition
-                    self._joint_blend_from = joint_chunk[-1].copy()
-                    self._joint_chunk = next_jc
-                    self._joint_chunk_timestamp = now
-                    # Skip one extra action — use that 67ms to blend from
-                    # old chunk's last action to new chunk's action[skip+1]
-                    self._joint_effective_skip = self.latency_skip + 1
-                    self._next_joint_chunk = None
-                else:
-                    # No next chunk available — all 16 actions exhausted.
-                    # This should never happen; hard exit.
-                    reason = (
-                        f'Joint chunk exhausted all {len(joint_chunk)} actions '
-                        f'with no next chunk queued (elapsed={joint_elapsed:.3f}s)')
-                    self.get_logger().fatal(f'[safety] {reason}')
-                    self.action_publisher.publish_stop()
-                    raise RuntimeError(reason)
+                # +1 skip: use that 67ms to blend from old action to new
+                self._effective_skip = new_skip + 1
+                self._action_chunk = pending
+                self._pending_chunk = None
+                self._chunk_timestamp = now
 
-            # Recompute joint index on the fresh chunk
-            joint_chunk = self._joint_chunk
-            joint_timestamp = self._joint_chunk_timestamp
-            joint_skip = self._joint_effective_skip
-            joint_elapsed = now - joint_timestamp
-            joint_t_frac = joint_elapsed / ACTION_STEP_PERIOD
-            joint_exec_idx = int(joint_t_frac)
-            joint_abs_idx = joint_skip + joint_exec_idx
-            joint_abs_idx = min(joint_abs_idx, len(joint_chunk) - 1)
+            # Recompute on new chunk
+            chunk = pending
+            timestamp = now
+            elapsed = 0.0
+            t_frac = 0.0
+            exec_idx = 0
+            abs_idx = self._effective_skip
 
-        # Joint action selection with chunk transition blending.
-        # On chunk switch, the first step blends from old chunk's last action
+        # Fatal if all 16 actions exhausted with no pending
+        if abs_idx >= len(chunk):
+            reason = (
+                f'Chunk exhausted all {len(chunk)} actions '
+                f'with no pending chunk (elapsed={elapsed:.3f}s)')
+            self.get_logger().fatal(f'[safety] {reason}')
+            self.action_publisher.publish_stop()
+            raise RuntimeError(reason)
+
+        # Clamp to valid range
+        abs_idx = min(abs_idx, len(chunk) - 1)
+
+        # Action selection with chunk transition blend.
+        # On promotion, the first step blends from old chunk's last action
         # to the new chunk's first executed action over ~67ms.
-        joint_action = None
-        if self._joint_blend_from is not None:
-            if joint_exec_idx == 0:
-                alpha = joint_t_frac  # 0→1 over one step period (~67ms)
-                target = joint_chunk[joint_abs_idx]
-                joint_action = target.copy()
-                joint_action[6:] = ((1.0 - alpha) * self._joint_blend_from[6:]
-                                    + alpha * target[6:])
+        action = None
+        if self._blend_from is not None:
+            if exec_idx == 0:
+                alpha = t_frac  # 0→1 over one step (~67ms)
+                target = chunk[abs_idx]
+                action = (1.0 - alpha) * self._blend_from + alpha * target
             else:
-                self._joint_blend_from = None  # blend complete
+                self._blend_from = None  # blend complete
 
-        if joint_action is None:
-            if self.interpolate_actions and joint_abs_idx < len(joint_chunk) - 1:
-                alpha = joint_t_frac - int(joint_t_frac)
-                joint_action = (1.0 - alpha) * joint_chunk[joint_abs_idx] + alpha * joint_chunk[joint_abs_idx + 1]
+        if action is None:
+            if self.interpolate_actions and abs_idx < len(chunk) - 1:
+                alpha = t_frac - int(t_frac)
+                action = (1.0 - alpha) * chunk[abs_idx] + alpha * chunk[abs_idx + 1]
             else:
-                joint_action = joint_chunk[joint_abs_idx].copy()
-
-        # Compose: base velocity from new chunk, joints from joint chunk
-        action = base_action.copy()
-        action[6:] = joint_action[6:]
+                action = chunk[abs_idx].copy()
 
         # Publish action to robot at 100 Hz
         obs = self.observation_bridge.get_latest_observation()
@@ -846,8 +788,7 @@ class GrootClientNode(Node):
             apply_smoothing=True,
             apply_safety=self.enable_safety_limits,
             chunk_id=self._total_chunks,
-            base_action_idx=base_abs_idx,
-            joint_action_idx=joint_abs_idx,
+            action_idx=abs_idx,
         )
 
     def _extract_action_chunk(self, response: dict) -> Optional[np.ndarray]:
