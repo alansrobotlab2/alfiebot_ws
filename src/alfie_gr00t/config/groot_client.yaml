@@ -83,6 +83,29 @@
     csv_log_path: "/tmp/groot_client_debug.csv"
 
     # ==========================================================================
+    # Continuous Inference & Temporal Ensembling
+    # ==========================================================================
+    # When enabled, inference runs continuously (always churning) and chunks
+    # are combined via temporal ensembling in a rolling ChunkBuffer.
+    # When disabled (default), uses classic overlapped execution model.
+    continuous_inference: false
+
+    # Temporal ensembling strategy for combining overlapping chunk predictions:
+    #   'latest'    — only use most recent chunk (baseline, matches classic behavior)
+    #   'uniform'   — equal weight to all overlapping chunks
+    #   'recency'   — linear decay favoring newer chunks
+    #   'exp_decay' — ACT-style: w = exp(-decay_m * k), k = action index offset
+    #   'triangle'  — peak weight at start of chunk, linear taper
+    smoothing_strategy: "latest"
+
+    # Exponential decay parameter for 'exp_decay' strategy
+    # Smaller = gentler decay (more averaging), larger = stronger recency bias
+    smoothing_decay_m: 0.01
+
+    # Maximum chunks to retain in the rolling buffer
+    max_buffer_chunks: 8
+
+    # ==========================================================================
     # Back Initialization
     # ==========================================================================
     # Height (meters) to move the back to on startup (0.0 to 0.390).
