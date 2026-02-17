@@ -109,7 +109,7 @@ class ActionPublisher:
         self._csv_writer = csv.writer(self._csv_file)
 
         # Build header row
-        header = ['timestamp', 'step']
+        header = ['timestamp', 'step', 'chunk_id', 'base_action_idx', 'joint_action_idx']
         for prefix in ['raw', 'smoothed', 'final', 'state']:
             for name in self.JOINT_NAMES:
                 header.append(f'{prefix}_{name}')
@@ -123,12 +123,15 @@ class ActionPublisher:
         smoothed: np.ndarray,
         final: np.ndarray,
         state: Optional[np.ndarray],
+        chunk_id: int = 0,
+        base_action_idx: int = 0,
+        joint_action_idx: int = 0,
     ):
         """Write one row to the CSV log."""
         if self._csv_writer is None:
             return
         state_vals = state if state is not None else np.zeros(self.ACTION_DIM)
-        row = [time.time(), self._inference_step]
+        row = [time.time(), self._inference_step, chunk_id, base_action_idx, joint_action_idx]
         for arr in [raw, smoothed, final, state_vals]:
             row.extend(arr.tolist())
         self._csv_writer.writerow(row)
@@ -149,6 +152,9 @@ class ActionPublisher:
         apply_smoothing: bool = True,
         apply_safety: bool = True,
         max_joint_delta: float = 0.3,
+        chunk_id: int = 0,
+        base_action_idx: int = 0,
+        joint_action_idx: int = 0,
     ) -> bool:
         """Publish action to robot.
 
@@ -160,6 +166,9 @@ class ActionPublisher:
             apply_smoothing: Whether to apply EMA smoothing.
             apply_safety: Whether to apply safety limits.
             max_joint_delta: Maximum joint position change per step (radians).
+            chunk_id: Which inference chunk this action comes from.
+            base_action_idx: Action index (0-15) for base velocity.
+            joint_action_idx: Action index (0-15) for joints.
 
         Returns:
             True if action was published, False if blocked by safety.
@@ -229,6 +238,9 @@ class ActionPublisher:
                 smoothed=smoothed_action,
                 final=action,
                 state=current_state,
+                chunk_id=chunk_id,
+                base_action_idx=base_action_idx,
+                joint_action_idx=joint_action_idx,
             )
 
         # Store for next smoothing iteration
