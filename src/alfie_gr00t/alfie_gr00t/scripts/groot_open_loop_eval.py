@@ -437,7 +437,14 @@ def print_timing_breakdown(
         print()
         _stats([t.get('prep_ms', 0) for t in server_timings], 'State split + obs build')
         print()
-        _stats([t.get('infer_ms', 0) for t in server_timings], 'GPU inference')
+        # Show sub-breakdown of inference if available
+        has_vla = any(t.get('vla_prep_ms', 0) > 0 for t in server_timings)
+        if has_vla:
+            _stats([t.get('vla_prep_ms', 0) for t in server_timings], 'VLA processor (preprocess)')
+            print()
+            _stats([t.get('gpu_infer_ms', 0) for t in server_timings], 'GPU forward + decode')
+            print()
+        _stats([t.get('infer_ms', 0) for t in server_timings], 'Inference total (VLA + GPU)')
         print()
         _stats([t.get('reassemble_ms', 0) for t in server_timings], 'Action reassembly')
         print()
@@ -460,15 +467,20 @@ def print_timing_breakdown(
         print('  MEAN BREAKDOWN')
         c = {k: np.mean([t[k] for t in client_timings]) for k in ['pack_ms', 'zmq_ms', 'unpack_ms', 'total_ms']}
         s = {k: np.mean([t.get(k, 0) for t in server_timings])
-             for k in ['deser_ms', 'decode_ms', 'prep_ms', 'infer_ms', 'reassemble_ms', 'handler_ms']}
+             for k in ['deser_ms', 'decode_ms', 'prep_ms', 'vla_prep_ms', 'gpu_infer_ms',
+                        'infer_ms', 'reassemble_ms', 'handler_ms']}
         net = np.mean(network_ms)
+        has_vla = s['vla_prep_ms'] > 0
         print(f'    Client pack:        {c["pack_ms"]:7.1f} ms')
         print(f'    ZMQ send+recv:      {c["zmq_ms"]:7.1f} ms')
         print(f'      Server deser:     {s["deser_ms"]:7.1f} ms')
         print(f'      Server decode:    {s["decode_ms"]:7.1f} ms')
         print(f'      Server prep:      {s["prep_ms"]:7.1f} ms')
-        print(f'      Server inference: {s["infer_ms"]:7.1f} ms')
-        print(f'      Server reassemble:{s["reassemble_ms"]:7.1f} ms')
+        if has_vla:
+            print(f'      VLA preprocess:   {s["vla_prep_ms"]:7.1f} ms')
+            print(f'      GPU fwd + decode: {s["gpu_infer_ms"]:7.1f} ms')
+        print(f'      Inference total:  {s["infer_ms"]:7.1f} ms')
+        print(f'      Reassembly:       {s["reassemble_ms"]:7.1f} ms')
         print(f'      Server total:     {s["handler_ms"] + s["deser_ms"]:7.1f} ms')
         print(f'      Network transit:  {net:7.1f} ms')
         print(f'    Client unpack:      {c["unpack_ms"]:7.1f} ms')
