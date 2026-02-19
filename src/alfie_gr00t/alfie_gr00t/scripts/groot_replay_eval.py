@@ -1107,6 +1107,11 @@ def run_episode(
     pipeline.reset()
     num_inference = 0
 
+    # Prefetch: in continuous open-loop mode, we know the next frame's observation
+    # and can ask the server to VLA-prep it while running GPU inference on the current.
+    can_prefetch = pipeline.continuous and not closed_loop
+    last_prefetch_id = None  # tracks the prefetch ID we submitted last request
+
     for gt_frame in range(N):
         # Determine observation state
         if closed_loop and cl_state is not None:
@@ -1118,11 +1123,26 @@ def run_episode(
         if pipeline.needs_inference():
             images = compressed_frames[gt_frame] if gt_frame < len(compressed_frames) else {}
 
+            # Build prefetch args for next frame
+            pf_images = None
+            pf_state = None
+            pf_id = None
+            if can_prefetch and gt_frame + 1 < N:
+                next_frame = gt_frame + 1
+                pf_images = compressed_frames[next_frame] if next_frame < len(compressed_frames) else None
+                pf_state = gt_states[next_frame]
+                pf_id = next_frame
+
             response = client.send_observation(
                 images=images,
                 state=state_raw,
                 language=task,
+                prefetch_images=pf_images,
+                prefetch_state=pf_state,
+                prefetch_id=pf_id,
+                use_prefetch_id=gt_frame if last_prefetch_id == gt_frame else None,
             )
+            last_prefetch_id = pf_id
 
             if response is None:
                 logger.error(f'Inference failed at frame {gt_frame}')
