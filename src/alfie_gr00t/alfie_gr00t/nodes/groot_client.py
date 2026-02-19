@@ -5,14 +5,15 @@ This node connects to a remote GR00T inference server via ZeroMQ,
 sends synchronized observations, and publishes action predictions
 to control the robot.
 
-Key timing (overlapped mode, n_exec=8, trigger@4, skip=4):
+Key timing (exhaust mode, n_exec=12, trigger@12, skip=4):
 - Server returns a 16-step action horizon
 - Universal latency skip: execution window is actions[skip : skip + n_exec]
-- Inference fires mid-chunk at trigger_step (268ms), not at chunk exhaust
-- Pending chunk buffered; promoted when current chunk's n_exec actions consumed
-- Near-zero dead time: ~1.87 Hz re-planning rate vs 0.75 Hz sequential
+- Inference fires at chunk exhaust (804ms), observation captures trajectory result
+- Overflow actions [12:16] bridge ~268ms of ~350ms inference RTT
+- Fixed latency_skip=4 on every promotion (no overshoot compensation)
+- ~0.87 Hz re-planning rate, <10% hold-and-wait per cycle
 - Command publishing runs at exactly 100 Hz on the ROS2 executor
-- Inter-action interpolation smooths 15 FPS actions to 100 Hz output
+- Rate-limited interpolation smooths 15 FPS actions to 100 Hz output
 
 Threading model:
 - Inference runs on a dedicated background thread (blocking ZMQ ~280ms RTT)
@@ -162,7 +163,7 @@ class GrootClientNode(Node):
         self._action_chunk: Optional[np.ndarray] = None   # shape (N, 22)
         self._pending_chunk: Optional[np.ndarray] = None  # next chunk, waiting
         self._chunk_timestamp: float = 0.0                # time.monotonic() when chunk started
-        self._effective_skip: int = self.latency_skip     # dynamic skip (latency + overshoot + blend)
+        self._effective_skip: int = self.latency_skip     # fixed skip (latency + blend offset)
         self._blend_from: Optional[np.ndarray] = None     # last action from old chunk for blend
 
         self._action_lock = threading.Lock()
@@ -1088,22 +1089,21 @@ class GrootClientNode(Node):
 
         # Promote pending chunk when execution window consumed
         if pending is not None and elapsed >= self.n_action_steps * ACTION_STEP_PERIOD:
-            overshoot_steps = int(
-                (elapsed - self.n_action_steps * ACTION_STEP_PERIOD) / ACTION_STEP_PERIOD)
-            new_skip = self.latency_skip + overshoot_steps
-            if overshoot_steps > 0:
-                self.get_logger().info(
-                    f'[chunk] late promotion: coasted {overshoot_steps} extra steps, '
-                    f'effective_skip={new_skip} (base={self.latency_skip})')
-
             # Save current action for blend transition (only if blending enabled)
             if self.chunk_blend_steps > 0:
                 blend_idx = min(abs_idx, len(chunk) - 1)
                 self._blend_from = chunk[blend_idx].copy()
 
             with self._action_lock:
-                # +1 skip when blending: use that 67ms to lerp from old→new
-                self._effective_skip = new_skip + (1 if self.chunk_blend_steps > 0 else 0)
+                # Fixed latency skip on every promotion. No overshoot
+                # compensation: latency_skip already accounts for the
+                # observation-to-action delay (~280ms = 4 steps at 15 FPS).
+                # In exhaust mode (trigger_step == n_action_steps), the
+                # observation is captured fresh at chunk exhaust — adding
+                # inference RTT as extra skip double-compensates and causes
+                # a death spiral of shrinking execution windows.
+                # +1 when blending to use 67ms for old→new lerp.
+                self._effective_skip = self.latency_skip + (1 if self.chunk_blend_steps > 0 else 0)
                 self._action_chunk = pending
                 self._pending_chunk = None
                 self._chunk_timestamp = now

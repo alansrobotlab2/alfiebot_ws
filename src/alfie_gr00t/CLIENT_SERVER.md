@@ -148,24 +148,22 @@ action[0:6] = chunk[base_idx, 0:6]
 
 **VALIDATED (Phase 0):** At k=4, all body parts exceed the 0.9 correlation threshold — base r=0.969, right arm r=0.974, gripper r=0.915, head r=0.988. **Universal latency skip is viable** — apply skip=4 to all channels, not just base.
 
-### 2. Dynamic latency skip (IMPLEMENTED)
+### 2. Dynamic latency skip (REMOVED — exhaust mode)
 
-**Problem:** With overlapped inference (trigger at step 4, ~280ms RTT), the pending chunk normally arrives before the execution window exhausts at step 8. But if inference is late (WiFi jitter, server load), the robot waits at zero base velocity until the pending chunk arrives. When it does arrive, the observation is more stale than the base `latency_skip=4` accounts for.
+**Original purpose:** With mid-chunk inference triggering (trigger_step=4), late
+inference arrival meant the observation was staler than `latency_skip=4` accounted
+for. The dynamic skip increased effective_skip by the number of extra steps waited.
 
-**Solution:** When promoting a late pending chunk, increase the effective latency skip by the number of extra steps waited:
+**Why removed:** In exhaust mode (trigger_step=12, n_action_steps=12), inference
+always fires AFTER the execution window is consumed. The observation is captured
+fresh at exhaust, and `latency_skip=4` already accounts for the ~280ms inference
+RTT. The overshoot mechanism added the ENTIRE inference RTT as extra skip, causing
+effective_skip to inflate from 4 to 7-9. This created a death spiral: smaller
+execution window → more hold-and-wait → more overshoot → even smaller window.
+CSV evidence (2026-02-17): 94% of steps in hold-and-wait, 54% stuck at action_idx=15.
 
-```
-effective_skip = latency_skip + overshoot_steps
-overshoot_steps = int((elapsed - exec_duration) / ACTION_STEP_PERIOD)
-```
-
-**Example:**
-- Normal: pending arrives before step 8 → promote at step 8, `effective_skip = 4`
-- Late by 2 steps: pending arrives at step 10 → promote at step 10, `effective_skip = 6`
-
-**Gap behavior:** Base velocity zeros at exec window exhaust (step 8). Joints hold last position. This gap should be ~12ms normally — no tail coasting needed.
-
-**Logged:** When overshoot > 0, a `[chunk] late promotion` message shows extra steps and effective skip.
+**Current behavior:** `effective_skip = latency_skip` (constant 4) on every chunk
+promotion. No dynamic adjustment.
 
 ### 4. Re-enable chunk transition blending
 

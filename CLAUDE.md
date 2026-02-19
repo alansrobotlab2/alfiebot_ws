@@ -69,6 +69,64 @@ Camera (640x480 JPEG) -> observation_bridge resizes to 320x240 RGB -> JPEG Q95 e
 
 Training images go through an additional H.264 yuv420p encode/decode in rosbag_to_groot.py (libx264, CRF=23) before being stored as MP4. The observation_bridge has an optional `h264_conditioning` flag to replicate this on live images.
 
+# Troubleshooting & Benchmarking ---
+
+## CSV Diagnostic Files
+The client logs two CSV files when `csv_log_path` is set (default: `/tmp/groot_client_debug.csv`):
+ - `/tmp/groot_client_debug.csv` — 100Hz full-fidelity log. Columns: `timestamp, step, chunk_id, action_idx, action_<joint>, smoothed_<joint>, state_<joint>` for all 22 DOF. Use this for hold-and-wait analysis, trajectory shape, tracking error, and smoothing behavior.
+ - `/tmp/groot_client_debug_actions.csv` — One row per action step (15 FPS). Columns: `timestamp, chunk_id, action_idx, effective_skip, action_<joint>, state_<joint>`. Use this for chunk timing, effective_skip validation, and action-level trajectory analysis.
+
+## Key Metrics to Check After a Run
+1. **effective_skip** (actions CSV): Should be constant 4. If inflated (7-9+), the overshoot bug has returned.
+2. **Hold-and-wait %**: Count rows with action_idx==15 (last action) in the debug CSV. Should be <10%. If >50%, execution window is too narrow or inference is too slow.
+3. **Base velocity (lx, az)**: Forward velocity should reach 0.02-0.06 m/s during approach. If <0.005, robot isn't moving.
+4. **action_idx distribution**: Should be roughly uniform across 4-15. If >40% at idx 15, chunks are exhausting and stalling.
+5. **Head yaw consistency**: Spread <0.05 rad confirms PyTorch backend. Spread >0.1 rad means TRT bf16 — switch to PyTorch immediately.
+6. **Chunk cycle time**: Time between consecutive chunk_id transitions. Should be ~1.15s (804ms exec + 350ms inference).
+7. **Arm tracking error**: `|action_right_shoulder_pitch - state_right_shoulder_pitch|` should be <0.1 rad. Persistent >0.2 rad means servos can't track.
+8. **Gripper**: Right gripper should show full range (0→close) during pick attempts. If stuck near 0, model isn't commanding a grasp.
+
+## Quick Diagnostic Commands
+```bash
+# Check TRT vs PyTorch backend (run BEFORE debugging live robot)
+# Uses hybrid_image_test.py Test 7: 5x identical inputs, check HEAD_YAW SPREAD
+# Spread <0.05 = PyTorch (good), >0.1 = TRT bf16 (bad)
+python3 scripts/hybrid_image_test.py --test 7 --server-host 192.168.50.201
+
+# Analyze a run CSV with python
+python3 -c "
+import pandas as pd
+df = pd.read_csv('/tmp/groot_client_debug_actions.csv')
+print(f'Chunks: {df.chunk_id.nunique()}, Steps: {len(df)}')
+print(f'effective_skip: {df.effective_skip.value_counts().to_dict()}')
+print(f'Duration: {df.timestamp.iloc[-1] - df.timestamp.iloc[0]:.1f}s')
+print(f'Mean |lx|: {df.action_cmd_vel_lx.abs().mean():.4f}')
+print(f'Mean |az|: {df.action_cmd_vel_az.abs().mean():.4f}')
+"
+```
+
+## Debug Image Comparison
+Set `debug_save_images: true` in `config/groot_client.yaml` to save observation images to `/tmp/groot_debug_images/`. Compare against training frames to check for visual domain gap.
+
+## Key Diagnostic Tools
+ - `scripts/hybrid_image_test.py` — Sends saved training images + GT state through ZMQ to isolate image vs state issues. Test 7 (consistency) is the fastest TRT-vs-PyTorch check.
+ - `scripts/groot_open_loop_eval.py` — Replays training episodes through the server (uses torchcodec + raw RGB ZMQ path) to verify model accuracy independent of live robot.
+
+## Current Execution Parameters (groot_client.yaml)
+ - `action_chunk_size=16, n_action_steps=12, latency_skip=4, inference_trigger_step=12`
+ - Execution window: actions[4:16] = 12 steps = 804ms per chunk
+ - Overflow: actions[12:16] bridges 268ms of ~350ms inference RTT
+ - Hold-and-wait gap: ~82ms (acceptable)
+ - Re-planning rate: ~0.87 Hz
+ - Rate-limited interpolator: enabled (G1-style velocity-capped joints)
+ - Base velocity limits: lx=0.15 m/s, ly=0.15 m/s, az=0.8 rad/s
+
+## Known Pitfalls
+ - **Never add inference RTT as extra latency skip.** `latency_skip=4` already compensates for observation-to-action delay. Adding overshoot causes a death spiral of shrinking execution windows (see 2026-02-17 incident).
+ - **Never fire inference mid-chunk.** The model must see the RESULT of its full trajectory. Mid-chunk triggers cause arm pogoing at chunk boundaries.
+ - **Always use PyTorch backend** (not TRT bf16). TRT bf16 causes catastrophic noise in flow matching denoising. Run Test 7 consistency check before any live debugging session.
+ - **Config lives in the checkpoint**, not `alfiebot_config.py`. Always check `processor_config.json` in the checkpoint directory to know actual action representations and normalization stats.
+
 # ROS2 ---
 Coding standards, domain knowledge, and preferences that AI should follow.
  - when you make a new msg, add the entry to cmakeLists.txt
