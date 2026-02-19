@@ -15,7 +15,7 @@ References:
 ## 1. How the Model Generates Actions (Shared Across All Examples)
 
 The action head is a **Diffusion Transformer (DiT)** using **Flow Matching** with
-**Euler integration** over **4 denoising steps**:
+**Euler integration** over **4 denoising steps**:` 
 
 ```python
 # gr00t/model/gr00t_n1d6/gr00t_n1d6.py:310-357
