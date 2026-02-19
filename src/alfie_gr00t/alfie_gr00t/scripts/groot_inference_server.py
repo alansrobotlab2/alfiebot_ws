@@ -326,6 +326,13 @@ class JpegPolicyWrapper(BasePolicy):
         self._prefetch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='vla_prefetch')
         self._prefetch_future = None
         self._prefetch_id = None  # frame ID for validating prefetch matches
+        # Backbone pipeline: overlap backbone(N+1) with DiT(N) on separate CUDA streams
+        self._backbone_stream = torch.cuda.Stream() if torch.cuda.is_available() else None
+        self._pending_backbone_output = None
+        self._pending_action_input = None
+        self._pending_backbone_event = None
+        self._pending_backbone_states = None  # states for decode_action after finish_frame
+        self._pending_backbone_id = None  # frame ID for validating backbone cache
 
     def _decode_images(self, observation: dict) -> dict[str, np.ndarray]:
         """Decode JPEG bytes or raw RGB arrays into (1,1,H,W,3) uint8."""
@@ -458,6 +465,81 @@ class JpegPolicyWrapper(BasePolicy):
         }
         return flat_actions, info
 
+    def _start_backbone_async(self, collated_inputs: dict, states: list, backbone_id: int):
+        """Start backbone on a separate CUDA stream (non-blocking).
+
+        After this returns, the backbone is running asynchronously. Call
+        _finish_backbone_and_infer() on the next request to wait for it
+        and run only the DiT + action decode.
+        """
+        model = self.policy.model
+        raw = collated_inputs.get("inputs", collated_inputs)
+        with torch.inference_mode():
+            backbone_inputs, action_inputs = model.prepare_input(raw)
+
+        self._backbone_stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(self._backbone_stream):
+            with torch.inference_mode():
+                backbone_output = model.backbone(backbone_inputs)
+
+        self._pending_backbone_event = self._backbone_stream.record_event()
+        self._pending_backbone_output = backbone_output
+        self._pending_action_input = action_inputs
+        self._pending_backbone_states = states
+        self._pending_backbone_id = backbone_id
+
+    def _finish_backbone_and_infer(self):
+        """Wait for async backbone, run DiT + decode actions.
+
+        Returns (flat_actions, info) like _gpu_infer(), but only runs
+        the action head (DiT) since backbone was done asynchronously.
+        """
+        model = self.policy.model
+
+        t0 = time.monotonic()
+        torch.cuda.current_stream().wait_event(self._pending_backbone_event)
+        t_wait = time.monotonic()
+
+        with torch.inference_mode():
+            model_pred = model.action_head.get_action(
+                self._pending_backbone_output,
+                self._pending_action_input,
+            )
+
+        normalized_action = model_pred["action_pred"].float()
+        t_dit = time.monotonic()
+
+        # Decode actions using the cached states
+        states = self._pending_backbone_states
+        batched_states = {}
+        for k in self.policy.modality_configs["state"].modality_keys:
+            batched_states[k] = np.stack([s[k] for s in states], axis=0)
+        unnormalized_action = self.policy.processor.decode_action(
+            normalized_action.cpu().numpy(), self.policy.embodiment_tag, batched_states
+        )
+        action_dict = {key: value.astype(np.float32) for key, value in unnormalized_action.items()}
+        t_decode = time.monotonic()
+
+        flat_actions = self._reassemble_actions(action_dict)
+        t_reassemble = time.monotonic()
+
+        # Clear cached state
+        self._pending_backbone_output = None
+        self._pending_action_input = None
+        self._pending_backbone_states = None
+        self._pending_backbone_event = None
+        self._pending_backbone_id = None
+
+        info = {
+            'backbone_wait_ms': (t_wait - t0) * 1000,
+            'dit_ms': (t_dit - t_wait) * 1000,
+            'gpu_infer_ms': (t_dit - t0) * 1000,  # backbone wait + DiT (comparable to full gpu_infer)
+            'decode_ms': (t_decode - t_dit) * 1000,
+            'reassemble_ms': (t_reassemble - t_decode) * 1000,
+            'backbone_hit': True,
+        }
+        return flat_actions, info
+
     def _prefetch_vla(self, observation: dict[str, Any]):
         """Background: preprocess + VLA-prepare an observation (CPU only)."""
         t0 = time.monotonic()
@@ -488,6 +570,18 @@ class JpegPolicyWrapper(BasePolicy):
         prefetch_obs = opts.get('prefetch_observation')
         prefetch_id = opts.get('prefetch_id')
         use_prefetch_id = observation.get('_prefetch_id')
+
+        # Debug: trace prefetch state (first 5 requests)
+        if self._request_count < 5:
+            logging.info(
+                f'[prefetch-debug] req={self._request_count} '
+                f'options_type={type(options).__name__} '
+                f'has_prefetch_obs={prefetch_obs is not None} '
+                f'prefetch_id={prefetch_id} '
+                f'use_prefetch_id={use_prefetch_id} '
+                f'has_future={self._prefetch_future is not None} '
+                f'cached_id={self._prefetch_id}'
+            )
 
         # Try to use cached prefetch result from previous request
         if (self._prefetch_future is not None
@@ -536,10 +630,46 @@ class JpegPolicyWrapper(BasePolicy):
             )
             self._prefetch_id = prefetch_id
 
-        # GPU inference (overlaps with VLA prefetch thread for next frame)
-        flat_actions, gpu_info = self._gpu_infer(collated_inputs, states)
+        # Check for backbone cache hit (backbone was started async on previous request)
+        backbone_hit = False
+        if (self._pending_backbone_event is not None
+                and use_prefetch_id is not None
+                and self._pending_backbone_id == use_prefetch_id
+                and prefetch_hit):
+            # Backbone was pre-computed for this frame — run only DiT + decode
+            flat_actions, gpu_info = self._finish_backbone_and_infer()
+            backbone_hit = True
+        else:
+            # Discard stale backbone cache
+            self._pending_backbone_output = None
+            self._pending_action_input = None
+            self._pending_backbone_event = None
+            self._pending_backbone_states = None
+            self._pending_backbone_id = None
+            # Full GPU inference (overlaps with VLA prefetch thread)
+            flat_actions, gpu_info = self._gpu_infer(collated_inputs, states)
 
         t_infer = time.monotonic()
+
+        # After GPU inference, start backbone for next frame if VLA prefetch is ready
+        if (self._backbone_stream is not None
+                and self._prefetch_future is not None
+                and prefetch_id is not None):
+            try:
+                # Non-blocking check: is VLA prefetch done?
+                if self._prefetch_future.done():
+                    cached = self._prefetch_future.result()
+                    self._start_backbone_async(
+                        cached['collated_inputs'],
+                        cached['states'],
+                        prefetch_id,
+                    )
+                    # Don't clear prefetch_future — next request still needs it
+                    # for the prefetch_hit check (.result() is idempotent)
+            except Exception as e:
+                logging.warning(f'[backbone-pipeline] failed to start async backbone: {e}')
+
+        t_backbone_start = time.monotonic()
 
         gpu_infer_ms = gpu_info.get('gpu_infer_ms', 0.0)
         reassemble_ms = gpu_info.get('reassemble_ms', 0.0)
@@ -556,6 +686,9 @@ class JpegPolicyWrapper(BasePolicy):
             'handler_ms': (t_infer - t0) * 1000,
             'deser_ms': getattr(self, '_loop_deser_ms', 0.0),
             'prefetch_hit': prefetch_hit,
+            'backbone_hit': backbone_hit,
+            'backbone_wait_ms': gpu_info.get('backbone_wait_ms', 0.0),
+            'dit_ms': gpu_info.get('dit_ms', 0.0),
         }
         info['server_timing'] = server_timing
 
@@ -572,12 +705,15 @@ class JpegPolicyWrapper(BasePolicy):
                 print(msg, flush=True)
             t = server_timing
             pf = 'HIT' if prefetch_hit else 'MISS'
+            bb = 'HIT' if backbone_hit else 'MISS'
             msg = (
                 f"[timing] prep={t['prep_ms']:.1f}ms "
                 f"vla={t['vla_prep_ms']:.1f}ms gpu={t['gpu_infer_ms']:.1f}ms "
                 f"infer={t['infer_ms']:.1f}ms "
-                f"handler={t['handler_ms']:.1f}ms prefetch={pf}"
+                f"handler={t['handler_ms']:.1f}ms prefetch={pf} backbone={bb}"
             )
+            if backbone_hit:
+                msg += f" bwait={t['backbone_wait_ms']:.1f}ms dit={t['dit_ms']:.1f}ms"
             logging.info(msg)
             print(msg, flush=True)
 
