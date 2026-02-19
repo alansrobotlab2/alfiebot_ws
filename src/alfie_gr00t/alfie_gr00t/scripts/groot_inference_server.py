@@ -662,8 +662,8 @@ def main():
             torch.backends.cudnn.benchmark = True
             # Cap PyTorch's CUDA cache at 60% of total memory to leave headroom for
             # TensorRT internal buffers, numpy, OS, and other allocations on unified memory
-            torch.cuda.set_per_process_memory_fraction(0.6)
-            logger.info('CUDA optimizations: cudnn.benchmark=True, memory cap=60%')
+            torch.cuda.set_per_process_memory_fraction(0.8)
+            logger.info('CUDA optimizations: cudnn.benchmark=True, memory cap=80%')
 
         logger.info(f'Model loaded (embodiment={embodiment_tag.value}, '
                      f'language_key={language_key})')
@@ -690,7 +690,9 @@ def main():
             'language': '',
         }
         t0 = time.monotonic()
-        wrapped._get_action(warmup_obs)
+        for i in range(3):
+            wrapped._get_action(warmup_obs)
+            logger.info(f'Warmup {i+1}/3 done ({time.monotonic() - t0:.1f}s elapsed)')
         elapsed = time.monotonic() - t0
         logger.info(f'Warmup complete in {elapsed:.1f}s')
 
