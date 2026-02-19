@@ -526,6 +526,17 @@ def run_eval(args):
     video_frames = load_video_frames(dataset_path, episode_index, num_frames)
     logger.info(f'Loaded {len(video_frames)} frames from {len(CAMERA_NAMES)} cameras')
 
+    # Pre-compress all frames to JPEG upfront — removes ~10-20ms of cv2.imencode
+    # per inference step from the critical path (4 cameras × ~3-5ms each).
+    logger.info(f'Pre-compressing {len(video_frames)} frames to JPEG (quality={JPEG_QUALITY})...')
+    t0 = time.time()
+    compressed_frames = []
+    for frame_dict in video_frames:
+        compressed_frames.append(
+            {cam: compress_jpeg(img, quality=JPEG_QUALITY) for cam, img in frame_dict.items()}
+        )
+    logger.info(f'Pre-compression done in {time.time() - t0:.1f}s')
+
     # Run evaluation — step every action_horizon frames
     pred_action_across_time = []
     num_inference_steps = 0
@@ -546,11 +557,8 @@ def run_eval(args):
         else:
             state_raw = gt_states[step]
 
-        # Compress images to JPEG for efficient transport
-        images = {}
-        frame_dict = video_frames[step] if step < len(video_frames) else {}
-        for cam_name, img in frame_dict.items():
-            images[cam_name] = compress_jpeg(img, quality=JPEG_QUALITY)
+        # Use pre-compressed JPEG images
+        images = compressed_frames[step] if step < len(compressed_frames) else {}
 
         # Send state — Gr00tPolicy normalizes internally
         response = client.send_observation(
