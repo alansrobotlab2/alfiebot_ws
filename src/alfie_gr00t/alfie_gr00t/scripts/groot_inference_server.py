@@ -39,7 +39,10 @@ import zmq
 
 # Enable TF32 tensor cores for FP32 matmuls (~2x speedup, negligible precision loss).
 # Orin SM87 supports TF32 but PyTorch doesn't enable it by default.
-torch.set_float32_matmul_precision("high")
+# NOTE: Must use legacy API — new fp32_precision API conflicts with torch.compile's
+# inductor cache hashing (RuntimeError: mix of legacy and new APIs).
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 from gr00t.data.embodiment_tags import EmbodimentTag
 from gr00t.policy.gr00t_policy import Gr00tPolicy
@@ -125,9 +128,12 @@ class TensorRTDiTWrapper:
             logging.info(f"TRT output dtype: {output_dtype} -> torch {self.engine_output_dtype}")
 
         # Pre-allocated output buffer — reused across diffusion steps to avoid
-        # repeated alloc/free on Jetson unified memory. Reallocated only on shape change.
+        # repeated alloc/free on Jetson unified memory.
         self._output_buf = None
-        self._output_shape = None
+
+        # Cache for TRT context shape setup — shapes are constant at batch=1
+        # with fixed input, so set_input_shape only needs to run once.
+        self._shapes_configured = False
 
         logging.info(f"TensorRT engine loaded: {engine_path}")
 
@@ -172,13 +178,17 @@ class TensorRTDiTWrapper:
                 if not backbone_attention_mask.is_contiguous():
                     backbone_attention_mask = backbone_attention_mask.contiguous()
 
-            self.context.set_input_shape("sa_embs", sa_embs.shape)
-            self.context.set_input_shape("vl_embs", vl_embs.shape)
-            self.context.set_input_shape("timestep", timestep.shape)
-            if image_mask is not None:
-                self.context.set_input_shape("image_mask", image_mask.shape)
-            if backbone_attention_mask is not None:
-                self.context.set_input_shape("backbone_attention_mask", backbone_attention_mask.shape)
+            # Set input shapes only once — constant at batch=1 with fixed inputs.
+            # Tensor addresses must be set every call (different tensor pointers).
+            if not self._shapes_configured:
+                self.context.set_input_shape("sa_embs", sa_embs.shape)
+                self.context.set_input_shape("vl_embs", vl_embs.shape)
+                self.context.set_input_shape("timestep", timestep.shape)
+                if image_mask is not None:
+                    self.context.set_input_shape("image_mask", image_mask.shape)
+                if backbone_attention_mask is not None:
+                    self.context.set_input_shape("backbone_attention_mask", backbone_attention_mask.shape)
+                self._shapes_configured = True
 
             self.context.set_tensor_address("sa_embs", sa_embs.data_ptr())
             self.context.set_tensor_address("vl_embs", vl_embs.data_ptr())
@@ -191,12 +201,11 @@ class TensorRTDiTWrapper:
                 )
 
             # Reuse output buffer across diffusion steps (avoids alloc/free churn)
-            output_shape = tuple(self.context.get_tensor_shape("output"))
-            if self._output_shape != output_shape:
+            if self._output_buf is None:
+                output_shape = tuple(self.context.get_tensor_shape("output"))
                 self._output_buf = torch.empty(
                     output_shape, dtype=self.engine_output_dtype, device=f"cuda:{self.device}"
                 )
-                self._output_shape = output_shape
             self.context.set_tensor_address("output", self._output_buf.data_ptr())
 
             # Execute on dedicated stream
@@ -208,7 +217,10 @@ class TensorRTDiTWrapper:
             if self.convert_to_bf16:
                 output = self._output_buf.to(torch.bfloat16)
             else:
-                output = self._output_buf.clone()
+                # Safe to return buffer directly (no clone needed): action_decoder
+                # creates new tensors via torch.bmm before the next TRT call
+                # overwrites _output_buf in the next denoising step.
+                output = self._output_buf
 
         # Record event on TRT stream and make default stream wait for it
         event = self.stream.record_event()
@@ -329,7 +341,7 @@ class JpegPolicyWrapper(BasePolicy):
             img_array = np.frombuffer(jpeg_bytes, dtype=np.uint8)
             img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            video_dict[key] = img[np.newaxis, np.newaxis, ...].astype(np.uint8)
+            video_dict[key] = img[np.newaxis, np.newaxis, ...]  # already uint8 from cv2
 
         return video_dict
 
@@ -472,6 +484,8 @@ examples:
     parser.add_argument('--compile-backbone-mode', default='default',
                         help='torch.compile mode (default: %(default)s). '
                              'Only "default" works on Orin.')
+    parser.add_argument('--compile-action-head', action='store_true',
+                        help='Apply torch.compile to action encoder/decoder MLPs')
     parser.add_argument('--torch-compile', action='store_true',
                         help='Apply torch.compile to DiT (PyTorch mode only)')
     parser.add_argument('--verbose', '-v', action='store_true',
@@ -602,6 +616,16 @@ def main():
                 mode=args.compile_backbone_mode,
             )
             logger.info('Backbone compiled (will warmup on first inference)')
+
+        # torch.compile on action encoder/decoder MLPs
+        if args.compile_action_head:
+            logger.info('Compiling action encoder/decoder with torch.compile...')
+            ah = policy.model.action_head
+            if hasattr(ah, 'action_encoder'):
+                ah.action_encoder.forward = torch.compile(ah.action_encoder.forward)
+            if hasattr(ah, 'action_decoder'):
+                ah.action_decoder.forward = torch.compile(ah.action_decoder.forward)
+            logger.info('Action head compiled (will warmup on first inference)')
 
         # Apply torch.compile to DiT (PyTorch mode only, not with TRT)
         if args.torch_compile and not args.trt_engine_path:
