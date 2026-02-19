@@ -22,6 +22,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -374,8 +375,11 @@ class JpegPolicyWrapper(BasePolicy):
         self, observation: dict[str, Any], options: dict[str, Any] | None = None
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Translate wire format → native format → run inference → flat 22D."""
+        t0 = time.monotonic()
+
         # Decode images
         video_dict = self._decode_images(observation)
+        t_decode = time.monotonic()
 
         # Split state
         state_dict = self._split_state(observation.get('state', []))
@@ -390,6 +394,7 @@ class JpegPolicyWrapper(BasePolicy):
             'state': state_dict,
             'language': language_dict,
         }
+        t_prep = time.monotonic()
 
         # Log periodically
         if self._request_count % 10 == 0:
@@ -405,27 +410,45 @@ class JpegPolicyWrapper(BasePolicy):
 
         # Run inference on the wrapped policy
         action_dict, info = self.policy.get_action(native_obs, options)
+        t_infer = time.monotonic()
 
         # Reassemble to flat 22D for the client
         flat_actions = self._reassemble_actions(action_dict)
+        t_reassemble = time.monotonic()
+
+        # Build server timing breakdown
+        server_timing = {
+            'decode_ms': (t_decode - t0) * 1000,
+            'prep_ms': (t_prep - t_decode) * 1000,
+            'infer_ms': (t_infer - t_prep) * 1000,
+            'reassemble_ms': (t_reassemble - t_infer) * 1000,
+            'handler_ms': (t_reassemble - t0) * 1000,
+            'deser_ms': getattr(self, '_loop_deser_ms', 0.0),
+        }
+        info['server_timing'] = server_timing
 
         # Log periodically
-        if self._request_count % 10 == 0 and flat_actions:
-            a = flat_actions[0]
+        if self._request_count % 10 == 0:
+            if flat_actions:
+                a = flat_actions[0]
+                msg = (
+                    f"[output] head=({a[19]:.3f},{a[20]:.3f},{a[21]:.3f}) "
+                    f"r_arm=({a[13]:.3f},{a[14]:.3f},{a[15]:.3f},{a[16]:.3f},{a[17]:.3f}) "
+                    f"r_grip={a[18]:.3f} back={a[6]:.3f} fwd={a[0]:.3f}"
+                )
+                logging.info(msg)
+                print(msg, flush=True)
+            t = server_timing
             msg = (
-                f"[output] head=({a[19]:.3f},{a[20]:.3f},{a[21]:.3f}) "
-                f"r_arm=({a[13]:.3f},{a[14]:.3f},{a[15]:.3f},{a[16]:.3f},{a[17]:.3f}) "
-                f"r_grip={a[18]:.3f} back={a[6]:.3f} fwd={a[0]:.3f}"
+                f"[timing] decode={t['decode_ms']:.1f}ms prep={t['prep_ms']:.1f}ms "
+                f"infer={t['infer_ms']:.1f}ms reassemble={t['reassemble_ms']:.1f}ms "
+                f"handler={t['handler_ms']:.1f}ms deser={t['deser_ms']:.1f}ms"
             )
             logging.info(msg)
             print(msg, flush=True)
 
         self._request_count += 1
 
-        # Return as a dict with 'actions' key — PolicyServer serializes via MsgSerializer.
-        # The client expects the response to contain an 'actions' key with flat 22D arrays.
-        # However, PolicyServer returns whatever _get_action returns as a tuple (action, info).
-        # We embed the flat actions in the action dict so the client can extract them.
         return {'actions': flat_actions}, info
 
     def check_observation(self, observation: dict[str, Any]) -> None:
@@ -709,11 +732,17 @@ def main():
             raise
 
         try:
+            t_deser_start = time.monotonic()
             request = MsgSerializer.from_bytes(message)
+            t_deser_done = time.monotonic()
+
             endpoint = request.get("endpoint", "get_action")
 
             if endpoint not in server._endpoints:
                 raise ValueError(f"Unknown endpoint: {endpoint}")
+
+            # Store deser time on wrapper so _get_action can include it
+            wrapped._loop_deser_ms = (t_deser_done - t_deser_start) * 1000
 
             handler = server._endpoints[endpoint]
             result = (
@@ -721,7 +750,11 @@ def main():
                 if handler.requires_input
                 else handler.handler()
             )
-            server.socket.send(MsgSerializer.to_bytes(result))
+
+            t_ser_start = time.monotonic()
+            response_bytes = MsgSerializer.to_bytes(result)
+            t_ser_done = time.monotonic()
+            server.socket.send(response_bytes)
         except Exception as e:
             logger.error(f'Error processing request: {e}')
             import traceback
