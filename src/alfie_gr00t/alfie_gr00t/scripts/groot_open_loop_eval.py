@@ -39,7 +39,7 @@ from matplotlib import pyplot as plt
 try:
     import torchcodec.decoders
     HAS_TORCHCODEC = True
-except ImportError:
+except (ImportError, RuntimeError):
     HAS_TORCHCODEC = False
 
 # Import ZMQ client (no ROS2 dependency)
