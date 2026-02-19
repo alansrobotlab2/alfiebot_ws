@@ -450,6 +450,21 @@ def print_timing_breakdown(
         print()
         _stats([t.get('handler_ms', 0) for t in server_timings], 'Handler total')
         print()
+        # Prefetch and backbone hit rates
+        prefetch_hits = [t.get('prefetch_hit', False) for t in server_timings]
+        backbone_hits = [t.get('backbone_hit', False) for t in server_timings]
+        if any(prefetch_hits) or any(backbone_hits):
+            n_total = len(prefetch_hits)
+            n_pf = sum(prefetch_hits)
+            n_bb = sum(backbone_hits)
+            print(f'    Prefetch hit rate:  {n_pf}/{n_total} ({100*n_pf/n_total:.0f}%)')
+            print(f'    Backbone hit rate:  {n_bb}/{n_total} ({100*n_bb/n_total:.0f}%)')
+            if any(backbone_hits):
+                bb_timings = [t for t in server_timings if t.get('backbone_hit')]
+                _stats([t.get('backbone_wait_ms', 0) for t in bb_timings], 'Backbone wait (on HIT frames)')
+                print()
+                _stats([t.get('dit_ms', 0) for t in bb_timings], 'DiT only (on HIT frames)')
+            print()
 
     # Network transit estimate (zmq_ms - server handler - server deser)
     if server_timings and client_timings:

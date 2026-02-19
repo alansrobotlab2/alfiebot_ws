@@ -25,6 +25,7 @@ import signal
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -321,6 +322,17 @@ class JpegPolicyWrapper(BasePolicy):
         self.policy = policy
         self.language_key = language_key
         self._request_count = 0
+        # Prefetch: VLA-prep the next frame while GPU runs current frame
+        self._prefetch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='vla_prefetch')
+        self._prefetch_future = None
+        self._prefetch_id = None  # frame ID for validating prefetch matches
+        # Backbone pipeline: overlap backbone(N+1) with DiT(N) on separate CUDA streams
+        self._backbone_stream = torch.cuda.Stream() if torch.cuda.is_available() else None
+        self._pending_backbone_output = None
+        self._pending_action_input = None
+        self._pending_backbone_event = None
+        self._pending_backbone_states = None  # states for decode_action after finish_frame
+        self._pending_backbone_id = None  # frame ID for validating backbone cache
 
     def _decode_images(self, observation: dict) -> dict[str, np.ndarray]:
         """Decode JPEG bytes or raw RGB arrays into (1,1,H,W,3) uint8."""
@@ -423,18 +435,181 @@ class JpegPolicyWrapper(BasePolicy):
         }
         return flat_actions, info
 
+    def _vla_prepare(self, native_obs: dict):
+        """Run VLA processor on CPU: prepare_inputs() on native observation.
+
+        Returns (collated_inputs, states) ready for run_inference().
+        """
+        return self.policy.prepare_inputs(native_obs)
+
+    def _gpu_infer(self, collated_inputs: dict, states: list):
+        """Run GPU-only inference + action reassembly.
+
+        Args:
+            collated_inputs: Output from policy.prepare_inputs().
+            states: State list from policy.prepare_inputs().
+
+        Returns:
+            (flat_actions, info) where info includes gpu_infer_ms, reassemble_ms.
+        """
+        t0 = time.monotonic()
+        action_dict = self.policy.run_inference(collated_inputs, states)
+        t_infer = time.monotonic()
+
+        flat_actions = self._reassemble_actions(action_dict)
+        t_reassemble = time.monotonic()
+
+        info = {
+            'gpu_infer_ms': (t_infer - t0) * 1000,
+            'reassemble_ms': (t_reassemble - t_infer) * 1000,
+        }
+        return flat_actions, info
+
+    def _start_backbone_async(self, collated_inputs: dict, states: list, backbone_id: int):
+        """Start backbone on a separate CUDA stream (non-blocking).
+
+        After this returns, the backbone is running asynchronously. Call
+        _finish_backbone_and_infer() on the next request to wait for it
+        and run only the DiT + action decode.
+        """
+        model = self.policy.model
+        raw = collated_inputs.get("inputs", collated_inputs)
+        with torch.inference_mode():
+            backbone_inputs, action_inputs = model.prepare_input(raw)
+
+        self._backbone_stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(self._backbone_stream):
+            with torch.inference_mode():
+                backbone_output = model.backbone(backbone_inputs)
+
+        self._pending_backbone_event = self._backbone_stream.record_event()
+        self._pending_backbone_output = backbone_output
+        self._pending_action_input = action_inputs
+        self._pending_backbone_states = states
+        self._pending_backbone_id = backbone_id
+
+    def _finish_backbone_and_infer(self):
+        """Wait for async backbone, run DiT + decode actions.
+
+        Returns (flat_actions, info) like _gpu_infer(), but only runs
+        the action head (DiT) since backbone was done asynchronously.
+        """
+        model = self.policy.model
+
+        t0 = time.monotonic()
+        torch.cuda.current_stream().wait_event(self._pending_backbone_event)
+        t_wait = time.monotonic()
+
+        with torch.inference_mode():
+            model_pred = model.action_head.get_action(
+                self._pending_backbone_output,
+                self._pending_action_input,
+            )
+
+        normalized_action = model_pred["action_pred"].float()
+        t_dit = time.monotonic()
+
+        # Decode actions using the cached states
+        states = self._pending_backbone_states
+        batched_states = {}
+        for k in self.policy.modality_configs["state"].modality_keys:
+            batched_states[k] = np.stack([s[k] for s in states], axis=0)
+        unnormalized_action = self.policy.processor.decode_action(
+            normalized_action.cpu().numpy(), self.policy.embodiment_tag, batched_states
+        )
+        action_dict = {key: value.astype(np.float32) for key, value in unnormalized_action.items()}
+        t_decode = time.monotonic()
+
+        flat_actions = self._reassemble_actions(action_dict)
+        t_reassemble = time.monotonic()
+
+        # Clear cached state
+        self._pending_backbone_output = None
+        self._pending_action_input = None
+        self._pending_backbone_states = None
+        self._pending_backbone_event = None
+        self._pending_backbone_id = None
+
+        info = {
+            'backbone_wait_ms': (t_wait - t0) * 1000,
+            'dit_ms': (t_dit - t_wait) * 1000,
+            'gpu_infer_ms': (t_dit - t0) * 1000,  # backbone wait + DiT (comparable to full gpu_infer)
+            'decode_ms': (t_decode - t_dit) * 1000,
+            'reassemble_ms': (t_reassemble - t_decode) * 1000,
+            'backbone_hit': True,
+        }
+        return flat_actions, info
+
+    def _prefetch_vla(self, observation: dict[str, Any]):
+        """Background: preprocess + VLA-prepare an observation (CPU only)."""
+        t0 = time.monotonic()
+        native_obs = self._preprocess(observation)
+        t_prep = time.monotonic()
+        collated_inputs, states = self._vla_prepare(native_obs)
+        t_vla = time.monotonic()
+        return {
+            'collated_inputs': collated_inputs,
+            'states': states,
+            'prep_ms': (t_prep - t0) * 1000,
+            'vla_prep_ms': (t_vla - t_prep) * 1000,
+        }
+
     def _get_action(
         self, observation: dict[str, Any], options: dict[str, Any] | None = None
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Translate wire format → native format → run inference → flat 22D.
 
         This is the synchronous path used by REQ/REP (eval, ping).
-        Calls _preprocess + _infer sequentially.
+        Supports prefetch pipelining: if the previous request submitted a
+        prefetch for this observation, we skip VLA preprocessing and go
+        straight to GPU inference.
         """
         t0 = time.monotonic()
+        prefetch_hit = False
+        opts = options or {}
+        prefetch_obs = opts.get('prefetch_observation')
+        prefetch_id = opts.get('prefetch_id')
+        use_prefetch_id = observation.get('_prefetch_id')
 
-        native_obs = self._preprocess(observation)
-        t_prep = time.monotonic()
+        # Debug: trace prefetch state (first 5 requests)
+        if self._request_count < 5:
+            logging.info(
+                f'[prefetch-debug] req={self._request_count} '
+                f'options_type={type(options).__name__} '
+                f'has_prefetch_obs={prefetch_obs is not None} '
+                f'prefetch_id={prefetch_id} '
+                f'use_prefetch_id={use_prefetch_id} '
+                f'has_future={self._prefetch_future is not None} '
+                f'cached_id={self._prefetch_id}'
+            )
+
+        # Try to use cached prefetch result from previous request
+        if (self._prefetch_future is not None
+                and use_prefetch_id is not None
+                and self._prefetch_id == use_prefetch_id):
+            try:
+                cached = self._prefetch_future.result(timeout=0.5)
+                collated_inputs = cached['collated_inputs']
+                states = cached['states']
+                prep_ms = cached['prep_ms']
+                vla_prep_ms = cached['vla_prep_ms']
+                prefetch_hit = True
+            except Exception as e:
+                logging.warning(f'[prefetch-debug] prefetch future failed: {e}')
+                prefetch_hit = False
+        # Discard stale prefetch
+        if not prefetch_hit:
+            self._prefetch_future = None
+            self._prefetch_id = None
+
+        if not prefetch_hit:
+            # Synchronous path: preprocess + VLA prep
+            native_obs = self._preprocess(observation)
+            t_prep = time.monotonic()
+            prep_ms = (t_prep - t0) * 1000
+            collated_inputs, states = self._vla_prepare(native_obs)
+            t_vla = time.monotonic()
+            vla_prep_ms = (t_vla - t_prep) * 1000
 
         # Log periodically
         if self._request_count % 10 == 0:
@@ -448,20 +623,72 @@ class JpegPolicyWrapper(BasePolicy):
                 logging.info(msg)
                 print(msg, flush=True)
 
-        # Run inference on the wrapped policy
-        flat_actions, info = self._infer(native_obs, options)
+        # Kick off VLA prefetch for next frame before GPU inference
+        if prefetch_obs is not None and prefetch_id is not None:
+            self._prefetch_future = self._prefetch_executor.submit(
+                self._prefetch_vla, prefetch_obs,
+            )
+            self._prefetch_id = prefetch_id
+
+        # Check for backbone cache hit (backbone was started async on previous request)
+        backbone_hit = False
+        if (self._pending_backbone_event is not None
+                and use_prefetch_id is not None
+                and self._pending_backbone_id == use_prefetch_id
+                and prefetch_hit):
+            # Backbone was pre-computed for this frame — run only DiT + decode
+            flat_actions, gpu_info = self._finish_backbone_and_infer()
+            backbone_hit = True
+        else:
+            # Discard stale backbone cache
+            self._pending_backbone_output = None
+            self._pending_action_input = None
+            self._pending_backbone_event = None
+            self._pending_backbone_states = None
+            self._pending_backbone_id = None
+            # Full GPU inference (overlaps with VLA prefetch thread)
+            flat_actions, gpu_info = self._gpu_infer(collated_inputs, states)
+
         t_infer = time.monotonic()
 
+        # After GPU inference, start backbone for next frame if VLA prefetch is ready
+        if (self._backbone_stream is not None
+                and self._prefetch_future is not None
+                and prefetch_id is not None):
+            try:
+                # Non-blocking check: is VLA prefetch done?
+                if self._prefetch_future.done():
+                    cached = self._prefetch_future.result()
+                    self._start_backbone_async(
+                        cached['collated_inputs'],
+                        cached['states'],
+                        prefetch_id,
+                    )
+                    # Don't clear prefetch_future — next request still needs it
+                    # for the prefetch_hit check (.result() is idempotent)
+            except Exception as e:
+                logging.warning(f'[backbone-pipeline] failed to start async backbone: {e}')
+
+        t_backbone_start = time.monotonic()
+
+        gpu_infer_ms = gpu_info.get('gpu_infer_ms', 0.0)
+        reassemble_ms = gpu_info.get('reassemble_ms', 0.0)
+
         # Build server timing breakdown
+        info = {}
         server_timing = {
-            'decode_ms': 0.0,  # included in prep_ms for split path
-            'prep_ms': (t_prep - t0) * 1000,
-            'vla_prep_ms': info.get('vla_prep_ms', 0.0),
-            'gpu_infer_ms': info.get('gpu_infer_ms', 0.0),
-            'infer_ms': (t_infer - t_prep) * 1000,
-            'reassemble_ms': info.get('reassemble_ms', 0.0),
+            'decode_ms': 0.0,
+            'prep_ms': prep_ms,
+            'vla_prep_ms': vla_prep_ms,
+            'gpu_infer_ms': gpu_infer_ms,
+            'infer_ms': vla_prep_ms + gpu_infer_ms + reassemble_ms,
+            'reassemble_ms': reassemble_ms,
             'handler_ms': (t_infer - t0) * 1000,
             'deser_ms': getattr(self, '_loop_deser_ms', 0.0),
+            'prefetch_hit': prefetch_hit,
+            'backbone_hit': backbone_hit,
+            'backbone_wait_ms': gpu_info.get('backbone_wait_ms', 0.0),
+            'dit_ms': gpu_info.get('dit_ms', 0.0),
         }
         info['server_timing'] = server_timing
 
@@ -477,12 +704,16 @@ class JpegPolicyWrapper(BasePolicy):
                 logging.info(msg)
                 print(msg, flush=True)
             t = server_timing
+            pf = 'HIT' if prefetch_hit else 'MISS'
+            bb = 'HIT' if backbone_hit else 'MISS'
             msg = (
                 f"[timing] prep={t['prep_ms']:.1f}ms "
                 f"vla={t['vla_prep_ms']:.1f}ms gpu={t['gpu_infer_ms']:.1f}ms "
                 f"infer={t['infer_ms']:.1f}ms "
-                f"handler={t['handler_ms']:.1f}ms deser={t['deser_ms']:.1f}ms"
+                f"handler={t['handler_ms']:.1f}ms prefetch={pf} backbone={bb}"
             )
+            if backbone_hit:
+                msg += f" bwait={t['backbone_wait_ms']:.1f}ms dit={t['dit_ms']:.1f}ms"
             logging.info(msg)
             print(msg, flush=True)
 
@@ -778,17 +1009,17 @@ def main():
     push_socket.setsockopt(zmq.LINGER, 0)
     logger.info(f'Async PUSH socket bound: {push_bind}')
 
-    # Single-slot buffer for preprocessed observations (IO thread → GPU thread)
+    # Single-slot buffer for model-ready inputs (IO thread → GPU thread)
     class SingleSlotBuffer:
         """Thread-safe single-slot buffer. Latest write overwrites previous."""
         def __init__(self):
             self._lock = threading.Lock()
             self._event = threading.Event()
-            self._data = None  # (obs_id, native_obs, preprocess_ms)
+            self._data = None
 
-        def put(self, obs_id: int, native_obs: dict, preprocess_ms: float):
+        def put(self, data):
             with self._lock:
-                self._data = (obs_id, native_obs, preprocess_ms)
+                self._data = data
             self._event.set()
 
         def get(self, timeout: float = 1.0):
@@ -804,7 +1035,7 @@ def main():
     preprocess_buffer = SingleSlotBuffer()
     async_request_count = 0
 
-    # IO thread: receive observations from PULL → preprocess → buffer
+    # IO thread: receive observations from PULL → preprocess + VLA prepare → buffer
     def async_io_thread():
         nonlocal async_request_count
         poller = zmq.Poller()
@@ -824,17 +1055,24 @@ def main():
                 observation = request.get('data', {}).get('observation', {})
                 obs_id = observation.get('obs_id', -1)
 
-                # CPU-bound preprocessing: JPEG decode + state split + language
+                # CPU-bound: JPEG decode + state split + language
                 native_obs = wrapped._preprocess(observation)
-                preprocess_ms = (time.monotonic() - t0) * 1000
+                t_preprocess = time.monotonic()
 
-                preprocess_buffer.put(obs_id, native_obs, preprocess_ms)
+                # CPU-bound: VLA processor (resize/crop/normalize, tokenize, collate, dtype)
+                collated_inputs, states = wrapped._vla_prepare(native_obs)
+                t_vla = time.monotonic()
+
+                preprocess_ms = (t_preprocess - t0) * 1000
+                vla_prep_ms = (t_vla - t_preprocess) * 1000
+
+                preprocess_buffer.put((obs_id, collated_inputs, states, preprocess_ms, vla_prep_ms))
                 async_request_count += 1
 
                 if async_request_count % 10 == 0:
                     logger.info(
-                        f'[async-io] preprocessed obs_id={obs_id} '
-                        f'in {preprocess_ms:.1f}ms'
+                        f'[async-io] obs_id={obs_id} '
+                        f'preprocess={preprocess_ms:.1f}ms vla={vla_prep_ms:.1f}ms'
                     )
             except zmq.Again:
                 continue
@@ -845,7 +1083,7 @@ def main():
 
         logger.info('Async IO thread stopped')
 
-    # GPU thread: grab preprocessed observation → inference → push result
+    # GPU thread: grab model-ready inputs → GPU inference only → push result
     def async_gpu_thread():
         logger.info('Async GPU thread started')
 
@@ -854,21 +1092,22 @@ def main():
             if item is None:
                 continue
 
-            obs_id, native_obs, preprocess_ms = item
+            obs_id, collated_inputs, states, preprocess_ms, vla_prep_ms = item
 
             try:
-                t0 = time.monotonic()
-                flat_actions, info = wrapped._infer(native_obs)
-                infer_ms = (time.monotonic() - t0) * 1000
+                flat_actions, info = wrapped._gpu_infer(collated_inputs, states)
+
+                gpu_infer_ms = info.get('gpu_infer_ms', 0.0)
+                reassemble_ms = info.get('reassemble_ms', 0.0)
 
                 server_timing = {
                     'prep_ms': preprocess_ms,
-                    'vla_prep_ms': info.get('vla_prep_ms', 0.0),
-                    'gpu_infer_ms': info.get('gpu_infer_ms', 0.0),
-                    'infer_ms': infer_ms,
-                    'handler_ms': preprocess_ms + infer_ms,
+                    'vla_prep_ms': vla_prep_ms,
+                    'gpu_infer_ms': gpu_infer_ms,
+                    'infer_ms': vla_prep_ms + gpu_infer_ms + reassemble_ms,
+                    'handler_ms': preprocess_ms + vla_prep_ms + gpu_infer_ms + reassemble_ms,
                     'decode_ms': 0.0,
-                    'reassemble_ms': info.get('reassemble_ms', 0.0),
+                    'reassemble_ms': reassemble_ms,
                     'deser_ms': 0.0,
                 }
                 info['server_timing'] = server_timing
@@ -881,7 +1120,8 @@ def main():
                 if async_request_count % 10 == 0:
                     logger.info(
                         f'[async-gpu] obs_id={obs_id} '
-                        f'infer={infer_ms:.1f}ms total={preprocess_ms + infer_ms:.1f}ms'
+                        f'gpu={gpu_infer_ms:.1f}ms vla={vla_prep_ms:.1f}ms '
+                        f'prep={preprocess_ms:.1f}ms'
                     )
             except Exception as e:
                 logger.error(f'Async GPU error: {e}')

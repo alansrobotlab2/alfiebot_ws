@@ -286,6 +286,11 @@ class ZMQClient:
         images: dict[str, bytes],
         state: np.ndarray,
         language: str,
+        prefetch_images: Optional[dict[str, bytes]] = None,
+        prefetch_state: Optional[np.ndarray] = None,
+        prefetch_language: Optional[str] = None,
+        prefetch_id: Optional[int] = None,
+        use_prefetch_id: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
         """Send observation and receive action prediction.
 
@@ -294,6 +299,11 @@ class ZMQClient:
                    Keys: 'left_wide', 'right_wide', 'left_center', 'right_center'
             state: State vector (22D).
             language: Task description string.
+            prefetch_images: Optional next-frame images for server-side pipelining.
+            prefetch_state: Optional next-frame state for server-side pipelining.
+            prefetch_language: Optional next-frame language (defaults to language).
+            prefetch_id: ID for the prefetch observation (server caches result under this ID).
+            use_prefetch_id: ID of a previously prefetched result to use for this request.
 
         Returns:
             Action response dictionary with 'actions' key containing
@@ -306,10 +316,27 @@ class ZMQClient:
             'language': language,
         }
 
+        # Tag observation with prefetch ID so server can validate cache hit
+        if use_prefetch_id is not None:
+            observation['_prefetch_id'] = use_prefetch_id
+
+        # Build options with prefetch if provided
+        options = None
+        if prefetch_images is not None and prefetch_state is not None and prefetch_id is not None:
+            prefetch_obs = {
+                **prefetch_images,
+                'state': prefetch_state.tolist() if isinstance(prefetch_state, np.ndarray) else prefetch_state,
+                'language': prefetch_language or language,
+            }
+            options = {
+                'prefetch_observation': prefetch_obs,
+                'prefetch_id': prefetch_id,
+            }
+
         # Call get_action endpoint via PolicyServer protocol
         response = self._call_endpoint(
             endpoint='get_action',
-            data={'observation': observation},
+            data={'observation': observation, 'options': options},
         )
 
         if response is None:
