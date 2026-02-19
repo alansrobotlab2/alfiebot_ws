@@ -259,6 +259,18 @@ ros2 run alfie_gr00t groot_client --ros-args \
     -p transport:=tcp \
     -p server_host:=192.168.1.100 \
     -p server_port:=5555
+
+# with async flag
+ros2 run alfie_gr00t groot_client --ros-args \
+    -p transport:=tcp \
+    -p server_host:=192.168.1.100 \
+    -p server_port:=5555 \
+    -p use_async_zmq:=true
+
+# using parms file
+ros2 run alfie_gr00t groot_client \
+  --ros-args -r __ns:=/alfie --params-file /home/alfie/alfiebot_ws/src/alfie_gr00t/config/groot_client.yaml
+
 ```
 
 ### Control Topics

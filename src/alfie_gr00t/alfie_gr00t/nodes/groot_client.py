@@ -43,6 +43,7 @@ from ..core.action_interpolator import ActionInterpolator
 from ..core.chunk_buffer import ChunkBuffer, TimestampedChunk
 from ..core.observation_bridge import Observation, ObservationBridge
 from ..core.rate_limited_interpolator import RateLimitedInterpolator
+from ..core.zmq_async_client import ZMQAsyncClient
 from ..core.zmq_client import ZMQClient, build_server_address, DEFAULT_IPC_PATH
 from ..utils.safety import SafetyMonitor
 
@@ -249,12 +250,30 @@ class GrootClientNode(Node):
             max_consecutive_failures=5,
         )
 
-        # Initialize ZMQ client
+        # Async ZMQ mode
+        self.use_async_zmq = self.get_parameter('use_async_zmq').value
+        self.async_push_port = self.get_parameter('async_push_port').value
+        self.async_pull_port = self.get_parameter('async_pull_port').value
+
+        # Initialize ZMQ client (REQ/REP — always created for ping/health checks)
         self.zmq_client = ZMQClient(
             server_address=self.server_address,
             timeout_ms=self.inference_timeout_ms,
             logger=lambda msg: self.get_logger().info(msg),
         )
+
+        # Initialize async ZMQ client (PUSH/PULL — for live inference when enabled)
+        self.async_client: Optional[ZMQAsyncClient] = None
+        if self.use_async_zmq:
+            push_addr = f'tcp://{self.server_host}:{self.async_push_port}'
+            pull_addr = f'tcp://{self.server_host}:{self.async_pull_port}'
+            self.async_client = ZMQAsyncClient(
+                push_address=push_addr,
+                pull_address=pull_addr,
+                req_address=self.server_address,
+                timeout_ms=self.inference_timeout_ms,
+                logger=lambda msg: self.get_logger().info(msg),
+            )
 
         # Initialize observation bridge
         self.observation_bridge = ObservationBridge(
@@ -342,10 +361,12 @@ class GrootClientNode(Node):
             self._initialize_back()
 
         # Start inference on a background thread (after all setup is complete)
-        inference_target = (
-            self._continuous_inference_loop if self.continuous_inference
-            else self._inference_loop
-        )
+        if self.use_async_zmq:
+            inference_target = self._async_inference_loop
+        elif self.continuous_inference:
+            inference_target = self._continuous_inference_loop
+        else:
+            inference_target = self._inference_loop
         self._inference_thread = threading.Thread(
             target=inference_target,
             name='groot_inference',
@@ -531,6 +552,11 @@ class GrootClientNode(Node):
         self.declare_parameter('server_port', 5555)
         self.declare_parameter('ipc_path', DEFAULT_IPC_PATH)
 
+        # Async ZMQ (PUSH/PULL) for decoupled observation/action flow
+        self.declare_parameter('use_async_zmq', False)
+        self.declare_parameter('async_push_port', 5556)  # client → server observations
+        self.declare_parameter('async_pull_port', 5557)  # server → client actions
+
         # Inference settings
         self.declare_parameter('inference_timeout_ms', 5000)
         self.declare_parameter('task_description', 'find the can and pick it up')
@@ -648,13 +674,23 @@ class GrootClientNode(Node):
         self.get_logger().info('Activating GR00T inference...')
         self._state = ClientState.CONNECTING
 
+        # Connect async client if enabled, otherwise REQ/REP
+        if self.async_client is not None:
+            if not self.async_client.connect():
+                self._state = ClientState.ERROR
+                self.get_logger().error('Failed to connect async ZMQ client')
+                return
+
         if self.zmq_client.connect():
             self._state = ClientState.ACTIVE
             self._active = True
             self._activation_time = time.monotonic()
             if self._chunk_buffer is not None:
                 self._chunk_buffer.reset()
-            self.get_logger().info('GR00T inference active')
+            self.get_logger().info(
+                f'GR00T inference active '
+                f'({"async PUSH/PULL" if self.async_client else "REQ/REP"})'
+            )
             self._check_starting_pose()
         else:
             self._state = ClientState.ERROR
@@ -873,6 +909,100 @@ class GrootClientNode(Node):
                 else:
                     # Buffer as pending (promoted when current chunk exhausts)
                     self._pending_chunk = chunk
+
+    def _async_inference_loop(self):
+        """Async PUSH/PULL inference loop.
+
+        Observations are pushed non-blocking to the server. Action results
+        arrive asynchronously on the async_client's receiver thread.
+        This loop polls for results and decides when to push new observations,
+        using the same trigger-step timing as the synchronous _inference_loop.
+
+        All existing overlap/skip/blend behavior is preserved:
+        - latency_skip compensates for observation staleness
+        - inference_trigger_step controls when observations are captured
+        - _pending_chunk / promote pattern handles chunk transitions
+        - chunk_blend_steps blends at transitions
+        """
+        trigger_time = self.inference_trigger_step * ACTION_STEP_PERIOD
+        awaiting_result = False  # True after push, until result received
+
+        while self._running:
+            if not self._active or self._state != ClientState.ACTIVE:
+                time.sleep(0.05)
+                continue
+
+            # Check for new action result from server (non-blocking)
+            result = self.async_client.pop_result()
+            if result is not None:
+                awaiting_result = False
+                self.safety.update_inference_time()
+
+                chunk = self._extract_action_chunk(result)
+                if chunk is not None:
+                    obs_id = result.get('obs_id', -1)
+                    latency_ms = result.get('latency_ms', 0)
+
+                    with self._action_lock:
+                        has_chunk = self._action_chunk is not None
+
+                    # Log chunk diagnostics
+                    skip = self.latency_skip
+                    skip_idx = min(skip, len(chunk) - 1)
+                    self.get_logger().info(
+                        f'[async-chunk] {"pending" if has_chunk else "first"} '
+                        f'obs_id={obs_id} latency={latency_ms:.0f}ms '
+                        f'skip={skip} exec_window=[{skip}:{skip + self.n_action_steps}] '
+                        f'action_base[{skip}]='
+                        f'{np.array2string(chunk[skip_idx, 0:6], precision=4, suppress_small=True)}'
+                    )
+
+                    self._total_chunks += 1
+
+                    # Install or buffer chunk (same logic as sync loop)
+                    with self._action_lock:
+                        if self._action_chunk is None:
+                            self._action_chunk = chunk
+                            self._chunk_timestamp = time.monotonic()
+                            self._effective_skip = 0
+                        else:
+                            self._pending_chunk = chunk
+
+            # Decide whether to push a new observation
+            with self._action_lock:
+                has_chunk = self._action_chunk is not None
+                has_pending = self._pending_chunk is not None
+                chunk_ts = self._chunk_timestamp
+
+            # Don't push if we already have a pending chunk or are awaiting a result
+            if has_pending or awaiting_result:
+                time.sleep(0.005)
+                continue
+
+            # Wait for trigger point within execution window
+            if has_chunk:
+                elapsed = time.monotonic() - chunk_ts
+                if elapsed < trigger_time:
+                    time.sleep(min(trigger_time - elapsed, 0.01))
+                    continue
+
+            # Capture observation and push (non-blocking)
+            obs = self.observation_bridge.get_latest_observation()
+            if obs is None or not obs.valid:
+                time.sleep(0.01)
+                continue
+
+            obs_id = self.async_client.push_observation(
+                images=obs.images,
+                state=obs.state,
+                language=self.task_description,
+            )
+
+            if obs_id >= 0:
+                awaiting_result = True
+            else:
+                self.get_logger().warn('[async] Failed to push observation')
+                time.sleep(0.01)
 
     def _continuous_inference_loop(self):
         """Continuous inference: always-churning loop.
@@ -1256,6 +1386,8 @@ class GrootClientNode(Node):
         self.action_publisher.close_csv()
         self._close_action_csv()
         self.zmq_client.close()
+        if self.async_client is not None:
+            self.async_client.close()
 
         super().destroy_node()
 

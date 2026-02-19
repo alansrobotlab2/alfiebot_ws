@@ -21,6 +21,14 @@ groot_server:
     ipc_path: "/tmp/groot_inference.sock"
 
     # ==========================================================================
+    # Async ZMQ (PUSH/PULL) — for live robot inference
+    # ==========================================================================
+    # Async sockets run alongside REQ/REP. No toggle needed — they
+    # activate automatically when a client connects.
+    async_pull_port: 5556    # server PULL ← client observations
+    async_push_port: 5557    # server PUSH → client actions
+
+    # ==========================================================================
     # Model Configuration
     # ==========================================================================
     # Path to trained GR00T model checkpoint
