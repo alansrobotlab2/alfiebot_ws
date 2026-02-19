@@ -123,6 +123,7 @@ class ZMQClient:
         # Statistics
         self._latency_history: deque = deque(maxlen=100)
         self._message_sizes: deque = deque(maxlen=100)  # (send_bytes, recv_bytes)
+        self._timing_history: deque = deque(maxlen=100)  # per-request timing breakdown
         self._frame_id = 0
 
     @property
@@ -232,17 +233,27 @@ class ZMQClient:
             request["data"] = data
 
         try:
-            start_time = time.monotonic()
+            t0 = time.monotonic()
 
             packed = msg_to_bytes(request)
+            t_pack = time.monotonic()
+
             self._socket.send(packed)
-
             response_packed = self._socket.recv()
-            response = msg_from_bytes(response_packed)
+            t_zmq = time.monotonic()
 
-            latency_ms = (time.monotonic() - start_time) * 1000
+            response = msg_from_bytes(response_packed)
+            t_unpack = time.monotonic()
+
+            latency_ms = (t_unpack - t0) * 1000
             self._latency_history.append(latency_ms)
             self._message_sizes.append((len(packed), len(response_packed)))
+            self._timing_history.append({
+                'pack_ms': (t_pack - t0) * 1000,
+                'zmq_ms': (t_zmq - t_pack) * 1000,
+                'unpack_ms': (t_unpack - t_zmq) * 1000,
+                'total_ms': latency_ms,
+            })
 
             self._consecutive_failures = 0
 
@@ -308,11 +319,19 @@ class ZMQClient:
         # action_dict contains {'actions': [[22D], ...]}
         if isinstance(response, (list, tuple)):
             action_dict = response[0]  # First element is action dict
-            # Wrap in standard response format
-            return {
+            result = {
                 'actions': action_dict.get('actions', []),
                 'status': 'ok',
             }
+            # Extract server timing from info dict if available
+            if len(response) > 1 and isinstance(response[1], dict):
+                server_timing = response[1].get('server_timing')
+                if server_timing:
+                    result['server_timing'] = server_timing
+            # Attach client timing from most recent request
+            if self._timing_history:
+                result['client_timing'] = self._timing_history[-1]
+            return result
         elif isinstance(response, dict):
             return response
 
@@ -362,10 +381,17 @@ class ZMQClient:
 
         if isinstance(response, (list, tuple)):
             action_dict = response[0]
-            return {
+            result = {
                 'actions': action_dict.get('actions', []),
                 'status': 'ok',
             }
+            if len(response) > 1 and isinstance(response[1], dict):
+                server_timing = response[1].get('server_timing')
+                if server_timing:
+                    result['server_timing'] = server_timing
+            if self._timing_history:
+                result['client_timing'] = self._timing_history[-1]
+            return result
         elif isinstance(response, dict):
             return response
 
@@ -438,3 +464,7 @@ class ZMQClient:
     def get_message_size_history(self) -> list[tuple[int, int]]:
         """Get full message size history as (send_bytes, recv_bytes) tuples."""
         return list(self._message_sizes)
+
+    def get_timing_history(self) -> list[dict]:
+        """Get per-request timing breakdown history."""
+        return list(self._timing_history)

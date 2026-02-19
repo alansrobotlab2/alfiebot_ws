@@ -391,6 +391,95 @@ def plot_comms_report(
     logger.info(f'Comms report plot saved: {save_plot_path}')
 
 
+def print_timing_breakdown(
+    server_timings: list[dict],
+    client_timings: list[dict],
+):
+    """Print per-phase timing breakdown across client and server."""
+    if not server_timings and not client_timings:
+        logger.info('No timing data to report.')
+        return
+
+    print()
+    print('=' * 70)
+    print('  ZMQ PIPELINE TIMING BREAKDOWN')
+    print('=' * 70)
+    print()
+
+    def _stats(values, label, indent=4):
+        arr = np.array(values)
+        pad = ' ' * indent
+        print(f'{pad}{label}')
+        print(f'{pad}  Mean:   {np.mean(arr):8.1f} ms')
+        print(f'{pad}  Median: {np.median(arr):8.1f} ms')
+        print(f'{pad}  P95:    {np.percentile(arr, 95):8.1f} ms')
+        print(f'{pad}  Min:    {np.min(arr):8.1f} ms')
+        print(f'{pad}  Max:    {np.max(arr):8.1f} ms')
+
+    # Client-side breakdown
+    if client_timings:
+        print('  CLIENT TIMING')
+        _stats([t['pack_ms'] for t in client_timings], 'msgpack pack (serialize request)')
+        print()
+        _stats([t['zmq_ms'] for t in client_timings], 'ZMQ send+recv (network + server)')
+        print()
+        _stats([t['unpack_ms'] for t in client_timings], 'msgpack unpack (deserialize response)')
+        print()
+        _stats([t['total_ms'] for t in client_timings], 'Total round-trip')
+        print()
+
+    # Server-side breakdown
+    if server_timings:
+        print('  SERVER TIMING')
+        _stats([t.get('deser_ms', 0) for t in server_timings], 'Request deserialization')
+        print()
+        _stats([t.get('decode_ms', 0) for t in server_timings], 'Image decode (JPEG/raw)')
+        print()
+        _stats([t.get('prep_ms', 0) for t in server_timings], 'State split + obs build')
+        print()
+        _stats([t.get('infer_ms', 0) for t in server_timings], 'GPU inference')
+        print()
+        _stats([t.get('reassemble_ms', 0) for t in server_timings], 'Action reassembly')
+        print()
+        _stats([t.get('handler_ms', 0) for t in server_timings], 'Handler total')
+        print()
+
+    # Network transit estimate (zmq_ms - server handler - server deser)
+    if server_timings and client_timings:
+        n = min(len(server_timings), len(client_timings))
+        network_ms = []
+        for i in range(n):
+            zmq = client_timings[i]['zmq_ms']
+            server_total = server_timings[i].get('handler_ms', 0) + server_timings[i].get('deser_ms', 0)
+            network_ms.append(zmq - server_total)
+        print('  NETWORK TRANSIT (estimated)')
+        _stats(network_ms, 'Network round-trip (zmq - server total)')
+        print()
+
+        # Summary table with means
+        print('  MEAN BREAKDOWN')
+        c = {k: np.mean([t[k] for t in client_timings]) for k in ['pack_ms', 'zmq_ms', 'unpack_ms', 'total_ms']}
+        s = {k: np.mean([t.get(k, 0) for t in server_timings])
+             for k in ['deser_ms', 'decode_ms', 'prep_ms', 'infer_ms', 'reassemble_ms', 'handler_ms']}
+        net = np.mean(network_ms)
+        print(f'    Client pack:        {c["pack_ms"]:7.1f} ms')
+        print(f'    ZMQ send+recv:      {c["zmq_ms"]:7.1f} ms')
+        print(f'      Server deser:     {s["deser_ms"]:7.1f} ms')
+        print(f'      Server decode:    {s["decode_ms"]:7.1f} ms')
+        print(f'      Server prep:      {s["prep_ms"]:7.1f} ms')
+        print(f'      Server inference: {s["infer_ms"]:7.1f} ms')
+        print(f'      Server reassemble:{s["reassemble_ms"]:7.1f} ms')
+        print(f'      Server total:     {s["handler_ms"] + s["deser_ms"]:7.1f} ms')
+        print(f'      Network transit:  {net:7.1f} ms')
+        print(f'    Client unpack:      {c["unpack_ms"]:7.1f} ms')
+        print(f'    ─────────────────────────────')
+        print(f'    Total RTT:          {c["total_ms"]:7.1f} ms')
+        print()
+
+    print('=' * 70)
+    print()
+
+
 def print_comms_summary(latencies: list[float], message_sizes: list[tuple[int, int]]):
     """Print communication bandwidth and timing summary."""
     if not latencies:
@@ -540,6 +629,8 @@ def run_eval(args):
     # Run evaluation — step every action_horizon frames
     pred_action_across_time = []
     num_inference_steps = 0
+    all_server_timings = []
+    all_client_timings = []
 
     # Closed-loop state: updated with predicted actions instead of GT
     closed_loop_state = gt_states[0].copy() if args.closed_loop else None
@@ -574,6 +665,12 @@ def run_eval(args):
         if response.get('status') != 'ok':
             logger.error(f"Server error at step {step}: {response.get('error_message')}")
             continue
+
+        # Collect timing data
+        if response.get('server_timing'):
+            all_server_timings.append(response['server_timing'])
+        if response.get('client_timing'):
+            all_client_timings.append(response['client_timing'])
 
         # Extract action chunk (action_horizon x 22)
         actions_list = response.get('actions', [])
@@ -657,6 +754,7 @@ def run_eval(args):
     message_sizes = client.get_message_size_history()
 
     print_comms_summary(latencies, message_sizes)
+    print_timing_breakdown(all_server_timings, all_client_timings)
 
     if latencies:
         plot_comms_report(latencies, message_sizes, comms_plot)
