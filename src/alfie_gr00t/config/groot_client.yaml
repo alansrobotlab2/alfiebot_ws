@@ -20,6 +20,20 @@
     ipc_path: "/tmp/groot_inference.sock"
 
     # ==========================================================================
+    # Async ZMQ (PUSH/PULL) — used for live robot inference
+    # ==========================================================================
+    # When enabled, observations are pushed non-blocking and actions arrive
+    # asynchronously, decoupling observation delivery from inference latency.
+    # When disabled, uses synchronous REQ/REP (classic mode).
+    use_async_zmq: true
+
+    # PUSH port: client → server observations (server binds PULL on this port)
+    async_push_port: 5556
+
+    # PULL port: server → client actions (server binds PUSH on this port)
+    async_pull_port: 5557
+
+    # ==========================================================================
     # Inference Settings
     # ==========================================================================
     # Inference timeout in milliseconds

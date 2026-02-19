@@ -57,6 +57,25 @@ def generate_launch_description():
         description='Socket path for IPC transport'
     )
 
+    # Launch arguments - Async ZMQ
+    use_async_zmq_arg = DeclareLaunchArgument(
+        'use_async_zmq',
+        default_value='true',
+        description='Use async PUSH/PULL ZMQ (true) or sync REQ/REP (false)'
+    )
+
+    async_push_port_arg = DeclareLaunchArgument(
+        'async_push_port',
+        default_value='5556',
+        description='PUSH port for async client → server observations'
+    )
+
+    async_pull_port_arg = DeclareLaunchArgument(
+        'async_pull_port',
+        default_value='5557',
+        description='PULL port for async server → client actions'
+    )
+
     # Launch arguments - Inference
     task_description_arg = DeclareLaunchArgument(
         'task_description',
@@ -144,7 +163,9 @@ def generate_launch_description():
                 'inference_trigger_step': LaunchConfiguration('inference_trigger_step'),
                 'chunk_blend_steps': LaunchConfiguration('chunk_blend_steps'),
                 'interpolate_actions': LaunchConfiguration('interpolate_actions'),
-
+                'use_async_zmq': LaunchConfiguration('use_async_zmq'),
+                'async_push_port': LaunchConfiguration('async_push_port'),
+                'async_pull_port': LaunchConfiguration('async_pull_port'),
             }
         ],
     )
@@ -168,6 +189,10 @@ def generate_launch_description():
         chunk_blend_steps_arg,
         interpolate_arg,
 
+        # Async ZMQ arguments
+        use_async_zmq_arg,
+        async_push_port_arg,
+        async_pull_port_arg,
 
         # Log startup info
         LogInfo(msg=['=========================================']),

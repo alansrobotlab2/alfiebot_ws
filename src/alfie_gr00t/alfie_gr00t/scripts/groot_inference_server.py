@@ -20,8 +20,10 @@ import argparse
 import gc
 import logging
 import os
+import queue
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -371,29 +373,50 @@ class JpegPolicyWrapper(BasePolicy):
 
         return actions.tolist()
 
-    def _get_action(
-        self, observation: dict[str, Any], options: dict[str, Any] | None = None
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Translate wire format → native format → run inference → flat 22D."""
-        t0 = time.monotonic()
+    def _preprocess(self, observation: dict[str, Any]) -> dict:
+        """Translate wire format to native GR00T observation format (CPU-only).
 
-        # Decode images
+        This is the CPU-bound portion that can be overlapped with GPU inference
+        on the previous frame when using async PUSH/PULL mode.
+
+        Returns:
+            Native observation dict ready for policy.get_action().
+        """
         video_dict = self._decode_images(observation)
-        t_decode = time.monotonic()
-
-        # Split state
         state_dict = self._split_state(observation.get('state', []))
-
-        # Format language
         language = observation.get('language', '')
         language_dict = {self.language_key: [[language]]}
 
-        # Build native observation
-        native_obs = {
+        return {
             'video': video_dict,
             'state': state_dict,
             'language': language_dict,
         }
+
+    def _infer(self, native_obs: dict, options: dict[str, Any] | None = None):
+        """Run inference and reassemble actions (GPU-bound).
+
+        Args:
+            native_obs: Preprocessed observation from _preprocess().
+
+        Returns:
+            (flat_actions, info) where flat_actions is list of 22D lists.
+        """
+        action_dict, info = self.policy.get_action(native_obs, options)
+        flat_actions = self._reassemble_actions(action_dict)
+        return flat_actions, info
+
+    def _get_action(
+        self, observation: dict[str, Any], options: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Translate wire format → native format → run inference → flat 22D.
+
+        This is the synchronous path used by REQ/REP (eval, ping).
+        Calls _preprocess + _infer sequentially.
+        """
+        t0 = time.monotonic()
+
+        native_obs = self._preprocess(observation)
         t_prep = time.monotonic()
 
         # Log periodically
@@ -409,20 +432,16 @@ class JpegPolicyWrapper(BasePolicy):
                 print(msg, flush=True)
 
         # Run inference on the wrapped policy
-        action_dict, info = self.policy.get_action(native_obs, options)
+        flat_actions, info = self._infer(native_obs, options)
         t_infer = time.monotonic()
-
-        # Reassemble to flat 22D for the client
-        flat_actions = self._reassemble_actions(action_dict)
-        t_reassemble = time.monotonic()
 
         # Build server timing breakdown
         server_timing = {
-            'decode_ms': (t_decode - t0) * 1000,
-            'prep_ms': (t_prep - t_decode) * 1000,
+            'decode_ms': 0.0,  # included in prep_ms for split path
+            'prep_ms': (t_prep - t0) * 1000,
             'infer_ms': (t_infer - t_prep) * 1000,
-            'reassemble_ms': (t_reassemble - t_infer) * 1000,
-            'handler_ms': (t_reassemble - t0) * 1000,
+            'reassemble_ms': 0.0,  # included in infer_ms for split path
+            'handler_ms': (t_infer - t0) * 1000,
             'deser_ms': getattr(self, '_loop_deser_ms', 0.0),
         }
         info['server_timing'] = server_timing
@@ -440,8 +459,8 @@ class JpegPolicyWrapper(BasePolicy):
                 print(msg, flush=True)
             t = server_timing
             msg = (
-                f"[timing] decode={t['decode_ms']:.1f}ms prep={t['prep_ms']:.1f}ms "
-                f"infer={t['infer_ms']:.1f}ms reassemble={t['reassemble_ms']:.1f}ms "
+                f"[timing] prep={t['prep_ms']:.1f}ms "
+                f"infer={t['infer_ms']:.1f}ms "
                 f"handler={t['handler_ms']:.1f}ms deser={t['deser_ms']:.1f}ms"
             )
             logging.info(msg)
@@ -513,6 +532,10 @@ examples:
                         help='Apply torch.compile to DiT (PyTorch mode only)')
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Verbose logging')
+    parser.add_argument('--async-pull-port', type=int, default=5556,
+                        help='PULL socket port for async observations (default: %(default)s)')
+    parser.add_argument('--async-push-port', type=int, default=5557,
+                        help='PUSH socket port for async action results (default: %(default)s)')
 
     return parser.parse_args()
 
@@ -696,7 +719,7 @@ def main():
         elapsed = time.monotonic() - t0
         logger.info(f'Warmup complete in {elapsed:.1f}s')
 
-    # Create server using NVIDIA's PolicyServer (sets up socket + endpoints)
+    # Create server using NVIDIA's PolicyServer (sets up REQ/REP socket + endpoints)
     logger.info(f'Starting PolicyServer on {args.host}:{args.port}')
     server = PolicyServer(
         policy=wrapped,
@@ -704,9 +727,6 @@ def main():
         port=args.port,
     )
 
-    # Run our own loop instead of server.run() so we can handle Ctrl-C.
-    # PolicyServer.run() blocks on socket.recv() with no timeout, making
-    # it impossible to shut down cleanly via signal.
     server.socket.setsockopt(zmq.RCVTIMEO, 1000)  # 1s timeout for clean shutdown
     running = True
 
@@ -720,8 +740,145 @@ def main():
 
     from gr00t.policy.server_client import MsgSerializer
 
+    # ─── Async PUSH/PULL sockets for live robot inference ───
+    async_ctx = zmq.Context()
+
+    # PULL socket: receive observations from client
+    pull_socket = async_ctx.socket(zmq.PULL)
+    pull_bind = f'tcp://{args.host}:{args.async_pull_port}'
+    pull_socket.bind(pull_bind)
+    pull_socket.setsockopt(zmq.RCVHWM, 1)  # single-slot — drop stale observations
+    logger.info(f'Async PULL socket bound: {pull_bind}')
+
+    # PUSH socket: send action results to client
+    push_socket = async_ctx.socket(zmq.PUSH)
+    push_bind = f'tcp://{args.host}:{args.async_push_port}'
+    push_socket.bind(push_bind)
+    push_socket.setsockopt(zmq.SNDHWM, 1)
+    push_socket.setsockopt(zmq.LINGER, 0)
+    logger.info(f'Async PUSH socket bound: {push_bind}')
+
+    # Single-slot buffer for preprocessed observations (IO thread → GPU thread)
+    class SingleSlotBuffer:
+        """Thread-safe single-slot buffer. Latest write overwrites previous."""
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._event = threading.Event()
+            self._data = None  # (obs_id, native_obs, preprocess_ms)
+
+        def put(self, obs_id: int, native_obs: dict, preprocess_ms: float):
+            with self._lock:
+                self._data = (obs_id, native_obs, preprocess_ms)
+            self._event.set()
+
+        def get(self, timeout: float = 1.0):
+            """Block until data available, then return and clear."""
+            if not self._event.wait(timeout=timeout):
+                return None
+            with self._lock:
+                data = self._data
+                self._data = None
+            self._event.clear()
+            return data
+
+    preprocess_buffer = SingleSlotBuffer()
+    async_request_count = 0
+
+    # IO thread: receive observations from PULL → preprocess → buffer
+    def async_io_thread():
+        nonlocal async_request_count
+        poller = zmq.Poller()
+        poller.register(pull_socket, zmq.POLLIN)
+        logger.info('Async IO thread started')
+
+        while running:
+            events = dict(poller.poll(timeout=500))
+            if pull_socket not in events:
+                continue
+
+            try:
+                raw = pull_socket.recv(zmq.NOBLOCK)
+                t0 = time.monotonic()
+
+                request = MsgSerializer.from_bytes(raw)
+                observation = request.get('data', {}).get('observation', {})
+                obs_id = observation.get('obs_id', -1)
+
+                # CPU-bound preprocessing: JPEG decode + state split + language
+                native_obs = wrapped._preprocess(observation)
+                preprocess_ms = (time.monotonic() - t0) * 1000
+
+                preprocess_buffer.put(obs_id, native_obs, preprocess_ms)
+                async_request_count += 1
+
+                if async_request_count % 10 == 0:
+                    logger.info(
+                        f'[async-io] preprocessed obs_id={obs_id} '
+                        f'in {preprocess_ms:.1f}ms'
+                    )
+            except zmq.Again:
+                continue
+            except Exception as e:
+                logger.error(f'Async IO error: {e}')
+                import traceback
+                traceback.print_exc()
+
+        logger.info('Async IO thread stopped')
+
+    # GPU thread: grab preprocessed observation → inference → push result
+    def async_gpu_thread():
+        logger.info('Async GPU thread started')
+
+        while running:
+            item = preprocess_buffer.get(timeout=0.5)
+            if item is None:
+                continue
+
+            obs_id, native_obs, preprocess_ms = item
+
+            try:
+                t0 = time.monotonic()
+                flat_actions, info = wrapped._infer(native_obs)
+                infer_ms = (time.monotonic() - t0) * 1000
+
+                server_timing = {
+                    'prep_ms': preprocess_ms,
+                    'infer_ms': infer_ms,
+                    'handler_ms': preprocess_ms + infer_ms,
+                    'decode_ms': 0.0,
+                    'reassemble_ms': 0.0,
+                    'deser_ms': 0.0,
+                }
+                info['server_timing'] = server_timing
+                info['obs_id'] = obs_id
+
+                # Push result to client
+                result = ({'actions': flat_actions}, info)
+                push_socket.send(MsgSerializer.to_bytes(result))
+
+                if async_request_count % 10 == 0:
+                    logger.info(
+                        f'[async-gpu] obs_id={obs_id} '
+                        f'infer={infer_ms:.1f}ms total={preprocess_ms + infer_ms:.1f}ms'
+                    )
+            except Exception as e:
+                logger.error(f'Async GPU error: {e}')
+                import traceback
+                traceback.print_exc()
+
+        logger.info('Async GPU thread stopped')
+
+    # Start async threads
+    io_t = threading.Thread(target=async_io_thread, name='async_io', daemon=True)
+    gpu_t = threading.Thread(target=async_gpu_thread, name='async_gpu', daemon=True)
+    io_t.start()
+    gpu_t.start()
+
+    # ─── Main loop: handle REQ/REP (eval, ping) ───
     addr = server.socket.getsockopt_string(zmq.LAST_ENDPOINT)
-    logger.info(f'Server is ready and listening on {addr}')
+    logger.info(f'Server ready: REQ/REP on {addr}, '
+                f'async PULL on :{args.async_pull_port}, '
+                f'async PUSH on :{args.async_push_port}')
 
     while running:
         try:
@@ -753,15 +910,22 @@ def main():
                 else handler.handler()
             )
 
-            t_ser_start = time.monotonic()
             response_bytes = MsgSerializer.to_bytes(result)
-            t_ser_done = time.monotonic()
             server.socket.send(response_bytes)
         except Exception as e:
             logger.error(f'Error processing request: {e}')
             import traceback
             traceback.print_exc()
             server.socket.send(MsgSerializer.to_bytes({"error": str(e)}))
+
+    # Cleanup
+    running = False
+    io_t.join(timeout=2.0)
+    gpu_t.join(timeout=2.0)
+
+    pull_socket.close(linger=0)
+    push_socket.close(linger=0)
+    async_ctx.term()
 
     server.socket.close()
     server.context.term()
