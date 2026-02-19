@@ -396,14 +396,31 @@ class JpegPolicyWrapper(BasePolicy):
     def _infer(self, native_obs: dict, options: dict[str, Any] | None = None):
         """Run inference and reassemble actions (GPU-bound).
 
+        Splits policy.get_action() into prepare_inputs() + run_inference()
+        to separately time VLA preprocessing vs GPU forward pass.
+
         Args:
             native_obs: Preprocessed observation from _preprocess().
 
         Returns:
             (flat_actions, info) where flat_actions is list of 22D lists.
+            info includes vla_prep_ms, gpu_infer_ms, reassemble_ms.
         """
-        action_dict, info = self.policy.get_action(native_obs, options)
+        t0 = time.monotonic()
+        collated_inputs, states = self.policy.prepare_inputs(native_obs)
+        t_prep = time.monotonic()
+
+        action_dict = self.policy.run_inference(collated_inputs, states)
+        t_infer = time.monotonic()
+
         flat_actions = self._reassemble_actions(action_dict)
+        t_reassemble = time.monotonic()
+
+        info = {
+            'vla_prep_ms': (t_prep - t0) * 1000,
+            'gpu_infer_ms': (t_infer - t_prep) * 1000,
+            'reassemble_ms': (t_reassemble - t_infer) * 1000,
+        }
         return flat_actions, info
 
     def _get_action(
@@ -439,8 +456,10 @@ class JpegPolicyWrapper(BasePolicy):
         server_timing = {
             'decode_ms': 0.0,  # included in prep_ms for split path
             'prep_ms': (t_prep - t0) * 1000,
+            'vla_prep_ms': info.get('vla_prep_ms', 0.0),
+            'gpu_infer_ms': info.get('gpu_infer_ms', 0.0),
             'infer_ms': (t_infer - t_prep) * 1000,
-            'reassemble_ms': 0.0,  # included in infer_ms for split path
+            'reassemble_ms': info.get('reassemble_ms', 0.0),
             'handler_ms': (t_infer - t0) * 1000,
             'deser_ms': getattr(self, '_loop_deser_ms', 0.0),
         }
@@ -460,6 +479,7 @@ class JpegPolicyWrapper(BasePolicy):
             t = server_timing
             msg = (
                 f"[timing] prep={t['prep_ms']:.1f}ms "
+                f"vla={t['vla_prep_ms']:.1f}ms gpu={t['gpu_infer_ms']:.1f}ms "
                 f"infer={t['infer_ms']:.1f}ms "
                 f"handler={t['handler_ms']:.1f}ms deser={t['deser_ms']:.1f}ms"
             )
@@ -843,10 +863,12 @@ def main():
 
                 server_timing = {
                     'prep_ms': preprocess_ms,
+                    'vla_prep_ms': info.get('vla_prep_ms', 0.0),
+                    'gpu_infer_ms': info.get('gpu_infer_ms', 0.0),
                     'infer_ms': infer_ms,
                     'handler_ms': preprocess_ms + infer_ms,
                     'decode_ms': 0.0,
-                    'reassemble_ms': 0.0,
+                    'reassemble_ms': info.get('reassemble_ms', 0.0),
                     'deser_ms': 0.0,
                 }
                 info['server_timing'] = server_timing
