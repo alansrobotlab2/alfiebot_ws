@@ -72,12 +72,14 @@ class RateLimitedInterpolator:
         self,
         max_speeds: Optional[dict] = None,
         dt: float = 0.01,
+        target_ema_alpha: float = 1.0,
     ):
         speeds = dict(DEFAULT_MAX_SPEEDS)
         if max_speeds is not None:
             speeds.update(max_speeds)
 
         self._dt = dt
+        self._ema_alpha = target_ema_alpha
 
         # Build per-index max delta (speed * dt) array
         # Index 0:6 = 0.0 (base velocity: passthrough)
@@ -90,11 +92,19 @@ class RateLimitedInterpolator:
 
         # Current interpolated position for position joints
         self._current: Optional[np.ndarray] = None
-        # Latest target
+        # Latest target (after EMA smoothing)
         self._target: Optional[np.ndarray] = None
+        # EMA state for target smoothing (position joints only)
+        self._smoothed_target: Optional[np.ndarray] = None
 
     def set_target(self, target: np.ndarray):
-        """Set a new action target (called at 15 FPS from chunk stepping).
+        """Set a new action target (called at 100 Hz from chunk stepping).
+
+        Position joints (6:22) are EMA-smoothed to dampen high-frequency
+        model noise (oscillation during hold-still phases). Since set_target
+        is called at 100 Hz but the raw target changes at ~15 FPS, the EMA
+        converges within one action step (~7 ticks) and effectively filters
+        at the action step rate. Base velocity passes through unsmoothed.
 
         Parameters
         ----------
@@ -102,7 +112,17 @@ class RateLimitedInterpolator:
             Full 22D action vector. Base velocity indices are stored for
             passthrough; position indices are tracked for rate limiting.
         """
-        self._target = np.asarray(target, dtype=np.float64).copy()
+        target = np.asarray(target, dtype=np.float64).copy()
+
+        # EMA smooth position joints to dampen oscillation
+        if self._ema_alpha < 1.0 and self._smoothed_target is not None:
+            target[6:] = (
+                self._ema_alpha * target[6:]
+                + (1.0 - self._ema_alpha) * self._smoothed_target[6:]
+            )
+
+        self._smoothed_target = target.copy()
+        self._target = target
 
     def step(self) -> Optional[np.ndarray]:
         """Advance one control tick. Call at 100 Hz.
@@ -138,6 +158,7 @@ class RateLimitedInterpolator:
         """Clear interpolation state (e.g., on deactivation)."""
         self._current = None
         self._target = None
+        self._smoothed_target = None
 
     def get_current(self) -> Optional[np.ndarray]:
         """Return the current interpolated position, or None."""
