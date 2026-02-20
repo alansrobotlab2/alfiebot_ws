@@ -155,7 +155,7 @@
     # When enabled, inference runs continuously (always churning) and chunks
     # are combined via temporal ensembling in a rolling ChunkBuffer.
     # When disabled (default), uses classic overlapped execution model.
-    continuous_inference: true
+    continuous_inference: false
 
     # Temporal ensembling strategy for combining overlapping chunk predictions:
     #   'latest'    — only use most recent chunk (baseline, matches classic behavior)
