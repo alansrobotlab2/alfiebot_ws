@@ -74,11 +74,21 @@ class ActionInterpolator:
         """
         action = np.asarray(action, dtype=np.float64)
 
-        # Avoid duplicates — update if same frame
-        if self._waypoints and self._waypoints[-1][0] == frame_idx:
-            self._waypoints[-1] = (frame_idx, action.copy())
-        else:
-            self._waypoints.append((frame_idx, action.copy()))
+        # Check if this frame already exists anywhere in the deque.
+        # At 100Hz, the same frame is updated ~7 times before advancing.
+        # Only checking the last entry would miss frame N after N+1 is added.
+        for i, (f, _) in enumerate(self._waypoints):
+            if f == frame_idx:
+                self._waypoints[i] = (frame_idx, action.copy())
+                if self.method == 'cubic_spline':
+                    self._spline = None
+                return
+
+        # New frame — only append if strictly after the last one
+        if self._waypoints and frame_idx <= self._waypoints[-1][0]:
+            return
+
+        self._waypoints.append((frame_idx, action.copy()))
 
         # Invalidate cached spline when waypoints change
         if self.method == 'cubic_spline':

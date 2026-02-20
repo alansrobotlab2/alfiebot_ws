@@ -129,7 +129,14 @@ class ChunkBuffer:
     # ── Internals (must hold _lock) ───────────────────────────────────
 
     def _get_combined(self, target_frame: int) -> Optional[np.ndarray]:
-        """Combine overlapping chunk predictions for target_frame."""
+        """Combine overlapping chunk predictions for target_frame.
+
+        Base velocity (indices 0:6) always uses the latest chunk only.
+        Velocity commands are state-dependent (captured at different robot
+        positions), so ensembling them creates a biased running average
+        that causes overshoot. Position joints (6:22) use the configured
+        ensembling strategy.
+        """
         if not self._chunks:
             return None
 
@@ -160,7 +167,14 @@ class ChunkBuffer:
         weights_arr = np.array(weights)
         weights_arr /= weights_arr.sum()
 
-        return np.average(predictions_arr, axis=0, weights=weights_arr)
+        result = np.average(predictions_arr, axis=0, weights=weights_arr)
+
+        # Override base velocity (0:6) with the latest chunk's prediction.
+        # Velocity is state-dependent — ensembling across chunks captured at
+        # different positions creates phase lag and overshoot.
+        result[0:6] = predictions_arr[-1, 0:6]
+
+        return result
 
     def _get_latest(self, target_frame: int) -> Optional[np.ndarray]:
         """Fast path: only use the most recent chunk covering target_frame."""

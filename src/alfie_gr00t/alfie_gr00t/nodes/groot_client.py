@@ -361,7 +361,9 @@ class GrootClientNode(Node):
             self._initialize_back()
 
         # Start inference on a background thread (after all setup is complete)
-        if self.use_async_zmq:
+        if self.use_async_zmq and self.continuous_inference:
+            inference_target = self._async_continuous_inference_loop
+        elif self.use_async_zmq:
             inference_target = self._async_inference_loop
         elif self.continuous_inference:
             inference_target = self._continuous_inference_loop
@@ -1004,6 +1006,100 @@ class GrootClientNode(Node):
                 self.get_logger().warn('[async] Failed to push observation')
                 time.sleep(0.01)
 
+    def _async_continuous_inference_loop(self):
+        """Async continuous inference: PUSH/PULL with temporal ensembling.
+
+        Combines async ZMQ transport (non-blocking PUSH/PULL) with
+        continuous inference (always-churning, ChunkBuffer temporal
+        ensembling). Observations are pushed as fast as possible;
+        results are popped non-blocking and added to the ChunkBuffer.
+
+        Unlike _async_inference_loop, this does NOT use trigger-step
+        timing or _action_chunk/_pending_chunk. Instead it matches
+        _continuous_inference_loop: fire continuously, write to
+        ChunkBuffer, let _continuous_command_callback read from it.
+
+        Unlike _continuous_inference_loop, this does NOT block on
+        send_observation(). PUSH/PULL sockets decouple observation
+        delivery from inference latency. With HWM=1, pushing a new
+        observation while one is in-flight drops the stale one.
+        """
+        # Track obs_id → (push_time, push_frame) for accurate frame association
+        obs_push_info: dict[int, tuple[float, int]] = {}
+        awaiting_first_chunk = True
+
+        while self._running:
+            if not self._active or self._state != ClientState.ACTIVE:
+                time.sleep(0.05)
+                awaiting_first_chunk = True
+                continue
+
+            # ── Check for results (non-blocking) ──────────────────
+            result = self.async_client.pop_result()
+            if result is not None:
+                self.safety.update_inference_time()
+
+                chunk = self._extract_action_chunk(result)
+                if chunk is not None:
+                    arrival_time = time.monotonic()
+                    arrival_frame = self._time_to_frame(arrival_time)
+
+                    obs_id = result.get('obs_id', -1)
+                    latency_ms = result.get('latency_ms', 0)
+
+                    # Look up the push time/frame for this obs_id
+                    push_time, push_frame = obs_push_info.pop(obs_id, (arrival_time, arrival_frame))
+
+                    # Add to ChunkBuffer for temporal ensembling
+                    self._chunk_buffer.add_chunk(TimestampedChunk(
+                        actions=chunk,
+                        obs_frame=push_frame,
+                        arrival_frame=arrival_frame,
+                        chunk_id=self._total_chunks,
+                        obs_timestamp=push_time,
+                        arrival_timestamp=arrival_time,
+                    ))
+
+                    if self._total_chunks % 10 == 0:
+                        self.get_logger().info(
+                            f'[async-continuous] chunk {self._total_chunks}: '
+                            f'obs_id={obs_id} obs_frame={push_frame} '
+                            f'arrival_frame={arrival_frame} '
+                            f'buffer={self._chunk_buffer.num_chunks} '
+                            f'latency={latency_ms:.0f}ms'
+                        )
+
+                    self._total_chunks += 1
+                    awaiting_first_chunk = False
+
+            # ── Push new observation (non-blocking) ───────────────
+            obs = self.observation_bridge.get_latest_observation()
+            if obs is None or not obs.valid:
+                time.sleep(0.005)
+                continue
+
+            push_time = time.monotonic()
+            push_frame = self._time_to_frame(push_time)
+
+            obs_id = self.async_client.push_observation(
+                images=obs.images,
+                state=obs.state,
+                language=self.task_description,
+            )
+
+            if obs_id >= 0:
+                obs_push_info[obs_id] = (push_time, push_frame)
+                # Prune old entries (keep last 50)
+                if len(obs_push_info) > 50:
+                    oldest_key = min(obs_push_info.keys())
+                    del obs_push_info[oldest_key]
+
+            # Brief sleep to avoid busy-spinning
+            if awaiting_first_chunk:
+                time.sleep(0.005)
+            else:
+                time.sleep(0.01)
+
     def _continuous_inference_loop(self):
         """Continuous inference: always-churning loop.
 
@@ -1118,11 +1214,12 @@ class GrootClientNode(Node):
             current_state,
         )
 
-        # Publish — smoothing handled by the pipeline above
+        # Publish — joint smoothing handled by ChunkBuffer/ActionSmoother above,
+        # but base velocity limiting (accel cap, magnitude cap) is in ActionPublisher.
         self.action_publisher.publish_action(
             action=action,
             current_state=current_state,
-            apply_smoothing=False,
+            apply_smoothing=True,
             apply_safety=self.enable_safety_limits,
             chunk_id=self._chunk_buffer.current_chunk_id,
             action_idx=current_frame % self.action_chunk_size,
