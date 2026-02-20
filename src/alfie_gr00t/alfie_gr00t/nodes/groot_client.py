@@ -229,9 +229,11 @@ class GrootClientNode(Node):
             self._rate_limiter = RateLimitedInterpolator(
                 max_speeds=max_speeds,
                 dt=1.0 / COMMAND_RATE_HZ,
+                target_ema_alpha=self.joint_smoothing_alpha,
             )
             self.get_logger().info(
-                f'Rate-limited interpolator enabled: {max_speeds}'
+                f'Rate-limited interpolator enabled: {max_speeds}, '
+                f'target_ema_alpha={self.joint_smoothing_alpha}'
             )
 
         # Per-action CSV logger (one row per action step, not per 100Hz tick)
