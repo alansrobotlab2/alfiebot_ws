@@ -337,19 +337,107 @@ spline_window: 6
 - **Minimum jerk trajectory**: Higher complexity, boundary condition estimation from finite differences amplifies noise. Could revisit if splines aren't enough.
 - **Gaussian smoothing**: Adds lag (symmetric kernel), no advantage over Butterworth for causal use.
 
+## Phase 3: EMA Alpha Sweep — Full Pipeline A/B Test (2026-02-19)
+
+### Problem
+
+Phase 2 benchmarks used cached horizons from `overlapped_execution_test.py` and the offline `smoothing_simulator.py`. While useful for isolating filter/interpolation effects, they don't capture the full client pipeline (ChunkBuffer temporal ensembling + EMA + ActionSmoother + ActionInterpolator + BaseVelocityLimiter) operating on live server predictions with real stochastic variation from the flow matching denoising process.
+
+When tested end-to-end via `groot_replay_eval.py`, the processed trajectories were still visually jaggy compared to ground truth — particularly the head (1.2-1.8x GT jerk ratio) and high-frequency oscillation (HF power 3-4x GT).
+
+### Methodology
+
+Used `groot_replay_eval.py` to replay episodes through the full pipeline with live server inference. This captures:
+- Real model stochasticity (flow matching produces different predictions each run)
+- Full pipeline interactions (ensembling → EMA → filter → interpolation → base limiter)
+- Actual inference latency (~172ms RTT over WiFi TCP)
+
+To account for model stochasticity, each config was tested across **5 episodes** (0, 1, 2, 3, 4) and results averaged. The A/B test script (`scripts/smoothing_ab_test.py`) automated serial execution of all configs.
+
+At 172ms RTT with 16-action chunks (latency_skip=4, usable window=12 frames=800ms), approximately **4-5 chunks overlap** at each action frame, providing meaningful temporal ensembling.
+
+### Configs Tested
+
+All configs use `exp_decay` (m=0.01) temporal ensembling with `max_buffer_chunks=8`.
+
+| Config | Interpolation | Filter | EMA Alpha | Rationale |
+|---|---|---|---|---|
+| `baseline_a09` | linear | none | 0.9 | Previous live config |
+| `spline_a09` | cubic_spline | none | 0.9 | Phase 2 conservative |
+| `spline_savgol_a09` | cubic_spline | savgol(5,2) | 0.9 | Phase 2 balanced |
+| `spline_savgol_a07` | cubic_spline | savgol(5,2) | 0.7 | EMA sweep mid |
+| `spline_savgol_a05` | cubic_spline | savgol(5,2) | 0.5 | EMA sweep aggressive |
+
+### Results (5 episodes averaged)
+
+| Metric | baseline_a09 | spline_a09 | spline_savgol_a09 | spline_savgol_a07 | **spline_savgol_a05** |
+|---|---|---|---|---|---|
+| Proc MAE | 0.0422 | 0.0420 | 0.0420 | 0.0417 | **0.0413** |
+| Proc MSE | 0.0223 | 0.0221 | 0.0220 | **0.0218** | 0.0218 |
+| Proc Jerk RMS | 2.690 | 2.797 | 3.403 | 3.051 | **2.416** |
+| Proc Jerk Ratio (×GT) | 0.292 | 0.303 | 0.369 | 0.331 | **0.262** |
+| Head Proc Ratio (×GT) | 1.228 | 1.336 | 1.784 | 1.483 | **1.183** |
+| R.Arm Proc Ratio (×GT) | 0.287 | 0.289 | 0.355 | 0.338 | **0.250** |
+| Proc HF Power % | **2.6%** | 3.3% | 3.7% | 3.4% | 3.5% |
+| Pipeline Delta | 0.0043 | 0.0038 | 0.0036 | 0.0030 | **0.0027** |
+
+*Jerk Ratio: <1.0 = smoother than GT, >1.0 = jerkier than GT. Bold = best in column.*
+
+### Key Findings
+
+1. **EMA alpha is the dominant knob.** Lowering alpha from 0.9 → 0.5 produced larger improvements than any filter or interpolation change. At alpha=0.5, each output is 50% new prediction + 50% previous output, acting as a strong low-pass on the 15 FPS ensembled signal.
+
+2. **At alpha=0.9, adding spline+savgol actually HURT.** `spline_savgol_a09` had the worst jerk ratio (0.369x) — worse than the plain linear baseline (0.292x). The filters only compound well when paired with stronger EMA. This is likely because the savgol's causal polynomial fitting amplifies frame-to-frame noise when the input signal is still noisy.
+
+3. **Alpha=0.5 improves accuracy AND smoothness.** Counter-intuitively, stronger EMA gave the best MAE (0.0413 vs baseline 0.0422, a -2.2% improvement). The smoother output tracks the smooth GT demonstrations more closely than the noisy raw predictions.
+
+4. **Head remains the hardest body part.** Even with the best config, head jerk is 1.18× GT — still slightly jerkier than the human demonstrations. All other body parts are well below 1.0× GT. The head's elevated jerk is inherent to the model's predictions, not a pipeline artifact.
+
+5. **Model stochasticity is significant.** Raw jerk varied ~2% across configs (3.37–3.42) despite identical model/episodes, confirming that multi-episode averaging is essential for reliable A/B comparisons. Single-episode comparisons have ~17% variance.
+
+### Improvement vs Baseline
+
+| Metric | baseline_a09 | spline_savgol_a05 | Change |
+|---|---|---|---|
+| Proc Jerk Ratio | 0.292× GT | 0.262× GT | **-10% smoother** |
+| Head Jerk Ratio | 1.228× GT | 1.183× GT | **-4% (closer to GT)** |
+| R.Arm Jerk Ratio | 0.287× GT | 0.250× GT | **-13% smoother** |
+| Proc MAE | 0.0422 | 0.0413 | **-2.2% better accuracy** |
+
+### Updated Live Config
+
+```yaml
+# Temporal ensembling (Phase 1)
+continuous_inference: true
+smoothing_strategy: "exp_decay"
+smoothing_decay_m: 0.01
+max_buffer_chunks: 8
+
+# EMA smoothing (Phase 3 — key finding: alpha=0.5 is the sweet spot)
+base_smoothing_alpha: 1.0       # base velocity: no EMA (accel limiter handles this)
+joint_smoothing_alpha: 0.5      # joints: 50% new + 50% previous
+
+# Post-ensembling filter (Phase 2)
+smoothing_method: "savgol"
+savgol_window: 5
+savgol_polyorder: 2
+
+# Interpolation (Phase 2)
+interpolation_method: "cubic_spline"
+spline_window: 6
+```
+
 ## Next Steps
 
 ### Immediate
 1. ~~Run the 15 FPS and 100 Hz benchmark sweeps~~ ✓ (2026-02-17)
 2. ~~Identify winning combination~~ ✓ — `cubic_spline` + `savgol w=5 p=2`
-3. Test on live robot with CSV logging
-4. Compare live results to offline benchmarks
+3. ~~Full-pipeline A/B test with EMA alpha sweep~~ ✓ (2026-02-19)
+4. Test on live robot with CSV logging
+5. Compare live results to offline benchmarks
 
-### Phase 3: Inference Speed
-5. **Profile server latency**: Measure actual inference RTT distribution (mean, P95, P99). Current estimate is ~280ms → 3.3Hz.
-6. **TensorRT revisit**: Try FP32 engine, bf16 with more denoising steps, or bf16 with fp32 accumulation.
-
-### Phase 4: Advanced Strategies
+### Future
+6. **Alpha sweep on base velocity**: Currently `base_smoothing_alpha=1.0` (no EMA on base). May benefit from separate tuning.
 7. **Adaptive decay**: Scale `decay_m` based on action variance across overlapping chunks.
 8. **Per-body-part strategies**: Different filter/interpolation params for base velocity vs arm joints.
 9. **Longer horizons**: More overlap = more ensembling benefit if future GR00T supports >16 steps.
