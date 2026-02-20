@@ -84,11 +84,12 @@
     # Enable joint position and velocity limit enforcement
     enable_safety_limits: true
 
-    # Legacy EMA smoothing coefficients (0-1). Higher = less smoothing.
-    # Kept for backward compatibility. 1.0 = disabled (recommended).
-    # Rate-limited interpolator + base accel limiting now handle smoothing.
+    # EMA smoothing coefficients (0-1) for temporal ensembling output.
+    # In continuous mode, applied inside ChunkBuffer after ensembling.
+    # Lower = more smoothing (more weight on previous output).
+    # A/B tested: alpha=0.5 beat alpha=0.7/0.9 on jerk AND accuracy.
     base_smoothing_alpha: 1.0
-    joint_smoothing_alpha: 1.0
+    joint_smoothing_alpha: 0.5
 
     # Inter-action interpolation: smooth 100Hz output by interpolating
     # between consecutive actions in the chunk. Superseded by rate-limited
@@ -154,7 +155,7 @@
     # When enabled, inference runs continuously (always churning) and chunks
     # are combined via temporal ensembling in a rolling ChunkBuffer.
     # When disabled (default), uses classic overlapped execution model.
-    continuous_inference: false
+    continuous_inference: true
 
     # Temporal ensembling strategy for combining overlapping chunk predictions:
     #   'latest'    — only use most recent chunk (baseline, matches classic behavior)
@@ -162,7 +163,7 @@
     #   'recency'   — linear decay favoring newer chunks
     #   'exp_decay' — ACT-style: w = exp(-decay_m * k), k = action index offset
     #   'triangle'  — peak weight at start of chunk, linear taper
-    smoothing_strategy: "latest"
+    smoothing_strategy: "exp_decay"
 
     # Exponential decay parameter for 'exp_decay' strategy
     # Smaller = gentler decay (more averaging), larger = stronger recency bias
@@ -178,7 +179,7 @@
     #   'none'        — no post-processing (default)
     #   'savgol'      — Savitzky-Golay polynomial smoothing (preserves trajectory shape)
     #   'butterworth' — low-pass filter (frequency-domain cutoff)
-    smoothing_method: "none"
+    smoothing_method: "savgol"
 
     # Savitzky-Golay parameters (only used when smoothing_method: "savgol")
     savgol_window: 5          # Window size (must be odd, >= 3)
@@ -192,7 +193,7 @@
     #   'linear'       — linear lerp between consecutive actions (current default)
     #   'cubic_spline' — C2-continuous cubic spline through waypoints (smoother)
     # Only used when rate_limit_enabled=false (legacy fallback).
-    interpolation_method: "linear"
+    interpolation_method: "cubic_spline"
     spline_window: 6          # Waypoints for spline fitting (only for cubic_spline)
 
     # ==========================================================================

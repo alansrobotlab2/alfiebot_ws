@@ -19,22 +19,11 @@ No ROS2 dependency — runs standalone.
 
 Usage:
 
-# Continuous mode with exp_decay ensembling + EMA
-python src/alfie_gr00t/alfie_gr00t/scripts/groot_replay_eval.py \
-    --config src/alfie_gr00t/config/groot_client.yaml \
-    --dataset-path data/alfiebot.CanDoChallenge \
-    --episode-index 0 \
-    --continuous-inference true \
-    --smoothing-strategy exp_decay \
-    --joint-smoothing-alpha 0.9 \
-    --host 192.168.50.201
-
-
     # Basic evaluation
-    python groot_replay_eval.py \\
-        --config config/groot_client.yaml \\
-        --dataset-path data/alfiebot.CanDoChallenge \\
-        --episode-index 0 \\
+    python src/alfie_gr00t/alfie_gr00t/scripts/groot_replay_eval.py \
+        --config src/alfie_gr00t/config/groot_client.yaml \
+        --dataset-path data/alfiebot.CanDoChallenge \
+        --episode-index 0 \
         --host 192.168.50.201
 
     # Compare rate limiting on vs off
