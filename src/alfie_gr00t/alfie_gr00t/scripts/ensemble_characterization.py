@@ -64,6 +64,8 @@ def collect_horizons(
     states: np.ndarray,
     task: str,
     num_frames: int,
+    rtc: bool = False,
+    rtc_freeze_steps: int = 4,
 ) -> list[HorizonEntry]:
     """Collect horizons at realistic cadence.
 
@@ -71,17 +73,28 @@ def collect_horizons(
     frames that elapsed during the inference RTT before firing the next.
     This simulates what the robot would actually experience.
 
+    When rtc=True, sends prev_actions (tail of previous chunk) with each
+    inference to enable server-side RTC freeze+inpaint.
+
     Returns list of (obs_frame, (16,22) array, latency_ms).
     """
     entries: list[HorizonEntry] = []
     t = 0
+    prev_horizon: np.ndarray | None = None
 
     while t < num_frames:
         images = compressed_frames[t] if t < len(compressed_frames) else {}
 
+        # RTC: send tail of previous chunk as freeze context
+        prev_actions = None
+        if rtc and prev_horizon is not None:
+            # Send last rtc_freeze_steps actions from previous chunk
+            prev_actions = prev_horizon[-rtc_freeze_steps:]
+
         t0 = time.monotonic()
         response = client.send_observation(
             images=images, state=states[t], language=task,
+            prev_actions=prev_actions,
         )
         latency_ms = (time.monotonic() - t0) * 1000
 
@@ -90,14 +103,21 @@ def collect_horizons(
             if actions_list:
                 horizon = np.array(actions_list, dtype=np.float32)
                 entries.append((t, horizon, latency_ms))
+                prev_horizon = horizon
+                rtc_tag = ' [RTC]' if rtc and prev_actions is not None else ''
                 logger.info(
                     f'  inference {len(entries):3d}  obs_frame={t:3d}  '
-                    f'latency={latency_ms:.0f}ms'
+                    f'latency={latency_ms:.0f}ms{rtc_tag}'
                 )
-
-        # Advance by however many action frames elapsed during inference
-        frames_elapsed = max(1, round(latency_ms / ACTION_PERIOD_MS))
-        t += frames_elapsed
+                # Advance by however many action frames elapsed during inference
+                frames_elapsed = max(1, round(latency_ms / ACTION_PERIOD_MS))
+                t += frames_elapsed
+        else:
+            # Timeout or error — retry same frame (don't skip ahead)
+            logger.warning(f'  inference failed at obs_frame={t}, retrying...')
+            # Small advance to avoid infinite loop on persistent failures
+            if latency_ms > 3000:
+                t += 1
 
     logger.info(f'Collected {len(entries)} horizons over {num_frames} frames '
                 f'(~{len(entries) / (num_frames / TRAINING_FPS):.1f} Hz)')
@@ -340,6 +360,7 @@ def run(args):
     print(f'  Episode:       {episode_index}')
     print(f'  Duration:      {args.duration_sec}s ({num_requested} frames)')
     print(f'  Task:          "{args.task}"')
+    print(f'  RTC:           {"ON (freeze={})".format(args.rtc_freeze_steps) if args.rtc else "OFF"}')
     print(f'  Output:        {output_dir}/')
     print('=' * 60)
     print()
@@ -384,9 +405,11 @@ def run(args):
             client.close()
             sys.exit(1)
 
-        logger.info(f'Running inference at realistic cadence over {num_frames} frames...')
+        rtc_msg = ' with RTC freeze+inpaint' if args.rtc else ''
+        logger.info(f'Running inference at realistic cadence over {num_frames} frames{rtc_msg}...')
         entries = collect_horizons(
             client, compressed_frames, states[:num_frames], args.task, num_frames,
+            rtc=args.rtc, rtc_freeze_steps=args.rtc_freeze_steps,
         )
         client.close()
 
@@ -438,6 +461,10 @@ def parse_args():
     parser.add_argument('--output-dir', default='/tmp/ensemble_characterization/')
     parser.add_argument('--load-horizons', action='store_true',
                         help='Reuse cached .npz if available')
+    parser.add_argument('--rtc', action='store_true',
+                        help='Send prev_actions for RTC freeze+inpaint (server must have --rtc)')
+    parser.add_argument('--rtc-freeze-steps', type=int, default=4,
+                        help='Number of freeze steps for RTC (default: %(default)s)')
     parser.add_argument('--verbose', '-v', action='store_true')
     return parser.parse_args()
 
