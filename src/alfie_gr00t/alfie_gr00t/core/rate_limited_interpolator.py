@@ -30,6 +30,18 @@ DEFAULT_MAX_SPEEDS = {
     'head': 1.0,           # rad/s — slow, smooth tracking
 }
 
+# Default deadband thresholds per body part (rad for joints, m for back)
+# 0.0 = disabled (no deadband filtering). Suppresses inference jitter by
+# rejecting target changes smaller than the threshold.
+DEFAULT_DEADBANDS = {
+    'back': 0.0,
+    'left_arm': 0.0,
+    'left_gripper': 0.0,
+    'right_arm': 0.0,
+    'right_gripper': 0.0,
+    'head': 0.0,
+}
+
 # Mapping from body part name to 22D action vector indices
 BODY_PART_INDICES = {
     'back': [6],
@@ -73,6 +85,9 @@ class RateLimitedInterpolator:
         max_speeds: Optional[dict] = None,
         dt: float = 0.01,
         target_ema_alpha: float = 1.0,
+        deadbands: Optional[dict] = None,
+        base_deadband_linear: float = 0.0,
+        base_deadband_angular: float = 0.0,
     ):
         speeds = dict(DEFAULT_MAX_SPEEDS)
         if max_speeds is not None:
@@ -89,6 +104,20 @@ class RateLimitedInterpolator:
             speed = speeds.get(part_name, 1.5)
             for idx in indices:
                 self._max_delta[idx] = speed * dt
+
+        # Build per-index deadband threshold array (position joints only)
+        self._deadband = np.zeros(self.ACTION_DIM, dtype=np.float64)
+        db = dict(DEFAULT_DEADBANDS)
+        if deadbands is not None:
+            db.update(deadbands)
+        for part_name, indices in BODY_PART_INDICES.items():
+            threshold = db.get(part_name, 0.0)
+            for idx in indices:
+                self._deadband[idx] = threshold
+
+        # Base velocity deadband thresholds
+        self._base_deadband_linear = base_deadband_linear
+        self._base_deadband_angular = base_deadband_angular
 
         # Current interpolated position for position joints
         self._current: Optional[np.ndarray] = None
@@ -113,6 +142,24 @@ class RateLimitedInterpolator:
             passthrough; position indices are tracked for rate limiting.
         """
         target = np.asarray(target, dtype=np.float64).copy()
+
+        # Deadband: suppress small target changes to filter inference jitter
+        if self._target is not None:
+            # Position joints: keep old target if within deadband
+            for idx in POSITION_INDICES:
+                if self._deadband[idx] > 0.0:
+                    if abs(target[idx] - self._target[idx]) < self._deadband[idx]:
+                        target[idx] = self._target[idx]
+            # Base linear velocity (0:3): snap to zero if below threshold
+            if self._base_deadband_linear > 0.0:
+                for idx in range(0, 3):
+                    if abs(target[idx]) < self._base_deadband_linear:
+                        target[idx] = 0.0
+            # Base angular velocity (3:6): snap to zero if below threshold
+            if self._base_deadband_angular > 0.0:
+                for idx in range(3, 6):
+                    if abs(target[idx]) < self._base_deadband_angular:
+                        target[idx] = 0.0
 
         # EMA smooth position joints to dampen oscillation
         if self._ema_alpha < 1.0 and self._smoothed_target is not None:
@@ -185,3 +232,12 @@ class RateLimitedInterpolator:
             'max_error': float(np.max(delta)),
             'joints_limited': int(limited),
         }
+
+    @property
+    def deadband_enabled(self) -> bool:
+        """True if any deadband threshold is non-zero."""
+        return (
+            np.any(self._deadband > 0.0)
+            or self._base_deadband_linear > 0.0
+            or self._base_deadband_angular > 0.0
+        )
