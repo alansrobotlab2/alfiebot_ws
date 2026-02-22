@@ -226,15 +226,32 @@ class GrootClientNode(Node):
                 'right_gripper': self.get_parameter('rate_limit_right_gripper').value,
                 'head': self.get_parameter('rate_limit_head').value,
             }
+            deadbands = {
+                'back': self.get_parameter('deadband_back').value,
+                'left_arm': self.get_parameter('deadband_left_arm').value,
+                'left_gripper': self.get_parameter('deadband_left_gripper').value,
+                'right_arm': self.get_parameter('deadband_right_arm').value,
+                'right_gripper': self.get_parameter('deadband_right_gripper').value,
+                'head': self.get_parameter('deadband_head').value,
+            }
             self._rate_limiter = RateLimitedInterpolator(
                 max_speeds=max_speeds,
                 dt=1.0 / COMMAND_RATE_HZ,
                 target_ema_alpha=self.joint_smoothing_alpha,
+                deadbands=deadbands,
+                base_deadband_linear=self.get_parameter('deadband_base_linear').value,
+                base_deadband_angular=self.get_parameter('deadband_base_angular').value,
             )
             self.get_logger().info(
                 f'Rate-limited interpolator enabled: {max_speeds}, '
                 f'target_ema_alpha={self.joint_smoothing_alpha}'
             )
+            if self._rate_limiter.deadband_enabled:
+                self.get_logger().info(
+                    f'  Deadband filter: {deadbands}, '
+                    f'base_linear={self.get_parameter("deadband_base_linear").value}, '
+                    f'base_angular={self.get_parameter("deadband_base_angular").value}'
+                )
 
         # Per-action CSV logger (one row per action step, not per 100Hz tick)
         self._action_csv_file = None
@@ -425,6 +442,14 @@ class GrootClientNode(Node):
             self.get_logger().info(f'    arms:               {self.get_parameter("rate_limit_left_arm").value} rad/s')
             self.get_logger().info(f'    grippers:           {self.get_parameter("rate_limit_left_gripper").value} rad/s')
             self.get_logger().info(f'    head:               {self.get_parameter("rate_limit_head").value} rad/s')
+            if self._rate_limiter is not None and self._rate_limiter.deadband_enabled:
+                self.get_logger().info(f'  --- Deadband Filter ---')
+                self.get_logger().info(f'    back:               {self.get_parameter("deadband_back").value} m')
+                self.get_logger().info(f'    arms:               {self.get_parameter("deadband_left_arm").value} rad')
+                self.get_logger().info(f'    grippers:           {self.get_parameter("deadband_left_gripper").value} rad')
+                self.get_logger().info(f'    head:               {self.get_parameter("deadband_head").value} rad')
+                self.get_logger().info(f'    base linear:        {self.get_parameter("deadband_base_linear").value} m/s')
+                self.get_logger().info(f'    base angular:       {self.get_parameter("deadband_base_angular").value} rad/s')
         self.get_logger().info(f'  Base Vel Limits:      lx={self.get_parameter("max_base_linear_x").value} ly={self.get_parameter("max_base_linear_y").value} az={self.get_parameter("max_base_angular_z").value}')
         self.get_logger().info(f'  Base Accel Limits:    lin={self.get_parameter("max_base_linear_accel").value} ang={self.get_parameter("max_base_angular_accel").value}')
         self.get_logger().info(f'  Servo Speed:          arms={self.get_parameter("servo_speed_arms").value} grippers={self.get_parameter("servo_speed_grippers").value} head={self.get_parameter("servo_speed_head").value}')
@@ -628,6 +653,16 @@ class GrootClientNode(Node):
         self.declare_parameter('rate_limit_right_arm', 2.0)
         self.declare_parameter('rate_limit_right_gripper', 3.0)
         self.declare_parameter('rate_limit_head', 1.0)
+
+        # Per-joint deadband filter: suppress inference jitter
+        self.declare_parameter('deadband_back', 0.0)
+        self.declare_parameter('deadband_left_arm', 0.0)
+        self.declare_parameter('deadband_left_gripper', 0.0)
+        self.declare_parameter('deadband_right_arm', 0.0)
+        self.declare_parameter('deadband_right_gripper', 0.0)
+        self.declare_parameter('deadband_head', 0.0)
+        self.declare_parameter('deadband_base_linear', 0.0)
+        self.declare_parameter('deadband_base_angular', 0.0)
 
         # Base velocity limits (BEHAVIOR R1Pro-inspired)
         self.declare_parameter('max_base_linear_x', 0.15)

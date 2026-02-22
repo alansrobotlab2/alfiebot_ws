@@ -121,6 +121,22 @@
     rate_limit_head: 1.0            # rad/s — slow, smooth tracking
 
     # ==========================================================================
+    # Per-Joint Deadband Filter
+    # ==========================================================================
+    # Suppresses inference jitter by ignoring target changes smaller than
+    # the threshold. Position joints: if |new - current| < deadband, keep old.
+    # Base velocity: snap to zero if |vel| < deadband.
+    # 0.0 = disabled (default). See DEADBAND_ANALYSIS.md for tuning rationale.
+    deadband_back: 0.0              # m — back position deadband
+    deadband_left_arm: 0.0          # rad — left arm joint deadband
+    deadband_left_gripper: 0.0      # rad — left gripper deadband
+    deadband_right_arm: 0.0         # rad — right arm joint deadband
+    deadband_right_gripper: 0.0     # rad — right gripper deadband
+    deadband_head: 0.0              # rad — head joint deadband
+    deadband_base_linear: 0.0       # m/s — base linear velocity deadband
+    deadband_base_angular: 0.0      # rad/s — base angular velocity deadband
+
+    # ==========================================================================
     # Base Velocity Limits (BEHAVIOR R1Pro-inspired, Phase A-2)
     # ==========================================================================
     # Magnitude capping + acceleration limiting for the mecanum base.
