@@ -43,6 +43,7 @@ setup(
             'smoothing_simulator = alfie_gr00t.scripts.smoothing_simulator:main',
             'smoothing_analysis = alfie_gr00t.scripts.smoothing_analysis:main',
             'groot_replay_eval = alfie_gr00t.scripts.groot_replay_eval:main',
+            'ensemble_characterization = alfie_gr00t.scripts.ensemble_characterization:main',
         ],
     },
 )
