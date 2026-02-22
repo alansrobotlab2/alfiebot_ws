@@ -193,6 +193,14 @@ PARAM_DEFAULTS = {
     'rate_limit_right_arm': 2.0,
     'rate_limit_right_gripper': 3.0,
     'rate_limit_head': 1.0,
+    'deadband_back': 0.0,
+    'deadband_left_arm': 0.0,
+    'deadband_left_gripper': 0.0,
+    'deadband_right_arm': 0.0,
+    'deadband_right_gripper': 0.0,
+    'deadband_head': 0.0,
+    'deadband_base_linear': 0.0,
+    'deadband_base_angular': 0.0,
     'max_base_linear_x': 0.15,
     'max_base_linear_y': 0.15,
     'max_base_angular_z': 0.8,
@@ -244,6 +252,14 @@ def apply_cli_overrides(config: dict, args: argparse.Namespace) -> dict:
         'rate_limit_right_arm': 'rate_limit_right_arm',
         'rate_limit_right_gripper': 'rate_limit_right_gripper',
         'rate_limit_head': 'rate_limit_head',
+        'deadband_back': 'deadband_back',
+        'deadband_left_arm': 'deadband_left_arm',
+        'deadband_left_gripper': 'deadband_left_gripper',
+        'deadband_right_arm': 'deadband_right_arm',
+        'deadband_right_gripper': 'deadband_right_gripper',
+        'deadband_head': 'deadband_head',
+        'deadband_base_linear': 'deadband_base_linear',
+        'deadband_base_angular': 'deadband_base_angular',
         'max_base_linear_x': 'max_base_linear_x',
         'max_base_linear_y': 'max_base_linear_y',
         'max_base_angular_z': 'max_base_angular_z',
@@ -379,6 +395,16 @@ class ClientPipelineSimulator:
                     'head': config['rate_limit_head'],
                 },
                 dt=TICK_DT,
+                deadbands={
+                    'back': config.get('deadband_back', 0.0),
+                    'left_arm': config.get('deadband_left_arm', 0.0),
+                    'left_gripper': config.get('deadband_left_gripper', 0.0),
+                    'right_arm': config.get('deadband_right_arm', 0.0),
+                    'right_gripper': config.get('deadband_right_gripper', 0.0),
+                    'head': config.get('deadband_head', 0.0),
+                },
+                base_deadband_linear=config.get('deadband_base_linear', 0.0),
+                base_deadband_angular=config.get('deadband_base_angular', 0.0),
             )
 
         # Legacy ActionInterpolator (classic mode, rate_limit_enabled=false)
@@ -442,6 +468,8 @@ class ClientPipelineSimulator:
         self._hold_count = 0
         self._rate_limit_clip_ticks = 0
         self._current_frame = 0  # continuous mode frame counter
+        self._inference_cooldown = 0  # frames until next inference allowed
+        self._inference_ready = True  # continuous mode: ready for next inference
 
     def reset(self):
         """Reset all state for a new episode."""
@@ -455,6 +483,8 @@ class ClientPipelineSimulator:
         self._hold_count = 0
         self._rate_limit_clip_ticks = 0
         self._current_frame = 0
+        self._inference_cooldown = 0
+        self._inference_ready = True
         if self._rate_limiter is not None:
             self._rate_limiter.reset()
         if self._action_interpolator is not None:
@@ -475,15 +505,27 @@ class ClientPipelineSimulator:
         """Check if we need to fire inference at the current step.
 
         Classic: trigger at inference_trigger_step (or first chunk).
-        Continuous: always (every frame fires inference).
+        Continuous: ready when cooldown has elapsed (simulates real-time
+        inference rate — with ~250ms RTT, fires ~4x/sec not every frame).
         """
         if self.continuous:
-            return True
+            return self._inference_ready
         if self._is_first_chunk:
             return True
         if self._pending_chunk is not None:
             return False
         return self._exec_idx == self.inference_trigger_step
+
+    def mark_inference_latency(self, latency_ms: float):
+        """Record actual inference RTT to schedule the next continuous inference.
+
+        In continuous mode, the next inference cannot fire until enough
+        simulated frames have elapsed to cover the real RTT. This prevents
+        the unrealistic scenario of firing inference every frame.
+        """
+        if self.continuous:
+            frames_elapsed = max(1, round(latency_ms / (ACTION_STEP_PERIOD * 1000)))
+            self._inference_cooldown = frames_elapsed
 
     def install_chunk(self, chunk: np.ndarray):
         """Install an action chunk from the server.
@@ -527,6 +569,13 @@ class ClientPipelineSimulator:
 
         Replicates _continuous_command_callback() from groot_client.py:1077-1129.
         """
+        # Tick inference cooldown — when it reaches 0, next inference can fire
+        if self._inference_cooldown > 0:
+            self._inference_cooldown -= 1
+            self._inference_ready = self._inference_cooldown == 0
+        else:
+            self._inference_ready = True
+
         frame = self._current_frame
         zeros = np.zeros(22, dtype=np.float32)
 
@@ -1077,6 +1126,8 @@ def run_episode(
     compressed_frames: list[dict],
     task: str,
     closed_loop: bool = False,
+    rtc: bool = False,
+    rtc_freeze_steps: int = 4,
 ) -> dict:
     """Replay one episode through the full pipeline.
 
@@ -1095,6 +1146,7 @@ def run_episode(
 
     pipeline.reset()
     num_inference = 0
+    prev_chunk = None  # Track last chunk for RTC prev_actions
 
     # Prefetch: in continuous open-loop mode, we know the next frame's observation
     # and can ask the server to VLA-prep it while running GPU inference on the current.
@@ -1112,6 +1164,11 @@ def run_episode(
         if pipeline.needs_inference():
             images = compressed_frames[gt_frame] if gt_frame < len(compressed_frames) else {}
 
+            # RTC: send tail of previous chunk as freeze context
+            prev_actions = None
+            if rtc and prev_chunk is not None:
+                prev_actions = prev_chunk[-rtc_freeze_steps:]
+
             # Build prefetch args for next frame
             pf_images = None
             pf_state = None
@@ -1126,6 +1183,7 @@ def run_episode(
                 images=images,
                 state=state_raw,
                 language=task,
+                prev_actions=prev_actions,
                 prefetch_images=pf_images,
                 prefetch_state=pf_state,
                 prefetch_id=pf_id,
@@ -1161,7 +1219,14 @@ def run_episode(
             if actions_list:
                 chunk = np.array(actions_list, dtype=np.float32)
                 pipeline.install_chunk(chunk)
+                prev_chunk = chunk
                 num_inference += 1
+
+                # Tell the pipeline how long this inference took so continuous
+                # mode can schedule the next one at a realistic rate
+                client_timing = response.get('client_timing', {})
+                latency_ms = client_timing.get('total_ms', 250.0)
+                pipeline.mark_inference_latency(latency_ms)
 
         # Step the pipeline for this frame
         raw, proc, info = pipeline.step_frame()
@@ -1254,6 +1319,19 @@ def run_eval(args):
             print(f'    rate_limit_left_arm:    {config["rate_limit_left_arm"]}')
             print(f'    rate_limit_right_arm:   {config["rate_limit_right_arm"]}')
             print(f'    rate_limit_head:        {config["rate_limit_head"]}')
+            db_any = any(config.get(f'deadband_{p}', 0.0) > 0
+                         for p in ['back', 'left_arm', 'left_gripper',
+                                   'right_arm', 'right_gripper', 'head'])
+            db_base = (config.get('deadband_base_linear', 0.0) > 0 or
+                       config.get('deadband_base_angular', 0.0) > 0)
+            if db_any or db_base:
+                print(f'    --- Deadband ---')
+                print(f'    deadband_back:          {config.get("deadband_back", 0.0)}')
+                print(f'    deadband_arms:          {config.get("deadband_left_arm", 0.0)} rad')
+                print(f'    deadband_grippers:      {config.get("deadband_left_gripper", 0.0)} rad')
+                print(f'    deadband_head:          {config.get("deadband_head", 0.0)} rad')
+                print(f'    deadband_base_linear:   {config.get("deadband_base_linear", 0.0)} m/s')
+                print(f'    deadband_base_angular:  {config.get("deadband_base_angular", 0.0)} rad/s')
         elif config.get('interpolate_actions'):
             print(f'    interpolate_actions:    {config["interpolate_actions"]}')
             print(f'    interpolation_method:   {config["interpolation_method"]}')
@@ -1263,6 +1341,8 @@ def run_eval(args):
     print(f'    max_base_linear_accel:  {config["max_base_linear_accel"]}')
     print(f'    max_base_angular_accel: {config["max_base_angular_accel"]}')
     print(f'    h264_conditioning:      {config["h264_conditioning"]}')
+    if args.rtc:
+        print(f'    rtc:                    ON (freeze_steps={args.rtc_freeze_steps})')
     print('=' * 70)
     print()
 
@@ -1337,6 +1417,8 @@ def run_eval(args):
             compressed_frames=compressed_frames,
             task=task,
             closed_loop=args.closed_loop,
+            rtc=args.rtc,
+            rtc_freeze_steps=args.rtc_freeze_steps,
         )
         elapsed = time.time() - t0
         logger.info(f'Replay done in {elapsed:.1f}s ({result["num_inference"]} inference steps)')
@@ -1688,6 +1770,16 @@ Examples:
     parser.add_argument('--rate-limit-right-gripper', type=float, default=None)
     parser.add_argument('--rate-limit-head', type=float, default=None)
 
+    # Deadband overrides
+    parser.add_argument('--deadband-back', type=float, default=None)
+    parser.add_argument('--deadband-left-arm', type=float, default=None)
+    parser.add_argument('--deadband-left-gripper', type=float, default=None)
+    parser.add_argument('--deadband-right-arm', type=float, default=None)
+    parser.add_argument('--deadband-right-gripper', type=float, default=None)
+    parser.add_argument('--deadband-head', type=float, default=None)
+    parser.add_argument('--deadband-base-linear', type=float, default=None)
+    parser.add_argument('--deadband-base-angular', type=float, default=None)
+
     # Base velocity overrides
     parser.add_argument('--max-base-linear-x', type=float, default=None)
     parser.add_argument('--max-base-linear-y', type=float, default=None)
@@ -1721,6 +1813,12 @@ Examples:
     parser.add_argument('--interpolation-method', type=str, default=None,
                         choices=['linear', 'cubic_spline'])
     parser.add_argument('--spline-window', type=int, default=None)
+
+    # RTC (Real-Time Chunking)
+    parser.add_argument('--rtc', action='store_true',
+                        help='Send prev_actions for RTC freeze+inpaint (server must have --rtc)')
+    parser.add_argument('--rtc-freeze-steps', type=int, default=4,
+                        help='Number of freeze steps for RTC (default: %(default)s)')
 
     # Logging
     parser.add_argument('-v', '--verbose', action='store_true',

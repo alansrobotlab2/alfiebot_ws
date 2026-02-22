@@ -128,11 +128,11 @@
     # Base velocity: snap to zero if |vel| < deadband.
     # 0.0 = disabled (default). See DEADBAND_ANALYSIS.md for tuning rationale.
     deadband_back: 0.0              # m — back position deadband
-    deadband_left_arm: 0.0          # rad — left arm joint deadband
-    deadband_left_gripper: 0.0      # rad — left gripper deadband
-    deadband_right_arm: 0.0         # rad — right arm joint deadband
-    deadband_right_gripper: 0.0     # rad — right gripper deadband
-    deadband_head: 0.0              # rad — head joint deadband
+    deadband_left_arm: 0.025          # rad — left arm joint deadband
+    deadband_left_gripper: 0.025      # rad — left gripper deadband
+    deadband_right_arm: 0.025         # rad — right arm joint deadband
+    deadband_right_gripper: 0.025     # rad — right gripper deadband
+    deadband_head: 0.025              # rad — head joint deadband
     deadband_base_linear: 0.0       # m/s — base linear velocity deadband
     deadband_base_angular: 0.0      # rad/s — base angular velocity deadband
 
@@ -171,7 +171,7 @@
     # When enabled, inference runs continuously (always churning) and chunks
     # are combined via temporal ensembling in a rolling ChunkBuffer.
     # When disabled (default), uses classic overlapped execution model.
-    continuous_inference: false
+    continuous_inference: true
 
     # Temporal ensembling strategy for combining overlapping chunk predictions:
     #   'latest'    — only use most recent chunk (baseline, matches classic behavior)
