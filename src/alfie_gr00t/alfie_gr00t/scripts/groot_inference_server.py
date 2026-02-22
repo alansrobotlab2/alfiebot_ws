@@ -317,7 +317,8 @@ class JpegPolicyWrapper(BasePolicy):
     existing client can consume them without changes.
     """
 
-    def __init__(self, policy: BasePolicy, language_key: str):
+    def __init__(self, policy: BasePolicy, language_key: str,
+                 rtc_enabled: bool = False, rtc_freeze_steps: int = 4):
         super().__init__(strict=False)
         self.policy = policy
         self.language_key = language_key
@@ -333,6 +334,203 @@ class JpegPolicyWrapper(BasePolicy):
         self._pending_backbone_event = None
         self._pending_backbone_states = None  # states for decode_action after finish_frame
         self._pending_backbone_id = None  # frame ID for validating backbone cache
+
+        # RTC (Real-Time Chunking) freeze+inpaint
+        self._rtc_enabled = rtc_enabled
+        self._rtc_freeze_steps = rtc_freeze_steps
+        if rtc_enabled:
+            self._install_rtc_patch()
+
+    # ── RTC (Real-Time Chunking) ────────────────────────────────────────
+
+    def _normalize_flat_actions(self, flat_actions: np.ndarray) -> np.ndarray:
+        """Normalize flat (D, 22) physical actions to model [-1,1] space.
+
+        Uses the processor's per-joint-group min-max normalization params.
+        All Alfie action groups use ABSOLUTE representation, so no relative
+        conversion is needed.
+        """
+        result = np.zeros_like(flat_actions)
+        embodiment_tag = self.policy.embodiment_tag
+        sap = self.policy.processor.state_action_processor
+        norm_params = sap.norm_params[embodiment_tag.value if hasattr(embodiment_tag, 'value') else embodiment_tag]
+
+        for name, start, end in STATE_PARTS:
+            params = norm_params['action'][name]
+            min_vals = np.asarray(params['min'], dtype=np.float32)
+            max_vals = np.asarray(params['max'], dtype=np.float32)
+            vals = flat_actions[..., start:end]
+            mask = ~np.isclose(max_vals, min_vals)
+            normed = np.zeros_like(vals)
+            normed[..., mask] = 2.0 * (vals[..., mask] - min_vals[mask]) / (max_vals[mask] - min_vals[mask]) - 1.0
+            result[..., start:end] = normed
+
+        return result
+
+    def _install_rtc_patch(self):
+        """Monkey-patch action_head.get_action_with_features with RTC inpainting.
+
+        When _rtc_context is set on the action_head before inference, the
+        patched method freezes the first `freeze_steps` actions to match
+        committed values from the previous chunk. This forces temporal
+        consistency at the source — inside the denoising loop.
+
+        Flow matching inpainting: after each Euler step, replace frozen
+        indices with the noise-schedule target:
+            frozen_target_t = (1 - tau) * z_frozen + tau * a_committed
+        where tau = (t+1) / num_steps.
+        """
+        action_head = self.policy.model.action_head
+        original_fn = action_head.get_action_with_features
+        freeze_steps = self._rtc_freeze_steps
+
+        # Pre-compute soft boundary mask (avoids hard seam at freeze boundary)
+        # 2-action exponential blend zone at the boundary
+        blend_zone = 2
+
+        def rtc_get_action_with_features(
+            backbone_features, state_features, embodiment_id, backbone_output,
+        ):
+            ctx = getattr(action_head, '_rtc_context', None)
+            if ctx is None:
+                return original_fn(backbone_features, state_features,
+                                   embodiment_id, backbone_output)
+
+            committed = ctx['committed']  # (1, freeze_steps, action_dim) normalized tensor
+            d = ctx['freeze_steps']
+
+            # --- Replicate the original denoising loop with inpainting ---
+            from transformers import BatchFeature
+
+            vl_embeds = backbone_features
+            batch_size = vl_embeds.shape[0]
+            device = vl_embeds.device
+            model_dtype = vl_embeds.dtype
+
+            actions = torch.randn(
+                size=(batch_size, action_head.config.action_horizon, action_head.action_dim),
+                dtype=torch.float32, device=device,
+            )
+
+            # Save initial noise at frozen positions for flow trajectory
+            z_frozen = actions[:, :d, :].clone()
+
+            dt = 1.0 / action_head.num_inference_timesteps
+
+            # Build soft mask: 1.0 = fully frozen, 0.0 = fully free
+            mask = torch.zeros(action_head.config.action_horizon, device=device)
+            for i in range(d):
+                if i < d - blend_zone:
+                    mask[i] = 1.0
+                else:
+                    # Exponential decay in blend zone
+                    dist_from_boundary = d - 1 - i
+                    mask[i] = float(np.exp(-3.0 * (blend_zone - 1 - dist_from_boundary)))
+            # mask shape: (action_horizon,) -> (1, action_horizon, 1) for broadcast
+            mask = mask.unsqueeze(0).unsqueeze(-1)
+
+            timestep_tensors = []
+            for t in range(action_head.num_inference_timesteps):
+                t_cont = t / float(action_head.num_inference_timesteps)
+                t_discretized = int(t_cont * action_head.num_timestep_buckets)
+                timestep_tensors.append(
+                    torch.full(size=(batch_size,), fill_value=t_discretized, device=device)
+                )
+
+            if action_head.config.add_pos_embed:
+                pos_ids = torch.arange(action_head.action_horizon, dtype=torch.long, device=device)
+                pos_embs = action_head.position_embedding(pos_ids).unsqueeze(0)
+
+            for t in range(action_head.num_inference_timesteps):
+                timesteps_tensor = timestep_tensors[t]
+                action_features = action_head.action_encoder(
+                    actions.to(model_dtype), timesteps_tensor, embodiment_id
+                )
+                if action_head.config.add_pos_embed:
+                    action_features = action_features + pos_embs
+
+                sa_embs = torch.cat((state_features, action_features), dim=1)
+
+                if action_head.config.use_alternate_vl_dit:
+                    model_output = action_head.model(
+                        hidden_states=sa_embs,
+                        encoder_hidden_states=vl_embeds,
+                        timestep=timesteps_tensor,
+                        image_mask=backbone_output.image_mask,
+                        backbone_attention_mask=backbone_output.backbone_attention_mask,
+                    )
+                else:
+                    model_output = action_head.model(
+                        hidden_states=sa_embs,
+                        encoder_hidden_states=vl_embeds,
+                        timestep=timesteps_tensor,
+                    )
+                if model_output.dtype != action_head.dtype:
+                    model_output = model_output.to(action_head.dtype)
+
+                pred = action_head.action_decoder(model_output, embodiment_id)
+                pred_velocity = pred[:, -action_head.action_horizon:]
+                actions = actions + dt * pred_velocity.float()
+
+                # RTC inpainting: replace frozen indices with flow trajectory target
+                tau = (t + 1) / action_head.num_inference_timesteps
+                frozen_target = (1.0 - tau) * z_frozen + tau * committed
+                # Apply soft mask: blend frozen_target into actions at frozen positions
+                actions[:, :d, :] = (
+                    mask[:, :d, :] * frozen_target
+                    + (1.0 - mask[:, :d, :]) * actions[:, :d, :]
+                )
+
+            return BatchFeature(
+                data={
+                    "action_pred": actions.to(model_dtype),
+                    "backbone_features": vl_embeds,
+                    "state_features": state_features,
+                }
+            )
+
+        action_head.get_action_with_features = rtc_get_action_with_features
+        logging.info(f'RTC patch installed: freeze_steps={freeze_steps}, blend_zone={blend_zone}')
+
+    def _set_rtc_context(self, observation: dict) -> None:
+        """Set RTC context on action_head before inference if prev_actions available."""
+        if not self._rtc_enabled:
+            return
+
+        prev_actions_raw = observation.get('prev_actions')
+        if prev_actions_raw is None:
+            self.policy.model.action_head._rtc_context = None
+            return
+
+        # prev_actions: list of lists [[22 floats], ...] or flat list -> (d, 22)
+        prev_arr = np.array(prev_actions_raw, dtype=np.float32)
+        if prev_arr.ndim == 1:
+            prev_arr = prev_arr.reshape(-1, 22)  # (d, 22)
+
+        # Normalize to model space
+        normalized = self._normalize_flat_actions(prev_arr)  # (d, 22)
+
+        # Pad to model's action_dim (22 -> 128) to match denoising space
+        model_action_dim = self.policy.model.action_head.action_dim
+        if normalized.shape[-1] < model_action_dim:
+            pad_width = model_action_dim - normalized.shape[-1]
+            normalized = np.pad(normalized, ((0, 0), (0, pad_width)), constant_values=0.0)
+
+        # Convert to tensor (1, d, model_action_dim) on model device
+        device = next(self.policy.model.parameters()).device
+        committed = torch.from_numpy(normalized).float().unsqueeze(0).to(device)
+
+        self.policy.model.action_head._rtc_context = {
+            'committed': committed,
+            'freeze_steps': committed.shape[1],
+        }
+
+    def _clear_rtc_context(self) -> None:
+        """Clear RTC context after inference."""
+        if self._rtc_enabled:
+            self.policy.model.action_head._rtc_context = None
+
+    # ── Image / State Processing ──────────────────────────────────────
 
     def _decode_images(self, observation: dict) -> dict[str, np.ndarray]:
         """Decode JPEG bytes or raw RGB arrays into (1,1,H,W,3) uint8."""
@@ -630,6 +828,9 @@ class JpegPolicyWrapper(BasePolicy):
             )
             self._prefetch_id = prefetch_id
 
+        # Set RTC context before inference (if prev_actions provided)
+        self._set_rtc_context(observation)
+
         # Check for backbone cache hit (backbone was started async on previous request)
         backbone_hit = False
         if (self._pending_backbone_event is not None
@@ -648,6 +849,9 @@ class JpegPolicyWrapper(BasePolicy):
             self._pending_backbone_id = None
             # Full GPU inference (overlaps with VLA prefetch thread)
             flat_actions, gpu_info = self._gpu_infer(collated_inputs, states)
+
+        # Clear RTC context after inference
+        self._clear_rtc_context()
 
         t_infer = time.monotonic()
 
@@ -787,6 +991,10 @@ examples:
                         help='PULL socket port for async observations (default: %(default)s)')
     parser.add_argument('--async-push-port', type=int, default=5557,
                         help='PUSH socket port for async action results (default: %(default)s)')
+    parser.add_argument('--rtc', action='store_true',
+                        help='Enable RTC (Real-Time Chunking) freeze+inpaint denoising')
+    parser.add_argument('--rtc-freeze-steps', type=int, default=4,
+                        help='Number of leading actions to freeze in RTC (default: %(default)s)')
 
     return parser.parse_args()
 
@@ -946,7 +1154,10 @@ def main():
         sys.exit(1)
 
     # Wrap with JPEG translation layer
-    wrapped = JpegPolicyWrapper(policy, language_key=language_key)
+    wrapped = JpegPolicyWrapper(
+        policy, language_key=language_key,
+        rtc_enabled=args.rtc, rtc_freeze_steps=args.rtc_freeze_steps,
+    )
 
     # Warmup inference to trigger torch.compile and other first-call overhead
     if not args.dataset_path:
