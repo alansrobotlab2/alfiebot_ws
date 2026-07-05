@@ -1,0 +1,28 @@
+# Alfie Pico stable serial-device naming
+#
+# The Alfie picos are RP2040-based boards from Raspberry Pi (USB vendor 2e8a),
+# but the exact model/product ID varies (e.g. Waveshare RP2040 Zero = 2e8a:0003,
+# Raspberry Pi Pico = 2e8a:000a). The kernel ttyACM* index is NOT stable across
+# boots, so each device is matched by its globally-unique USB serial alone
+# (vendor 2e8a is included only as a cheap pre-filter). The original /dev/ttyACM*
+# node still exists; these rules only add named aliases.
+#
+# Install:  sudo cp 99-alfie-pico.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload-rules && sudo udevadm trigger
+# Verify:   ls -l /dev/ttyAlfie*
+
+# Heartbeat pico -> /dev/ttyAlfieH  (Waveshare RP2040 Zero, serial 530328473106349C)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{serial}=="530328473106349C", SYMLINK+="ttyAlfieH", GROUP="dialout", MODE="0666"
+
+# ttyAlfieB pico -> /dev/ttyAlfieB  (Raspberry Pi Pico, serial 5044340578353C1C)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{serial}=="5044340578353C1C", SYMLINK+="ttyAlfieB", GROUP="dialout", MODE="0666"
+
+# ttyAlfieL pico -> /dev/ttyAlfieL  (serial 5303284738D1359C)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{serial}=="5303284738D1359C", SYMLINK+="ttyAlfieL", GROUP="dialout", MODE="0666"
+
+# ttyAlfieR pico -> /dev/ttyAlfieR  (serial 530328474102739C)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{serial}=="530328474102739C", SYMLINK+="ttyAlfieR", GROUP="dialout", MODE="0666"
+
+# ttyAlfieD pico -> /dev/ttyAlfieD  (serial 5303284740F45C9C)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{serial}=="5303284740F45C9C", SYMLINK+="ttyAlfieD", GROUP="dialout", MODE="0666"
+#SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{serial}=="<SERIAL>", SYMLINK+="ttyAlfie<X>", GROUP="dialout", MODE="0666"
