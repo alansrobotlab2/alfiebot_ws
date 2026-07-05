@@ -22,6 +22,8 @@ setup(
         'console_scripts': [
             'ollama_serve_node = alfie_llm.ollama_serve_node:main',
             'mlc_llm_serve_node = alfie_llm.mlc_llm_serve_node:main',
+            'vllm_serve_node = alfie_llm.vllm_serve_node:main',
+            'llama_serve_node = alfie_llm.llama_serve_node:main',
         ],
     },
 )

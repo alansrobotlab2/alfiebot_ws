@@ -1,0 +1,744 @@
+[
+  {
+    "mse_overall": 0.006235,
+    "jerk_ratio_overall": 0.81,
+    "hf_power_overall": 2.1,
+    "inference_count": null,
+    "per_group": {
+      "base": {
+        "gt_jerk": 6.1226,
+        "raw_jerk": 4.7403,
+        "proc_jerk": 2.3478,
+        "raw_jerk_ratio": 0.77,
+        "proc_jerk_ratio": 0.38,
+        "raw_hf_pct": 15.8,
+        "proc_hf_pct": 10.5
+      },
+      "back": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_arm": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_hand": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "right_arm": {
+        "gt_jerk": 11.3198,
+        "raw_jerk": 11.3776,
+        "proc_jerk": 7.0624,
+        "raw_jerk_ratio": 1.01,
+        "proc_jerk_ratio": 0.62,
+        "raw_hf_pct": 0.2,
+        "proc_hf_pct": 0.1
+      },
+      "right_hand": {
+        "gt_jerk": 15.4603,
+        "raw_jerk": 9.9507,
+        "proc_jerk": 5.6237,
+        "raw_jerk_ratio": 0.64,
+        "proc_jerk_ratio": 0.36,
+        "raw_hf_pct": 0.1,
+        "proc_hf_pct": 0.0
+      },
+      "head": {
+        "gt_jerk": 2.1088,
+        "raw_jerk": 7.1357,
+        "proc_jerk": 3.7471,
+        "raw_jerk_ratio": 3.38,
+        "proc_jerk_ratio": 1.78,
+        "raw_hf_pct": 1.9,
+        "proc_hf_pct": 0.8
+      }
+    },
+    "per_joint_mse": {
+      "base": {
+        "raw_mse": 0.001675,
+        "proc_mse": 0.001641
+      },
+      "back": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_arm": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_hand": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "right_arm": {
+        "raw_mse": 0.010666,
+        "proc_mse": 0.011502
+      },
+      "right_hand": {
+        "raw_mse": 0.012824,
+        "proc_mse": 0.013398
+      },
+      "head": {
+        "raw_mse": 0.006221,
+        "proc_mse": 0.006461
+      }
+    },
+    "name": "D1_no_filter",
+    "phase": "D",
+    "desc": "No post-filter (ensemble+EMA only)",
+    "status": "ok",
+    "elapsed_s": 63.720391511917114
+  },
+  {
+    "mse_overall": 0.005314,
+    "jerk_ratio_overall": 0.77,
+    "hf_power_overall": 2.0,
+    "inference_count": null,
+    "per_group": {
+      "base": {
+        "gt_jerk": 6.1226,
+        "raw_jerk": 6.6946,
+        "proc_jerk": 2.2057,
+        "raw_jerk_ratio": 1.09,
+        "proc_jerk_ratio": 0.36,
+        "raw_hf_pct": 15.5,
+        "proc_hf_pct": 7.2
+      },
+      "back": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_arm": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_hand": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "right_arm": {
+        "gt_jerk": 11.3198,
+        "raw_jerk": 12.108,
+        "proc_jerk": 7.0479,
+        "raw_jerk_ratio": 1.07,
+        "proc_jerk_ratio": 0.62,
+        "raw_hf_pct": 0.2,
+        "proc_hf_pct": 0.1
+      },
+      "right_hand": {
+        "gt_jerk": 15.4603,
+        "raw_jerk": 7.0294,
+        "proc_jerk": 4.5133,
+        "raw_jerk_ratio": 0.45,
+        "proc_jerk_ratio": 0.29,
+        "raw_hf_pct": 0.1,
+        "proc_hf_pct": 0.0
+      },
+      "head": {
+        "gt_jerk": 2.1088,
+        "raw_jerk": 6.8803,
+        "proc_jerk": 3.73,
+        "raw_jerk_ratio": 3.26,
+        "proc_jerk_ratio": 1.77,
+        "raw_hf_pct": 1.8,
+        "proc_hf_pct": 0.8
+      }
+    },
+    "per_joint_mse": {
+      "base": {
+        "raw_mse": 0.001905,
+        "proc_mse": 0.001496
+      },
+      "back": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_arm": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_hand": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "right_arm": {
+        "raw_mse": 0.012276,
+        "proc_mse": 0.013032
+      },
+      "right_hand": {
+        "raw_mse": 0.013384,
+        "proc_mse": 0.014091
+      },
+      "head": {
+        "raw_mse": 0.006278,
+        "proc_mse": 0.00653
+      }
+    },
+    "name": "D2_savgol_w3",
+    "phase": "D",
+    "desc": "SavGol window=3",
+    "status": "ok",
+    "elapsed_s": 64.01372909545898
+  },
+  {
+    "mse_overall": 0.005575,
+    "jerk_ratio_overall": 0.9,
+    "hf_power_overall": 2.6,
+    "inference_count": null,
+    "per_group": {
+      "base": {
+        "gt_jerk": 6.1226,
+        "raw_jerk": 5.2221,
+        "proc_jerk": 2.7636,
+        "raw_jerk_ratio": 0.85,
+        "proc_jerk_ratio": 0.45,
+        "raw_hf_pct": 15.4,
+        "proc_hf_pct": 18.5
+      },
+      "back": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_arm": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_hand": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "right_arm": {
+        "gt_jerk": 11.3198,
+        "raw_jerk": 13.0621,
+        "proc_jerk": 9.5764,
+        "raw_jerk_ratio": 1.15,
+        "proc_jerk_ratio": 0.85,
+        "raw_hf_pct": 0.3,
+        "proc_hf_pct": 0.2
+      },
+      "right_hand": {
+        "gt_jerk": 15.4603,
+        "raw_jerk": 9.5158,
+        "proc_jerk": 9.2067,
+        "raw_jerk_ratio": 0.62,
+        "proc_jerk_ratio": 0.6,
+        "raw_hf_pct": 0.2,
+        "proc_hf_pct": 0.2
+      },
+      "head": {
+        "gt_jerk": 2.1088,
+        "raw_jerk": 6.5023,
+        "proc_jerk": 4.4679,
+        "raw_jerk_ratio": 3.08,
+        "proc_jerk_ratio": 2.12,
+        "raw_hf_pct": 1.9,
+        "proc_hf_pct": 1.2
+      }
+    },
+    "per_joint_mse": {
+      "base": {
+        "raw_mse": 0.001913,
+        "proc_mse": 0.001614
+      },
+      "back": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_arm": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_hand": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "right_arm": {
+        "raw_mse": 0.014313,
+        "proc_mse": 0.015033
+      },
+      "right_hand": {
+        "raw_mse": 0.012679,
+        "proc_mse": 0.012508
+      },
+      "head": {
+        "raw_mse": 0.005248,
+        "proc_mse": 0.005514
+      }
+    },
+    "name": "D3_savgol_w5",
+    "phase": "D",
+    "desc": "SavGol window=5 (current)",
+    "status": "ok",
+    "elapsed_s": 63.82708120346069
+  },
+  {
+    "mse_overall": 0.004671,
+    "jerk_ratio_overall": 0.89,
+    "hf_power_overall": 2.5,
+    "inference_count": null,
+    "per_group": {
+      "base": {
+        "gt_jerk": 6.1226,
+        "raw_jerk": 5.6616,
+        "proc_jerk": 2.8669,
+        "raw_jerk_ratio": 0.92,
+        "proc_jerk_ratio": 0.47,
+        "raw_hf_pct": 17.7,
+        "proc_hf_pct": 13.6
+      },
+      "back": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_arm": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_hand": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "right_arm": {
+        "gt_jerk": 11.3198,
+        "raw_jerk": 13.7394,
+        "proc_jerk": 9.713,
+        "raw_jerk_ratio": 1.21,
+        "proc_jerk_ratio": 0.86,
+        "raw_hf_pct": 0.3,
+        "proc_hf_pct": 0.2
+      },
+      "right_hand": {
+        "gt_jerk": 15.4603,
+        "raw_jerk": 8.5237,
+        "proc_jerk": 6.1792,
+        "raw_jerk_ratio": 0.55,
+        "proc_jerk_ratio": 0.4,
+        "raw_hf_pct": 0.1,
+        "proc_hf_pct": 0.1
+      },
+      "head": {
+        "gt_jerk": 2.1088,
+        "raw_jerk": 6.5517,
+        "proc_jerk": 4.402,
+        "raw_jerk_ratio": 3.11,
+        "proc_jerk_ratio": 2.09,
+        "raw_hf_pct": 1.7,
+        "proc_hf_pct": 1.1
+      }
+    },
+    "per_joint_mse": {
+      "base": {
+        "raw_mse": 0.001681,
+        "proc_mse": 0.001179
+      },
+      "back": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_arm": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_hand": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "right_arm": {
+        "raw_mse": 0.012182,
+        "proc_mse": 0.013196
+      },
+      "right_hand": {
+        "raw_mse": 0.011472,
+        "proc_mse": 0.012205
+      },
+      "head": {
+        "raw_mse": 0.005745,
+        "proc_mse": 0.006008
+      }
+    },
+    "name": "D4_savgol_w7",
+    "phase": "D",
+    "desc": "SavGol window=7",
+    "status": "ok",
+    "elapsed_s": 63.7894241809845
+  },
+  {
+    "mse_overall": 0.004468,
+    "jerk_ratio_overall": 0.76,
+    "hf_power_overall": 1.9,
+    "inference_count": null,
+    "per_group": {
+      "base": {
+        "gt_jerk": 6.1226,
+        "raw_jerk": 5.479,
+        "proc_jerk": 2.4925,
+        "raw_jerk_ratio": 0.89,
+        "proc_jerk_ratio": 0.41,
+        "raw_hf_pct": 19.3,
+        "proc_hf_pct": 12.0
+      },
+      "back": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_arm": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_hand": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "right_arm": {
+        "gt_jerk": 11.3198,
+        "raw_jerk": 13.0579,
+        "proc_jerk": 7.7242,
+        "raw_jerk_ratio": 1.15,
+        "proc_jerk_ratio": 0.68,
+        "raw_hf_pct": 0.2,
+        "proc_hf_pct": 0.1
+      },
+      "right_hand": {
+        "gt_jerk": 15.4603,
+        "raw_jerk": 7.734,
+        "proc_jerk": 5.4677,
+        "raw_jerk_ratio": 0.5,
+        "proc_jerk_ratio": 0.35,
+        "raw_hf_pct": 0.1,
+        "proc_hf_pct": 0.1
+      },
+      "head": {
+        "gt_jerk": 2.1088,
+        "raw_jerk": 6.8922,
+        "proc_jerk": 3.8405,
+        "raw_jerk_ratio": 3.27,
+        "proc_jerk_ratio": 1.82,
+        "raw_hf_pct": 1.9,
+        "proc_hf_pct": 0.9
+      }
+    },
+    "per_joint_mse": {
+      "base": {
+        "raw_mse": 0.001936,
+        "proc_mse": 0.001533
+      },
+      "back": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_arm": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_hand": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "right_arm": {
+        "raw_mse": 0.014042,
+        "proc_mse": 0.014512
+      },
+      "right_hand": {
+        "raw_mse": 0.018655,
+        "proc_mse": 0.018669
+      },
+      "head": {
+        "raw_mse": 0.005336,
+        "proc_mse": 0.0055
+      }
+    },
+    "name": "D5_butter_7hz",
+    "phase": "D",
+    "desc": "Butterworth 7Hz cutoff",
+    "status": "ok",
+    "elapsed_s": 63.97776913642883
+  },
+  {
+    "mse_overall": 0.005164,
+    "jerk_ratio_overall": 0.85,
+    "hf_power_overall": 2.6,
+    "inference_count": null,
+    "per_group": {
+      "base": {
+        "gt_jerk": 6.1226,
+        "raw_jerk": 4.0996,
+        "proc_jerk": 2.7937,
+        "raw_jerk_ratio": 0.67,
+        "proc_jerk_ratio": 0.46,
+        "raw_hf_pct": 17.0,
+        "proc_hf_pct": 17.5
+      },
+      "back": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_arm": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_hand": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "right_arm": {
+        "gt_jerk": 11.3198,
+        "raw_jerk": 10.9716,
+        "proc_jerk": 7.3666,
+        "raw_jerk_ratio": 0.97,
+        "proc_jerk_ratio": 0.65,
+        "raw_hf_pct": 0.2,
+        "proc_hf_pct": 0.1
+      },
+      "right_hand": {
+        "gt_jerk": 15.4603,
+        "raw_jerk": 7.883,
+        "proc_jerk": 5.8402,
+        "raw_jerk_ratio": 0.51,
+        "proc_jerk_ratio": 0.38,
+        "raw_hf_pct": 0.1,
+        "proc_hf_pct": 0.1
+      },
+      "head": {
+        "gt_jerk": 2.1088,
+        "raw_jerk": 6.5547,
+        "proc_jerk": 4.37,
+        "raw_jerk_ratio": 3.11,
+        "proc_jerk_ratio": 2.07,
+        "raw_hf_pct": 1.6,
+        "proc_hf_pct": 1.0
+      }
+    },
+    "per_joint_mse": {
+      "base": {
+        "raw_mse": 0.001604,
+        "proc_mse": 0.001268
+      },
+      "back": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_arm": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_hand": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "right_arm": {
+        "raw_mse": 0.016126,
+        "proc_mse": 0.01602
+      },
+      "right_hand": {
+        "raw_mse": 0.020855,
+        "proc_mse": 0.020291
+      },
+      "head": {
+        "raw_mse": 0.005694,
+        "proc_mse": 0.005779
+      }
+    },
+    "name": "D6_butter_5hz",
+    "phase": "D",
+    "desc": "Butterworth 5Hz cutoff",
+    "status": "ok",
+    "elapsed_s": 63.91557765007019
+  },
+  {
+    "mse_overall": 0.004342,
+    "jerk_ratio_overall": 0.72,
+    "hf_power_overall": 2.0,
+    "inference_count": null,
+    "per_group": {
+      "base": {
+        "gt_jerk": 6.1226,
+        "raw_jerk": 5.045,
+        "proc_jerk": 2.3329,
+        "raw_jerk_ratio": 0.82,
+        "proc_jerk_ratio": 0.38,
+        "raw_hf_pct": 17.3,
+        "proc_hf_pct": 13.6
+      },
+      "back": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_arm": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "left_hand": {
+        "gt_jerk": 0.0,
+        "raw_jerk": 0.0,
+        "proc_jerk": 0.0,
+        "raw_jerk_ratio": 0.0,
+        "proc_jerk_ratio": 0.0,
+        "raw_hf_pct": 0.0,
+        "proc_hf_pct": 0.0
+      },
+      "right_arm": {
+        "gt_jerk": 11.3198,
+        "raw_jerk": 11.3765,
+        "proc_jerk": 5.5412,
+        "raw_jerk_ratio": 1.01,
+        "proc_jerk_ratio": 0.49,
+        "raw_hf_pct": 0.2,
+        "proc_hf_pct": 0.1
+      },
+      "right_hand": {
+        "gt_jerk": 15.4603,
+        "raw_jerk": 13.7658,
+        "proc_jerk": 7.8561,
+        "raw_jerk_ratio": 0.89,
+        "proc_jerk_ratio": 0.51,
+        "raw_hf_pct": 0.3,
+        "proc_hf_pct": 0.1
+      },
+      "head": {
+        "gt_jerk": 2.1088,
+        "raw_jerk": 6.342,
+        "proc_jerk": 2.9403,
+        "raw_jerk_ratio": 3.01,
+        "proc_jerk_ratio": 1.39,
+        "raw_hf_pct": 1.9,
+        "proc_hf_pct": 0.9
+      }
+    },
+    "per_joint_mse": {
+      "base": {
+        "raw_mse": 0.001793,
+        "proc_mse": 0.001434
+      },
+      "back": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_arm": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "left_hand": {
+        "raw_mse": 0.0,
+        "proc_mse": 0.0
+      },
+      "right_arm": {
+        "raw_mse": 0.012667,
+        "proc_mse": 0.011332
+      },
+      "right_hand": {
+        "raw_mse": 0.011064,
+        "proc_mse": 0.009385
+      },
+      "head": {
+        "raw_mse": 0.006022,
+        "proc_mse": 0.005915
+      }
+    },
+    "name": "D7_butter_3hz",
+    "phase": "D",
+    "desc": "Butterworth 3Hz cutoff",
+    "status": "ok",
+    "elapsed_s": 63.966054916381836
+  }
+]

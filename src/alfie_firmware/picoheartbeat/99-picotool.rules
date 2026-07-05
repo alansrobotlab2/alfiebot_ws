@@ -1,0 +1,22 @@
+# Raspberry Pi RP2040 / RP2350 USB permissions for picotool & BOOTSEL flashing
+#
+# picotool (and PlatformIO's bundled copy) talks to the chip over raw USB via
+# libusb. Without these rules a non-root user cannot claim the device in BOOTSEL
+# mode, and flashing fails with "No new RPxxxx device found / No accessible
+# RP-series devices in BOOTSEL mode were found".
+#
+# GROUP="plugdev" grants access to members of plugdev (headless-safe);
+# TAG+="uaccess" also grants the active local-session user. User must be in plugdev.
+#
+# Install:  sudo cp 99-picotool.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# RP2040 BOOTSEL (mass storage bootrom) — also matches these boards' app firmware
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="0003", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+# Pico SDK CDC / reset interface (application mode)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000a", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+# RP2350 (Pico 2) BOOTSEL + application, for future boards
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000f", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="0009", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+# Catch-all for any other Raspberry Pi (2e8a) USB device
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", MODE="0660", GROUP="plugdev", TAG+="uaccess"
