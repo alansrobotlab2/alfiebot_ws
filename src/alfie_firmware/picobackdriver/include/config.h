@@ -88,12 +88,12 @@
 #define MOTOR_VOLTAGE           12.0    ///< Motor operating voltage (V)
 #define MOTOR_MAX_CURRENT_MA    2000    ///< Maximum motor current (mA)
 #define MOTOR_STALL_TORQUE_NM   0.5     ///< Motor stall torque (N·m)
-#define MOTOR_FREE_SPEED_RPM    111     ///< Motor free speed (RPM)
+#define MOTOR_FREE_SPEED_RPM    176     ///< Motor free speed (RPM)
 
 /**
  * @brief Gear Ratio Configuration
  */
-#define GEAR_RATIO              88.0    ///< Gear reduction ratio (motor:output shaft) - 111 RPM motor
+#define GEAR_RATIO              88.0    ///< Gear reduction ratio (motor:output shaft) - 176 RPM motor
 #define OUTPUT_SHAFT_MAX_RPM    (MOTOR_FREE_SPEED_RPM / GEAR_RATIO)  ///< Max output shaft RPM
 
 /**
@@ -121,7 +121,7 @@
 /**
  * @brief Maximum Velocities and Accelerations for Linear Actuator
  */
-#define MAX_ACTUATOR_VELOCITY       0.074     ///< Maximum linear actuator velocity (m/s) hypothetical with 111 rpm motor, no load
+#define MAX_ACTUATOR_VELOCITY       0.117     ///< Maximum linear actuator velocity (m/s) hypothetical with 176 rpm motor, no load
 #define MAX_ACTUATOR_ACCELERATION   0.75      ///< Maximum linear actuator acceleration (m/s²)
 
 /**
