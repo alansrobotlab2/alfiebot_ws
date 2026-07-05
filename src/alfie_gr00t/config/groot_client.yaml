@@ -87,9 +87,9 @@
     # EMA smoothing coefficients (0-1) for temporal ensembling output.
     # In continuous mode, applied inside ChunkBuffer after ensembling.
     # Lower = more smoothing (more weight on previous output).
-    # A/B tested: alpha=0.5 beat alpha=0.7/0.9 on jerk AND accuracy.
+    # Sweep tested: alpha=0.3 achieves 0.46x jerk ratio (see SMOOTHIT.md).
     base_smoothing_alpha: 1.0
-    joint_smoothing_alpha: 0.5
+    joint_smoothing_alpha: 0.3
 
     # Inter-action interpolation: smooth 100Hz output by interpolating
     # between consecutive actions in the chunk. Superseded by rate-limited
@@ -128,11 +128,11 @@
     # Base velocity: snap to zero if |vel| < deadband.
     # 0.0 = disabled (default). See DEADBAND_ANALYSIS.md for tuning rationale.
     deadband_back: 0.0              # m — back position deadband
-    deadband_left_arm: 0.025          # rad — left arm joint deadband
-    deadband_left_gripper: 0.025      # rad — left gripper deadband
-    deadband_right_arm: 0.025         # rad — right arm joint deadband
-    deadband_right_gripper: 0.025     # rad — right gripper deadband
-    deadband_head: 0.025              # rad — head joint deadband
+    deadband_left_arm: 0.05          # rad — left arm joint deadband
+    deadband_left_gripper: 0.05      # rad — left gripper deadband
+    deadband_right_arm: 0.05         # rad — right arm joint deadband
+    deadband_right_gripper: 0.05     # rad — right gripper deadband
+    deadband_head: 0.05              # rad — head joint deadband
     deadband_base_linear: 0.0       # m/s — base linear velocity deadband
     deadband_base_angular: 0.0      # rad/s — base angular velocity deadband
 
@@ -166,6 +166,16 @@
     servo_torque_head: 0.3
 
     # ==========================================================================
+    # Real-Time Chunking (RTC)
+    # ==========================================================================
+    # RTC is a server-side feature — NOT configured here. Enable it by
+    # starting the inference server with --rtc:
+    #   python3 groot_inference_server.py --rtc ...
+    # The client automatically sends prev_actions when RTC is active.
+    # RTC freeze+inpaints the action prefix during denoising for smooth
+    # chunk transitions. See SMOOTHIT.md for benchmark results.
+
+    # ==========================================================================
     # Continuous Inference & Temporal Ensembling
     # ==========================================================================
     # When enabled, inference runs continuously (always churning) and chunks
@@ -195,7 +205,7 @@
     #   'none'        — no post-processing (default)
     #   'savgol'      — Savitzky-Golay polynomial smoothing (preserves trajectory shape)
     #   'butterworth' — low-pass filter (frequency-domain cutoff)
-    smoothing_method: "savgol"
+    smoothing_method: "butterworth"
 
     # Savitzky-Golay parameters (only used when smoothing_method: "savgol")
     savgol_window: 5          # Window size (must be odd, >= 3)
@@ -203,7 +213,7 @@
 
     # Butterworth parameters (only used when smoothing_method: "butterworth")
     butterworth_order: 2      # Filter order
-    butterworth_cutoff_hz: 5.0  # Cutoff frequency (Nyquist at 15 FPS = 7.5 Hz)
+    butterworth_cutoff_hz: 3.0  # Cutoff frequency (sweep found 3Hz optimal, see SMOOTHIT.md)
 
     # Interpolation method for upsampling 15 FPS → 100 Hz:
     #   'linear'       — linear lerp between consecutive actions (current default)

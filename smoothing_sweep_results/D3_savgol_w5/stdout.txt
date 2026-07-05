@@ -1,0 +1,630 @@
+
+======================================================================
+  GR00T Replay Evaluation (Full Client Pipeline)
+======================================================================
+  Config:               /home/alfie/alfiebot_ws/src/alfie_gr00t/config/groot_client.yaml
+  Dataset:              /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge
+  Episodes:             [0, 1, 2]
+  Server:               tcp://192.168.50.201:5555
+  Task:                 "find the can and pick it up"
+  Closed-Loop:          False
+  Output:               smoothing_sweep_results/D3_savgol_w5
+  Mode:                 CONTINUOUS (temporal ensembling)
+
+  Pipeline Config:
+    action_chunk_size:      16
+    latency_skip:           4
+    smoothing_strategy:     exp_decay
+    smoothing_decay_m:      0.01
+    max_buffer_chunks:      8
+    base_smoothing_alpha:   1.0
+    joint_smoothing_alpha:  0.5
+    smoothing_method:       savgol
+    savgol_window:          5
+    savgol_polyorder:       2
+    interpolate_actions:    True
+    interpolation_method:   cubic_spline
+    max_base_linear_x:      0.15
+    max_base_linear_y:      0.15
+    max_base_angular_z:     0.8
+    max_base_linear_accel:  0.3
+    max_base_angular_accel: 1.5
+    h264_conditioning:      False
+    rtc:                    ON (freeze_steps=4)
+======================================================================
+
+
+--- Episode 0 ---
+
+  [OPEN-LOOP] RAW       MSE: 0.005438  MAE: 0.021159
+  [OPEN-LOOP] PROCESSED MSE: 0.005575  MAE: 0.021378
+  Pipeline delta (mean |proc-raw|): 0.003212
+  Hold frames: 0/410 (0.0%)
+  Rate-limit clips: 0 ticks
+  Base vel clips: 0, accel clips: 374
+
+  Group            RAW MSE    PROC MSE     RAW MAE    PROC MAE       Delta
+  ------------  ----------  ----------  ----------  ----------  ----------
+  base            0.001242    0.001069    0.007141    0.007006    0.002330
+  back            0.000000    0.000000    0.000000    0.000000    0.000000
+  left_arm        0.000000    0.000000    0.000000    0.000000    0.000000
+  left_hand       0.000000    0.000000    0.000000    0.000000    0.000000
+  right_arm       0.013623    0.014187    0.056246    0.057252    0.008173
+  right_hand      0.017588    0.017392    0.024882    0.024920    0.001376
+  head            0.008829    0.009306    0.038849    0.039035    0.004813
+
+  TRAJECTORY SMOOTHNESS
+                  Jerk RMS  Jerk Ratio   Delta RMS   HF Power%
+                ----------  ----------  ----------  ----------
+  GT                7.3495       1.00x    0.028666        0.3%
+  Raw pred          7.8454       1.07x    0.026458        2.7%
+  Processed         5.6331       0.77x    0.021968        2.6%
+
+  Group            GT Jerk    Raw Jerk   Proc Jerk   Raw Ratio  Proc Ratio   Raw HF%  Proc HF%
+  ------------  ----------  ----------  ----------  ----------  ----------  --------  --------
+  base              4.1707      4.7842      3.2413       1.15x       0.78x      8.8%      8.8%
+  back              0.0000      0.0000      0.0000       0.00x       0.00x      0.0%      0.0%
+  left_arm          0.0000      0.0000      0.0000       0.00x       0.00x      0.0%      0.0%
+  left_hand         0.0000      0.0000      0.0000       0.00x       0.00x      0.0%      0.0%
+  right_arm        12.4563     13.8041      9.9129       1.11x       0.80x      0.5%      0.3%
+  right_hand       17.2530     10.7662      8.4397       0.62x       0.49x      0.2%      0.2%
+  head              1.8715      7.0259      4.9160       3.75x       2.63x      1.2%      0.8%
+
+
+======================================================================
+  ZMQ COMMUNICATION SUMMARY
+======================================================================
+
+  LATENCY (round-trip)
+    Mean:       377.3 ms
+    Median:     382.7 ms
+    P95:        384.4 ms
+    P99:        384.8 ms
+    Min:          0.9 ms
+    Max:        385.0 ms
+
+  EFFECTIVE INFERENCE RATE
+    Mean:         2.7 FPS
+    (at 15 FPS client rate, overhead = 377.3ms per frame)
+
+  MESSAGE SIZES
+    Send (observation):
+      Mean:     170.7 KB
+      Min:        0.0 KB
+      Max:      238.3 KB
+    Recv (action):
+      Mean:       3.3 KB
+      Min:        0.0 KB
+      Max:        3.4 KB
+
+  BANDWIDTH (over 70 requests, 26.4s)
+    Upload:       452.4 KB/s  (11948 KB total)
+    Download:       8.9 KB/s  (234 KB total)
+    Total:        461.2 KB/s
+
+  PROJECTED AT 15 FPS CLIENT RATE
+    Upload:      2560.2 KB/s
+    Download:      50.2 KB/s
+    Total:       2610.4 KB/s
+======================================================================
+
+
+======================================================================
+  ZMQ PIPELINE TIMING BREAKDOWN
+======================================================================
+
+  CLIENT TIMING
+    msgpack pack (serialize request)
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.2 ms
+
+    ZMQ send+recv (network + server)
+      Mean:      382.6 ms
+      Median:    382.6 ms
+      P95:       384.3 ms
+      Min:       380.5 ms
+      Max:       384.9 ms
+
+    msgpack unpack (deserialize response)
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    Total round-trip
+      Mean:      382.8 ms
+      Median:    382.7 ms
+      P95:       384.4 ms
+      Min:       380.6 ms
+      Max:       385.0 ms
+
+  SERVER TIMING
+    Request deserialization
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    Image decode (JPEG/raw)
+      Mean:        0.0 ms
+      Median:      0.0 ms
+      P95:         0.0 ms
+      Min:         0.0 ms
+      Max:         0.0 ms
+
+    State split + obs build
+      Mean:        2.7 ms
+      Median:      2.6 ms
+      P95:         2.8 ms
+      Min:         2.5 ms
+      Max:         3.0 ms
+
+    VLA processor (preprocess)
+      Mean:       29.6 ms
+      Median:     29.5 ms
+      P95:        30.7 ms
+      Min:        28.6 ms
+      Max:        31.0 ms
+
+    GPU forward + decode
+      Mean:      221.6 ms
+      Median:    221.6 ms
+      P95:       222.3 ms
+      Min:       220.6 ms
+      Max:       222.6 ms
+
+    Inference total (VLA + GPU)
+      Mean:      251.3 ms
+      Median:    251.3 ms
+      P95:       252.6 ms
+      Min:       249.4 ms
+      Max:       253.0 ms
+
+    Action reassembly
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    Handler total
+      Mean:      255.9 ms
+      Median:    256.0 ms
+      P95:       257.3 ms
+      Min:       254.0 ms
+      Max:       257.7 ms
+
+  NETWORK TRANSIT (estimated)
+    Network round-trip (zmq - server total)
+      Mean:      126.6 ms
+      Median:    126.5 ms
+      P95:       127.1 ms
+      Min:       126.2 ms
+      Max:       127.7 ms
+
+  MEAN BREAKDOWN
+    Client pack:            0.1 ms
+    ZMQ send+recv:        382.6 ms
+      Server deser:         0.1 ms
+      Server decode:        0.0 ms
+      Server prep:          2.7 ms
+      VLA preprocess:      29.6 ms
+      GPU fwd + decode:   221.6 ms
+      Inference total:    251.3 ms
+      Reassembly:           0.1 ms
+      Server total:       256.0 ms
+      Network transit:    126.6 ms
+    Client unpack:          0.1 ms
+    ─────────────────────────────
+    Total RTT:            382.8 ms
+
+======================================================================
+
+
+--- Episode 1 ---
+
+  [OPEN-LOOP] RAW       MSE: 0.055415  MAE: 0.078940
+  [OPEN-LOOP] PROCESSED MSE: 0.056689  MAE: 0.080172
+  Pipeline delta (mean |proc-raw|): 0.005340
+  Hold frames: 0/105 (0.0%)
+  Rate-limit clips: 0 ticks
+  Base vel clips: 0, accel clips: 48
+
+  Group            RAW MSE    PROC MSE     RAW MAE    PROC MAE       Delta
+  ------------  ----------  ----------  ----------  ----------  ----------
+  base            0.000058    0.000058    0.003013    0.003045    0.001595
+  back            0.000000    0.000000    0.000000    0.000000    0.000000
+  left_arm        0.000000    0.000000    0.000000    0.000000    0.000000
+  left_hand       0.000000    0.000000    0.000000    0.000000    0.000000
+  right_arm       0.198323    0.203318    0.265800    0.270486    0.016371
+  right_hand      0.115691    0.115337    0.180103    0.181192    0.009462
+  head            0.037161    0.038294    0.069834    0.070628    0.005533
+
+  TRAJECTORY SMOOTHNESS
+                  Jerk RMS  Jerk Ratio   Delta RMS   HF Power%
+                ----------  ----------  ----------  ----------
+  GT               10.9624       1.00x    0.037203        0.8%
+  Raw pred         17.4788       1.59x    0.052847       10.1%
+  Processed        11.9508       1.09x    0.039938        9.3%
+
+  Group            GT Jerk    Raw Jerk   Proc Jerk   Raw Ratio  Proc Ratio   Raw HF%  Proc HF%
+  ------------  ----------  ----------  ----------  ----------  ----------  --------  --------
+  base              0.0000      2.7715      2.7890       0.00x       0.00x     28.5%     29.1%
+  back              0.0000      0.0000      0.0000       0.00x       0.00x      0.0%      0.0%
+  left_arm          0.0000      0.0000      0.0000       0.00x       0.00x      0.0%      0.0%
+  left_hand         0.0000      0.0000      0.0000       0.00x       0.00x      0.0%      0.0%
+  right_arm        19.0291     32.5943     22.1030       1.71x       1.16x      3.3%      2.0%
+  right_hand       28.6526     29.3799     20.9593       1.03x       0.73x      3.2%      1.9%
+  head              2.0275     12.9090      8.4336       6.37x       4.16x     10.6%      6.2%
+
+
+======================================================================
+  ZMQ COMMUNICATION SUMMARY
+======================================================================
+
+  LATENCY (round-trip)
+    Mean:       378.4 ms
+    Median:     382.7 ms
+    P95:        384.3 ms
+    P99:        384.8 ms
+    Min:          0.9 ms
+    Max:        385.0 ms
+
+  EFFECTIVE INFERENCE RATE
+    Mean:         2.6 FPS
+    (at 15 FPS client rate, overhead = 378.4ms per frame)
+
+  MESSAGE SIZES
+    Send (observation):
+      Mean:     170.8 KB
+      Min:        0.0 KB
+      Max:      238.3 KB
+    Recv (action):
+      Mean:       3.4 KB
+      Min:        0.0 KB
+      Max:        3.4 KB
+
+  BANDWIDTH (over 88 requests, 33.3s)
+    Upload:       451.3 KB/s  (15026 KB total)
+    Download:       8.9 KB/s  (295 KB total)
+    Total:        460.1 KB/s
+
+  PROJECTED AT 15 FPS CLIENT RATE
+    Upload:      2561.3 KB/s
+    Download:      50.3 KB/s
+    Total:       2611.6 KB/s
+======================================================================
+
+
+======================================================================
+  ZMQ PIPELINE TIMING BREAKDOWN
+======================================================================
+
+  CLIENT TIMING
+    msgpack pack (serialize request)
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    ZMQ send+recv (network + server)
+      Mean:      382.4 ms
+      Median:    382.6 ms
+      P95:       383.4 ms
+      Min:       379.2 ms
+      Max:       383.7 ms
+
+    msgpack unpack (deserialize response)
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    Total round-trip
+      Mean:      382.6 ms
+      Median:    382.8 ms
+      P95:       383.5 ms
+      Min:       379.3 ms
+      Max:       383.9 ms
+
+  SERVER TIMING
+    Request deserialization
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    Image decode (JPEG/raw)
+      Mean:        0.0 ms
+      Median:      0.0 ms
+      P95:         0.0 ms
+      Min:         0.0 ms
+      Max:         0.0 ms
+
+    State split + obs build
+      Mean:        2.6 ms
+      Median:      2.6 ms
+      P95:         2.7 ms
+      Min:         2.6 ms
+      Max:         2.7 ms
+
+    VLA processor (preprocess)
+      Mean:       29.2 ms
+      Median:     29.2 ms
+      P95:        29.5 ms
+      Min:        28.8 ms
+      Max:        29.5 ms
+
+    GPU forward + decode
+      Mean:      222.0 ms
+      Median:    222.3 ms
+      P95:       222.8 ms
+      Min:       220.4 ms
+      Max:       222.9 ms
+
+    Inference total (VLA + GPU)
+      Mean:      251.3 ms
+      Median:    251.5 ms
+      P95:       252.2 ms
+      Min:       249.6 ms
+      Max:       252.2 ms
+
+    Action reassembly
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    Handler total
+      Mean:      255.8 ms
+      Median:    256.1 ms
+      P95:       256.8 ms
+      Min:       252.5 ms
+      Max:       256.8 ms
+
+  NETWORK TRANSIT (estimated)
+    Network round-trip (zmq - server total)
+      Mean:      126.6 ms
+      Median:    126.5 ms
+      P95:       127.0 ms
+      Min:       126.2 ms
+      Max:       127.1 ms
+
+  MEAN BREAKDOWN
+    Client pack:            0.1 ms
+    ZMQ send+recv:        382.4 ms
+      Server deser:         0.1 ms
+      Server decode:        0.0 ms
+      Server prep:          2.6 ms
+      VLA preprocess:      29.2 ms
+      GPU fwd + decode:   222.0 ms
+      Inference total:    251.3 ms
+      Reassembly:           0.1 ms
+      Server total:       255.9 ms
+      Network transit:    126.6 ms
+    Client unpack:          0.1 ms
+    ─────────────────────────────
+    Total RTT:            382.6 ms
+
+======================================================================
+
+
+--- Episode 2 ---
+
+  [OPEN-LOOP] RAW       MSE: 0.005067  MAE: 0.020769
+  [OPEN-LOOP] PROCESSED MSE: 0.005177  MAE: 0.020934
+  Pipeline delta (mean |proc-raw|): 0.003270
+  Hold frames: 0/322 (0.0%)
+  Rate-limit clips: 0 ticks
+  Base vel clips: 0, accel clips: 315
+
+  Group            RAW MSE    PROC MSE     RAW MAE    PROC MAE       Delta
+  ------------  ----------  ----------  ----------  ----------  ----------
+  base            0.001913    0.001614    0.007714    0.007346    0.002593
+  back            0.000000    0.000000    0.000000    0.000000    0.000000
+  left_arm        0.000000    0.000000    0.000000    0.000000    0.000000
+  left_hand       0.000000    0.000000    0.000000    0.000000    0.000000
+  right_arm       0.014313    0.015033    0.061929    0.063117    0.008531
+  right_hand      0.012679    0.012508    0.021345    0.021630    0.002033
+  head            0.005248    0.005514    0.026547    0.026419    0.003901
+
+  TRAJECTORY SMOOTHNESS
+                  Jerk RMS  Jerk Ratio   Delta RMS   HF Power%
+                ----------  ----------  ----------  ----------
+  GT                7.1286       1.00x    0.025580        3.2%
+  Raw pred          7.4897       1.05x    0.024979        4.5%
+  Processed         5.4314       0.76x    0.020603        5.3%
+
+  Group            GT Jerk    Raw Jerk   Proc Jerk   Raw Ratio  Proc Ratio   Raw HF%  Proc HF%
+  ------------  ----------  ----------  ----------  ----------  ----------  --------  --------
+  base              6.1226      5.2221      2.7636       0.85x       0.45x     15.4%     18.5%
+  back              0.0000      0.0000      0.0000       0.00x       0.00x      0.0%      0.0%
+  left_arm          0.0000      0.0000      0.0000       0.00x       0.00x      0.0%      0.0%
+  left_hand         0.0000      0.0000      0.0000       0.00x       0.00x      0.0%      0.0%
+  right_arm        11.3198     13.0621      9.5764       1.15x       0.85x      0.3%      0.2%
+  right_hand       15.4603      9.5158      9.2067       0.62x       0.60x      0.2%      0.2%
+  head              2.1088      6.5023      4.4679       3.08x       2.12x      1.9%      1.2%
+
+
+======================================================================
+  ZMQ COMMUNICATION SUMMARY
+======================================================================
+
+  LATENCY (round-trip)
+    Mean:       382.0 ms
+    Median:     382.0 ms
+    P95:        383.4 ms
+    P99:        383.9 ms
+    Min:        379.3 ms
+    Max:        384.7 ms
+
+  EFFECTIVE INFERENCE RATE
+    Mean:         2.6 FPS
+    (at 15 FPS client rate, overhead = 382.0ms per frame)
+
+  MESSAGE SIZES
+    Send (observation):
+      Mean:     163.3 KB
+      Min:      150.1 KB
+      Max:      180.8 KB
+    Recv (action):
+      Mean:       3.4 KB
+      Min:        3.4 KB
+      Max:        3.4 KB
+
+  BANDWIDTH (over 100 requests, 38.2s)
+    Upload:       427.3 KB/s  (16326 KB total)
+    Download:       8.9 KB/s  (339 KB total)
+    Total:        436.2 KB/s
+
+  PROJECTED AT 15 FPS CLIENT RATE
+    Upload:      2448.9 KB/s
+    Download:      50.9 KB/s
+    Total:       2499.8 KB/s
+======================================================================
+
+
+======================================================================
+  ZMQ PIPELINE TIMING BREAKDOWN
+======================================================================
+
+  CLIENT TIMING
+    msgpack pack (serialize request)
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    ZMQ send+recv (network + server)
+      Mean:      381.7 ms
+      Median:    381.5 ms
+      P95:       382.7 ms
+      Min:       380.3 ms
+      Max:       384.5 ms
+
+    msgpack unpack (deserialize response)
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    Total round-trip
+      Mean:      381.8 ms
+      Median:    381.7 ms
+      P95:       382.8 ms
+      Min:       380.5 ms
+      Max:       384.7 ms
+
+  SERVER TIMING
+    Request deserialization
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    Image decode (JPEG/raw)
+      Mean:        0.0 ms
+      Median:      0.0 ms
+      P95:         0.0 ms
+      Min:         0.0 ms
+      Max:         0.0 ms
+
+    State split + obs build
+      Mean:        2.6 ms
+      Median:      2.6 ms
+      P95:         2.6 ms
+      Min:         2.5 ms
+      Max:         2.7 ms
+
+    VLA processor (preprocess)
+      Mean:       28.7 ms
+      Median:     28.6 ms
+      P95:        29.4 ms
+      Min:        28.4 ms
+      Max:        29.5 ms
+
+    GPU forward + decode
+      Mean:      221.6 ms
+      Median:    221.5 ms
+      P95:       222.4 ms
+      Min:       220.3 ms
+      Max:       223.1 ms
+
+    Inference total (VLA + GPU)
+      Mean:      250.4 ms
+      Median:    250.4 ms
+      P95:       251.3 ms
+      Min:       249.1 ms
+      Max:       252.2 ms
+
+    Action reassembly
+      Mean:        0.1 ms
+      Median:      0.1 ms
+      P95:         0.1 ms
+      Min:         0.1 ms
+      Max:         0.1 ms
+
+    Handler total
+      Mean:      255.0 ms
+      Median:    255.0 ms
+      P95:       255.9 ms
+      Min:       252.9 ms
+      Max:       257.1 ms
+
+  NETWORK TRANSIT (estimated)
+    Network round-trip (zmq - server total)
+      Mean:      126.6 ms
+      Median:    126.5 ms
+      P95:       127.1 ms
+      Min:       126.2 ms
+      Max:       127.8 ms
+
+  MEAN BREAKDOWN
+    Client pack:            0.1 ms
+    ZMQ send+recv:        381.7 ms
+      Server deser:         0.1 ms
+      Server decode:        0.0 ms
+      Server prep:          2.6 ms
+      VLA preprocess:      28.7 ms
+      GPU fwd + decode:   221.6 ms
+      Inference total:    250.4 ms
+      Reassembly:           0.1 ms
+      Server total:       255.1 ms
+      Network transit:    126.6 ms
+    Client unpack:          0.1 ms
+    ─────────────────────────────
+    Total RTT:            381.8 ms
+
+======================================================================
+
+
+======================================================================
+  AGGREGATE RESULTS
+======================================================================
+  Episodes evaluated: 3
+  RAW       MSE: 0.021973  MAE: 0.040289
+  PROCESSED MSE: 0.022481  MAE: 0.040828
+  Pipeline delta: 0.003941
+
+  Smoothness (jerk RMS):
+    GT:        8.4802
+    Raw:       10.9379  (1.29x GT)
+    Processed: 7.6717  (0.90x GT)
+  High-freq noise (power >3Hz):
+    Raw:       5.8%
+    Processed: 5.7%
+======================================================================
+
+Results saved to: smoothing_sweep_results/D3_savgol_w5
