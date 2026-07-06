@@ -7,6 +7,10 @@
   <maintainer email="alansrobotlab@gmail.com">alfie</maintainer>
   <license>Apache-2.0</license>
 
+  <!-- pip-only deps (no rosdep keys); installed via setup.py install_requires:
+       onnx_asr, onnxruntime, silero-vad, torchaudio==2.8.0 (must match torch),
+       numpy -->
+
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

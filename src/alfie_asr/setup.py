@@ -11,7 +11,17 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools'],
+    install_requires=[
+        'setuptools',
+        'onnx_asr',
+        'onnxruntime',
+        'silero-vad',
+        # torchaudio must match the installed torch (2.8.0, CUDA 12.6) — the
+        # unpinned wheel (2.11.0) is built for CUDA 13 and fails to load
+        # libcudart.so.13 on this Jetson.
+        'torchaudio==2.8.0',
+        'numpy',
+    ],
     zip_safe=True,
     maintainer='alfie',
     maintainer_email='alansrobotlab@gmail.com',
