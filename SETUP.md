@@ -288,6 +288,7 @@ sudo apt-get install -y \
   portaudio19-dev \
   python3-pyaudio \
   python3-venv \
+  python3-alsaaudio \
   hostapd \
   ros-humble-foxglove-bridge \
   ros-humble-depthai-ros \
@@ -299,7 +300,6 @@ pip3 install \
   pyusb \
   spidev \
   piper-tts \
-  pyalsaaudio \
   onnx \
   onnx-asr \
   silero-vad \
@@ -308,6 +308,11 @@ pip3 install \
 
 # Initialize rosdep
 sudo rosdep init
+
+# Register local rosdep rules for pip packages missing from upstream rosdistro
+# (e.g. piper-tts, pyalsaaudio — used by alfie_tts)
+echo "yaml file://$HOME/alfiebot_ws/rosdep/alfiebot-pip.yaml" | \
+  sudo tee /etc/ros/rosdep/sources.list.d/50-alfiebot.list
 rosdep update
 ```
 

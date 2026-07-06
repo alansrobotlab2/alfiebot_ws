@@ -35,7 +35,9 @@ class AlfieTTS(Node):
         self.noise_w = 0.8  # controls phoneme duration variation
         self.playback_rate_scale = 0.95  # <1.0 lowers pitch, >1.0 raises pitch
         self.use_cuda = False
-        self.output_device = 0
+        # PulseAudio sink name (stable across reboots/hotplugs, unlike numeric index).
+        # KTMicro USB Audio speaker.
+        self.output_sink = "alsa_output.usb-KTMicro_KT_USB_Audio_2021-06-07-0000-0000-0000--00.analog-stereo"
         self.latency = 0.15
         self.speaking = False
 
@@ -48,8 +50,8 @@ class AlfieTTS(Node):
         self.voice = PiperVoice.load(self.model_path, self.config_path, use_cuda=self.use_cuda)
 
         try:
-            subprocess.run(["pactl", "set-default-sink", "0"], check=True)
-            self.get_logger().info("Set default sink to 0 using pactl.")
+            subprocess.run(["pactl", "set-default-sink", self.output_sink], check=True)
+            self.get_logger().info(f"Set default sink to {self.output_sink} using pactl.")
         except Exception as e:
             self.get_logger().warn(f"Failed to set default sink: {e}")
 

@@ -13,7 +13,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/voices', glob('voices/*')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'piper-tts', 'sounddevice'],
     zip_safe=True,
     maintainer='alfie',
     maintainer_email='alansrobotlab@gmail.com',

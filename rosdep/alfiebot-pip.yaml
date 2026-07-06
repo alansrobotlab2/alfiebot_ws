@@ -1,0 +1,6 @@
+# Local rosdep rules for pip packages not present in upstream rosdistro.
+# Registered via /etc/ros/rosdep/sources.list.d/50-alfiebot.list (see SETUP.md).
+python3-piper-tts-pip:
+  ubuntu:
+    pip:
+      packages: [piper-tts]
