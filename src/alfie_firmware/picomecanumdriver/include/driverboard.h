@@ -15,6 +15,7 @@
 #include <Arduino.h>
 #include "config.h"
 #include "ros_interface.h"
+#include "hiwonder_driver.h"
 
 // =============================================================================
 // DATA STRUCTURES
@@ -27,25 +28,11 @@ typedef struct {
     float target_velocity;      ///< Target wheel velocity (m/s)
     float current_velocity;     ///< Current wheel velocity (m/s)
     float current_acceleration; ///< Current wheel acceleration (m/s²)
-    volatile int32_t encoder_count;    ///< Current encoder count (volatile for ISR access)
-    volatile uint32_t last_pulse_time; ///< Last encoder pulse timestamp (microseconds)
-    int16_t pwm_output;         ///< PWM output value (-255 to 255, sign indicates direction)
+    int32_t encoder_count;      ///< Latest accumulated encoder count from the Hiwonder controller
+    int16_t speed_cmd;          ///< Last commanded speed sent to the controller (pulses/10ms, signed)
     bool fault_detected;        ///< Motor fault flag
     bool is_moving;             ///< True if motor is currently moving
-    bool encoder_a_state;       ///< Current state of encoder A pin
-    bool encoder_b_state;       ///< Current state of encoder B pin
 } MotorState_t;
-
-/**
- * @brief Encoder interrupt data structure
- */
-typedef struct {
-    volatile int32_t count;         ///< Encoder pulse count
-    volatile uint32_t last_time;    ///< Last interrupt time (microseconds)
-    volatile bool direction;        ///< Current rotation direction (true=forward, false=reverse)
-    uint8_t pin_a;                  ///< Encoder A pin number
-    uint8_t pin_b;                  ///< Encoder B pin number
-} EncoderData_t;
 
 // =============================================================================
 // DRIVERBOARD CLASS
@@ -59,13 +46,13 @@ class DriverBoard {
 public:
     // Motor states for all 4 wheels (FL, FR, RL, RR)
     MotorState_t motors[4];
-    
+
     // Robot status
     uint8_t robot_status;
-    
-    // Encoder interrupt data for all 4 wheels (FL, FR, RL, RR)
-    EncoderData_t encoders[4];
-    
+
+    // Hiwonder 4-channel encoder motor controller (I2C)
+    Hiwonder hw;
+
     // ROS state machine variables
     RosAgentState_t agent_state;
     uint32_t last_state_time;
@@ -133,23 +120,9 @@ public:
      * Immediately stops all motor outputs for safety
      */
     void emergencyStop(void);
-    
+
     /**
-     * @brief Setup encoder interrupts for all motors
-     * Attaches interrupt handlers to encoder pins
-     */
-    void setupEncoderInterrupts(void);
-    
-    /**
-     * @brief Process encoder interrupt for a specific motor
-     * @param motor_index Motor index (0=FL, 1=FR, 2=RL, 3=RR)
-     * @param pin_state Current state of the encoder pin that triggered interrupt
-     * @param is_pin_a True if pin A triggered interrupt, false if pin B
-     */
-    void processEncoderInterrupt(uint8_t motor_index, bool pin_state, bool is_pin_a);
-    
-    /**
-     * @brief Reset all encoder counters to zero
+     * @brief Reset the cached encoder baseline to the current controller counts
      */
     void resetEncoders(void);
 };

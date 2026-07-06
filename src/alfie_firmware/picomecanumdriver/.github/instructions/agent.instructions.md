@@ -4,14 +4,16 @@ applyTo: '**'
 
 # Project Overview
 
-This project allows a Raspberry Pi Pico, to act as a device connected to a host computer using microros ros2
+This project allows a Waveshare RP2040-Zero to act as a device connected to a host computer using microros ros2.
 
-There are a total of 4 h bridges connected via gpio.  each h bridge has two pins for direction and one pin for pwm speed control.
+The four mecanum wheels are driven by a Hiwonder 4-channel encoder motor driver connected over I2C (GP12 = SDA, GP13 = SCL). The Hiwonder controller runs its own per-channel closed-loop velocity PID, so the RP2040 only sends target speeds and reads back accumulated encoder counts over I2C. The board subscribes to a geometry_msgs/Twist (`/mecanumdrive`), performs inverse mecanum kinematics on-chip, and publishes nav_msgs/Odometry (`/odom`).
+
+The onboard status LED is a single WS2812 RGB on GP16 (driven via Adafruit NeoPixel) — there is no plain digital LED.
 
 ## Development Environment
 
 This solution is developed under VSCode using the PlatformIO extension.
-The code is built using the Arduino framework for the RP2040.
+The code is built using the Arduino framework for the RP2040 (earlephilhower core).
 
 ## Solution Tips
 

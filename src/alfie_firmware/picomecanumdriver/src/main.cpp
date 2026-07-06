@@ -11,6 +11,7 @@
  */
 
 #include <Arduino.h>
+#include <Adafruit_NeoPixel.h>
 #include "config.h"
 #include "ros_interface.h"
 #include "motor_control.h"
@@ -22,6 +23,9 @@
 
 // Global DriverBoard instance
 DriverBoard rp;
+
+// Onboard WS2812 status LED (single pixel on GPIO16)
+static Adafruit_NeoPixel statusLed(1, STATUS_LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // =============================================================================
 // CORE 0: SETUP AND LOOP (Peripheral Management)
@@ -37,7 +41,13 @@ void setup() {
     while (!Serial && millis() < 5000) {
         // Wait for serial connection or timeout
     }
-    
+
+    // Initialize the onboard WS2812 status LED
+    statusLed.begin();
+    statusLed.setBrightness(LED_BRIGHTNESS);
+    statusLed.clear();
+    statusLed.show();
+
     // Initialize hardware peripherals
     rp.initializePeripherals();
 }
@@ -77,9 +87,11 @@ void loop() {
         } else {
             led_state = normal_pattern[led_step];
         }
-        
-        digitalWrite(STATUS_LED_PIN, led_state ? HIGH : LOW);
-        
+
+        // Green when on, off otherwise
+        statusLed.setPixelColor(0, led_state ? statusLed.Color(0, 255, 0) : 0);
+        statusLed.show();
+
         // Advance to next step (8 steps total, wraps around)
         led_step = (led_step + 1) % 8;
     }

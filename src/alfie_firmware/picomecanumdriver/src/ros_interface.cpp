@@ -9,6 +9,8 @@
 #include "ros_interface.h"
 #include "driverboard.h"
 #include <rmw_microros/rmw_microros.h>
+#include <math.h>
+#include <string.h>
 
 // =============================================================================
 // GLOBAL ROS INTERFACE VARIABLES
@@ -265,19 +267,47 @@ void processVelocityCommand(void) {
  * Sends current robot odometry to /odom topic
  */
 void publishOdometry(void) {
-    // TODO: Implement odometry publishing
-    // This will be implemented when odometry calculations are ready
-    if (micro_ros_initialized && new_odometry_data) {
-        // Populate odom_msg with current odometry data
-        // odom_msg.pose.pose.position.x = rp.odometry.position_x;
-        // odom_msg.pose.pose.position.y = rp.odometry.position_y;
-        // ... etc
-        
-        // Publish the message
-        // rcl_publish(&odom_publisher, &odom_msg, NULL);
-        
-        new_odometry_data = false;
+    if (!micro_ros_initialized || !new_odometry_data) {
+        return;
     }
+    new_odometry_data = false;
+
+    // Frame ids (point the rosidl strings at static buffers)
+    static char odom_frame_id[] = "odom";
+    static char base_frame_id[] = "base_link";
+    odom_msg.header.frame_id.data = odom_frame_id;
+    odom_msg.header.frame_id.size = strlen(odom_frame_id);
+    odom_msg.header.frame_id.capacity = sizeof(odom_frame_id);
+    odom_msg.child_frame_id.data = base_frame_id;
+    odom_msg.child_frame_id.size = strlen(base_frame_id);
+    odom_msg.child_frame_id.capacity = sizeof(base_frame_id);
+
+    // Timestamp from local clock
+    uint32_t now_ms = getSystemTimeMs();
+    odom_msg.header.stamp.sec = (int32_t)(now_ms / 1000);
+    odom_msg.header.stamp.nanosec = (uint32_t)((now_ms % 1000) * 1000000UL);
+
+    // Pose
+    odom_msg.pose.pose.position.x = rp.odometry.position_x;
+    odom_msg.pose.pose.position.y = rp.odometry.position_y;
+    odom_msg.pose.pose.position.z = 0.0;
+
+    // Orientation (yaw -> quaternion about Z)
+    float yaw = rp.odometry.orientation;
+    odom_msg.pose.pose.orientation.x = 0.0;
+    odom_msg.pose.pose.orientation.y = 0.0;
+    odom_msg.pose.pose.orientation.z = sin(yaw * 0.5f);
+    odom_msg.pose.pose.orientation.w = cos(yaw * 0.5f);
+
+    // Body-frame twist
+    odom_msg.twist.twist.linear.x = rp.odometry.linear_velocity_x;
+    odom_msg.twist.twist.linear.y = rp.odometry.linear_velocity_y;
+    odom_msg.twist.twist.linear.z = 0.0;
+    odom_msg.twist.twist.angular.x = 0.0;
+    odom_msg.twist.twist.angular.y = 0.0;
+    odom_msg.twist.twist.angular.z = rp.odometry.angular_velocity;
+
+    (void)rcl_publish(&odom_publisher, &odom_msg, NULL);
 }
 
 /**
@@ -297,9 +327,10 @@ void handleWatchdog(void) {
         rp.velocity_cmd.timestamp = current_time;
         new_velocity_command = true;
         last_command_time = 0; // Reset to prevent repeated stops
-        
-        // TODO: Add motor disabling functions when motor_control module is complete
-        // disableAllMotors();
+
+        // Note: the Hiwonder I2C bus is owned by Core 0. We only zero the shared
+        // velocity command here; Core 0's updateMotorControl() will push zero
+        // speeds to the controller on its next cycle (within CONTROL_LOOP_PERIOD_MS).
     }
 }
 

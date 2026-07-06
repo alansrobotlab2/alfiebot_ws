@@ -20,62 +20,51 @@
 /**
  * @brief Serial Communication Configuration
  */
-#define SERIAL_BAUD_RATE        115200  ///< Serial port baud rate for ROS2 communication
+#define SERIAL_BAUD_RATE        1500000 ///< Serial port baud rate (matches micro-ROS agent on /dev/ttyAlfieD)
 #define SERIAL_TIMEOUT_MS       1000    ///< Serial communication timeout
 
 /**
  * @brief Status LED Configuration
- * Built-in LED for status indication
+ * The RP2040-Zero's only onboard LED is a single WS2812 RGB on GPIO16,
+ * driven via Adafruit NeoPixel (there is no plain digital LED).
  */
-#define STATUS_LED_PIN          LED_BUILTIN  ///< Built-in LED pin
+#define STATUS_LED_PIN          16           ///< WS2812 (NeoPixel) data pin
 #define LED_BLINK_PERIOD_MS     125          ///< LED blink timing unit (125ms = 8 steps per second)
+#define LED_BRIGHTNESS          64           ///< WS2812 brightness (0-255); green at full is very bright
 
 
 
 // =============================================================================
-// MOTOR DRIVER PIN ASSIGNMENTS
+// HIWONDER 4-CHANNEL ENCODER MOTOR DRIVER (I2C)
 // =============================================================================
 
 /**
- * @brief Motor Driver Pin Configuration
- * Assumes 4 motor drivers for mecanum wheels (Front-Left, Front-Right, Rear-Left, Rear-Right)
+ * @brief Hiwonder motor driver I2C bus configuration
+ * The RP2040-Zero talks to the Hiwonder controller over I2C0 on GP12/GP13.
  */
-
-// Front Left Motor (Motor 1)
-#define MOTOR_FL_PWM_PIN        6       ///< Front-Left motor PWM pin
-#define MOTOR_FL_DIR1_PIN       7       ///< Front-Left motor direction pin 1
-#define MOTOR_FL_DIR2_PIN       8       ///< Front-Left motor direction pin 2
-#define MOTOR_FL_ENCODER_A      9       ///< Front-Left motor encoder A pin
-#define MOTOR_FL_ENCODER_B      10      ///< Front-Left motor encoder B pin
-
-// Front Right Motor (Motor 2)
-#define MOTOR_FR_PWM_PIN        11      ///< Front-Right motor PWM pin
-#define MOTOR_FR_DIR1_PIN       12      ///< Front-Right motor direction pin 1
-#define MOTOR_FR_DIR2_PIN       13      ///< Front-Right motor direction pin 2
-#define MOTOR_FR_ENCODER_A      14      ///< Front-Right motor encoder A pin
-#define MOTOR_FR_ENCODER_B      15      ///< Front-Right motor encoder B pin
-
-// Rear Left Motor (Motor 3)
-#define MOTOR_RL_PWM_PIN        18      ///< Rear-Left motor PWM pin
-#define MOTOR_RL_DIR1_PIN       19      ///< Rear-Left motor direction pin 1
-#define MOTOR_RL_DIR2_PIN       20      ///< Rear-Left motor direction pin 2
-#define MOTOR_RL_ENCODER_A      21      ///< Rear-Left motor encoder A pin
-#define MOTOR_RL_ENCODER_B      22      ///< Rear-Left motor encoder B pin
-
-// Rear Right Motor (Motor 4)
-#define MOTOR_RR_PWM_PIN        26      ///< Rear-Right motor PWM pin
-#define MOTOR_RR_DIR1_PIN       27      ///< Rear-Right motor direction pin 1
-#define MOTOR_RR_DIR2_PIN       28      ///< Rear-Right motor direction pin 2
-#define MOTOR_RR_ENCODER_A      2       ///< Rear-Right motor encoder A pin
-#define MOTOR_RR_ENCODER_B      3       ///< Rear-Right motor encoder B pin
+#define I2C_SDA_PIN             12          ///< I2C0 SDA (to Hiwonder SDA)
+#define I2C_SCL_PIN             13          ///< I2C0 SCL (to Hiwonder SCL)
+#define I2C_FREQ_HZ             400000      ///< I2C bus speed (400 kHz)
+#define HIWONDER_I2C_ADDR       0x34        ///< Hiwonder controller 7-bit I2C address
 
 /**
- * @brief PWM Configuration for Motors
+ * @brief Hiwonder controller register map
+ * Standard Hiwonder 4-channel encoder motor controller register set.
  */
-#define PWM_FREQUENCY           512     ///< PWM frequency in Hz
-#define PWM_RESOLUTION          255     ///< PWM resolution (8-bit)
-#define PWM_MIN_DUTY            0       ///< Minimum PWM duty cycle
-#define PWM_MAX_DUTY            255     ///< Maximum PWM duty cycle
+#define HIWONDER_REG_ADC_BAT            0   ///< R: battery voltage, 2 bytes LE (mV)
+#define HIWONDER_REG_MOTOR_TYPE         20  ///< W: motor type (1 byte)
+#define HIWONDER_REG_ENCODER_POLARITY   21  ///< W: encoder polarity (1 byte, 0/1)
+#define HIWONDER_REG_FIXED_PWM          31  ///< W: open-loop PWM, 4x int8 (-100..100)  [unused]
+#define HIWONDER_REG_FIXED_SPEED        51  ///< W: closed-loop speed, 4x int8 (pulses/10ms)
+#define HIWONDER_REG_ENCODER_TOTAL      60  ///< R: accumulated counts, 4x int32 LE (16 bytes)
+
+/**
+ * @brief Hiwonder motor configuration
+ */
+#define HIWONDER_MOTOR_TYPE         3       ///< 3 = JGB37-520 (12V geared encoder motor)
+#define HIWONDER_ENCODER_POLARITY   0       ///< 0/1; flip if all wheels count backward
+#define HIWONDER_MAX_SPEED          100     ///< int8 saturation for FIXED_SPEED register (pulses/10ms)
+#define HIWONDER_CONTROL_PERIOD_MS  10      ///< FIXED_SPEED units are pulses per this window (10 ms)
 
 
 
@@ -127,10 +116,19 @@
 
 /**
  * @brief Encoder Configuration
+ *
+ * The Hiwonder controller reports accumulated encoder counts (reg 60) and accepts
+ * closed-loop targets (reg 51) in the same "pulses" units. COUNTS_PER_WHEEL_REV is
+ * the number of those counts per full revolution of the wheel output shaft and is
+ * the single calibration constant tying commanded speed and odometry together.
+ *
+ * Starting estimate: 44 quadrature counts/motor-rev x 169:1 gearing. MUST be
+ * verified empirically (spin a wheel N turns, read the reg 60 delta) before relying
+ * on odometry or the top-speed headroom against the +/-100 pulses/10ms register limit.
  */
-#define ENCODER_PPR             11     ///< Encoder pulses per revolution
-#define ENCODER_COUNTS_PER_REV  (ENCODER_PPR * 4)  ///< Quadrature encoding (4x)
-#define GEARED_COUNTS_PER_REV   (ENCODER_COUNTS_PER_REV * GEAR_RATIO)  ///< Counts per wheel revolution
+#define ENCODER_PPR             11     ///< Encoder pulses per motor revolution (magnetic ring)
+#define ENCODER_COUNTS_PER_REV  (ENCODER_PPR * 4)  ///< Quadrature encoding (4x) per motor rev
+#define COUNTS_PER_WHEEL_REV    ((float)ENCODER_COUNTS_PER_REV * GEAR_RATIO)  ///< Counts per wheel revolution (CALIBRATE)
 
 
 

@@ -29,28 +29,6 @@
 // extern DriverBoard rp;
 
 // =============================================================================
-// ENCODER INTERRUPT SERVICE ROUTINES
-// =============================================================================
-
-/**
- * @brief Encoder interrupt service routines
- * Handle encoder pulse detection and counting
- */
-void encoderISR_FL_A(void);
-void encoderISR_FL_B(void);
-void encoderISR_FR_A(void);
-void encoderISR_FR_B(void);
-void encoderISR_RL_A(void);
-void encoderISR_RL_B(void);
-void encoderISR_RR_A(void);
-void encoderISR_RR_B(void);
-
-/**
- * @brief Reset all encoder counters to zero
- */
-void resetEncoders(void);
-
-// =============================================================================
 // MECANUM DRIVE KINEMATICS
 // =============================================================================
 

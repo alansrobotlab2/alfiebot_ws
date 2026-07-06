@@ -21,7 +21,7 @@
 /**
  * @brief Serial Communication Configuration
  */
-#define SERIAL_BAUD_RATE        1500000  ///< Serial port baud rate for ROS2 communication
+#define SERIAL_BAUD_RATE        1000000  ///< Serial port baud rate for ROS2 communication
 #define SERIAL_TIMEOUT_MS       1000    ///< Serial communication timeout
 
 /**
