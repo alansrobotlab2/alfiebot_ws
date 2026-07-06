@@ -29,3 +29,7 @@ bool is_calibrated
 
 # Current calibration state (see constants above)
 uint8 calibration_status
+
+# BNO085 IMU telemetry (torso/base orientation)
+# quaternion orientation, angular velocity (rad/s), linear acceleration (m/s^2 incl. gravity)
+GDBImu imu

@@ -12,6 +12,7 @@ find_package(rosidl_default_generators REQUIRED)
 
 # Generate messages
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/GDBImu.msg"
   "msg/BackCmd.msg"
   "msg/BackState.msg"
   "srv/BackRequestCalibration.srv"

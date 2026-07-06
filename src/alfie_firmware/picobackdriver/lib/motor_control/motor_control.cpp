@@ -104,7 +104,15 @@ DriverBoard::DriverBoard()
     
     // Initialize calibration state
     calibration_in_progress = false;
-    
+
+    // Initialize IMU state
+    imu_data.qw = 1.0; imu_data.qx = 0.0; imu_data.qy = 0.0; imu_data.qz = 0.0;
+    imu_data.gyro_x = 0.0; imu_data.gyro_y = 0.0; imu_data.gyro_z = 0.0;
+    imu_data.accel_x = 0.0; imu_data.accel_y = 0.0; imu_data.accel_z = 0.0;
+    imu_data.valid = false;
+    new_imu_data = false;
+    imu_initialized = false;
+
 }
 
 // =============================================================================
@@ -146,9 +154,12 @@ void DriverBoard::initializePeripherals(void) {
     
     // Setup encoder interrupts
     setupEncoderInterrupts();
-    
+
     // Stop motor initially
     emergencyStop();
+
+    // Initialize BNO085 IMU on I2C0 (non-fatal: telemetry only)
+    imu_initialized = imuInit();
 }
 
 /**
@@ -171,6 +182,11 @@ void DriverBoard::updatePeripherals(void) {
     // Update RGB LED status
     updateRgbLED();    // Update status LED based on robot state
     //updateStatusLED();
+
+    // Poll BNO085 IMU (non-blocking; drains any pending events)
+    if (imu_initialized && imuUpdate(imu_data)) {
+        new_imu_data = true;
+    }
 }
 
 /**

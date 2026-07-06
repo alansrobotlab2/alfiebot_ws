@@ -39,6 +39,23 @@
 #define LIMIT_SWITCH_PIN    28      ///< Minimum position limit switch pin
 
 
+// ==========================================================================
+// IMU CONFIGURATION (BNO085 on I2C0)
+// ==========================================================================
+/**
+ * @brief BNO085 9-DOF IMU Configuration
+ * Connected on I2C0: SDA=GP12, SCL=GP13, RESET=GP11.
+ * On-chip sensor fusion provides a true quaternion (rotation vector) plus
+ * calibrated gyro (rad/s) and accelerometer (m/s^2, gravity included).
+ */
+#define IMU_I2C_SDA_PIN         12      ///< BNO085 I2C0 SDA pin
+#define IMU_I2C_SCL_PIN         13      ///< BNO085 I2C0 SCL pin
+#define IMU_RESET_PIN           11      ///< BNO085 active-low reset line
+#define IMU_I2C_ADDR            0x4A    ///< BNO085 default I2C address (SA0/ADR low)
+#define IMU_I2C_CLOCK_HZ        400000  ///< I2C bus clock (Fast Mode)
+#define IMU_REPORT_INTERVAL_MS  10      ///< On-chip report interval (100 Hz)
+
+
 // =============================================================================
 // MOTOR DRIVER PIN ASSIGNMENTS
 // =============================================================================

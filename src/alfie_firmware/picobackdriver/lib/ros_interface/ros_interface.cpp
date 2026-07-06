@@ -464,10 +464,26 @@ void publishOdometry(void) {
         back_state_msg.pulse_count = rp.actuator_state.pulses;
         back_state_msg.pwm_output = rp.actuator_state.pwm_output;
         back_state_msg.is_calibrated = rp.actuator_state.is_calibrated;
-        
+
+        // BNO085 IMU telemetry (latest snapshot from Core 0)
+        // Orientation quaternion (rotation vector)
+        back_state_msg.imu.orientation_x = rp.imu_data.qx;
+        back_state_msg.imu.orientation_y = rp.imu_data.qy;
+        back_state_msg.imu.orientation_z = rp.imu_data.qz;
+        back_state_msg.imu.orientation_w = rp.imu_data.qw;
+        // Angular velocity (rad/s)
+        back_state_msg.imu.angular_velocity_x = rp.imu_data.gyro_x;
+        back_state_msg.imu.angular_velocity_y = rp.imu_data.gyro_y;
+        back_state_msg.imu.angular_velocity_z = rp.imu_data.gyro_z;
+        // Linear acceleration (m/s^2, gravity included)
+        back_state_msg.imu.linear_acceleration_x = rp.imu_data.accel_x;
+        back_state_msg.imu.linear_acceleration_y = rp.imu_data.accel_y;
+        back_state_msg.imu.linear_acceleration_z = rp.imu_data.accel_z;
+        rp.new_imu_data = false;
+
         // Publish the message
         rcl_publish(&state_publisher, &back_state_msg, NULL);
-        
+
         rp.new_actuator_state = false;
     }
 }

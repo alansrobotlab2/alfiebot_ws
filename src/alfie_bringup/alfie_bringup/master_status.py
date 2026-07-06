@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 import rclpy
 from rclpy.node import Node
 from alfie_msgs.msg import RobotLowState, GDBState, BackState, JetsonState
-from alfie_msgs.msg import ServoState, MotorState
+from alfie_msgs.msg import ServoState, MotorState, GDBImu
 from sensor_msgs.msg import Imu, MagneticField, JointState
 import numpy as np
 from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -289,14 +289,18 @@ class MasterStatusNode(Node):
     
     def _build_imu_list(self) -> List[Imu]:
         """Build list of IMU messages from all sensors
-        
+
         Returns:
-            List of 3 IMU messages: Oak IMU (head), gdb0 IMU (upper board), gdb1 IMU (lower board)
+            List of 4 IMU messages: Oak IMU (head), gdb0 IMU (upper board),
+            gdb1 IMU (lower board), back board IMU (spine/torso)
         """
+        # Back board IMU may not have arrived yet; fall back to a zeroed GDBImu
+        back_imu = self.back_state.imu if self.back_state is not None else GDBImu()
         return [
             self._create_oak_imu_msg(),  # Oak IMU (head/camera)
             self.convert_gdb_imu_to_imu(self.gdb0_state.imu, 'gdb0_imu'),  # Upper GDB board
-            self.convert_gdb_imu_to_imu(self.gdb1_state.imu, 'gdb1_imu')   # Lower GDB board
+            self.convert_gdb_imu_to_imu(self.gdb1_state.imu, 'gdb1_imu'),  # Lower GDB board
+            self.convert_gdb_imu_to_imu(back_imu, 'back_imu')             # Back board (spine)
         ]
     
     def _build_magnetic_field_list(self) -> List[MagneticField]:

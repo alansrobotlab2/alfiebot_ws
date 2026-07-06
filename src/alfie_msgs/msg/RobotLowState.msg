@@ -1,7 +1,7 @@
 std_msgs/Header header
 
-# 3 imu total, head, upper gdb board in base, lower gdb board in base
-sensor_msgs/Imu[3] imu
+# 4 imu total, head, upper gdb board in base, lower gdb board in base, back board on spine
+sensor_msgs/Imu[4] imu
 
 # 2 magnetic field sensor total, upper gdb board in base, lower gdb board in base
 sensor_msgs/MagneticField[2] magnetic_field

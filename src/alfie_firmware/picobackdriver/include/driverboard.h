@@ -15,6 +15,7 @@
 #include "config.h"
 #include <ros_interface.h>
 #include "../lib/ws2812/ws2812.h"
+#include "../lib/imu/imu.h"
 
 // =============================================================================
 // DATA STRUCTURES
@@ -126,7 +127,12 @@ public:
     
     // Calibration state
     volatile bool calibration_in_progress;  ///< True when calibration is in progress (blocks BackCmd processing)
-    
+
+    // BNO085 IMU telemetry (read on Core 0, published on Core 1)
+    volatile ImuData_t imu_data;            ///< Latest IMU snapshot (quaternion, gyro, accel)
+    volatile bool new_imu_data;             ///< Set when a fresh IMU sample is available
+    bool imu_initialized;                   ///< True if BNO085 initialized successfully
+
 
     /**
      * @brief Constructor - initializes all state variables
