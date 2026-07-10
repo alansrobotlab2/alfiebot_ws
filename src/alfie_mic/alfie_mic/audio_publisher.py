@@ -6,39 +6,30 @@ import sounddevice as sd
 import numpy as np
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 import time
-from alfie_mic.usb_4_mic_array.tuning import Tuning
-from alfie_mic.pixel_ring import pixel_ring
-import usb.core
 
 SAMPLE_RATE = 16000  # ReSpeaker default sample rate
 BLOCKSIZE = 512  # 512 samples per frame to match AudioFrame message
 CHANNELS = 1
 STREAM_RESET_INTERVAL = 3600  # seconds, configurable
 
+# NOTE: XVF3800 DSP tuning, DOA and LED control live in the respeaker_control
+# node, which owns the USB control interface. This node only captures audio
+# over ALSA.
+
 class AudioPublisher(Node):
     def __init__(self):
         super().__init__('audio_publisher')
-
-        self.mic = usb.core.find(idVendor=0x2886, idProduct=0x0018)
-        #print dev
-        if self.mic:
-            mic_info = str(self.mic).split('\n')[0]
-            self.get_logger().info(f'Alfie Mic found: {mic_info}')
-            Mic_tuning = Tuning(self.mic)
-            Mic_tuning.write("AGCONOFF",1)
-            Mic_tuning.write("AGCGAIN",250)
-            Mic_tuning.write("ECHOONOFF",1)
-            Mic_tuning.write("AGCMAXGAIN",250)
-            Mic_tuning.write("AGCDESIREDLEVEL",20)
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.publisher_ = self.create_publisher(AudioFrame, 'audio_frames', qos)
         
         # Find and use the ReSpeaker 4 Mic Array device
         self.audio_device = None
+        # Match case-insensitively on "respeaker" so this works across the
+        # gen1 "ReSpeaker 4 Mic Array" and gen2 "reSpeaker XVF3800 4-Mic Array".
         devices = sd.query_devices()
         for i, device in enumerate(devices):
-            if 'ReSpeaker 4 Mic Array' in device['name']:
+            if device['max_input_channels'] > 0 and 'respeaker' in device['name'].lower():
                 self.audio_device = i
                 self.get_logger().info(f'Found ReSpeaker device at index {i}: {device["name"]}')
                 break

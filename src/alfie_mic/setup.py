@@ -11,7 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools', 'alfie_msgs'],
+    install_requires=['setuptools', 'alfie_msgs', 'pyusb', 'sounddevice'],
     zip_safe=True,
     maintainer='alfie',
     maintainer_email='alansrobotlab@gmail.com',
@@ -20,6 +20,7 @@ setup(
     entry_points={
         'console_scripts': [
             'audio_publisher = alfie_mic.audio_publisher:main',
+            'respeaker_control = alfie_mic.respeaker_control:main',
         ],
     },
 )

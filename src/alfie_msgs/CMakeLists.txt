@@ -58,6 +58,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/HeadState.msg"
   "msg/BackCmd.msg"
   "msg/BackState.msg"
+  "msg/Doa.msg"
+  "msg/LedCommand.msg"
   "srv/GDBServoService.srv"
   "srv/BackRequestCalibration.srv"
   DEPENDENCIES std_msgs sensor_msgs geometry_msgs
