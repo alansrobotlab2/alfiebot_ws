@@ -11,7 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'alfie_msgs', 'requests'],
     zip_safe=True,
     maintainer='alfie',
     maintainer_email='alansrobotlab@gmail.com',
@@ -20,6 +20,7 @@ setup(
     #tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'agent_node = alfie_agent.agent_node:main',
         ],
     },
 )

@@ -173,6 +173,30 @@ def generate_launch_description():
         ),
 
         Node(
+            package='alfie_mic',
+            namespace='alfie',
+            executable='respeaker_control',
+            name='respeaker_control_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
+            respawn=True
+        ),
+
+        Node(
+            package='alfie_mic',
+            namespace='alfie',
+            executable='led_behavior',
+            name='led_behavior_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
+            respawn=True
+        ),
+
+        Node(
             package='alfie_asr',
             namespace='alfie',
             executable='parakeet_asr_node',
@@ -189,6 +213,18 @@ def generate_launch_description():
             namespace='alfie',
             executable='mlc_llm_serve_node',
             name='mlc_llm_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
+            respawn=True
+        ),
+
+        Node(
+            package='alfie_agent',
+            namespace='alfie',
+            executable='agent_node',
+            name='agent_node',
             output='screen',
             emulate_tty=True,
             sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown

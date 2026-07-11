@@ -11,6 +11,7 @@ import rclpy
 from rclpy.node import Node
 from alfie_msgs.msg import AudioFrame, ASRResult
 from alfie_msgs.msg import Speaking
+from std_msgs.msg import Empty
 import numpy as np
 import onnxruntime as ort
 import onnx_asr
@@ -82,43 +83,53 @@ class ASRNode(Node):
             self.speaking_callback,
             qos)
 
+        # Barge-in: signal TTS/agent to stop when the user speaks over the robot.
+        self.barge_in_pub = self.create_publisher(Empty, 'barge_in', qos)
+
         self.get_logger().info('ASRNode initialized.')
 
     def speaking_callback(self, msg):
         self.speaking = msg.is_speaking
 
     def audio_callback(self, msg):
-        # only process the frames if tts isn't speaking
-        if self.speaking == False:
-            samples = np.array(msg.audioframe, dtype=np.int16)
-            # Use the full 256-sample frame for VAD
-            vad_input = samples.astype(np.float32) / 32768.0
-            speech = self.vad_iterator(vad_input)
-            #self.get_logger().info(f'VAD output: {speech}')
-            if speech:
-                key, = speech
-                print(key, " ", speech)
-            else:
-                key = "speaking"
+        # Audio is always processed now (even while the robot speaks): the
+        # reSpeaker's hardware AEC removes the robot's own voice, so what remains
+        # is the user. This is what enables barge-in.
+        samples = np.array(msg.audioframe, dtype=np.int16)
+        # Use the full 256-sample frame for VAD
+        vad_input = samples.astype(np.float32) / 32768.0
+        speech = self.vad_iterator(vad_input)
+        #self.get_logger().info(f'VAD output: {speech}')
+        if speech:
+            key, = speech
+            print(key, " ", speech)
+        else:
+            key = "speaking"
 
-            if self.micstate == 'IDLE' and key == 'start':
-                self.get_logger().info('Speech start detected')            
-                self.audio_buffer = bytearray()
-                self.audio_buffer.extend(samples.tobytes())
-                self.micstate = 'SPEECH'
-            elif self.micstate == 'SPEECH' and key == 'speaking':
-                self.audio_buffer.extend(samples.tobytes())
-            elif self.micstate == 'SPEECH' and key == 'end':
-                self.get_logger().info('Speech end detected, transcribing...')
-                self.audio_buffer.extend(samples.tobytes())
-                audio_np = np.frombuffer(self.audio_buffer, dtype=np.int16)
-                result = self.asr_model.recognize(audio_np, sample_rate=SAMPLE_RATE)
-                asr_msg = ASRResult()
-                asr_msg.asrresult = str(result)
-                self.get_logger().info('Speech detected, publishing result: ' + asr_msg.asrresult)
-                self.publisher_.publish(asr_msg)
-                self.micstate = 'IDLE'
-                self.audio_buffer = bytearray()
+        if self.micstate == 'IDLE' and key == 'start':
+            self.get_logger().info('Speech start detected')
+            # If the robot is talking, the user is interrupting: fire barge-in.
+            if self.speaking:
+                self.get_logger().info('User spoke over the robot; sending barge_in.')
+                self.barge_in_pub.publish(Empty())
+            self.audio_buffer = bytearray()
+            self.audio_buffer.extend(samples.tobytes())
+            self.micstate = 'SPEECH'
+        elif self.micstate == 'SPEECH' and key == 'speaking':
+            self.audio_buffer.extend(samples.tobytes())
+        elif self.micstate == 'SPEECH' and key == 'end':
+            self.get_logger().info('Speech end detected, transcribing...')
+            self.audio_buffer.extend(samples.tobytes())
+            # onnx_asr.recognize() requires float32 PCM in [-1, 1]; passing the
+            # raw int16 buffer raises WrongDataTypeError.
+            audio_np = np.frombuffer(self.audio_buffer, dtype=np.int16).astype(np.float32) / 32768.0
+            result = self.asr_model.recognize(audio_np, sample_rate=SAMPLE_RATE)
+            asr_msg = ASRResult()
+            asr_msg.asrresult = str(result)
+            self.get_logger().info('Speech detected, publishing result: ' + asr_msg.asrresult)
+            self.publisher_.publish(asr_msg)
+            self.micstate = 'IDLE'
+            self.audio_buffer = bytearray()
 
 
 def main(args=None):

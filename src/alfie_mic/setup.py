@@ -21,6 +21,7 @@ setup(
         'console_scripts': [
             'audio_publisher = alfie_mic.audio_publisher:main',
             'respeaker_control = alfie_mic.respeaker_control:main',
+            'led_behavior = alfie_mic.led_behavior:main',
         ],
     },
 )

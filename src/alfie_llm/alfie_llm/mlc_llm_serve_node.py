@@ -1,75 +1,118 @@
-import rclpy
-from rclpy.node import Node
+"""
+mlc_llm_serve_node — runs the local (custom-built) MLC-LLM OpenAI server.
+
+Wraps `.venv/bin/python -m mlc_llm serve` from the source tree at ~/mlc-llm,
+serving the converted Qwen3.6 35B-A3B model. The env comes from .envrc.local
+(vendored TVM + mlc_llm on PYTHONPATH). The explicit --model-lib is mandatory:
+without it the JIT cache re-resolves to a FlashInfer variant and segfaults on
+sm_87 (Orin).
+
+Publishes a latched `llm/ready` Bool once the /v1/models endpoint answers, so
+consumers can wait for the model (a 35B MoE takes ~30 s to load) before entering
+the conversation loop. All paths are ROS parameters so a different build/model
+can be selected at launch.
+"""
+import os
+import signal
 import subprocess
 import threading
-import signal
-import sys
 import time
+import urllib.request
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from std_msgs.msg import Bool
+
 
 class MLCLLMServeNode(Node):
     def __init__(self):
         super().__init__('mlc_llm_serve_node')
 
-        self.model = '/data/qwen3-1.7b-q4f16_1-MLC'
-        self.lib = '/data/qwen3-1.7b-q4f16_1-MLC/lib.so'
-        
-        self.container_name = f'mlc-llm-server-{int(time.time())}'
-        self.container_id = None
-        self.process = None
-        self.get_logger().info('Starting mlc llm server...')
-        self.mlc_thread = threading.Thread(target=self.run_mlc_llm_serve, daemon=True)
-        self.mlc_thread.start()
+        self.mlc_dir = self.declare_parameter('mlc_dir', '/home/alfie/mlc-llm').value
+        self.model = self.declare_parameter(
+            'model', 'dist/qwen3_6-35B-A3B-q4f16_1').value
+        self.model_lib = self.declare_parameter(
+            'model_lib', 'dist/qwen3_6-35B-A3B-q4f16_1/lib.so').value
+        self.device = self.declare_parameter('device', 'cuda:0').value
+        self.mode = self.declare_parameter('mode', 'interactive').value
+        self.host = self.declare_parameter('host', '0.0.0.0').value
+        self.port = int(self.declare_parameter('port', 8000).value)
 
+        # Latched so a consumer that subscribes after the model is up still sees it.
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                             durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.ready_pub = self.create_publisher(Bool, 'llm/ready', latched)
+        self._publish_ready(False)
 
-        
-    def run_mlc_llm_serve(self):
+        self.proc = None
+        self._stop = threading.Event()
+        threading.Thread(target=self._run_server, daemon=True).start()
+        threading.Thread(target=self._wait_ready, daemon=True).start()
+
+    def _publish_ready(self, value):
+        msg = Bool()
+        msg.data = bool(value)
+        self.ready_pub.publish(msg)
+
+    def _serve_cmd(self):
+        # Source .envrc.local (vendored TVM/mlc_llm env) then exec the server.
+        return (
+            f'cd {self.mlc_dir} && source .envrc.local && '
+            f'exec .venv/bin/python -m mlc_llm serve {self.model} '
+            f'--model-lib {self.model_lib} --device {self.device} '
+            f'--mode {self.mode} --host {self.host} --port {self.port}'
+        )
+
+    def _run_server(self):
+        self.get_logger().info(
+            f'Starting MLC-LLM server: {self.model} (lib {self.model_lib}, '
+            f'{self.device}, mode {self.mode}, port {self.port})')
         try:
-            # Direct docker run command without interactive flags (replacing jetson-containers run)
-            # Based on jetson-containers run.sh for tegra-aarch64 but removing -it flags
-            process = subprocess.Popen([
-                'docker', 'run',
-                '--runtime', 'nvidia',
-                '--env', 'NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics',
-                '--rm',
-                '--network', 'host',
-                '--shm-size=8g',
-                '--volume', '/tmp/argus_socket:/tmp/argus_socket',
-                '--volume', '/etc/enctune.conf:/etc/enctune.conf',
-                '--volume', '/etc/nv_tegra_release:/etc/nv_tegra_release',
-                '--volume', '/tmp/nv_jetson_model:/tmp/nv_jetson_model',
-                '--volume', '/var/run/dbus:/var/run/dbus',
-                '--volume', '/var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket',
-                '--volume', '/var/run/docker.sock:/var/run/docker.sock',
-                '--volume', '/home/alfie/jetson-containers/data:/data',
-                '-v', '/etc/localtime:/etc/localtime:ro',
-                '-v', '/etc/timezone:/etc/timezone:ro',
-                '--device', '/dev/snd',
-                '-e', 'PULSE_SERVER=unix:/run/user/1000/pulse/native',
-                '-v', '/run/user/1000/pulse:/run/user/1000/pulse',
-                '--device', '/dev/bus/usb',
-                '--device', '/dev/i2c-0',
-                '--device', '/dev/i2c-1', 
-                '--device', '/dev/i2c-2',
-                '--device', '/dev/i2c-4',
-                '--device', '/dev/i2c-5',
-                '--device', '/dev/i2c-7',
-                '-v', '/run/jtop.sock:/run/jtop.sock',
-                '--name', self.container_name,
-                'dustynv/mlc:0.20.0-r36.4.0',
-                'mlc_llm', 'serve', self.model,
-                '--model-lib', self.lib,
-                '--host', '0.0.0.0',
-                '--mode', 'interactive',
-                '--device', 'cuda'
-            ])
-            process.wait()
+            # Own session/process group so we can tear down mlc's child processes.
+            self.proc = subprocess.Popen(
+                ['bash', '-c', self._serve_cmd()], start_new_session=True)
+            self.proc.wait()
+            if not self._stop.is_set():
+                self.get_logger().error(
+                    f'MLC-LLM server exited (code {self.proc.returncode}).')
+                self._publish_ready(False)
         except Exception as e:
-            self.get_logger().error(f'Failed to launch mlc llm server: {e}')
+            self.get_logger().error(f'Failed to launch MLC-LLM server: {e}')
+
+    def _wait_ready(self):
+        url = f'http://localhost:{self.port}/v1/models'
+        while not self._stop.is_set():
+            try:
+                with urllib.request.urlopen(url, timeout=2) as r:
+                    if r.status == 200:
+                        self.get_logger().info('MLC-LLM server is ready.')
+                        self._publish_ready(True)
+                        return
+            except Exception:
+                pass
+            time.sleep(2.0)
+
+    def destroy_node(self):
+        self._stop.set()
+        if self.proc and self.proc.poll() is None:
+            try:
+                pgid = os.getpgid(self.proc.pid)
+                os.killpg(pgid, signal.SIGINT)
+                for _ in range(20):
+                    if self.proc.poll() is not None:
+                        break
+                    time.sleep(0.25)
+                if self.proc.poll() is None:
+                    os.killpg(pgid, signal.SIGKILL)
+            except Exception:
+                pass
+        super().destroy_node()
+
 
 def main(args=None):
     rclpy.init(args=args)
     node = MLCLLMServeNode()
-  
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -77,6 +120,7 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

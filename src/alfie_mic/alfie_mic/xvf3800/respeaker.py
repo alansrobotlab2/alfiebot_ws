@@ -46,8 +46,10 @@ PARAMETERS = {
     # GPO_SERVICER_RESID (20) - LEDs + direction of arrival
     "LED_EFFECT": (20, 12, 1, "rw", "uint8"),
     "LED_BRIGHTNESS": (20, 13, 1, "rw", "uint8"),
+    "LED_GAMMIFY": (20, 14, 1, "rw", "uint8"),   # gamma correction on/off (smooths breath)
     "LED_SPEED": (20, 15, 1, "rw", "uint8"),
     "LED_COLOR": (20, 16, 1, "rw", "uint32"),
+    "LED_DOA_COLOR": (20, 17, 2, "rw", "uint32"),  # (base_color, doa_color) for DOA mode
     "DOA_VALUE": (20, 18, 2, "ro", "uint16"),
 
     # PP_RESID (17) - post-processing: AGC / noise / echo suppression
