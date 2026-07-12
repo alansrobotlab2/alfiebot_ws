@@ -46,6 +46,14 @@ DEFAULT_CANCEL_KEYS = ['stop']
 # Per-model detection thresholds (live-tunable via thr_<key> params).
 DEFAULT_THRESHOLDS = {'hey_alfie': 0.45, 'alfie': 0.45, 'stop': 0.25}
 
+# Energy-gate barge-in: wake-word matching fails during double-talk, but the AEC
+# keeps the mic quiet (~250 RMS residual) while Alfie speaks, so a sustained loud
+# mic signal means the user is talking over him -> barge in. No wake match needed.
+# Tuned for a room with background TV (residual ~250, background peaks ~2400,
+# a deliberate speak-up over TTS peaks ~4000+). Lower it (~1200) in a quiet room.
+BARGE_THRESHOLD_DEFAULT = 2800.0   # mic RMS floor to count as the user talking
+BARGE_HOLD_DEFAULT = 2             # consecutive 80 ms hops above it (~160 ms)
+
 
 def _key_to_phrase(key):
     """'hey_jarvis_v0.1' -> 'hey jarvis' ; 'hey_alfie' -> 'hey alfie'."""
@@ -70,6 +78,11 @@ class WakeWordNode(Node):
         self._debounce = float(self.declare_parameter('debounce_sec', 1.5).value)
         # Log near-miss scores during threshold tuning.
         self._debug_scores = bool(self.declare_parameter('debug_scores', True).value)
+        # Energy-gate barge-in (live-tunable).
+        self._barge_enabled = bool(self.declare_parameter('barge_enabled', True).value)
+        self._barge_threshold = float(
+            self.declare_parameter('barge_energy_threshold', BARGE_THRESHOLD_DEFAULT).value)
+        self._barge_hold = int(self.declare_parameter('barge_hold_hops', BARGE_HOLD_DEFAULT).value)
 
         wake_paths = [os.path.join(model_dir, m) for m in wake_models]
         for p in wake_paths:
@@ -99,6 +112,8 @@ class WakeWordNode(Node):
         self._buf = np.zeros(0, dtype=np.int16)
         self._last_fire = {}
         self.speaking = False
+        self._barge_run = 0        # consecutive loud hops while speaking
+        self._last_barge = 0.0
 
         audio_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         # wake is RELIABLE (must not be dropped); barge_in is BEST_EFFORT to match
@@ -117,15 +132,25 @@ class WakeWordNode(Node):
 
     def on_speaking(self, msg):
         self.speaking = msg.is_speaking
+        if not msg.is_speaking:
+            self._barge_run = 0
 
     def _on_set_params(self, params):
-        # Live threshold tuning: `thr_<key>` params update the detection map.
+        # Live tuning: `thr_<key>` thresholds + the barge-in energy gate.
         for p in params:
             if p.name.startswith('thr_'):
                 key = p.name[len('thr_'):]
                 if key in self._thresholds:
                     self._thresholds[key] = float(p.value)
                     self.get_logger().info(f'threshold {key} -> {float(p.value):.2f}')
+            elif p.name == 'barge_energy_threshold':
+                self._barge_threshold = float(p.value)
+                self.get_logger().info(f'barge threshold -> {self._barge_threshold:.0f}')
+            elif p.name == 'barge_hold_hops':
+                self._barge_hold = int(p.value)
+                self.get_logger().info(f'barge hold -> {self._barge_hold}')
+            elif p.name == 'barge_enabled':
+                self._barge_enabled = bool(p.value)
         return SetParametersResult(successful=True)
 
     def on_audio(self, msg):
@@ -136,6 +161,31 @@ class WakeWordNode(Node):
             self._buf = self._buf[OWW_CHUNK:]
             scores = self.oww.predict(chunk)
             self._handle_scores(scores)
+            self._handle_barge_energy(chunk)
+
+    def _handle_barge_energy(self, chunk):
+        # While Alfie speaks, a sustained loud mic (well above the AEC residual)
+        # is the user talking over him -> barge in. No wake-word match needed.
+        if not (self._barge_enabled and self.speaking):
+            self._barge_run = 0
+            return
+        rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+        if self._debug_scores and rms >= 250:
+            self.get_logger().info(
+                f'  barge-rms {rms:.0f} (thr {self._barge_threshold:.0f}, run {self._barge_run})',
+                throttle_duration_sec=0.3)
+        if rms >= self._barge_threshold:
+            self._barge_run += 1
+        else:
+            self._barge_run = 0
+        now = time.monotonic()
+        if self._barge_run >= self._barge_hold and (now - self._last_barge) > self._debounce:
+            self._last_barge = now
+            self._barge_run = 0
+            self.get_logger().info(f'Energy barge-in (rms {rms:.0f})')
+            self.barge_pub.publish(Empty())
+            d = String(); d.data = 'bargein'   # red LED flash
+            self.detect_pub.publish(d)
 
     def _handle_scores(self, scores):
         now = time.monotonic()

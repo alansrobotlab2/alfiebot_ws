@@ -16,21 +16,34 @@ import subprocess
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rcl_interfaces.msg import SetParametersResult
 
 from std_msgs.msg import Header
 from alfie_msgs.msg import Doa, LedCommand
 
 from alfie_mic.xvf3800 import respeaker as xvf3800
 
-# DSP post-processing tuning applied at startup. See xvf3800/respeaker.py.
+# Fixed DSP tuning applied once at startup. See xvf3800/respeaker.py.
 XVF3800_TUNING = [
-    ("PP_AGCONOFF", [1]),
     ("PP_AGCMAXGAIN", [1000.0]),
     ("PP_AGCDESIREDLEVEL", [0.03]),
-    ("PP_ECHOONOFF", [1]),
-    ("PP_NLATTENONOFF", [1]),
     ("LED_GAMMIFY", [1]),   # gamma-correct the ring so breath/crossfade fade smoothly
 ]
+
+# Live-tunable AEC / post-processing params: ROS param -> (XVF3800 param, is_float).
+# Tune at runtime to explore double-talk / barge-in behaviour, e.g.
+#   ros2 param set /alfie/respeaker_control pp_nlatten 0
+# A float param left at its sentinel default (-1) is not written (firmware default
+# kept); the on/off ints are always written at startup.
+AEC_TUNABLES = {
+    'pp_agc_onoff': ('PP_AGCONOFF', False, 1),
+    'pp_echo':      ('PP_ECHOONOFF', False, 1),
+    'pp_nlatten':   ('PP_NLATTENONOFF', False, 1),
+    'ref_gain':     ('AUDIO_MGR_REF_GAIN', True, -1.0),
+    'mic_gain':     ('AUDIO_MGR_MIC_GAIN', True, -1.0),
+    'pp_min_ns':    ('PP_MIN_NS', True, -1.0),
+    'pp_min_nn':    ('PP_MIN_NN', True, -1.0),
+}
 
 # ALSA playback mixer on the reSpeaker's USB-audio interface. This is a
 # USB-audio-class control, independent of the XVF3800 USB DSP control handle,
@@ -60,6 +73,7 @@ class ReSpeakerControl(Node):
             except Exception as e:
                 self.get_logger().info(f'reSpeaker XVF3800 found (version read failed: {e})')
             self._apply_tuning()
+            self._setup_aec_params()
 
         # Playback gain is an ALSA control, so set it regardless of whether the
         # USB DSP handle came up.
@@ -88,6 +102,34 @@ class ReSpeakerControl(Node):
             except Exception as e:
                 self.get_logger().warn(
                     f'Mic tuning {name}={value} failed ({type(e).__name__}: {e})')
+
+    def _setup_aec_params(self):
+        """Declare the AEC/post-processing params, write them, and register a
+        live-update callback so they can be tuned at runtime."""
+        for pname, (_xvf, is_float, default) in AEC_TUNABLES.items():
+            val = self.declare_parameter(pname, default).value
+            self._write_aec(pname, float(val) if is_float else int(val))
+        self.add_on_set_parameters_callback(self._on_set_params)
+        applied = {p: self.get_parameter(p).value for p in AEC_TUNABLES}
+        self.get_logger().info(f'AEC params: {applied}')
+
+    def _write_aec(self, pname, value):
+        """Write one AEC param to the device (skips float sentinels < 0)."""
+        xvf, is_float, _ = AEC_TUNABLES[pname]
+        if is_float and value < 0:
+            return   # sentinel: leave firmware default
+        try:
+            self.mic.write(xvf, [float(value) if is_float else int(value)])
+        except Exception as e:
+            self.get_logger().warn(
+                f'AEC write {xvf}={value} failed ({type(e).__name__}: {e})')
+
+    def _on_set_params(self, params):
+        for p in params:
+            if p.name in AEC_TUNABLES:
+                self._write_aec(p.name, p.value)
+                self.get_logger().info(f'AEC {p.name} -> {p.value}')
+        return SetParametersResult(successful=True)
 
     def _apply_playback_gain(self):
         card = self._find_alsa_card()
