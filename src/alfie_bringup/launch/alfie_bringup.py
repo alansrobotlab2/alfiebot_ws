@@ -209,6 +209,18 @@ def generate_launch_description():
         ),
 
         Node(
+            package='alfie_wakeword',
+            namespace='alfie',
+            executable='wakeword_node',
+            name='wakeword_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
+            sigkill_timeout='10',  # Force kill after 10 seconds
+            respawn=True
+        ),
+
+        Node(
             package='alfie_llm',
             namespace='alfie',
             executable='mlc_llm_serve_node',

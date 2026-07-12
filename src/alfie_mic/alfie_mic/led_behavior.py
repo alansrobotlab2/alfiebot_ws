@@ -4,8 +4,11 @@ led_behavior node — maps robot conversation state to the reSpeaker LED ring.
 Keeps respeaker_control a pure USB driver: this node only decides *what* the
 ring should show and publishes LedCommand; respeaker_control owns the USB writes.
 
+A wake/stop detection briefly flashes the whole ring (green for a wake word,
+red for "stop"), overlaid on top of the current state.
+
 State priority (highest first):
-  SPEAKING  (tts is talking)      -> solid green (amplitude pulse TBD)
+  SPEAKING  (tts is talking)      -> cyan amplitude pulse
   THINKING  (llm is generating)   -> animated cyan<->green crossfade breath
   LISTENING (resting/default)     -> DOA follow (ring points at the speaker)
   IDLE      (no activity for a while) -> dim solid
@@ -26,7 +29,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
-from std_msgs.msg import Bool, Float32
+from std_msgs.msg import Bool, Float32, String
 from alfie_msgs.msg import LedCommand, Speaking
 
 # LedCommand.effect values (see LedCommand.msg / xvf3800 LED_EFFECT).
@@ -36,13 +39,21 @@ FRAME_HZ = 30.0         # animation / update rate
 IDLE_TIMEOUT_S = 30.0   # drop to IDLE after this long with no speaking/thinking
 REFRESH_S = 5.0         # re-publish a static state periodically (driver re-sync)
 
+# Wake-word flash: a brief full-ring flash overlaid on whatever state is showing.
+# Green acknowledges a wake ("hey alfie"/"alfie"); red acknowledges "stop".
+FLASH_S = 0.45
+FLASH_GREEN = 0x00FF00
+FLASH_RED = 0xFF0000
+CANCEL_KEYS = {'stop'}   # detection keys that flash red instead of green
+
 # Peak channel value for the animated states (75% of full 255).
 LED_MAX = 191
 
-# THINKING crossfade: whole ring morphs cyan <-> green. The two colours differ
-# only in the blue channel, so the fade is just blue 0..LED_MAX with G=LED_MAX —
-# no muddy midpoints.
-THINK_PERIOD_S = 1.0    # seconds per full cyan->green->cyan cycle
+# THINKING crossfade: whole ring morphs cyan <-> purple (green is reserved for
+# the wake flash). Linear RGB interpolation between the two endpoints at 75%.
+THINK_PERIOD_S = 1.0            # seconds per full cyan->purple->cyan cycle
+THINK_COLOR_A = (0, LED_MAX, LED_MAX)    # cyan   (R, G, B)
+THINK_COLOR_B = (96, 0, LED_MAX)         # purple (R, G, B)
 
 # SPEAKING pulse: cyan ring whose brightness tracks the live TTS amplitude
 # (tts/level, RMS 0..1). Envelope follower: instant attack, slow release, so it
@@ -74,6 +85,8 @@ class LedBehavior(Node):
         self.create_subscription(Speaking, 'speaking', self.on_speaking, qos)
         self.create_subscription(Bool, 'generating', self.on_generating, qos)
         self.create_subscription(Float32, 'tts/level', self.on_level, qos)
+        # wakeword_node publishes RELIABLE, so match it for the detection flash.
+        self.create_subscription(String, 'wakeword/detection', self.on_detection, led_qos)
 
         self.speaking = False
         self.generating = False
@@ -85,6 +98,10 @@ class LedBehavior(Node):
         self._spk_raw = 0.0
         self._spk_ts = 0.0
         self._spk_env = 0.0
+        # Wake/stop flash overlay state.
+        self._flash_until = 0.0
+        self._flash_color = FLASH_GREEN
+        self._flashing = False
 
         self.create_timer(1.0 / FRAME_HZ, self._tick)
         self.get_logger().info('LedBehavior initialized.')
@@ -103,6 +120,13 @@ class LedBehavior(Node):
         self._spk_raw = msg.data
         self._spk_ts = time.monotonic()
 
+    def on_detection(self, msg):
+        # Flash green on a wake word, red on the "stop" cancel word.
+        key = (msg.data or '').strip()
+        self._flash_color = FLASH_RED if key in CANCEL_KEYS else FLASH_GREEN
+        self._flash_until = time.monotonic() + FLASH_S
+        self._mark_active()
+
     def _mark_active(self):
         self._last_activity = self.get_clock().now()
 
@@ -117,6 +141,15 @@ class LedBehavior(Node):
         return 'LISTENING'
 
     def _tick(self):
+        # Wake/stop flash overrides everything for its brief duration.
+        if time.monotonic() < self._flash_until:
+            self._publish(EFFECT_SOLID, 255, 0, self._flash_color)
+            self._flashing = True
+            return
+        if self._flashing:
+            self._flashing = False
+            self._last_state = None   # force the underlying state to re-publish
+
         state = self._desired_state()
         changed = state != self._last_state
         if changed:
@@ -138,9 +171,12 @@ class LedBehavior(Node):
 
     def _animate_thinking(self):
         t = time.monotonic() - self._anim_t0
-        p = (1 - math.cos(2 * math.pi * t / THINK_PERIOD_S)) / 2  # 0(green)..1(cyan)..0
-        blue = int(LED_MAX * p)
-        color = (LED_MAX << 8) | blue                             # R=0, G=LED_MAX, B=blue
+        p = (1 - math.cos(2 * math.pi * t / THINK_PERIOD_S)) / 2  # 0=cyan .. 1=purple
+        a, b = THINK_COLOR_A, THINK_COLOR_B
+        r = int(a[0] + (b[0] - a[0]) * p)
+        g = int(a[1] + (b[1] - a[1]) * p)
+        bl = int(a[2] + (b[2] - a[2]) * p)
+        color = (r << 16) | (g << 8) | bl
         self._publish(EFFECT_SOLID, 255, 0, color)
 
     def _animate_speaking(self):

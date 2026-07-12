@@ -5,13 +5,16 @@ import sys
 os.environ['ORT_DISABLE_AFFINITY'] = '1'  # Disable thread affinity
 os.environ['OMP_NUM_THREADS'] = '4'  # Set number of OpenMP threads
 
+# Boot fully offline: the Parakeet model is already in the local HF cache, so
+# resolve it from there instead of hitting HuggingFace on every startup.
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
+os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')
+
 import threading
 import time
 import rclpy
 from rclpy.node import Node
 from alfie_msgs.msg import AudioFrame, ASRResult
-from alfie_msgs.msg import Speaking
-from std_msgs.msg import Empty
 import numpy as np
 import onnxruntime as ort
 import onnx_asr
@@ -34,7 +37,6 @@ class ASRNode(Node):
         ort.set_default_logger_severity(3)  # Reduce logging verbosity
         
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self.speaking = False
         self.audio_buffer = bytearray()
         self.prev_samples = np.zeros(BLOCKSIZE, dtype=np.int16)
         self.micstate = 'IDLE'
@@ -77,24 +79,12 @@ class ASRNode(Node):
             self.audio_callback,
             qos)
 
-        self.speaking_sub = self.create_subscription(
-            Speaking,
-            'speaking',
-            self.speaking_callback,
-            qos)
-
-        # Barge-in: signal TTS/agent to stop when the user speaks over the robot.
-        self.barge_in_pub = self.create_publisher(Empty, 'barge_in', qos)
-
         self.get_logger().info('ASRNode initialized.')
 
-    def speaking_callback(self, msg):
-        self.speaking = msg.is_speaking
-
     def audio_callback(self, msg):
-        # Audio is always processed now (even while the robot speaks): the
-        # reSpeaker's hardware AEC removes the robot's own voice, so what remains
-        # is the user. This is what enables barge-in.
+        # Audio is always processed (even while the robot speaks): the reSpeaker's
+        # hardware AEC removes the robot's own voice. Wake-word barge-in and the
+        # agent's wake gating decide what actually gets acted on.
         samples = np.array(msg.audioframe, dtype=np.int16)
         # Use the full 256-sample frame for VAD
         vad_input = samples.astype(np.float32) / 32768.0
@@ -108,10 +98,6 @@ class ASRNode(Node):
 
         if self.micstate == 'IDLE' and key == 'start':
             self.get_logger().info('Speech start detected')
-            # If the robot is talking, the user is interrupting: fire barge-in.
-            if self.speaking:
-                self.get_logger().info('User spoke over the robot; sending barge_in.')
-                self.barge_in_pub.publish(Empty())
             self.audio_buffer = bytearray()
             self.audio_buffer.extend(samples.tobytes())
             self.micstate = 'SPEECH'

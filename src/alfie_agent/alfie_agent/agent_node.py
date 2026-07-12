@@ -2,22 +2,28 @@
 agent_node — the conversation bridge.
 
 Closes the loop between ASR and TTS: it subscribes to transcripts (`asrresult`),
-sends them to the local MLC-LLM server (Qwen3-1.7B, OpenAI-compatible API), and
-publishes the reply as a `speechrequest` for TTS to speak. It also publishes a
-`generating` flag (true while the LLM is producing a turn) that drives the
+sends them to the local MLC-LLM server (Qwen3.6 35B-A3B, OpenAI-compatible API),
+and publishes the reply as a `speechrequest` for TTS to speak. It also publishes
+a `generating` flag (true while the LLM is producing a turn) that drives the
 "thinking" LED state, and honours `barge_in` so a user can interrupt.
 
 Design notes:
+  * Wake-gated: transcripts are only processed while a listening window (opened
+    by a `wake` event) is open, so background speech is ignored. The window
+    re-opens after each reply for hands-free follow-ups; a bare wake phrase is
+    stripped and just (re)opens the window.
+  * Gated on `llm/ready` so nothing is sent before the 35B server has loaded.
   * The LLM call runs in a worker thread so ROS callbacks never block.
   * Turns are invalidated by a monotonically increasing turn id: a new
     transcript or a barge-in bumps the id, and any in-flight worker notices on
     its next streamed chunk and bails without publishing speech.
-  * Qwen3 emits <think>...</think> reasoning by default; we request /no_think
+  * Qwen emits <think>...</think> reasoning by default; we request /no_think
     and strip any think blocks so the robot never speaks its reasoning.
 """
 import re
 import json
 import threading
+import time
 
 import requests
 
@@ -25,8 +31,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
-from std_msgs.msg import Bool, Empty
-from alfie_msgs.msg import ASRResult, SpeechRequest
+from std_msgs.msg import Bool, Empty, String
+from alfie_msgs.msg import ASRResult, SpeechRequest, Speaking
 
 LLM_BASE_URL = "http://localhost:8000/v1"
 MODEL_ID_FALLBACK = "dist/qwen3_6-35B-A3B-q4f16_1"
@@ -40,6 +46,19 @@ REQUEST_TIMEOUT = (5, 60)      # (connect, read) seconds
 MAX_TOKENS = 200
 TEMPERATURE = 0.7
 SPEAK_VOLUME = 100
+
+# Wake-word gating: a `wake` event opens a listening window; transcripts are only
+# processed while it is open. The window is (re)opened on a wake and extended on
+# each accepted user command (which covers the reply plus a follow-up gap) — it
+# is NOT extended by Alfie's own speech, so background audio can't keep it alive
+# indefinitely. When it lapses, the wake word is required again (and the next
+# wake starts a fresh conversation).
+FOLLOWUP_WINDOW_S = 8.0
+WAKE_PHRASES_DEFAULT = {'hey alfie', 'alfie'}
+# A very short transcript arriving right after a wake is the (possibly mis-heard)
+# wake phrase itself, not a command — acknowledge it instead of answering it.
+WAKE_UTTERANCE_SUPPRESS_S = 3.0
+MAX_WAKE_UTTERANCE_WORDS = 2
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
@@ -55,6 +74,11 @@ class AgentNode(Node):
 
         self.create_subscription(ASRResult, 'asrresult', self.on_asrresult, qos)
         self.create_subscription(Empty, 'barge_in', self.on_barge_in, qos)
+        self.create_subscription(Speaking, 'speaking', self.on_speaking, qos)
+
+        # Wake events open the conversation window. RELIABLE to match wakeword_node.
+        wake_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        self.create_subscription(String, 'wake', self.on_wake, wake_qos)
 
         # The LLM server (35B MoE) takes ~30 s to load. Gate on its latched
         # `llm/ready` so transcripts heard during startup are dropped instead of
@@ -70,8 +94,15 @@ class AgentNode(Node):
         self._history = []          # list of {"role", "content"}
         self._model_id = None       # resolved lazily from /v1/models
 
+        # Wake-gating state.
+        self._listen_until = 0.0    # monotonic deadline; window open while now < it
+        self._wake_time = 0.0       # monotonic time of the last wake event
+        self._speaking = False
+        self._wake_phrases = set(WAKE_PHRASES_DEFAULT)
+
         self.publish_generating(False)
-        self.get_logger().info('AgentNode initialized (waiting for llm/ready).')
+        self.get_logger().info(
+            'AgentNode initialized (waiting for llm/ready; say the wake word to talk).')
 
     # --- ROS callbacks (kept short; real work happens on worker threads) ---
 
@@ -79,9 +110,29 @@ class AgentNode(Node):
         was_ready = self._llm_ready
         self._llm_ready = bool(msg.data)
         if self._llm_ready and not was_ready:
-            self.get_logger().info('LLM is ready; accepting transcripts.')
+            self.get_logger().info('LLM is ready; waiting for wake word.')
         elif not self._llm_ready and was_ready:
-            self.get_logger().warn('LLM went not-ready; pausing transcripts.')
+            self.get_logger().warn('LLM went not-ready; pausing.')
+
+    def on_wake(self, msg):
+        phrase = (msg.data or '').strip().lower()
+        now = time.monotonic()
+        fresh = now >= self._listen_until   # window was closed -> new conversation
+        if phrase:
+            self._wake_phrases.add(phrase)
+        self._listen_until = now + FOLLOWUP_WINDOW_S
+        self._wake_time = now
+        if fresh:
+            with self._lock:
+                self._history = []
+            self.get_logger().info(f"Wake '{phrase}': new conversation, listening.")
+        else:
+            self.get_logger().info(f"Wake '{phrase}': window extended.")
+
+    def on_speaking(self, msg):
+        # Track TTS state only. The window is deliberately NOT extended here — if
+        # it were, Alfie answering background audio would keep it open forever.
+        self._speaking = msg.is_speaking
 
     def on_asrresult(self, msg):
         text = (msg.asrresult or '').strip()
@@ -91,11 +142,31 @@ class AgentNode(Node):
             self.get_logger().warn('LLM not ready; ignoring transcript.',
                                    throttle_duration_sec=5.0)
             return
-        self.get_logger().info(f'Heard: {text}')
+        now = time.monotonic()
+        if now >= self._listen_until:
+            self.get_logger().info(f'No wake word; ignoring: {text}',
+                                   throttle_duration_sec=5.0)
+            return
+        command, _ = self._strip_wake(text)
+        if not command:
+            # Bare wake phrase ("Hey Alfie") — acknowledge and keep listening.
+            self._listen_until = now + FOLLOWUP_WINDOW_S
+            self.get_logger().info('Wake acknowledged; listening for a command.')
+            return
+        if (now - self._wake_time) < WAKE_UTTERANCE_SUPPRESS_S and \
+                len(command.split()) <= MAX_WAKE_UTTERANCE_WORDS:
+            # Very short transcript right after a wake = the (mis-heard) wake
+            # phrase itself. Keep listening, don't answer it.
+            self._listen_until = now + FOLLOWUP_WINDOW_S
+            self.get_logger().info(f'Ignoring wake utterance: {command}')
+            return
+        # Keep the window alive across LLM + TTS for this turn.
+        self._listen_until = now + FOLLOWUP_WINDOW_S
+        self.get_logger().info(f'Heard: {command}')
         with self._lock:
             self._turn += 1
             my_turn = self._turn
-        threading.Thread(target=self._run_turn, args=(text, my_turn),
+        threading.Thread(target=self._run_turn, args=(command, my_turn),
                          daemon=True).start()
 
     def on_barge_in(self, msg):
@@ -103,6 +174,17 @@ class AgentNode(Node):
         with self._lock:
             self._turn += 1
         self.publish_generating(False)
+
+    def _strip_wake(self, text):
+        """Remove a leading wake phrase; return (command, had_wake). Compares
+        word-by-word, case- and punctuation-insensitive, longest phrase first."""
+        words = text.split()
+        low = [re.sub(r'[^a-z0-9]', '', w.lower()) for w in words]
+        for ph in sorted(self._wake_phrases, key=lambda p: len(p.split()), reverse=True):
+            pw = ph.split()
+            if low[:len(pw)] == pw:
+                return ' '.join(words[len(pw):]).strip(), True
+        return text.strip(), False
 
     # --- helpers ---
 

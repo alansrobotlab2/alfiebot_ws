@@ -39,8 +39,11 @@ def generate_launch_description():
         voice_node('alfie_mic', 'respeaker_control', 'respeaker_control_node'),
         voice_node('alfie_mic', 'led_behavior', 'led_behavior_node'),
 
-        # ASR (Parakeet + Silero VAD) -> asrresult; barge_in on speech-over.
+        # ASR (Parakeet + Silero VAD) -> asrresult.
         voice_node('alfie_asr', 'parakeet_asr_node', 'asr_node'),
+
+        # Wake word (openWakeWord) -> wake (opens conversation window) + barge_in.
+        voice_node('alfie_wakeword', 'wakeword_node', 'wakeword_node'),
 
         # TTS (Piper -> reSpeaker) + speaking/level for the LED pulse.
         voice_node('alfie_tts', 'alfietts', 'tts_node'),
