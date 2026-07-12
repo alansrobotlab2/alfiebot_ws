@@ -23,13 +23,13 @@ import requests
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from std_msgs.msg import Bool, Empty
 from alfie_msgs.msg import ASRResult, SpeechRequest
 
 LLM_BASE_URL = "http://localhost:8000/v1"
-MODEL_ID_FALLBACK = "/data/qwen3-1.7b-q4f16_1-MLC"
+MODEL_ID_FALLBACK = "dist/qwen3_6-35B-A3B-q4f16_1"
 SYSTEM_PROMPT = (
     "You are Alfie, a friendly desktop robot. Keep replies short and "
     "conversational, one or two sentences, suitable for being spoken aloud. "
@@ -56,19 +56,40 @@ class AgentNode(Node):
         self.create_subscription(ASRResult, 'asrresult', self.on_asrresult, qos)
         self.create_subscription(Empty, 'barge_in', self.on_barge_in, qos)
 
+        # The LLM server (35B MoE) takes ~30 s to load. Gate on its latched
+        # `llm/ready` so transcripts heard during startup are dropped instead of
+        # hitting a connection-refused. Latched QoS so we still get the retained
+        # value if the agent starts after the server is already up.
+        ready_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                               durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(Bool, 'llm/ready', self.on_llm_ready, ready_qos)
+        self._llm_ready = False
+
         self._lock = threading.Lock()
         self._turn = 0
         self._history = []          # list of {"role", "content"}
         self._model_id = None       # resolved lazily from /v1/models
 
         self.publish_generating(False)
-        self.get_logger().info('AgentNode initialized.')
+        self.get_logger().info('AgentNode initialized (waiting for llm/ready).')
 
     # --- ROS callbacks (kept short; real work happens on worker threads) ---
+
+    def on_llm_ready(self, msg):
+        was_ready = self._llm_ready
+        self._llm_ready = bool(msg.data)
+        if self._llm_ready and not was_ready:
+            self.get_logger().info('LLM is ready; accepting transcripts.')
+        elif not self._llm_ready and was_ready:
+            self.get_logger().warn('LLM went not-ready; pausing transcripts.')
 
     def on_asrresult(self, msg):
         text = (msg.asrresult or '').strip()
         if not text:
+            return
+        if not self._llm_ready:
+            self.get_logger().warn('LLM not ready; ignoring transcript.',
+                                   throttle_duration_sec=5.0)
             return
         self.get_logger().info(f'Heard: {text}')
         with self._lock:
