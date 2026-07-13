@@ -1,0 +1,76 @@
+# robot_localization EKF for Alfie's mecanum (holonomic) base.
+#
+# Fuses wheel odometry velocities (/odom_cov, via odom_covariance_relay) with the
+# BNO085 gyro yaw-rate (/alfie/imu) to produce a smooth odom -> base_link transform.
+#
+# Design choices for THIS robot:
+#  - two_d_mode: planar base; z/roll/pitch are pinned to 0.
+#  - Fuse odom TWIST (vx, vy, vyaw), not pose — the firmware pose drifts; let the
+#    filter integrate velocities. Mecanum is holonomic, so vy is real and fused.
+#  - Fuse only the IMU yaw RATE (gyro), NOT absolute yaw — the BNO085 yaw is
+#    magnetometer-referenced/absolute; feeding it here would fight odom continuity.
+#    (Absolute yaw belongs in a separate map-frame filter later, if ever.)
+#  - The IMU is torso/base-fixed (does not move with the head), so its yaw rate is a
+#    valid base-heading signal — provided the prismatic torso lift is held constant
+#    while driving.
+#
+# This node OWNS the odom -> base_link TF. Do not also run odom_tf_broadcaster.
+# Remap /tf and /tf_static to /alfie/tf(_static) in the launch to match this system.
+
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.2
+    two_d_mode: true
+    publish_tf: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # --- Wheel odometry (velocities only) ---
+    odom0: /odom_cov
+    # [ x,     y,     z,
+    #   roll,  pitch, yaw,
+    #   vx,    vy,    vz,
+    #   vroll, vpitch,vyaw,
+    #   ax,    ay,    az ]
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  true,  false,
+                   false, false, true,
+                   false, false, false]
+    odom0_queue_size: 10
+    odom0_differential: false
+    odom0_relative: false
+
+    # --- BNO085 IMU (yaw rate only) ---
+    imu0: /alfie/imu
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_queue_size: 10
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: true
+
+    # Modest process noise; tune on-hardware during the foundations gate.
+    process_noise_covariance: [
+      0.05, 0,    0,    0,    0,    0,    0,    0,    0,    0,     0,     0,     0,    0,    0,
+      0,    0.05, 0,    0,    0,    0,    0,    0,    0,    0,     0,     0,     0,    0,    0,
+      0,    0,    0.06, 0,    0,    0,    0,    0,    0,    0,     0,     0,     0,    0,    0,
+      0,    0,    0,    0.03, 0,    0,    0,    0,    0,    0,     0,     0,     0,    0,    0,
+      0,    0,    0,    0,    0.03, 0,    0,    0,    0,    0,     0,     0,     0,    0,    0,
+      0,    0,    0,    0,    0,    0.06, 0,    0,    0,    0,     0,     0,     0,    0,    0,
+      0,    0,    0,    0,    0,    0,    0.025,0,    0,    0,     0,     0,     0,    0,    0,
+      0,    0,    0,    0,    0,    0,    0,    0.025,0,    0,     0,     0,     0,    0,    0,
+      0,    0,    0,    0,    0,    0,    0,    0,    0.04, 0,     0,     0,     0,    0,    0,
+      0,    0,    0,    0,    0,    0,    0,    0,    0,    0.01,  0,     0,     0,    0,    0,
+      0,    0,    0,    0,    0,    0,    0,    0,    0,    0,     0.01,  0,     0,    0,    0,
+      0,    0,    0,    0,    0,    0,    0,    0,    0,    0,     0,     0.02,  0,    0,    0,
+      0,    0,    0,    0,    0,    0,    0,    0,    0,    0,     0,     0,     0.01, 0,    0,
+      0,    0,    0,    0,    0,    0,    0,    0,    0,    0,     0,     0,     0,    0.01, 0,
+      0,    0,    0,    0,    0,    0,    0,    0,    0,    0,     0,     0,     0,    0,    0.015]

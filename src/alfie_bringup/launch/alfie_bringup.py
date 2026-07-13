@@ -28,6 +28,26 @@ def generate_launch_description():
     with open(urdf_file, 'r') as f:
         robot_description = f.read()
 
+    # Stereo calibration YAMLs for the metric nav pipeline (Phase 0 / F1).
+    calib_dir = os.path.join(
+        get_package_share_directory('alfie_bringup'), 'config', 'stereo_calibration')
+    left_yaml = os.path.join(calib_dir, 'left.yaml')
+    right_yaml = os.path.join(calib_dir, 'right.yaml')
+
+    # /tf remaps so TF-broadcasting nodes join the namespaced tree.
+    tf_remaps = [('/tf', '/alfie/tf'), ('/tf_static', '/alfie/tf_static')]
+
+    def static_tf(name, x, y, z, yaw, pitch, roll, parent, child):
+        return Node(
+            package='tf2_ros', namespace='alfie',
+            executable='static_transform_publisher', name=name,
+            arguments=['--x', x, '--y', y, '--z', z,
+                       '--yaw', yaw, '--pitch', pitch, '--roll', roll,
+                       '--frame-id', parent, '--child-frame-id', child],
+            remappings=tf_remaps,
+            output='screen', emulate_tty=True,
+            sigterm_timeout='5', sigkill_timeout='10', respawn=True)
+
     return LaunchDescription([
 
         # Robot State Publisher - publishes URDF to /robot_description and TF transforms
@@ -325,6 +345,106 @@ def generate_launch_description():
             sigkill_timeout='10',
             respawn=True
         ),
+
+        # ------------------------------------------------------------------
+        # Navigation foundations (Phase 0) — TF tree, clean IMU, calibrated
+        # stereo. Feeds cuVSLAM/ESS/nvblox/Nav2 later. The camera node above is
+        # unchanged; the metric stereo path is built from its wide streams here.
+        # ------------------------------------------------------------------
+
+        # BNO085 telemetry (low/backstate) -> clean sensor_msgs/Imu on /alfie/imu.
+        Node(
+            package='alfie_bringup',
+            namespace='alfie',
+            executable='imu_bridge',
+            name='imu_bridge',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
+        ),
+
+        # Wheel /odom -> odom->base_link TF (firmware publishes /odom but no TF).
+        # For fused wheel+IMU odometry instead, use foundations.launch.py
+        # (use_ekf:=true), which swaps this for the robot_localization EKF.
+        Node(
+            package='alfie_bringup',
+            namespace='alfie',
+            executable='odom_tf_broadcaster',
+            name='odom_tf_broadcaster',
+            remappings=tf_remaps,
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
+        ),
+
+        # Decode the wide stereo eyes to raw + publish calibrated CameraInfo for
+        # the metric pipeline (warns until F1 calibration YAMLs exist).
+        Node(
+            package='image_transport',
+            namespace='alfie',
+            executable='republish',
+            name='left_wide_republish',
+            arguments=['compressed', 'raw'],
+            remappings=[
+                ('in/compressed', 'stereo_camera/left_wide/image_raw/compressed'),
+                ('out', 'stereo_camera/left/image_raw'),
+            ],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
+        ),
+        Node(
+            package='image_transport',
+            namespace='alfie',
+            executable='republish',
+            name='right_wide_republish',
+            arguments=['compressed', 'raw'],
+            remappings=[
+                ('in/compressed', 'stereo_camera/right_wide/image_raw/compressed'),
+                ('out', 'stereo_camera/right/image_raw'),
+            ],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
+        ),
+        Node(
+            package='alfie_bringup',
+            namespace='alfie',
+            executable='stereo_camera_info_pub',
+            name='stereo_camera_info_pub',
+            parameters=[{'left_yaml': left_yaml, 'right_yaml': right_yaml}],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
+        ),
+
+        # Navigation frames (PLACEHOLDERS — MEASURE ON HARDWARE). See constraint
+        # #7: reconcile the URDF neck kinematics before trusting camera/IMU poses.
+        # base_footprint: TODO z = base_link height above the floor.
+        static_tf('tf_base_footprint', '0', '0', '0.0', '0', '0', '0',
+                  'base_footprint', 'base_link'),
+        # IMU: static neck-top mount, treated as rigid to base. TODO x y z.
+        static_tf('tf_imu_link', '0.0', '0.0', '0.0', '0', '0', '0',
+                  'base_link', 'imu_link'),
+        # Camera body on the head. TODO x y z (and orientation if not level).
+        static_tf('tf_stereo_camera_link', '0.0', '0.0', '0.0', '0', '0', '0',
+                  'head_link', 'stereo_camera_link'),
+        # Optical frames: ROS optical convention (z fwd) = yaw=-pi/2, roll=-pi/2.
+        # Right is +baseline along optical x. TODO set right x = stereo baseline (m).
+        static_tf('tf_left_optical', '0', '0', '0', '-1.5707963', '0', '-1.5707963',
+                  'stereo_camera_link', 'left_camera_optical_frame'),
+        static_tf('tf_right_optical', '0.06', '0', '0', '-1.5707963', '0', '-1.5707963',
+                  'stereo_camera_link', 'right_camera_optical_frame'),
 
         Node(
             package='foxglove_bridge',
