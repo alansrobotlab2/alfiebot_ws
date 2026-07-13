@@ -38,6 +38,14 @@ class MLCLLMServeNode(Node):
         self.mode = self.declare_parameter('mode', 'interactive').value
         self.host = self.declare_parameter('host', '0.0.0.0').value
         self.port = int(self.declare_parameter('port', 8000).value)
+        # Memory-footprint tuning: cap the KV-cache context, bound conversation
+        # history, and hold the GPU memory pool to a fraction of VRAM.
+        self.context_window_size = int(
+            self.declare_parameter('context_window_size', 32768).value)
+        self.max_history_size = int(
+            self.declare_parameter('max_history_size', 4).value)
+        self.gpu_memory_utilization = float(
+            self.declare_parameter('gpu_memory_utilization', 0.5).value)
 
         # Latched so a consumer that subscribes after the model is up still sees it.
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -61,7 +69,10 @@ class MLCLLMServeNode(Node):
             f'cd {self.mlc_dir} && source .envrc.local && '
             f'exec .venv/bin/python -m mlc_llm serve {self.model} '
             f'--model-lib {self.model_lib} --device {self.device} '
-            f'--mode {self.mode} --host {self.host} --port {self.port}'
+            f'--mode {self.mode} --host {self.host} --port {self.port} '
+            f'--overrides "context_window_size={self.context_window_size};'
+            f'max_history_size={self.max_history_size};'
+            f'gpu_memory_utilization={self.gpu_memory_utilization}"'
         )
 
     def _run_server(self):

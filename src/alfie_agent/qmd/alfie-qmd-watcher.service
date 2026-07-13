@@ -1,0 +1,16 @@
+[Unit]
+Description=Alfie QMD vault index watcher (reindex on note changes)
+After=alfie-qmd-daemon.service
+Wants=alfie-qmd-daemon.service
+
+[Service]
+Type=simple
+User=alfie
+Group=alfie
+EnvironmentFile=/home/alfie/alfiebot_ws/src/alfie_agent/qmd/qmd.env
+ExecStart=/home/alfie/alfiebot_ws/src/alfie_agent/qmd/qmd-watcher.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

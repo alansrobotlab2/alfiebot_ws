@@ -1,11 +1,17 @@
 """
-agent_node — the conversation bridge.
+agent_node — the conversation bridge with a tool-calling brain.
 
 Closes the loop between ASR and TTS: it subscribes to transcripts (`asrresult`),
-sends them to the local MLC-LLM server (Qwen3.6 35B-A3B, OpenAI-compatible API),
-and publishes the reply as a `speechrequest` for TTS to speak. It also publishes
-a `generating` flag (true while the LLM is producing a turn) that drives the
-"thinking" LED state, and honours `barge_in` so a user can interrupt.
+runs an agentic turn against the local MLC-LLM server (Qwen3.6 35B-A3B) — which
+may call tools such as reading/writing notes in the obsidian vault — and
+publishes the spoken reply as a `speechrequest` for TTS. It also publishes a
+`generating` flag (true while a turn is in flight) that drives the "thinking" LED,
+and honours `barge_in` so a user can interrupt.
+
+The thinking is delegated to `harness.run_turn`: MLC can't do native OpenAI
+tool-calling, so tools are described in the system prompt and Qwen emits
+`<tool_call>` blocks that the harness parses and dispatches (see harness.py,
+prompt_builder.py, tools/). This node keeps all ROS I/O and turn management.
 
 Design notes:
   * Wake-gated: transcripts are only processed while a listening window (opened
@@ -13,19 +19,15 @@ Design notes:
     re-opens after each reply for hands-free follow-ups; a bare wake phrase is
     stripped and just (re)opens the window.
   * Gated on `llm/ready` so nothing is sent before the 35B server has loaded.
-  * The LLM call runs in a worker thread so ROS callbacks never block.
-  * Turns are invalidated by a monotonically increasing turn id: a new
-    transcript or a barge-in bumps the id, and any in-flight worker notices on
-    its next streamed chunk and bails without publishing speech.
-  * Qwen emits <think>...</think> reasoning by default; we request /no_think
-    and strip any think blocks so the robot never speaks its reasoning.
+  * Each turn runs in a worker thread so ROS callbacks never block. While tools
+    run the robot is silent — the `generating` LED covers that gap.
+  * Turns are invalidated by a monotonically increasing turn id: a new transcript
+    or a barge-in bumps the id, and any in-flight worker notices (before each LLM
+    call and tool call, and on every streamed chunk) and bails without speaking.
 """
 import re
-import json
 import threading
 import time
-
-import requests
 
 import rclpy
 from rclpy.node import Node
@@ -34,18 +36,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Bool, Empty, String
 from alfie_msgs.msg import ASRResult, SpeechRequest, Speaking
 
-LLM_BASE_URL = "http://localhost:8000/v1"
-MODEL_ID_FALLBACK = "dist/qwen3_6-35B-A3B-q4f16_1"
-SYSTEM_PROMPT = (
-    "You are Alfie, a friendly desktop robot. Keep replies short and "
-    "conversational, one or two sentences, suitable for being spoken aloud. "
-    "Do not use markdown, emoji, or stage directions. /no_think"
-)
-MAX_HISTORY_TURNS = 6          # user+assistant pairs kept as context
-REQUEST_TIMEOUT = (5, 60)      # (connect, read) seconds
-MAX_TOKENS = 200
-TEMPERATURE = 0.7
-SPEAK_VOLUME = 100
+from alfie_agent import harness, prompt_builder, tools
+from alfie_agent.llm_client import LLMClient
 
 # Wake-word gating: a `wake` event opens a listening window; transcripts are only
 # processed while it is open. The window is (re)opened on a wake and extended on
@@ -59,13 +51,43 @@ WAKE_PHRASES_DEFAULT = {'hey alfie', 'alfie'}
 # wake phrase itself, not a command — acknowledge it instead of answering it.
 WAKE_UTTERANCE_SUPPRESS_S = 3.0
 MAX_WAKE_UTTERANCE_WORDS = 2
-
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+SPEAK_VOLUME = 100
 
 
 class AgentNode(Node):
     def __init__(self):
         super().__init__('agent_node')
+
+        # --- parameters (workspace idiom: declare_parameter with defaults) ---
+        self.llm_base_url = self.declare_parameter(
+            'llm_base_url', 'http://localhost:8000/v1').value
+        model_id_fallback = self.declare_parameter(
+            'model_id', 'dist/qwen3_6-35B-A3B-q4f16_1').value
+        # Shared-with-lloyd obsidian vault; point this at your placeholder folder
+        # until the real vault is hooked up.
+        self.vault_root = self.declare_parameter('vault_root', '~/obsidian').value
+        # QMD semantic-search daemon (tobi/qmd). If it's not running, vault_search
+        # returns a clean error and the rest of the agent still works.
+        qmd_url = self.declare_parameter(
+            'qmd_url', 'http://localhost:8181/query').value
+        # Skip the cross-encoder reranker by default: qmd runs on CPU here, and
+        # the reranker (0.6B) roughly doubles query latency for a small quality
+        # gain. lex+vec results are already strong. (lloyd defaults this too.)
+        qmd_skip_rerank = bool(self.declare_parameter('qmd_skip_rerank', True).value)
+        self.max_tool_iters = int(self.declare_parameter('max_tool_iters', 4).value)
+        self.max_history_turns = int(self.declare_parameter('max_history_turns', 6).value)
+        max_tokens = int(self.declare_parameter('max_tokens', 200).value)
+        temperature = float(self.declare_parameter('temperature', 0.7).value)
+
+        # --- brain: tools, system prompt, LLM client ---
+        tools.configure(self.vault_root, qmd_url=qmd_url,
+                        qmd_skip_rerank=qmd_skip_rerank)
+        tool_specs = tools.list_tools()
+        soul = prompt_builder.load_soul(self.vault_root)
+        self.system_prompt = prompt_builder.build_system_prompt(soul, tool_specs)
+        self.llm = LLMClient(self.llm_base_url, model_id_fallback,
+                             timeout=(5, 60), temperature=temperature,
+                             max_tokens=max_tokens)
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
@@ -92,7 +114,6 @@ class AgentNode(Node):
         self._lock = threading.Lock()
         self._turn = 0
         self._history = []          # list of {"role", "content"}
-        self._model_id = None       # resolved lazily from /v1/models
 
         # Wake-gating state.
         self._listen_until = 0.0    # monotonic deadline; window open while now < it
@@ -102,7 +123,8 @@ class AgentNode(Node):
 
         self.publish_generating(False)
         self.get_logger().info(
-            'AgentNode initialized (waiting for llm/ready; say the wake word to talk).')
+            f'AgentNode initialized with {len(tool_specs)} tool(s), '
+            f'vault={self.vault_root} (waiting for llm/ready; say the wake word to talk).')
 
     # --- ROS callbacks (kept short; real work happens on worker threads) ---
 
@@ -176,8 +198,11 @@ class AgentNode(Node):
         self.publish_generating(False)
 
     def _strip_wake(self, text):
-        """Remove a leading wake phrase; return (command, had_wake). Compares
-        word-by-word, case- and punctuation-insensitive, longest phrase first."""
+        """
+        Remove a leading wake phrase; return ``(command, had_wake)``.
+
+        Compares word-by-word, case- and punctuation-insensitive, longest first.
+        """
         words = text.split()
         low = [re.sub(r'[^a-z0-9]', '', w.lower()) for w in words]
         for ph in sorted(self._wake_phrases, key=lambda p: len(p.split()), reverse=True):
@@ -197,24 +222,23 @@ class AgentNode(Node):
         with self._lock:
             return my_turn == self._turn
 
-    def _resolve_model_id(self):
-        if self._model_id:
-            return self._model_id
-        try:
-            r = requests.get(f"{LLM_BASE_URL}/models", timeout=REQUEST_TIMEOUT)
-            r.raise_for_status()
-            self._model_id = r.json()["data"][0]["id"]
-        except Exception:
-            self._model_id = MODEL_ID_FALLBACK
-        return self._model_id
-
     def _run_turn(self, text, my_turn):
         self.publish_generating(True)
+        with self._lock:
+            history = list(self._history)
         reply = None
         try:
-            reply = self._stream_llm(text, my_turn)
+            reply = harness.run_turn(
+                text, history,
+                system_prompt=self.system_prompt,
+                llm=self.llm,
+                call_tool=tools.call_tool,
+                is_current=lambda: self._is_current(my_turn),
+                logger=self.get_logger().info,
+                max_tool_iters=self.max_tool_iters,
+            )
         except Exception as e:
-            self.get_logger().error(f'LLM request failed: {e}')
+            self.get_logger().error(f'Turn failed: {e}')
 
         if not self._is_current(my_turn):
             return  # superseded by a newer turn or a barge-in
@@ -224,54 +248,13 @@ class AgentNode(Node):
             with self._lock:
                 self._history.append({"role": "user", "content": text})
                 self._history.append({"role": "assistant", "content": reply})
-                # keep only the most recent MAX_HISTORY_TURNS pairs
-                self._history = self._history[-2 * MAX_HISTORY_TURNS:]
+                # keep only the most recent max_history_turns pairs
+                self._history = self._history[-2 * self.max_history_turns:]
             self.get_logger().info(f'Reply: {reply}')
             out = SpeechRequest()
             out.text = reply
             out.volume = SPEAK_VOLUME
             self.speech_pub.publish(out)
-
-    def _stream_llm(self, text, my_turn):
-        with self._lock:
-            messages = ([{"role": "system", "content": SYSTEM_PROMPT}]
-                        + list(self._history)
-                        + [{"role": "user", "content": text}])
-        payload = {
-            "model": self._resolve_model_id(),
-            "messages": messages,
-            "stream": True,
-            "temperature": TEMPERATURE,
-            "max_tokens": MAX_TOKENS,
-        }
-        parts = []
-        with requests.post(f"{LLM_BASE_URL}/chat/completions", json=payload,
-                           stream=True, timeout=REQUEST_TIMEOUT) as r:
-            r.raise_for_status()
-            for line in r.iter_lines(decode_unicode=True):
-                if not self._is_current(my_turn):
-                    return None  # cancelled (barge-in or newer turn)
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    delta = json.loads(data)["choices"][0]["delta"]
-                except (json.JSONDecodeError, KeyError, IndexError):
-                    continue
-                piece = delta.get("content")
-                if piece:
-                    parts.append(piece)
-        return self._clean("".join(parts))
-
-    @staticmethod
-    def _clean(reply):
-        reply = _THINK_RE.sub("", reply)
-        # drop any unterminated leading think block
-        if "</think>" in reply:
-            reply = reply.split("</think>")[-1]
-        return reply.strip()
 
 
 def main(args=None):

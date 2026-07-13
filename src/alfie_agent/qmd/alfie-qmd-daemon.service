@@ -1,0 +1,17 @@
+[Unit]
+Description=Alfie QMD vault-search daemon (tobi/qmd, CUDA on Orin)
+After=network.target
+
+[Service]
+Type=simple
+User=alfie
+Group=alfie
+EnvironmentFile=/home/alfie/alfiebot_ws/src/alfie_agent/qmd/qmd.env
+WorkingDirectory=/home/alfie
+# Run the qmd CLI directly under Node 24 to avoid shebang/PATH ambiguity.
+ExecStart=/home/alfie/.local/node/bin/node /home/alfie/.bun/bin/qmd mcp --http --port 8181
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

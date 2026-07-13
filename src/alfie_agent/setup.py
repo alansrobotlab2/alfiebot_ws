@@ -11,11 +11,14 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
+    package_data={package_name: ['prompts/*.md']},
+    include_package_data=True,
     install_requires=['setuptools', 'alfie_msgs', 'requests'],
-    zip_safe=True,
+    zip_safe=False,
     maintainer='alfie',
     maintainer_email='alansrobotlab@gmail.com',
-    description='TODO: Package description',
+    description='Conversation agent: ASR-to-TTS bridge with a tool-calling brain '
+                '(obsidian vault tools) over the local MLC-LLM server.',
     license='Apache-2.0',
     #tests_require=['pytest'],
     entry_points={
