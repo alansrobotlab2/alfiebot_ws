@@ -85,9 +85,10 @@ def _render_tools(tools):
     lines = [
         "# Tools",
         "",
-        "Most questions need NO tool — just answer directly. Only call a tool when "
-        "the question is specifically about the shared vault's contents, or you're "
-        "asked to save or recall something.",
+        "Most questions need NO tool — just answer directly. But when a listed tool "
+        "fits the request, USE it rather than guessing or working it out yourself; "
+        "each tool's description says when it applies. Never tell the user you lack "
+        "a capability that a listed tool provides.",
         "",
         "To call a tool, emit exactly one tool call on its own and then stop:",
         '<tool_call>{"name": "<tool_name>", "arguments": {<json args>}}</tool_call>',

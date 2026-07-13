@@ -190,13 +190,6 @@ class WakeWordNode(Node):
 
     def _handle_scores(self, scores):
         now = time.monotonic()
-        # TEMP DIAGNOSTIC: log the peak score across all models every second so we
-        # can see what the mic audio actually produces (remove after tuning).
-        if self._debug_scores and scores:
-            _pk = max(scores.items(), key=lambda kv: float(kv[1]))
-            self.get_logger().info(
-                f'  peak {_pk[0]}={float(_pk[1]):.3f} rms={getattr(self, "_last_rms", 0.0):.0f}',
-                throttle_duration_sec=1.0)
         for key, score in scores.items():
             score = float(score)
             thr = self._thresholds.get(key, self._default_threshold)
