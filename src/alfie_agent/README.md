@@ -90,6 +90,57 @@ window + budgeted episode turns) instead of growing unbounded, and every past
 interaction is recalled either from the injected window or by semantic search.
 Writes go through the audited `vault_write` path (`memory/audit/writes.jsonl`).
 
+## Prefix caching — fast first turns (`_pin_base_prefix`)
+
+Every request carries the same ~800-token system prompt. Without help, the
+**first turn of each conversation re-prefills all of it** — measured **~2.3 s**
+TTFT cold on the Orin. The fix (validated on-device 2026-07-13) pins that prompt
+once so first turns **fork** from it and prefill only the user delta: **~0.31 s**
+(~8× faster). Resolved the engine-side problem posed in
+[`docs/mlc_prefix_cache_problem_statement.md`](../../docs/mlc_prefix_cache_problem_statement.md).
+
+**Why it's not automatic (the hybrid wall).** Qwen3.6-35B-A3B is a *hybrid*
+model — attention KV **plus** a GatedDeltaNet **recurrent** state. Pure-attention
+engines (vLLM/SGLang) reuse any prefix for free because KV pages are
+position-independent. The GDN recurrent state only exists at a sequence's *latest*
+position, so reusing an interior prefix normally means rolling that state back —
+bounded and memory-expensive. The escape hatch: the system prompt is byte-identical
+every request, so its terminal GDN state is a **constant** — capture it once and
+every request forks with ~zero rollback.
+
+**How the agent does it.** On `llm/ready`, `_pin_base_prefix` sends one
+`max_tokens=1` completion of the **base** system prompt with
+`debug_config.pinned_system_prompt=True`. MLC keeps that sequence resident (never
+recycled, never evicted); real turns fork from it at the system-prompt boundary.
+No per-turn re-warm, survives episode/`summarize()` prompt changes.
+
+**Configuration intuition** — three load-bearing settings on the serve node
+([`alfie_llm/mlc_llm_serve_node.py`](../alfie_llm/alfie_llm/mlc_llm_serve_node.py)),
+each of which silently breaks the feature if wrong:
+
+| Setting | Value | Why |
+|---|---|---|
+| `--enable-debug` | **on** | Without it the server *strips* `debug_config` from requests (a `server_context` gate), so the pin is silently dropped and every first turn re-prefills cold. This is why the pin "never worked" before and the earlier warm-parent hack existed. |
+| `max_num_sequence` | **2** | rnn_state slots = `max_num_sequence + recycling_seqs`; the pinned parent counts in **neither**, so it permanently steals one. Reserve a slot (1 live stream + 1 pin) or the engine's background loop dies with `rnn_state GetFreeSlot: sequence slot is full` and requests hang. |
+| `prefix_cache_max_num_recycling_seqs` | **0** | Do **not** hold finished turns. A held prior turn *preempts* the clean pin-fork and sends distinct first-turns down a slow reuse/rollback path — measured **~1.87 s vs ~0.31 s**. With 0, every turn forks the pin. (Follow-ups then fork the pin too and prefill the small growing history delta: ~0.3→0.5 s across several turns — fine for short voice chats.) Never `-1`: that sizes 0 KV slots and the engine reload deadlocks. |
+
+`max_history_size=16` sizes the rnn_state history ring that bounds the fork's
+rollback (the chat-template tail); 8 also works. **Pin the *base* prompt, not the
+per-episode one** — there is no unpin API, so pinning a changing prompt each
+episode would leak rnn_state slots until the engine runs out. Episodes that fold
+in a recent-memory preamble still fork the base and prefill only the (small)
+preamble.
+
+**Measured (Orin, 35B-A3B q4f16_1, exact production serve command):**
+
+| Case | TTFT |
+|---|---|
+| Cold first turn (no pin) | ~2.3 s |
+| Pinned fork — first turn | **~0.31 s** |
+| Pinned fork — flat across 15 distinct turns | ~0.31 s (no drift, no crash) |
+| Growing conversation (fork pin + history delta) | 0.30 → 0.48 s over 4 turns |
+| `recycling=1` regression (why it's 0) | ~1.87 s |
+
 ## Requirements
 
 ### Python / ROS (the node itself)

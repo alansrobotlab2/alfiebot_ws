@@ -43,12 +43,18 @@ class LLMClient:
             self._model_id = self.model_id_fallback
         return self._model_id
 
-    def stream_completion(self, messages, *, is_current, max_tokens=None):
+    def stream_completion(self, messages, *, is_current, max_tokens=None,
+                          debug_config=None):
         """
         Stream a chat completion and return the raw accumulated text.
 
         Returns ``None`` if ``is_current()`` goes false mid-stream (cancelled).
         Raises on transport/HTTP errors (the caller logs and recovers).
+
+        ``debug_config`` (dict) is forwarded to MLC's engine — e.g.
+        ``{"pinned_system_prompt": True}`` to pin a resident system-prompt parent.
+        Requires the server to run with ``--enable-debug`` or it is silently
+        dropped (see mlc_llm_serve_node).
         """
         payload = {
             "model": self.resolve_model_id(),
@@ -57,6 +63,8 @@ class LLMClient:
             "temperature": self.temperature,
             "max_tokens": max_tokens or self.max_tokens,
         }
+        if debug_config is not None:
+            payload["debug_config"] = debug_config
         parts = []
         with requests.post(f"{self.base_url}/chat/completions", json=payload,
                            stream=True, timeout=self.timeout) as r:
