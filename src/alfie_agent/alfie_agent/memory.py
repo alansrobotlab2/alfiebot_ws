@@ -57,7 +57,10 @@ def select_recent(entries, now, window_min, max_items):
 
 
 def render_preamble(chosen):
-    """Render selected recent entries into the injected second-system-message."""
+    """Render selected recent entries into the recent-memory window.
+
+    Folded into the system prompt as a trailing section by the prompt builder.
+    """
     if not chosen:
         return None
     lines = [

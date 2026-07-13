@@ -44,7 +44,7 @@ EMBEDDING_MODEL = 'embedding_model.onnx'
 DEFAULT_WAKE_MODELS = ['hey_alfie.onnx', 'alfie.onnx', 'stop.onnx']
 DEFAULT_CANCEL_KEYS = ['stop']
 # Per-model detection thresholds (live-tunable via thr_<key> params).
-DEFAULT_THRESHOLDS = {'hey_alfie': 0.35, 'alfie': 0.35, 'stop': 0.10}
+DEFAULT_THRESHOLDS = {'hey_alfie': 0.20, 'alfie': 0.25, 'stop': 0.10}
 
 # Energy-gate barge-in: wake-word matching fails during double-talk, but the AEC
 # keeps the mic quiet (~250 RMS residual) while Alfie speaks, so a sustained loud

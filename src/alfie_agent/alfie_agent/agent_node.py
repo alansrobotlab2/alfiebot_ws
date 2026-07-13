@@ -41,12 +41,14 @@ from alfie_agent import harness, memory, prompt_builder, tools
 from alfie_agent.llm_client import LLMClient
 
 # Wake-word gating: a `wake` event opens a listening window; transcripts are only
-# processed while it is open. The window is (re)opened on a wake and extended on
-# each accepted user command (which covers the reply plus a follow-up gap) — it
-# is NOT extended by Alfie's own speech, so background audio can't keep it alive
-# indefinitely. When it lapses, the wake word is required again (and the next
-# wake starts a fresh conversation).
-FOLLOWUP_WINDOW_S = 8.0
+# processed while it is open. The window is (re)opened on a wake, held open across
+# the LLM+TTS latency of a turn, and then reopened for FOLLOWUP_WINDOW_S measured
+# from the *end* of Alfie's reply — so the user always gets the full follow-up gap
+# after Alfie stops talking, regardless of how long the reply took. That reopen is
+# gated on an active episode, so a stray/background reply can't keep it alive
+# indefinitely. When it lapses, the wake word is required again (and the next wake
+# starts a fresh conversation).
+FOLLOWUP_WINDOW_S = 5.0
 WAKE_PHRASES_DEFAULT = {'hey alfie', 'alfie'}
 # A very short transcript arriving right after a wake is the (possibly mis-heard)
 # wake phrase itself, not a command — acknowledge it instead of answering it.
@@ -99,9 +101,12 @@ class AgentNode(Node):
         # --- brain: tools, system prompt, LLM client ---
         tools.configure(self.vault_root, qmd_url=qmd_url,
                         qmd_skip_rerank=qmd_skip_rerank)
-        tool_specs = tools.list_tools()
-        soul = prompt_builder.load_soul(self.vault_root)
-        self.system_prompt = prompt_builder.build_system_prompt(soul, tool_specs)
+        # Keep the soul + tool specs so the system prompt can be rebuilt per
+        # episode with the recent-memory window folded in (see on_wake).
+        self._tool_specs = tools.list_tools()
+        self._soul = prompt_builder.load_soul(self.vault_root)
+        self.system_prompt = prompt_builder.build_system_prompt(
+            self._soul, self._tool_specs)
         self.llm = LLMClient(self.llm_base_url, model_id_fallback,
                              timeout=(5, 60), temperature=temperature,
                              max_tokens=max_tokens)
@@ -132,7 +137,10 @@ class AgentNode(Node):
         self._turn = 0
         # Active context for the *live* episode only (reset on idle compaction).
         self._episode_turns = []    # list of {"role", "content"}
-        self._recent_memory = None  # recent-memory preamble, built at episode start
+        # System prompt for the live episode: the base prompt, or (on a fresh
+        # wake) the base prompt with a recent-memory window folded in. Rebuilt at
+        # episode start so the window rides inside the position-0 system message.
+        self._episode_system_prompt = self.system_prompt
         self._compacting = False    # a background compaction is in flight
         self._generating = False    # a turn is generating (mirrors the LED flag)
 
@@ -148,7 +156,7 @@ class AgentNode(Node):
 
         self.publish_generating(False)
         self.get_logger().info(
-            f'AgentNode initialized with {len(tool_specs)} tool(s), '
+            f'AgentNode initialized with {len(self._tool_specs)} tool(s), '
             f'vault={self.vault_root} (waiting for llm/ready; say the wake word to talk).')
 
     # --- ROS callbacks (kept short; real work happens on worker threads) ---
@@ -170,8 +178,9 @@ class AgentNode(Node):
         self._listen_until = now + FOLLOWUP_WINDOW_S
         self._wake_time = now
         if fresh:
-            # New episode: reset active context and inject a window of recent
-            # memory (summaries of interactions from the past few minutes).
+            # New episode: reset active context and fold a window of recent
+            # memory (summaries of interactions from the past few minutes) into
+            # the episode's system prompt.
             preamble = None
             try:
                 preamble = memory.recent_preamble(
@@ -179,9 +188,11 @@ class AgentNode(Node):
                     max_items=self.recent_max_items)
             except Exception as e:  # memory is best-effort; never block a wake
                 self.get_logger().warn(f'recent memory unavailable: {e}')
+            episode_prompt = prompt_builder.build_system_prompt(
+                self._soul, self._tool_specs, recent_memory=preamble)
             with self._lock:
                 self._episode_turns = []
-                self._recent_memory = preamble
+                self._episode_system_prompt = episode_prompt
             self.get_logger().info(
                 f"Wake '{phrase}': new conversation, listening"
                 f"{' (recent memory loaded)' if preamble else ''}.")
@@ -189,9 +200,20 @@ class AgentNode(Node):
             self.get_logger().info(f"Wake '{phrase}': window extended.")
 
     def on_speaking(self, msg):
-        # Track TTS state only. The window is deliberately NOT extended here — if
-        # it were, Alfie answering background audio would keep it open forever.
+        was_speaking = self._speaking
         self._speaking = msg.is_speaking
+        # When Alfie finishes a reply, reopen the follow-up window so the user gets
+        # the full FOLLOWUP_WINDOW_S to respond hands-free — measured from the end
+        # of the reply, not from when the command was heard (a long reply would
+        # otherwise eat the gap). Gated on an active episode so a stray TTS with no
+        # live conversation can't hold the window open on background audio.
+        if was_speaking and not msg.is_speaking:
+            with self._lock:
+                active = bool(self._episode_turns)
+            if active:
+                self._listen_until = time.monotonic() + FOLLOWUP_WINDOW_S
+                self.get_logger().info(
+                    f'Reply done; follow-up window open ({FOLLOWUP_WINDOW_S:.0f}s).')
 
     def on_asrresult(self, msg):
         text = (msg.asrresult or '').strip()
@@ -264,18 +286,17 @@ class AgentNode(Node):
         self.publish_generating(True)
         with self._lock:
             history = list(self._episode_turns)
-            recent_memory = self._recent_memory
+            system_prompt = self._episode_system_prompt
         reply = None
         try:
             reply = harness.run_turn(
                 text, history,
-                system_prompt=self.system_prompt,
+                system_prompt=system_prompt,
                 llm=self.llm,
                 call_tool=tools.call_tool,
                 is_current=lambda: self._is_current(my_turn),
                 logger=self.get_logger().info,
                 max_tool_iters=self.max_tool_iters,
-                recent_memory=recent_memory,
             )
         except Exception as e:
             self.get_logger().error(f'Turn failed: {e}')
@@ -318,7 +339,7 @@ class AgentNode(Node):
                 return                      # a turn/TTS/compaction is in flight
             turns = self._episode_turns
             self._episode_turns = []        # hard reset of active context
-            self._recent_memory = None
+            self._episode_system_prompt = self.system_prompt
             self._compacting = True
         self.get_logger().info(
             f'Episode idle; compacting {len(turns) // 2} turn(s) into memory.')

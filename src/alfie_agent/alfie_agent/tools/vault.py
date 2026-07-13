@@ -145,9 +145,8 @@ _TOOLS = [
     {
         "name": "vault_read",
         "description": (
-            "Read a note from the obsidian vault by its path relative to the "
-            "vault root (e.g. 'notes/todo.md'). Optionally pass start_line and "
-            "num_lines to read a slice."
+            "Read a note from the vault by its vault-relative path (e.g. "
+            "'notes/todo.md'); start_line/num_lines read just a slice."
         ),
         "parameters": {
             "type": "object",
@@ -165,9 +164,8 @@ _TOOLS = [
     {
         "name": "vault_write",
         "description": (
-            "Create or overwrite a note in the obsidian vault. Give the path "
-            "relative to the vault root and the full file content. Parent "
-            "folders are created as needed."
+            "Create or overwrite a note at a vault-relative path with the full "
+            "file content; parent folders are created as needed."
         ),
         "parameters": {
             "type": "object",

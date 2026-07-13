@@ -98,10 +98,8 @@ _TOOLS = [
     {
         "name": "vault_search",
         "description": (
-            "Search the obsidian vault by meaning or keyword to find relevant "
-            "notes when you don't know the exact file path. Returns matching "
-            "files with a snippet and score; follow up with vault_read to get "
-            "the full note."
+            "Search the vault by meaning or keyword when you don't know the "
+            "exact path; returns files with snippets. Follow up with vault_read."
         ),
         "parameters": {
             "type": "object",

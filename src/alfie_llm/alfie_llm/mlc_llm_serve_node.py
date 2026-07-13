@@ -46,6 +46,16 @@ class MLCLLMServeNode(Node):
             self.declare_parameter('max_history_size', 4).value)
         self.gpu_memory_utilization = float(
             self.declare_parameter('gpu_memory_utilization', 0.5).value)
+        # NOTE on prefix caching (investigated 2026-07-12): the first turn of each
+        # conversation re-prefills the whole ~700-token system prompt (~1.9s),
+        # because `--mode interactive` reuses a cached sequence only when it is a
+        # full prefix of the next request — it will NOT fork the shared system-
+        # prompt head for a different user message. `prefix_cache_max_num_recycling_seqs`
+        # only adds exact-repeat reuse (no help for real first turns), so it's not
+        # set here. Do NOT pass -1 ("infinite"): the KV cache sizes
+        # `max_num_sequence + N` slots (mlc cpp/serve/model.cc), so -1 -> 0 slots
+        # and the native engine reload deadlocks (server never binds :8000).
+        # In-conversation follow-ups are already fast (~0.4s) via continuation reuse.
 
         # Latched so a consumer that subscribes after the model is up still sees it.
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,

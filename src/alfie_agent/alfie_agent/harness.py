@@ -173,7 +173,7 @@ def summarize(turns, llm, *, max_tokens=256):
 
 
 def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
-             logger=None, max_tool_iters=4, max_tokens=None, recent_memory=None):
+             logger=None, max_tool_iters=4, max_tokens=None):
     """
     Run one conversational turn, resolving any tool calls.
 
@@ -181,14 +181,11 @@ def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
     ``history`` is a list of prior {role, content} turns and is not mutated.
     ``call_tool(name, arguments) -> dict`` executes a tool.
 
-    ``recent_memory``, if given, is injected as a second ``system`` message
-    (after the static, prefix-cached system prompt) carrying the recent-memory
-    window — so volatile memory never invalidates the cached prefix.
+    The recent-memory window (if any) is folded into ``system_prompt`` by the
+    prompt builder — MLC-LLM only accepts a system prompt at position 0, so it
+    cannot ride in as a second ``system`` message.
     """
-    system_msgs = [{"role": "system", "content": system_prompt}]
-    if recent_memory:
-        system_msgs.append({"role": "system", "content": recent_memory})
-    messages = (system_msgs
+    messages = ([{"role": "system", "content": system_prompt}]
                 + list(history)
                 + [{"role": "user", "content": user_text}])
 
