@@ -32,9 +32,8 @@ _TOOLS = [
     {
         "name": "current_datetime",
         "description": (
-            "Get the current date and time from the robot's clock. Use this for "
-            "any question about the current date, day of week, or time — never "
-            "guess it. Local time by default; pass utc=true for UTC."
+            "Current date, day, and local time from the robot's clock — use for "
+            "any date/day/time question, never guess. utc=true for UTC."
         ),
         "parameters": {
             "type": "object",

@@ -359,6 +359,32 @@ class AgentNode(Node):
         finally:
             with self._lock:
                 self._compacting = False
+        # Re-warm the agent's system-prompt prefix. The summarize() call above ran
+        # with a *different* system prompt and, since MLC caches only the last
+        # sequence, evicted the agent prefix — so the next wake's first reply would
+        # otherwise pay a full cold prefill of the ~550-token prompt. A 1-token
+        # throwaway completion on the real prompt makes it the cached sequence
+        # again. Runs on idle (GPU is free) and is best-effort.
+        self._warm_prefix()
+
+    def _warm_prefix(self):
+        """Prime MLC's prefix cache with the base system prompt (best-effort).
+
+        Bails immediately if a new turn has started (a live turn will warm the
+        cache itself, and we don't want the throwaway competing for the GPU).
+        """
+        if self._generating:
+            return
+        try:
+            self.llm.stream_completion(
+                [{"role": "system", "content": self.system_prompt},
+                 {"role": "user", "content": "hi"}],
+                is_current=lambda: not self._generating,
+                max_tokens=1,
+            )
+            self.get_logger().info('Prefix cache re-warmed.')
+        except Exception as e:
+            self.get_logger().warn(f'prefix warm failed: {e}')
 
 
 def main(args=None):

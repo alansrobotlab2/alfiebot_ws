@@ -101,11 +101,9 @@ _TOOLS = [
     {
         "name": "calculate",
         "description": (
-            "Evaluate a Python-syntax math expression and return the result. Use "
-            "this for any arithmetic instead of computing it yourself. Supports "
-            "+ - * / // % **, parentheses, comparisons, math functions (sqrt, sin, "
-            "log, factorial, ...) and constants (pi, e). Example: '(3 + 4) * 2' or "
-            "'sqrt(2) * sin(pi / 4)'."
+            "Evaluate a Python-syntax math expression (e.g. 'sqrt(2)*3', "
+            "'factorial(5)'). Use for any arithmetic instead of computing it "
+            "yourself."
         ),
         "parameters": {
             "type": "object",

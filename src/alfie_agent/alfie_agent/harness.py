@@ -18,6 +18,7 @@ speaking.
 """
 import json
 import re
+import time
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -189,16 +190,28 @@ def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
                 + list(history)
                 + [{"role": "user", "content": user_text}])
 
-    for _ in range(max_tool_iters):
+    turn_t0 = time.monotonic()
+    for gen in range(max_tool_iters):
         if not is_current():
             return None
+        t0 = time.monotonic()
+        prompt_tok = sum(approx_tokens(m.get("content", "")) for m in messages)
         raw = llm.stream_completion(messages, is_current=is_current,
                                     max_tokens=max_tokens)
         if raw is None:
             return None  # cancelled mid-stream
+        if logger:
+            dt = time.monotonic() - t0
+            logger(f"gen {gen}: {dt:.2f}s (prompt ~{prompt_tok} tok, "
+                   f"out ~{approx_tokens(raw)} tok)")
 
         calls = parse_tool_calls(raw)
         if not calls:
+            if logger:
+                logger(f"turn done in {time.monotonic() - turn_t0:.2f}s "
+                       f"({gen + 1} generation(s), no tool)" if gen == 0 else
+                       f"turn done in {time.monotonic() - turn_t0:.2f}s "
+                       f"({gen + 1} generation(s))")
             return strip_markup(raw)
 
         # Record the model's tool-call turn, then run the tools and feed the
@@ -232,4 +245,7 @@ def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
                                 max_tokens=max_tokens)
     if raw is None:
         return None
+    if logger:
+        logger(f"turn done in {time.monotonic() - turn_t0:.2f}s "
+               f"(hit max_tool_iters={max_tool_iters})")
     return strip_markup(raw)
