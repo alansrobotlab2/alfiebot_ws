@@ -28,6 +28,7 @@ Design notes:
 import re
 import threading
 import time
+from datetime import datetime, timezone
 
 import rclpy
 from rclpy.node import Node
@@ -36,7 +37,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Bool, Empty, String
 from alfie_msgs.msg import ASRResult, SpeechRequest, Speaking
 
-from alfie_agent import harness, prompt_builder, tools
+from alfie_agent import harness, memory, prompt_builder, tools
 from alfie_agent.llm_client import LLMClient
 
 # Wake-word gating: a `wake` event opens a listening window; transcripts are only
@@ -75,9 +76,25 @@ class AgentNode(Node):
         # gain. lex+vec results are already strong. (lloyd defaults this too.)
         qmd_skip_rerank = bool(self.declare_parameter('qmd_skip_rerank', True).value)
         self.max_tool_iters = int(self.declare_parameter('max_tool_iters', 4).value)
-        self.max_history_turns = int(self.declare_parameter('max_history_turns', 6).value)
+        # Kept declared for launch-file compatibility; superseded by the
+        # token-budget trim below (active depth is now bounded by tokens, not a
+        # fixed pair count).
+        self.declare_parameter('max_history_turns', 6)
         max_tokens = int(self.declare_parameter('max_tokens', 200).value)
         temperature = float(self.declare_parameter('temperature', 0.7).value)
+
+        # --- context management (stateless episodes + recent-memory injection) ---
+        # Active depth is bounded within a live episode by a token budget; on idle
+        # the episode is compacted into the memory subsystem and reset. A fresh
+        # wake injects a window of recent-interaction summaries.
+        self.active_token_budget = int(
+            self.declare_parameter('active_token_budget', 2000).value)
+        self.recent_window_min = int(
+            self.declare_parameter('recent_window_min', 30).value)
+        self.recent_max_items = int(
+            self.declare_parameter('recent_max_items', 5).value)
+        self.compaction_enabled = bool(
+            self.declare_parameter('compaction_enabled', True).value)
 
         # --- brain: tools, system prompt, LLM client ---
         tools.configure(self.vault_root, qmd_url=qmd_url,
@@ -113,13 +130,21 @@ class AgentNode(Node):
 
         self._lock = threading.Lock()
         self._turn = 0
-        self._history = []          # list of {"role", "content"}
+        # Active context for the *live* episode only (reset on idle compaction).
+        self._episode_turns = []    # list of {"role", "content"}
+        self._recent_memory = None  # recent-memory preamble, built at episode start
+        self._compacting = False    # a background compaction is in flight
+        self._generating = False    # a turn is generating (mirrors the LED flag)
 
         # Wake-gating state.
         self._listen_until = 0.0    # monotonic deadline; window open while now < it
         self._wake_time = 0.0       # monotonic time of the last wake event
         self._speaking = False
         self._wake_phrases = set(WAKE_PHRASES_DEFAULT)
+
+        # Idle detector: when the follow-up window lapses with un-compacted turns,
+        # summarize the episode into memory (GPU is free then) and reset context.
+        self.create_timer(2.0, self._on_idle_tick)
 
         self.publish_generating(False)
         self.get_logger().info(
@@ -145,9 +170,21 @@ class AgentNode(Node):
         self._listen_until = now + FOLLOWUP_WINDOW_S
         self._wake_time = now
         if fresh:
+            # New episode: reset active context and inject a window of recent
+            # memory (summaries of interactions from the past few minutes).
+            preamble = None
+            try:
+                preamble = memory.recent_preamble(
+                    window_min=self.recent_window_min,
+                    max_items=self.recent_max_items)
+            except Exception as e:  # memory is best-effort; never block a wake
+                self.get_logger().warn(f'recent memory unavailable: {e}')
             with self._lock:
-                self._history = []
-            self.get_logger().info(f"Wake '{phrase}': new conversation, listening.")
+                self._episode_turns = []
+                self._recent_memory = preamble
+            self.get_logger().info(
+                f"Wake '{phrase}': new conversation, listening"
+                f"{' (recent memory loaded)' if preamble else ''}.")
         else:
             self.get_logger().info(f"Wake '{phrase}': window extended.")
 
@@ -214,6 +251,7 @@ class AgentNode(Node):
     # --- helpers ---
 
     def publish_generating(self, value):
+        self._generating = bool(value)
         m = Bool()
         m.data = bool(value)
         self.generating_pub.publish(m)
@@ -225,7 +263,8 @@ class AgentNode(Node):
     def _run_turn(self, text, my_turn):
         self.publish_generating(True)
         with self._lock:
-            history = list(self._history)
+            history = list(self._episode_turns)
+            recent_memory = self._recent_memory
         reply = None
         try:
             reply = harness.run_turn(
@@ -236,6 +275,7 @@ class AgentNode(Node):
                 is_current=lambda: self._is_current(my_turn),
                 logger=self.get_logger().info,
                 max_tool_iters=self.max_tool_iters,
+                recent_memory=recent_memory,
             )
         except Exception as e:
             self.get_logger().error(f'Turn failed: {e}')
@@ -246,15 +286,58 @@ class AgentNode(Node):
         self.publish_generating(False)
         if reply:
             with self._lock:
-                self._history.append({"role": "user", "content": text})
-                self._history.append({"role": "assistant", "content": reply})
-                # keep only the most recent max_history_turns pairs
-                self._history = self._history[-2 * self.max_history_turns:]
+                self._episode_turns.append({"role": "user", "content": text})
+                self._episode_turns.append({"role": "assistant", "content": reply})
+                # Bound active depth by tokens, not a fixed pair count.
+                self._episode_turns = harness.budget_trim(
+                    self._episode_turns, self.active_token_budget)
             self.get_logger().info(f'Reply: {reply}')
             out = SpeechRequest()
             out.text = reply
             out.volume = SPEAK_VOLUME
             self.speech_pub.publish(out)
+
+    # --- idle compaction: episode -> memory subsystem ---
+
+    def _on_idle_tick(self):
+        """
+        Compact the episode into memory once the conversation goes idle.
+
+        Fires when the follow-up window has lapsed with un-compacted turns: hands
+        the episode off for background summarization and resets active context.
+        """
+        if not self.compaction_enabled:
+            return
+        now = time.monotonic()
+        with self._lock:
+            if now < self._listen_until:
+                return                      # window still open
+            if not self._episode_turns:
+                return                      # nothing to compact
+            if self._compacting or self._generating or self._speaking:
+                return                      # a turn/TTS/compaction is in flight
+            turns = self._episode_turns
+            self._episode_turns = []        # hard reset of active context
+            self._recent_memory = None
+            self._compacting = True
+        self.get_logger().info(
+            f'Episode idle; compacting {len(turns) // 2} turn(s) into memory.')
+        threading.Thread(target=self._compact, args=(turns,), daemon=True).start()
+
+    def _compact(self, turns):
+        try:
+            res = memory.record_episode(
+                turns,
+                summarize_fn=lambda t: harness.summarize(t, self.llm),
+                now=datetime.now(timezone.utc),
+            )
+            if res:
+                self.get_logger().info(f"Stored memory: {res['summary']}")
+        except Exception as e:
+            self.get_logger().error(f'Compaction failed: {e}')
+        finally:
+            with self._lock:
+                self._compacting = False
 
 
 def main(args=None):

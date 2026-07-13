@@ -57,12 +57,21 @@ def test_collection_prefix_stripped_from_paths():
     assert out["results"][0]["file"] == "notes/a.md"
 
 
-def test_skip_rerank_flag():
+def test_skip_rerank_sends_rerank_false():
+    # qmd's REST /query reads `rerank` (boolean), NOT `skipRerank`.
     qmd_search.configure("http://localhost:8181/query", skip_rerank=True)
     with mock.patch.object(qmd_search.requests, "post",
                            return_value=_fake_response({"results": []})) as post:
         qmd_search.call_tool("vault_search", {"query": "q"})
-    assert post.call_args.kwargs["json"].get("skipRerank") is True
+    assert post.call_args.kwargs["json"].get("rerank") is False
+
+
+def test_rerank_enabled_sends_rerank_true():
+    qmd_search.configure("http://localhost:8181/query", skip_rerank=False)
+    with mock.patch.object(qmd_search.requests, "post",
+                           return_value=_fake_response({"results": []})) as post:
+        qmd_search.call_tool("vault_search", {"query": "q"})
+    assert post.call_args.kwargs["json"].get("rerank") is True
 
 
 def test_daemon_down_returns_clean_error():

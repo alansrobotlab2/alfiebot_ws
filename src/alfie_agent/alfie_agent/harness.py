@@ -101,16 +101,94 @@ def _tool_response_turn(pairs):
     return {"role": "user", "content": "\n".join(blocks)}
 
 
+def approx_tokens(text):
+    """Cheap token estimate (~4 chars/token) — no tokenizer needed on-device."""
+    return max(1, len(text or "") // 4)
+
+
+def budget_trim(turns, max_tokens):
+    """
+    Drop the oldest turn-pairs until ``turns`` fits ``max_tokens`` (approx).
+
+    Turns are appended as (user, assistant) pairs, so we drop from the front two
+    at a time to keep roles paired and always retain at least the last pair.
+    Returns a new list; the input is not mutated.
+    """
+    turns = list(turns)
+    total = sum(approx_tokens(t.get("content", "")) for t in turns)
+    while total > max_tokens and len(turns) > 2:
+        dropped = turns[:2]
+        turns = turns[2:]
+        total -= sum(approx_tokens(t.get("content", "")) for t in dropped)
+    return turns
+
+
+# --- episode summarisation (idle compaction; see agent_node) ------------------
+
+_SUMMARIZER_SYS = (
+    "You compress a short spoken conversation between a user and Alfie (a desktop "
+    "robot) into durable memory. Reply with ONLY a JSON object and nothing else: "
+    '{"summary": a one to three sentence third-person summary of what happened '
+    'and what the user wanted, "facts": a JSON array of durable facts worth '
+    "remembering about the user or their world (names, preferences, ongoing "
+    "tasks) — use [] if there are none}. Do not include any other text. /no_think"
+)
+_SUMMARIZER_INSTR = "Summarize the conversation above as the JSON object described."
+
+
+def parse_summary(raw):
+    """Parse the summarizer's reply into ``{"summary", "facts"}`` (tolerant)."""
+    text = strip_markup(raw or "")
+    obj = _loads_tolerant(text)
+    if isinstance(obj, dict) and "summary" in obj:
+        facts = obj.get("facts", [])
+        if not isinstance(facts, list):
+            facts = []
+        return {"summary": str(obj.get("summary") or "").strip(),
+                "facts": [str(f).strip() for f in facts if str(f).strip()]}
+    # Fallback: no parseable JSON — keep the plain text as the summary.
+    return {"summary": text.strip()[:400], "facts": []}
+
+
+def summarize(turns, llm, *, max_tokens=256):
+    """
+    Summarize an episode's turns into ``{"summary", "facts"}`` via the LLM.
+
+    Runs off the conversation critical path (idle compaction). Returns an empty
+    summary if the call is cancelled or yields nothing.
+    """
+    convo = "\n".join(
+        f"{'User' if t.get('role') == 'user' else 'Alfie'}: {t.get('content', '')}"
+        for t in turns
+    )
+    messages = [
+        {"role": "system", "content": _SUMMARIZER_SYS},
+        {"role": "user", "content": convo + "\n\n" + _SUMMARIZER_INSTR},
+    ]
+    raw = llm.stream_completion(messages, is_current=lambda: True,
+                                max_tokens=max_tokens)
+    if raw is None:
+        return {"summary": "", "facts": []}
+    return parse_summary(raw)
+
+
 def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
-             logger=None, max_tool_iters=4, max_tokens=None):
+             logger=None, max_tool_iters=4, max_tokens=None, recent_memory=None):
     """
     Run one conversational turn, resolving any tool calls.
 
     Returns the spoken reply text, or ``None`` if the turn was cancelled.
     ``history`` is a list of prior {role, content} turns and is not mutated.
     ``call_tool(name, arguments) -> dict`` executes a tool.
+
+    ``recent_memory``, if given, is injected as a second ``system`` message
+    (after the static, prefix-cached system prompt) carrying the recent-memory
+    window — so volatile memory never invalidates the cached prefix.
     """
-    messages = ([{"role": "system", "content": system_prompt}]
+    system_msgs = [{"role": "system", "content": system_prompt}]
+    if recent_memory:
+        system_msgs.append({"role": "system", "content": recent_memory})
+    messages = (system_msgs
                 + list(history)
                 + [{"role": "user", "content": user_text}])
 

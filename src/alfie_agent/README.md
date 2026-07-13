@@ -11,9 +11,10 @@ agent.
 
 ```
 asrresult ─▶ agent_node ─▶ harness.run_turn ──▶ MLC-LLM (localhost:8000)  ← streams <tool_call> blocks
-                │                   │
-                │                   └─▶ tools/  ── vault_read / vault_write (file I/O)
-                │                              └── vault_search ──▶ QMD daemon (localhost:8181/query)
+                │  ▲                │
+                │  │(recent memory) └─▶ tools/  ── vault_read / vault_write (file I/O)
+                │  │                            └── vault_search ──▶ QMD daemon (localhost:8181/query)
+                │  └─ memory.py ◀── idle: summarize episode ▶ memory/episodes/*.md + recent.jsonl
                 └─▶ speechrequest (TTS),  generating (thinking LED)
 ```
 
@@ -27,6 +28,7 @@ asrresult ─▶ agent_node ─▶ harness.run_turn ──▶ MLC-LLM (localhost
   + SOUL personality + tool protocol. Loads `SOUL.md` from the vault
   (`<vault_root>/alfie/SOUL.md`) if present, else the bundled
   `prompts/SOUL.default.md`.
+- **`memory.py`** — the memory subsystem (context management; see below).
 - **`tools/`** — in-process tool modules behind lloyd's `list_tools()` /
   `call_tool()` interface (so they can be lifted behind an MCP server later):
   - `vault.py` — `vault_read`, `vault_write` (path-escape-guarded, audited).
@@ -54,8 +56,39 @@ asrresult ─▶ agent_node ─▶ harness.run_turn ──▶ MLC-LLM (localhost
 | `qmd_url` | `http://localhost:8181/query` | QMD search daemon |
 | `qmd_skip_rerank` | `true` | skip the cross-encoder reranker (unneeded in agent use; much faster on CPU) |
 | `max_tool_iters` | `4` | max tool round-trips per turn |
-| `max_history_turns` | `6` | rolling conversation history |
+| `max_history_turns` | `6` | **deprecated** — declared for launch compat; superseded by `active_token_budget` |
+| `active_token_budget` | `2000` | approx-token cap on the live episode's raw turns |
+| `recent_window_min` | `30` | how far back the injected recent-memory window reaches (minutes) |
+| `recent_max_items` | `5` | max recent-interaction summaries injected at episode start |
+| `compaction_enabled` | `true` | write episode summaries into memory on idle |
 | `max_tokens` / `temperature` | `200` / `0.7` | generation |
+
+## Context management & memory
+
+Alfie has no "new chat" button, so context is managed automatically as
+**stateless episodes over an actively-managed memory subsystem** (`memory.py`):
+
+- **Episode = one wake-initiated conversation.** Raw turns accumulate only within
+  the live episode, bounded by `active_token_budget` (approx-token trim, oldest
+  pairs dropped first — `harness.budget_trim`). There is no cross-episode raw
+  history.
+- **Idle compaction (hard reset + memory).** When the follow-up window lapses with
+  un-compacted turns, an idle timer hands the episode to a background thread that
+  summarizes it (one LLM call, run while the GPU is otherwise free) and then
+  clears active context. The summary + any durable facts are written to:
+  - `<vault>/memory/episodes/<ts>.md` — a permanent, **QMD-indexed** note
+    (reachable later via `vault_search`);
+  - `<vault>/memory/recent.jsonl` — the rolling working-memory log.
+- **Recent-memory injection.** A fresh wake reads a time+size-windowed view of
+  `recent.jsonl` (`recent_window_min` / `recent_max_items`) and injects it as a
+  **second `system` message**, *after* the static system prompt — so the prefix
+  cache for the (volatile-free) system prompt is never invalidated.
+- **Deeper recall stays on-demand** via the existing `vault_search` tool.
+
+Net effect: per-prefill active depth stays flat (~static prompt + ≤1 KB recent
+window + budgeted episode turns) instead of growing unbounded, and every past
+interaction is recalled either from the injected window or by semantic search.
+Writes go through the audited `vault_write` path (`memory/audit/writes.jsonl`).
 
 ## Requirements
 
@@ -94,25 +127,28 @@ prefix so the path lines up with `vault_read`.)
 | build tools | cmake 3.22, gcc/g++, CUDA 12.6 | present; used for the (now-unused) CUDA compile |
 | inotify-tools | 3.22 (apt) | for the reindex watcher |
 
-#### CPU-only (why not GPU)
-qmd runs **entirely on CPU** (`QMD_LLAMA_GPU=false`, `QMD_FORCE_CPU=1`) for both
-the daemon and the watcher. This is deliberate, not a shortcut:
+#### Performance: CPU, rerank OFF (the load-bearing knob)
+qmd runs **entirely on CPU** (`QMD_LLAMA_GPU=false`, `QMD_FORCE_CPU=1`) and hits
+**~121 ms** per novel query (embeddinggemma-300M, lex+vec, warm; ~2 s cold model
+load once per daemon start). Quality is strong — the correct note ranks #1 on
+semantic queries with no lexical overlap.
 
-- **GPU is blocked by the resident 35B MLC model.** ggml-cuda's VMM pooled
-  allocator reserves a fixed **32 GB of GPU virtual address space**
-  (`CUDA_POOL_VMM_MAX_SIZE = 1<<35`) on first allocation. With MLC occupying the
-  GPU, `cuMemAddressReserve` for that 32 GB VA range fails — so *any* qmd process
-  (daemon or embed) crashes at model load with "CUDA error: out of memory". This
-  is a **virtual-address reservation** failure, not a RAM shortage (~12 GB is
-  free; CUDA confirms it). It happens even for a single qmd GPU process with
-  nothing else but MLC on the GPU.
-- **CPU is also the better choice here.** The models are small (300M / 0.6B /
-  1.7B) and fast on the 12-core CPU, and running them on CPU keeps them from
-  contending with the 35B for GPU compute during a conversation.
-- **To force GPU anyway** (not recommended): shrink `CUDA_POOL_VMM_MAX_SIZE` in
-  `.../node-llama-cpp/llama/llama.cpp/ggml/src/ggml-cuda/ggml-cuda.cu` (e.g.
-  `1<<32` = 4 GB) and rebuild node-llama-cpp (`source build`). Untested; qmd would
-  then contend with the 35B on the GPU.
+- **The reranker must be disabled, and via the right field.** qmd's REST
+  `/query` reads a boolean **`rerank`** — it *silently ignores* `skipRerank`.
+  With rerank on, a 0.6B cross-encoder runs on every query → **~18 s on CPU**.
+  `tools/qmd_search.py` sends `"rerank": false`; the `qmd_skip_rerank` ROS param
+  (default `true`) controls it. This one field is the entire difference between
+  18 s and 121 ms — it is not the embedding model or the GPU.
+- **GPU was explored and rejected.** It's blocked by the resident 35B: ggml-cuda's
+  VMM pool reserves 32 GB of GPU *virtual address space* which `cuMemAddressReserve`
+  can't satisfy while MLC holds the GPU. Even patched to use the legacy pool
+  (`ggml-cuda.cu new_pool_for_device`, done in the local build), qmd then crashes
+  intermittently in cuBLAS `mul_mat` under memory contention with MLC. Moot: CPU
+  already beats the latency target, so GPU is unused. (The patched CUDA build is
+  inert while `QMD_FORCE_CPU=1`.)
+- A smaller embedder (bge-small-en-v1.5, 33M) was also tried: same ~30 ms once
+  rerank is off, but weaker ranking (qmd feeds it embeddinggemma's task-prefix),
+  so embeddinggemma-300M is kept.
 
 #### Offline
 All three models are cached under `~/.cache/qmd/models`; the daemon downloads
@@ -168,6 +204,10 @@ The unit tests are pure Python (no ROS/LLM/QMD needed); the harness/LLM/QMD are
 verified live against the running servers.
 
 ## Deferred (not in this iteration)
-Facts/knowledge-graph memory, `vault_recall` (graph-expanded search), skills,
-autonomy/workers, session persistence + compaction, discord/email, inner voice.
-The tool-module interface is kept MCP-shaped so these can be added incrementally.
+Session persistence + compaction landed as Phase 1 (see *Context management &
+memory* above). Still deferred: the **Phase 2** memory work — a curated
+`facts.md` profile injected each session, recent-buffer pruning/consolidation,
+daily digests, an optional `memory_recall` tool, and first-utterance auto-retrieval
+— plus a knowledge-graph / `vault_recall` (graph-expanded search), skills,
+autonomy/workers, discord/email, and inner voice. The tool-module interface is
+kept MCP-shaped so these can be added incrementally.

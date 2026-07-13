@@ -47,9 +47,12 @@ def _vault_search(params):
         ],
         "limit": limit,
         "collections": collections,
+        # qmd's REST /query reads the boolean `rerank` field (NOT `skipRerank`,
+        # which it silently ignores). The reranker is a 0.6B cross-encoder run per
+        # query — ~18 s on CPU — so leaving it on tanks latency. Off by default
+        # (unneeded in agent use); this is the single biggest latency lever.
+        "rerank": not _SKIP_RERANK,
     }
-    if _SKIP_RERANK:
-        payload["skipRerank"] = True
 
     try:
         r = requests.post(_QMD_URL, json=payload, timeout=_TIMEOUT)

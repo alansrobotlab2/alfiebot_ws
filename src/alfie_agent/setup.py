@@ -20,7 +20,7 @@ setup(
     description='Conversation agent: ASR-to-TTS bridge with a tool-calling brain '
                 '(obsidian vault tools) over the local MLC-LLM server.',
     license='Apache-2.0',
-    #tests_require=['pytest'],
+    # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'agent_node = alfie_agent.agent_node:main',
