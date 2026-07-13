@@ -184,6 +184,10 @@ class AgentNode(Node):
         self._llm_ready = bool(msg.data)
         if self._llm_ready and not was_ready:
             self.get_logger().info('LLM is ready; waiting for wake word.')
+            # Prime a short-tailed system-prompt parent so the FIRST conversation's
+            # first turn can fork from it (~0.3s) instead of a full cold prefill
+            # (~2.1s). Best-effort, off-thread so we never block the callback.
+            threading.Thread(target=self._warm_prefix, daemon=True).start()
         elif not self._llm_ready and was_ready:
             self.get_logger().warn('LLM went not-ready; pausing.')
 
@@ -374,6 +378,15 @@ class AgentNode(Node):
             out.volume = SPEAK_VOLUME
             self.speech_pub.publish(out)
 
+        # Re-warm so the NEXT first turn has a resident short-tailed parent to fork
+        # from: interactive mode keeps only one prefix-cache slot, so this turn just
+        # evicted the previous warm. Runs off-thread while TTS speaks (GPU is free);
+        # _warm_prefix bails if a new turn has already started. Also covers the
+        # continuation break after a tool turn (the next turn forks the system prompt
+        # instead of re-prefilling from a diverged history).
+        if self._is_current(my_turn):
+            threading.Thread(target=self._warm_prefix, daemon=True).start()
+
     # --- idle compaction: episode -> memory subsystem ---
 
     def _on_idle_tick(self):
@@ -415,30 +428,44 @@ class AgentNode(Node):
         finally:
             with self._lock:
                 self._compacting = False
-        # Re-warm the agent's system-prompt prefix. The summarize() call above ran
-        # with a *different* system prompt and, since MLC caches only the last
-        # sequence, evicted the agent prefix — so the next wake's first reply would
-        # otherwise pay a full cold prefill of the ~550-token prompt. A 1-token
-        # throwaway completion on the real prompt makes it the cached sequence
-        # again. Runs on idle (GPU is free) and is best-effort.
+        # Re-warm the system-prompt parent. The summarize() call above ran with a
+        # *different* system prompt, so the resident recycled sequence no longer
+        # shares our system prefix. Re-warming makes [system,'hi',<1tok>] the resident
+        # parent again so the next wake's first turn forks from it (see _warm_prefix).
+        # Runs on idle (GPU is free) and is best-effort.
         self._warm_prefix()
 
     def _warm_prefix(self):
-        """Prime MLC's prefix cache with the base system prompt (best-effort).
+        """Keep a short-tailed system-prompt parent resident for fast first turns.
 
-        Bails immediately if a new turn has started (a live turn will warm the
-        cache itself, and we don't want the throwaway competing for the GPU).
+        A 1-token completion on ``[episode_prompt, 'hi']`` leaves a recycled sequence
+        ``[episode_prompt, 'hi', <1 tok>]`` in the engine's prefix cache. Because the
+        model is hybrid (GDN), a real first turn can only FORK from this parent's
+        interior system-prompt boundary when the divergent tail (~13 tokens here) fits
+        the rnn_state history window (``max_history_size`` on the serve node) — so this
+        warm is what turns a ~2.1s cold prefill into a ~0.3-0.6s fork.
+
+        We warm the *episode* system prompt (the base prompt plus the folded-in
+        recent-memory window), so the fork reuses the whole system block a real turn
+        will send, not just the base slice. Called after each turn (interactive mode
+        keeps only one prefix-cache slot, so every turn evicts the warm parent), on
+        idle compaction, and on startup. Without a resident warm parent the first turn
+        falls back to a full prefill (correct, just slower). Bails if a turn is live —
+        that turn warms the cache itself and we don't want the throwaway competing for
+        the GPU.
         """
         if self._generating:
             return
+        with self._lock:
+            system_prompt = self._episode_system_prompt
         try:
             self.llm.stream_completion(
-                [{"role": "system", "content": self.system_prompt},
+                [{"role": "system", "content": system_prompt},
                  {"role": "user", "content": "hi"}],
                 is_current=lambda: not self._generating,
                 max_tokens=1,
             )
-            self.get_logger().info('Prefix cache re-warmed.')
+            self.get_logger().info('Prefix cache warmed (system-prompt parent resident).')
         except Exception as e:
             self.get_logger().warn(f'prefix warm failed: {e}')
 

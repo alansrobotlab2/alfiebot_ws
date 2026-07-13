@@ -38,24 +38,43 @@ class MLCLLMServeNode(Node):
         self.mode = self.declare_parameter('mode', 'interactive').value
         self.host = self.declare_parameter('host', '0.0.0.0').value
         self.port = int(self.declare_parameter('port', 8000).value)
-        # Memory-footprint tuning: cap the KV-cache context, bound conversation
-        # history, and hold the GPU memory pool to a fraction of VRAM.
+        # Memory-footprint tuning: cap the KV-cache context and hold the GPU memory
+        # pool to a fraction of VRAM.
         self.context_window_size = int(
             self.declare_parameter('context_window_size', 32768).value)
+        # `max_history_size` is NOT conversation history — in this hybrid (GDN)
+        # build it sizes the rnn_state recurrent-history ring buffer, which is what
+        # bounds prefix-cache reuse. It is MEMORY-EXPENSIVE: the rnn_state slab is
+        # ~0.3 GB per slot for this 35B model (16 -> ~5 GB, 32 -> ~9.8 GB, 256 OOMs
+        # at util 0.5). 16 comfortably covers the warm parent's ~13-token divergent
+        # tail (see agent_node._warm_prefix); larger buys nothing here because real
+        # conversation tails already exceed it and fall back to full prefill. See
+        # the prefix-caching note below.
         self.max_history_size = int(
-            self.declare_parameter('max_history_size', 4).value)
+            self.declare_parameter('max_history_size', 16).value)
         self.gpu_memory_utilization = float(
             self.declare_parameter('gpu_memory_utilization', 0.5).value)
-        # NOTE on prefix caching (investigated 2026-07-12): the first turn of each
-        # conversation re-prefills the whole ~700-token system prompt (~1.9s),
-        # because `--mode interactive` reuses a cached sequence only when it is a
-        # full prefix of the next request — it will NOT fork the shared system-
-        # prompt head for a different user message. `prefix_cache_max_num_recycling_seqs`
-        # only adds exact-repeat reuse (no help for real first turns), so it's not
-        # set here. Do NOT pass -1 ("infinite"): the KV cache sizes
-        # `max_num_sequence + N` slots (mlc cpp/serve/model.cc), so -1 -> 0 slots
+        # NOTE on prefix caching (re-investigated 2026-07-13): first turns used to
+        # re-prefill the whole ~800-token system prompt (~2.1s). Root cause: Qwen3.6
+        # 35B-A3B is a HYBRID (attention + GDN linear-attention) model, so reusing an
+        # interior prefix (the shared system prompt) requires rolling the recurrent
+        # rnn_state back by `pop_n = parent_len - match_offset` tokens, and that fork
+        # is only allowed when `pop_n <= max_history_size` (mlc cpp/serve/prefix_cache.cc
+        # ~L138). With the old max_history_size=4 the fork was always skipped -> full
+        # re-prefill. Raising it to 16 lets a real first turn FORK from a short-tailed
+        # "warm" parent (see agent_node._warm_prefix, which keeps [episode_prompt,'hi',
+        # <1tok>] resident); measured first-turn TTFT then drops ~2.1s -> ~0.3-0.6s.
+        # In-conversation follow-ups after a non-tool turn are fast (~0.3s) via pop_n=0
+        # continuation reuse. CAVEAT: --mode interactive keeps only ONE prefix-cache
+        # slot, so each turn evicts the warm parent (the agent re-warms after every
+        # turn and on idle) and a tool turn breaks the next turn's continuation (the
+        # cache holds raw <tool_call> text, history holds the clean reply). The robust
+        # fix (pin the constant system prefix + snapshot its recurrent state so forks
+        # need pop_n=0, no rnn history buffer) is engine-side; see
+        # docs/mlc_prefix_cache_problem_statement.md.
+        # Do NOT pass prefix_cache_max_num_recycling_seqs=-1 ("infinite"): the KV cache
+        # sizes `max_num_sequence + N` slots (mlc cpp/serve/model.cc), so -1 -> 0 slots
         # and the native engine reload deadlocks (server never binds :8000).
-        # In-conversation follow-ups are already fast (~0.4s) via continuation reuse.
 
         # Latched so a consumer that subscribes after the model is up still sees it.
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
