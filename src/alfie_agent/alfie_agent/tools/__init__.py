@@ -13,10 +13,12 @@ parsed ``<tool_call>`` blocks back through ``call_tool``.
 """
 from . import vault
 from . import qmd_search
+from . import clock
+from . import calc
 
 # One entry per tool module. Order is stable so the system prompt (and the
 # LLM's prefix cache) stays consistent across turns.
-_MODULES = [vault, qmd_search]
+_MODULES = [vault, qmd_search, clock, calc]
 
 # Built lazily on first list_tools(): tool name -> owning module.
 _dispatch = {}
