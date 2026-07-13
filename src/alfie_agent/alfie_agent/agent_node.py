@@ -36,6 +36,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from std_msgs.msg import Bool, Empty, String
 from alfie_msgs.msg import ASRResult, SpeechRequest, Speaking
+from alfie_msgs.srv import Detect
 
 from alfie_agent import harness, memory, prompt_builder, tools
 from alfie_agent.llm_client import LLMClient
@@ -77,6 +78,18 @@ class AgentNode(Node):
         # the reranker (0.6B) roughly doubles query latency for a small quality
         # gain. lex+vec results are already strong. (lloyd defaults this too.)
         qmd_skip_rerank = bool(self.declare_parameter('qmd_skip_rerank', True).value)
+        # alfie_room room-recognition service (HTTP). If it's not running,
+        # identify_room/learn_room return a clean error and the agent still works.
+        room_url = self.declare_parameter(
+            'room_url', 'http://localhost:8182/').value
+        # alfie_nanoowl on-demand detection service (ROS). If it's not running,
+        # the `look` tool returns a clean error and the agent still works.
+        nanoowl_service = self.declare_parameter(
+            'nanoowl_service', 'nanoowl/detect').value
+        # Budget for a single on-demand detection (first call re-encodes the
+        # prompt and may warm the model, so keep it generous).
+        self._nanoowl_timeout = float(
+            self.declare_parameter('nanoowl_timeout', 10.0).value)
         self.max_tool_iters = int(self.declare_parameter('max_tool_iters', 4).value)
         # Kept declared for launch-file compatibility; superseded by the
         # token-budget trim below (active depth is now bounded by tokens, not a
@@ -98,9 +111,14 @@ class AgentNode(Node):
         self.compaction_enabled = bool(
             self.declare_parameter('compaction_enabled', True).value)
 
+        # On-demand vision: a service client for the nanoowl detector. Created
+        # before tools.configure so the `look` tool can be wired to it.
+        self.nanoowl_cli = self.create_client(Detect, nanoowl_service)
+
         # --- brain: tools, system prompt, LLM client ---
         tools.configure(self.vault_root, qmd_url=qmd_url,
-                        qmd_skip_rerank=qmd_skip_rerank)
+                        qmd_skip_rerank=qmd_skip_rerank, room_url=room_url,
+                        see_detect=self._nanoowl_detect)
         # Keep the soul + tool specs so the system prompt can be rebuilt per
         # episode with the recent-memory window folded in (see on_wake).
         self._tool_specs = tools.list_tools()
@@ -281,6 +299,44 @@ class AgentNode(Node):
     def _is_current(self, my_turn):
         with self._lock:
             return my_turn == self._turn
+
+    def _nanoowl_detect(self, prompt=None, threshold=None):
+        """Run one on-demand detection via the nanoowl service; return a snapshot
+        dict for tools/see.py, or an ``{"error": ...}`` dict if unavailable.
+
+        Called from a tool worker thread while the node spins in the main thread,
+        so it uses call_async and blocks the worker on the future (the executor
+        resolves it) — never spin from here.
+        """
+        if not self.nanoowl_cli.wait_for_service(timeout_sec=0.5):
+            return {"error": "the vision detector isn't running."}
+        req = Detect.Request()
+        req.prompt = prompt or ''
+        req.threshold = float(threshold) if threshold else 0.0
+
+        done = threading.Event()
+        future = self.nanoowl_cli.call_async(req)
+        future.add_done_callback(lambda _f: done.set())
+        if not done.wait(timeout=self._nanoowl_timeout):
+            return {"error": "the vision detector timed out."}
+
+        resp = future.result()
+        if resp is None:
+            return {"error": "the vision detector call failed."}
+        if not resp.ok:
+            return {"error": f"vision unavailable: {resp.message}"}
+
+        d = resp.detections
+        return {
+            "prompt": d.prompt,
+            "width": d.image_width,
+            "height": d.image_height,
+            "detections": [
+                {"label": det.label, "score": det.score,
+                 "x0": det.x0, "y0": det.y0, "x1": det.x1, "y1": det.y1}
+                for det in d.detections
+            ],
+        }
 
     def _run_turn(self, text, my_turn):
         self.publish_generating(True)

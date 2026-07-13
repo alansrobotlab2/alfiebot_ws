@@ -1,0 +1,9 @@
+# Run ONE open-vocabulary detection on the detector's latest camera frame.
+# On-demand: the alfie_nanoowl node keeps the model warm but only runs inference
+# when this service is called (no continuous GPU load).
+string prompt        # comma-separated queries to look for; empty keeps the detector's current prompt
+float32 threshold    # confidence cutoff 0..1; <= 0 uses the node's default
+---
+bool ok              # false if no camera frame was available or inference failed
+string message       # human-readable status (especially on failure)
+Detections detections

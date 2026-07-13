@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """
-nanoowl_node — open-vocabulary object detection with NanoOWL (OWL-ViT).
+nanoowl_node — on-demand open-vocabulary object detection with NanoOWL (OWL-ViT).
 
-Subscribes to a compressed camera stream, runs NanoOWL on the latest frame at a
-fixed rate, and publishes the detections as an ``alfie_msgs/Detections`` list on
-``nanoowl/detections``. What to look for is set by a free-text *prompt* (a
-comma-separated list of queries, e.g. ``"a person, a face, a cup"``) that can be
-changed live by publishing a ``std_msgs/String`` on ``nanoowl/prompt`` — so the
-agent can point the detector at whatever it currently cares about.
+Detection runs *on demand*, not continuously: the node keeps the OWL-ViT model
+warm and holds only the latest camera frame, but runs inference only when its
+``nanoowl/detect`` service is called (so it never competes with the LLM / GR00T
+for the GPU while nobody's asking). Each call optionally retargets the detector
+with a free-text ``prompt`` (comma-separated queries, e.g. "a person, a cup" —
+open-vocabulary, so it can look for anything) and returns the detections.
 
-Inference is throttled by a timer rather than run per-frame: the subscription
-keeps only the newest frame (depth-1) and the timer processes it at
-``rate_hz``, so a slow model never backs up the camera pipeline.
+The agent's ``look`` tool is the usual caller (see alfie_agent tools/see.py). For
+observability each successful call also republishes its result on
+``nanoowl/detections`` (and, if ``publish_annotated``, a boxed image) — but
+nothing is published unless something asked.
 
-Speed: with ``image_encoder_engine`` pointing at a pre-built TensorRT engine
-the OWL-ViT image encoder runs on TensorRT (big speedup on Jetson). With it
-unset the node falls back to a pure-PyTorch encoder — slower, but it runs with
-no engine build. See the package README for how to build the engine.
+Speed: with ``image_encoder_engine`` pointing at a pre-built TensorRT engine the
+image encoder runs on TensorRT (~130 ms/call on Orin). With it unset a pure
+PyTorch encoder is used (slower; ~500 ms) — see the package README for the engine
+build (and the TensorRT-on-Jetson setup it needs).
 """
 import time
 
@@ -26,9 +27,9 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
-from std_msgs.msg import String
 from sensor_msgs.msg import CompressedImage
 from alfie_msgs.msg import Detection, Detections
+from alfie_msgs.srv import Detect
 
 from cv_bridge import CvBridge
 import cv2
@@ -46,7 +47,7 @@ except Exception as e:  # pragma: no cover - depends on host install
 
 def _parse_prompt(text):
     """'[a person, a face]' or 'a person, a face' -> ['a person', 'a face']."""
-    text = text.strip()
+    text = (text or '').strip()
     if text.startswith('[') and text.endswith(']'):
         text = text[1:-1]
     return [q.strip() for q in text.split(',') if q.strip()]
@@ -60,10 +61,10 @@ class NanoOwlNode(Node):
         self.image_topic = self.declare_parameter(
             'image_topic',
             'stereo_camera/left_center/image_raw/compressed').value
+        self.detect_service = self.declare_parameter(
+            'detect_service', 'nanoowl/detect').value
         self.detections_topic = self.declare_parameter(
             'detections_topic', 'nanoowl/detections').value
-        self.prompt_topic = self.declare_parameter(
-            'prompt_topic', 'nanoowl/prompt').value
         self.annotated_topic = self.declare_parameter(
             'annotated_topic', 'nanoowl/annotated/compressed').value
 
@@ -75,7 +76,6 @@ class NanoOwlNode(Node):
         self.prompt = self.declare_parameter(
             'prompt', 'a person, a face, a hand').value
         self.threshold = float(self.declare_parameter('threshold', 0.1).value)
-        self.rate_hz = float(self.declare_parameter('rate_hz', 5.0).value)
         self.publish_annotated = bool(
             self.declare_parameter('publish_annotated', False).value)
         self.jpeg_quality = int(self.declare_parameter('jpeg_quality', 70).value)
@@ -90,7 +90,7 @@ class NanoOwlNode(Node):
                 % _IMPORT_ERR)
             raise SystemExit(1)
 
-        # --- Model --------------------------------------------------------
+        # --- Model (loaded once, kept warm) -------------------------------
         engine = self.image_encoder_engine or None
         self.get_logger().info(
             f'Loading NanoOWL model="{self.model_name}" '
@@ -107,8 +107,8 @@ class NanoOwlNode(Node):
         self._text_encodings = None
         self._set_prompt(self.prompt)
 
-        # --- Latest-frame slot (depth-1, overwrite not queue) -------------
-        self._latest = None  # (np.ndarray BGR, header)
+        # --- Latest raw frame (stored undecoded; decoded only on a detect) --
+        self._latest_msg = None  # sensor_msgs/CompressedImage
 
         # --- I/O ----------------------------------------------------------
         sensor_qos = QoSProfile(
@@ -123,47 +123,58 @@ class NanoOwlNode(Node):
                 CompressedImage, self.annotated_topic, sensor_qos)
         self.create_subscription(
             CompressedImage, self.image_topic, self._on_image, sensor_qos)
-        self.create_subscription(
-            String, self.prompt_topic, self._on_prompt, 10)
 
-        self.create_timer(1.0 / max(self.rate_hz, 0.1), self._on_timer)
+        self.create_service(Detect, self.detect_service, self._on_detect)
 
         self.get_logger().info(
-            f'nanoowl_node up: "{self.image_topic}" -> "{self.detections_topic}" '
-            f'@ {self.rate_hz:.1f} Hz, prompt={self._text}')
+            f'nanoowl_node up (on-demand): service "{self.detect_service}", '
+            f'camera "{self.image_topic}", default prompt={self._text}')
 
     # ---- prompt handling -------------------------------------------------
     def _set_prompt(self, text):
-        """(Re)encode the text queries; cached so predict() skips text encoding."""
+        """(Re)encode the text queries; cached so a repeat prompt skips encoding."""
         queries = _parse_prompt(text)
         if not queries:
-            self.get_logger().warning(f'Empty prompt ignored: {text!r}')
-            return
+            return False
+        if queries == self._text and self._text_encodings is not None:
+            return True  # unchanged; keep cached encodings
         self._text = queries
         self._text_encodings = self.predictor.encode_text(queries)
         self.get_logger().info(f'Prompt set: {queries}')
+        return True
 
-    def _on_prompt(self, msg):
-        self._set_prompt(msg.data)
-
-    # ---- image handling --------------------------------------------------
+    # ---- camera ----------------------------------------------------------
     def _on_image(self, msg):
+        # Cheap: just hold the latest compressed frame; decode happens on detect.
+        self._latest_msg = msg
+
+    # ---- service ---------------------------------------------------------
+    def _on_detect(self, request, response):
+        if request.prompt and request.prompt.strip():
+            if not self._set_prompt(request.prompt):
+                response.ok = False
+                response.message = 'empty/invalid prompt'
+                return response
+        if self._text_encodings is None:
+            response.ok = False
+            response.message = 'no active detection prompt'
+            return response
+
+        msg = self._latest_msg
+        if msg is None:
+            response.ok = False
+            response.message = 'no camera frame available yet'
+            return response
+
         try:
             img = self.bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
-        except Exception as e:  # pragma: no cover
-            self.get_logger().warning(f'decode failed: {e}',
-                                      throttle_duration_sec=2.0)
-            return
-        self._latest = (img, msg.header)
+        except Exception as e:
+            response.ok = False
+            response.message = f'frame decode failed: {e}'
+            return response
 
-    def _on_timer(self):
-        if self._latest is None or self._text_encodings is None:
-            return
-        img, header = self._latest
-        self._latest = None  # consume; wait for a fresh frame next tick
-
+        threshold = request.threshold if request.threshold > 0 else self.threshold
         h, w = img.shape[:2]
-        # NanoOWL wants a PIL RGB image.
         from PIL import Image
         pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
@@ -173,23 +184,26 @@ class NanoOwlNode(Node):
                 image=pil,
                 text=self._text,
                 text_encodings=self._text_encodings,
-                threshold=self.threshold,
+                threshold=threshold,
                 pad_square=False,
             )
-        except Exception as e:  # pragma: no cover
-            self.get_logger().error(f'inference failed: {e}',
-                                    throttle_duration_sec=2.0)
-            return
+        except Exception as e:
+            response.ok = False
+            response.message = f'inference failed: {e}'
+            return response
         dt = time.time() - t0
 
-        det_msg = self._build_msg(output, header, w, h)
-        self.det_pub.publish(det_msg)
-        self.get_logger().info(
-            f'{len(det_msg.detections)} det in {dt * 1e3:.0f}ms',
-            throttle_duration_sec=1.0)
+        det_msg = self._build_msg(output, msg.header, w, h)
+        response.ok = True
+        response.message = f'{len(det_msg.detections)} detections in {dt * 1e3:.0f}ms'
+        response.detections = det_msg
 
+        # Observability: republish the on-demand result (nothing streams otherwise).
+        self.det_pub.publish(det_msg)
         if self.publish_annotated:
-            self._publish_annotated(img, det_msg, header)
+            self._publish_annotated(img, det_msg, msg.header)
+        self.get_logger().info(response.message)
+        return response
 
     # ---- message building ------------------------------------------------
     def _build_msg(self, output, header, width, height):

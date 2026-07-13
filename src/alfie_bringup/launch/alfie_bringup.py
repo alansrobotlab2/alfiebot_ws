@@ -279,6 +279,53 @@ def generate_launch_description():
             respawn=True
         ),
 
+        # On-demand visual room recognition service (teachable place recognition).
+        # Subscribes to the wide stereo eyes, serves classify/teach over local HTTP
+        # (127.0.0.1:8182) which the agent's identify_room/learn_room tools call.
+        Node(
+            package='alfie_room',
+            namespace='alfie',
+            executable='room_node',
+            name='room_node',
+            parameters=[{
+                'http_port': 8182,
+                'model_path': '/home/alfie/alfiebot_ws/models/dinov2_vits14.onnx',
+                'store_path': '/home/alfie/alfiebot_ws/data/rooms/rooms.json',
+                'sim_threshold': 0.55,
+                'margin': 0.05,
+                'vault_root': '~/obsidian',
+            }],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
+        ),
+
+        # On-demand open-vocabulary object detection (NanoOWL / OWL-ViT). Keeps
+        # the model warm and holds the latest center-eye frame, but runs inference
+        # only when its nanoowl/detect service is called (by the agent's `look`
+        # tool) — so it never competes with the LLM/GR00T for the GPU while idle.
+        # Uses the pre-built TensorRT engine (~130 ms/call); rebuild it with
+        # `python3 -m nanoowl.build_image_encoder_engine <path>` (see alfie_nanoowl
+        # README for the Jetson TensorRT setup it needs).
+        Node(
+            package='alfie_nanoowl',
+            namespace='alfie',
+            executable='nanoowl_node',
+            name='nanoowl_node',
+            parameters=[{
+                'image_topic': 'stereo_camera/left_center/image_raw/compressed',
+                'image_encoder_engine':
+                    '/home/alfie/nanoowl_data/owl_image_encoder_patch32.engine',
+            }],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
+        ),
+
         Node(
             package='foxglove_bridge',
             namespace='alfie',

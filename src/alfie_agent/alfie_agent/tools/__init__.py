@@ -15,19 +15,25 @@ from . import vault
 from . import qmd_search
 from . import clock
 from . import calc
+from . import room
+from . import see
 
 # One entry per tool module. Order is stable so the system prompt (and the
 # LLM's prefix cache) stays consistent across turns.
-_MODULES = [vault, qmd_search, clock, calc]
+_MODULES = [vault, qmd_search, clock, calc, room, see]
 
 # Built lazily on first list_tools(): tool name -> owning module.
 _dispatch = {}
 
 
-def configure(vault_root, qmd_url=None, qmd_skip_rerank=False):
-    """Configure the underlying tool modules (vault root + QMD search URL)."""
+def configure(vault_root, qmd_url=None, qmd_skip_rerank=False, room_url=None,
+              see_detect=None):
+    """Configure the underlying tool modules (vault root, QMD + room service URLs,
+    and the on-demand vision `detect` callback for the `look` tool)."""
     vault.configure(vault_root)
     qmd_search.configure(qmd_url, skip_rerank=qmd_skip_rerank)
+    room.configure(room_url)
+    see.configure(detect=see_detect)
 
 
 def list_tools():

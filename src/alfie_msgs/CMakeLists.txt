@@ -64,6 +64,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Detections.msg"
   "srv/GDBServoService.srv"
   "srv/BackRequestCalibration.srv"
+  "srv/Detect.srv"
   DEPENDENCIES std_msgs sensor_msgs geometry_msgs
  )
 
