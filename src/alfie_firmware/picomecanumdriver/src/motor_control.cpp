@@ -301,11 +301,16 @@ void mecanumDriveKinematics(float linear_x, float linear_y, float angular_z,
     float wheel_separation_x = ROBOT_CENTER_TO_WHEEL_X / 1000.0f; // mm -> m
     float wheel_separation_y = ROBOT_CENTER_TO_WHEEL_Y / 1000.0f; // mm -> m
 
-    // For mecanum: FL and RR are on one diagonal, FR and RL on the other
-    wheel_velocities[0] = linear_x - linear_y - angular_z * (wheel_separation_x + wheel_separation_y); // FL
-    wheel_velocities[1] = linear_x + linear_y + angular_z * (wheel_separation_x + wheel_separation_y); // FR
-    wheel_velocities[2] = linear_x - linear_y + angular_z * (wheel_separation_x + wheel_separation_y); // RL
-    wheel_velocities[3] = linear_x + linear_y - angular_z * (wheel_separation_x + wheel_separation_y); // RR
+    // Standard mecanum inverse kinematics (X-roller config), body frame with
+    // +x forward, +y left, +z CCW. Strafe (y) is a DIAGONAL wheel pattern
+    // [FL-, FR+, RL+, RR-]; rotation (z) is a SIDE pattern [FL-, FR+, RL-, RR+].
+    // (Verified on hardware 2026-07-13: the earlier RL/RR terms had y and w
+    //  swapped, which made strafe rotate the robot and rotate strafe it.)
+    float k = wheel_separation_x + wheel_separation_y;
+    wheel_velocities[0] = linear_x - linear_y - angular_z * k; // FL
+    wheel_velocities[1] = linear_x + linear_y + angular_z * k; // FR
+    wheel_velocities[2] = linear_x + linear_y - angular_z * k; // RL
+    wheel_velocities[3] = linear_x - linear_y + angular_z * k; // RR
 }
 
 /**
@@ -321,8 +326,9 @@ void mecanumDriveOdometry(float wheel_velocities[4], float *linear_x,
     float wheel_separation_x = ROBOT_CENTER_TO_WHEEL_X / 1000.0f; // mm -> m
     float wheel_separation_y = ROBOT_CENTER_TO_WHEEL_Y / 1000.0f; // mm -> m
 
+    // Inverse of the corrected mecanum kinematics above (must stay in sync).
     *linear_x = (wheel_velocities[0] + wheel_velocities[1] + wheel_velocities[2] + wheel_velocities[3]) / 4.0f;
-    *linear_y = (-wheel_velocities[0] + wheel_velocities[1] - wheel_velocities[2] + wheel_velocities[3]) / 4.0f;
-    *angular_z = (-wheel_velocities[0] + wheel_velocities[1] + wheel_velocities[2] - wheel_velocities[3]) /
+    *linear_y = (-wheel_velocities[0] + wheel_velocities[1] + wheel_velocities[2] - wheel_velocities[3]) / 4.0f;
+    *angular_z = (-wheel_velocities[0] + wheel_velocities[1] - wheel_velocities[2] + wheel_velocities[3]) /
                  (4.0f * (wheel_separation_x + wheel_separation_y));
 }

@@ -28,7 +28,7 @@ class OdomTfBroadcaster(Node):
     def __init__(self):
         super().__init__('odom_tf_broadcaster')
 
-        self.declare_parameter('odom_topic', '/odom')
+        self.declare_parameter('odom_topic', '/alfie/low/odom')
         # Empty -> use the frame ids carried in the Odometry message.
         self.declare_parameter('odom_frame', '')
         self.declare_parameter('base_frame', '')

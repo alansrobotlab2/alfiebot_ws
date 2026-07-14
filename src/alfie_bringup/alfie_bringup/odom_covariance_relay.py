@@ -23,7 +23,7 @@ class OdomCovarianceRelay(Node):
     def __init__(self):
         super().__init__('odom_covariance_relay')
 
-        self.declare_parameter('in_topic', '/odom')
+        self.declare_parameter('in_topic', '/alfie/low/odom')
         self.declare_parameter('out_topic', '/odom_cov')
         # Diagonal covariances for [x, y, z, roll, pitch, yaw].
         self.declare_parameter('pose_covariance_diagonal',

@@ -21,8 +21,18 @@
 //
 // MOTOR_CHANNEL_MAP[logical] = Hiwonder channel index (0..3) that wheel is wired to.
 // MOTOR_DIR_SIGN[logical]    = +1 or -1 applied to both speed command and count.
-static const uint8_t MOTOR_CHANNEL_MAP[4] = {0, 1, 2, 3}; // FL, FR, RL, RR
-static const int8_t  MOTOR_DIR_SIGN[4]    = {1, 1, 1, 1};  // FL, FR, RL, RR
+static const uint8_t MOTOR_CHANNEL_MAP[4] = {1, 3, 0, 2}; // FL, FR, RL, RR
+static const int8_t  MOTOR_DIR_SIGN[4]    = {1, 1, -1, 1}; // FL, FR, RL, RR
+//
+// Calibration determined on hardware 2026-07-13 (open-loop spin test on the
+// mecanumtest rig, same hardware):
+//   - Channel map: commanding logical FL/FR/RL/RR with an identity map physically
+//     spun RL/FL/RR/FR, i.e. Hiwonder ch0->RL, ch1->FL, ch2->RR, ch3->FR, giving
+//     FL->ch1, FR->ch3, RL->ch0, RR->ch2.
+//   - Direction: FL/FR/RR roll forward on +command; RL rolled backward, so RL=-1.
+//   - FR's encoder was reversed relative to its motor (closed-loop PID runaway);
+//     FIXED IN HARDWARE by swapping the FR encoder A/B wires. All four now count
+//     up on forward, so closed-loop control is stable.
 
 Hiwonder::Hiwonder(uint8_t address)
     : address_(address), last_status_(0) {}
@@ -32,28 +42,28 @@ Hiwonder::Hiwonder(uint8_t address)
 // =============================================================================
 
 void Hiwonder::writeRegister(uint8_t reg, const uint8_t *data, uint8_t len) {
-    Wire.beginTransmission(address_);
-    Wire.write(reg);
+    HIWONDER_WIRE.beginTransmission(address_);
+    HIWONDER_WIRE.write(reg);
     for (uint8_t i = 0; i < len; i++) {
-        Wire.write(data[i]);
+        HIWONDER_WIRE.write(data[i]);
     }
-    last_status_ = Wire.endTransmission();
+    last_status_ = HIWONDER_WIRE.endTransmission();
 }
 
 bool Hiwonder::readRegister(uint8_t reg, uint8_t *data, uint8_t len) {
-    Wire.beginTransmission(address_);
-    Wire.write(reg);
-    last_status_ = Wire.endTransmission();
+    HIWONDER_WIRE.beginTransmission(address_);
+    HIWONDER_WIRE.write(reg);
+    last_status_ = HIWONDER_WIRE.endTransmission();
     if (last_status_ != 0) {
         return false;
     }
 
-    uint8_t received = Wire.requestFrom(address_, len);
+    uint8_t received = HIWONDER_WIRE.requestFrom(address_, len);
     if (received != len) {
         return false;
     }
     for (uint8_t i = 0; i < len; i++) {
-        data[i] = Wire.read();
+        data[i] = HIWONDER_WIRE.read();
     }
     return true;
 }
@@ -63,10 +73,10 @@ bool Hiwonder::readRegister(uint8_t reg, uint8_t *data, uint8_t len) {
 // =============================================================================
 
 bool Hiwonder::begin(void) {
-    Wire.setSDA(I2C_SDA_PIN);
-    Wire.setSCL(I2C_SCL_PIN);
-    Wire.begin();
-    Wire.setClock(I2C_FREQ_HZ);
+    HIWONDER_WIRE.setSDA(I2C_SDA_PIN);
+    HIWONDER_WIRE.setSCL(I2C_SCL_PIN);
+    HIWONDER_WIRE.begin();
+    HIWONDER_WIRE.setClock(I2C_FREQ_HZ);
 
     // Configure motor type, then encoder polarity.
     uint8_t motor_type = HIWONDER_MOTOR_TYPE;

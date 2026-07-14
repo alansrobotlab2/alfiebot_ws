@@ -94,7 +94,7 @@ bool createRosEntities(void) {
         &mecanum_subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-        "/mecanumdrive"
+        "/alfie/low/mecanumdrive"
     );
     if (ret != RCL_RET_OK) {
         (void)rcl_node_fini(&node);
@@ -107,7 +107,7 @@ bool createRosEntities(void) {
         &odom_publisher,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
-        "/odom"
+        "/alfie/low/odom"
     );
     if (ret != RCL_RET_OK) {
         (void)rcl_subscription_fini(&mecanum_subscriber, &node);

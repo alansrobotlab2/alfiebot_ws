@@ -20,7 +20,7 @@
 /**
  * @brief Serial Communication Configuration
  */
-#define SERIAL_BAUD_RATE        1500000 ///< Serial port baud rate (matches micro-ROS agent on /dev/ttyAlfieD)
+#define SERIAL_BAUD_RATE        1000000 ///< Serial port baud rate (matches micro-ROS agent on /dev/ttyAlfieD)
 #define SERIAL_TIMEOUT_MS       1000    ///< Serial communication timeout
 
 /**
@@ -40,10 +40,15 @@
 
 /**
  * @brief Hiwonder motor driver I2C bus configuration
- * The RP2040-Zero talks to the Hiwonder controller over I2C0 on GP12/GP13.
+ * The RP2040-Zero talks to the Hiwonder controller over I2C on GP10/GP11.
+ * GP10/GP11 are the RP2040's I2C1 pins, so the driver must use the Wire1
+ * instance (not Wire / I2C0). Keep HIWONDER_WIRE in sync with the pins:
+ *   I2C0 (Wire):  SDA on GP0/4/8/12/16/20,  SCL on GP1/5/9/13/17/21
+ *   I2C1 (Wire1): SDA on GP2/6/10/14/18/26, SCL on GP3/7/11/15/19/27
  */
-#define I2C_SDA_PIN             12          ///< I2C0 SDA (to Hiwonder SDA)
-#define I2C_SCL_PIN             13          ///< I2C0 SCL (to Hiwonder SCL)
+#define HIWONDER_WIRE           Wire1       ///< Arduino I2C instance (Wire=I2C0, Wire1=I2C1)
+#define I2C_SDA_PIN             10          ///< I2C1 SDA (to Hiwonder SDA)
+#define I2C_SCL_PIN             11          ///< I2C1 SCL (to Hiwonder SCL)
 #define I2C_FREQ_HZ             400000      ///< I2C bus speed (400 kHz)
 #define HIWONDER_I2C_ADDR       0x34        ///< Hiwonder controller 7-bit I2C address
 
