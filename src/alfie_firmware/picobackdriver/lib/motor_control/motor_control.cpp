@@ -274,8 +274,8 @@ void DriverBoard::updateMotorControl(void) {
         
         // Apply PWM to motor
         analogWrite(MOTOR_PWM_PIN, abs((int)motor.pwm_output));
-        digitalWrite(MOTOR_DIR1_PIN, motor.pwm_output >= 0 ? HIGH : LOW);
-        digitalWrite(MOTOR_DIR2_PIN, motor.pwm_output >= 0 ? LOW : HIGH);
+        digitalWrite(MOTOR_DIR1_PIN, motor.pwm_output >= 0 ? MOTOR_DIR_UP_DIR1 : MOTOR_DIR_DOWN_DIR1);
+        digitalWrite(MOTOR_DIR2_PIN, motor.pwm_output >= 0 ? MOTOR_DIR_UP_DIR2 : MOTOR_DIR_DOWN_DIR2);
     }
 }
 

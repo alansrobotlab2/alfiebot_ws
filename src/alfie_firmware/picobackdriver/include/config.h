@@ -73,8 +73,27 @@
 #define MOTOR_VCC_PIN           15      ///< Motor driver VCC power pin (logic power supply)
 
 // Linear Actuator Encoder Pins
-#define MOTOR_ENCODER_A         26      ///< Linear actuator motor encoder A pin
-#define MOTOR_ENCODER_B         27      ///< Linear actuator motor encoder B pin
+// NOTE: The gen2 servo gearmotor's encoder is phased opposite the original
+// motor, so A/B are swapped here (26<->27) to keep "up" = increasing count.
+// This reverses the quadrature direction so the velocity PID stays stable
+// (positive PWM -> positive measured velocity) and position increases upward.
+#define MOTOR_ENCODER_A         27      ///< Linear actuator motor encoder A pin (gen2: was GP26)
+#define MOTOR_ENCODER_B         26      ///< Linear actuator motor encoder B pin (gen2: was GP27)
+
+/**
+ * @brief Motor Direction Polarity (TB6612FNG DIR pin levels)
+ *
+ * Defines the AIN1/AIN2 levels for "up" (positive PWM / away from the lower
+ * limit switch) and "down" (toward the limit switch at position 0). The gen2
+ * servo gearmotor spins opposite the original motor for the same DIR inputs,
+ * so up/down are the reverse of the original wiring. The encoder rides the same
+ * shaft, so position sense (up = +position) is unchanged. If a future motor
+ * swap reverses polarity again, flip only these four lines.
+ */
+#define MOTOR_DIR_UP_DIR1       LOW     ///< AIN1 level to drive actuator up
+#define MOTOR_DIR_UP_DIR2       HIGH    ///< AIN2 level to drive actuator up
+#define MOTOR_DIR_DOWN_DIR1     HIGH    ///< AIN1 level to drive actuator down
+#define MOTOR_DIR_DOWN_DIR2     LOW     ///< AIN2 level to drive actuator down
 
 /**
  * @brief PWM Configuration for Motors
@@ -92,7 +111,7 @@
  * @brief Linear Actuator Configuration
  */
 #define ACTUATOR_MIN_POSITION    0.0     ///< Minimum actuator position (meters)
-#define ACTUATOR_MAX_POSITION    0.390     ///< Maximum actuator position (meters)
+#define ACTUATOR_MAX_POSITION    0.400     ///< Maximum actuator position (meters)
 #define ACTUATOR_HOME_POSITION   0.0     ///< Home/zero position (meters)
 
 // =============================================================================
@@ -110,7 +129,7 @@
 /**
  * @brief Gear Ratio Configuration
  */
-#define GEAR_RATIO              88.0    ///< Gear reduction ratio (motor:output shaft) - 176 RPM motor
+#define GEAR_RATIO              130.0    ///< Effective counts-per-meter calibration constant (motor:output shaft × any encoder-PPR error). Empirically tuned: 106 gave 325mm on a 400mm command -> 106×400/325≈130.5. Not the datasheet gearbox ratio.
 #define OUTPUT_SHAFT_MAX_RPM    (MOTOR_FREE_SPEED_RPM / GEAR_RATIO)  ///< Max output shaft RPM
 
 /**

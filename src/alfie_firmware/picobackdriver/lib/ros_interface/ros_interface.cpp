@@ -341,7 +341,7 @@ void calibrationServiceCallback(const void *req_msg, void *res_msg) {
     delay(50);
     
     // Calibration parameters
-    const uint8_t CALIBRATION_PWM = 200;        // Fixed PWM for slow downward motion
+    const uint8_t CALIBRATION_PWM = 150;        // Fixed PWM for slow downward motion
     const uint32_t CALIBRATION_TIMEOUT_MS = 20000;  // 20 second timeout
     const uint32_t LED_UPDATE_INTERVAL_MS = 100;    // Update LED every 100ms during calibration
     
@@ -353,10 +353,9 @@ void calibrationServiceCallback(const void *req_msg, void *res_msg) {
     bool limit_switch_triggered = (digitalRead(LIMIT_SWITCH_PIN) == HIGH);
     
     if (!limit_switch_triggered) {
-        // Limit switch not triggered - need to move downward
-        // Set direction for downward motion (DIR1=LOW, DIR2=HIGH)
-        digitalWrite(MOTOR_DIR1_PIN, LOW);
-        digitalWrite(MOTOR_DIR2_PIN, HIGH);
+        // Limit switch not triggered - need to move downward toward the switch
+        digitalWrite(MOTOR_DIR1_PIN, MOTOR_DIR_DOWN_DIR1);
+        digitalWrite(MOTOR_DIR2_PIN, MOTOR_DIR_DOWN_DIR2);
         analogWrite(MOTOR_PWM_PIN, CALIBRATION_PWM);
         
         // Update actuator state to show PWM is active during calibration
