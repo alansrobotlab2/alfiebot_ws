@@ -38,8 +38,8 @@ public:
     int16_t maxAngleCount[NUM_SERVOS];
 
     // ---- Eye LEDs ---------------------------------------------------------
-    volatile uint8_t eye_pwm[NUM_EYES]   = {0, 0};  ///< commanded duty 0..255
-    volatile uint8_t eye_state[NUM_EYES] = {0, 0};  ///< last-applied duty 0..255
+    volatile uint16_t eye_pwm[NUM_EYES]   = {0, 0};  ///< commanded duty 0..4095
+    volatile uint16_t eye_state[NUM_EYES] = {0, 0};  ///< last-applied duty 0..4095
 
     // ---- Status LED -------------------------------------------------------
     WS2812 statusLED;

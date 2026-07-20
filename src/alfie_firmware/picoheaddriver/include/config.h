@@ -80,7 +80,7 @@
 #define EYE_LEFT                0
 #define EYE_RIGHT               1
 #define EYE_PWM_FREQ_HZ         100       ///< Eye LED PWM frequency
-#define EYE_PWM_MAX             255       ///< 8-bit duty range
+#define EYE_PWM_MAX             4095      ///< 12-bit duty range
 
 // =============================================================================
 // STATUS LED (onboard WS2812)

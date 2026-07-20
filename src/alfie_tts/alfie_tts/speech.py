@@ -46,10 +46,10 @@ class AlfieTTS(Node):
         self.config_path = os.path.join(voices_dir, 'en_US-libritts_r-medium.onnx.json')
         self.speaker_id = 623
         #candidates = [65, 66, 67, 76, 515, 617, 623, 903 ]
-        self.length_scale = 1.00  # >1.0 slows down speech (1.1 = 10% slower)
+        self.length_scale = 0.95  # >1.0 slows down speech (1.1 = 10% slower)
         self.noise_scale = 0.667  # controls pitch variation
         self.noise_w = 0.8  # controls phoneme duration variation
-        self.playback_rate_scale = 1.00  # <1.0 lowers pitch, >1.0 raises pitch
+        self.playback_rate_scale = 0.95  # <1.0 lowers pitch, >1.0 raises pitch
         self.use_cuda = False
         self.latency = 0.15
         self.speaking = False

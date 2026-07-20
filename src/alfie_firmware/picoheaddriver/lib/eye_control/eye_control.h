@@ -14,12 +14,12 @@
 #include <Arduino.h>
 #include "driverboard.h"
 
-/// Configure TB6612 pins, enable the driver, set 100 Hz 8-bit PWM, eyes off.
+/// Configure TB6612 pins, enable the driver, set 100 Hz 12-bit PWM, eyes off.
 void initEyes();
 
-/// Set one eye's brightness (idx = EYE_LEFT / EYE_RIGHT, duty 0..255) and record
+/// Set one eye's brightness (idx = EYE_LEFT / EYE_RIGHT, duty 0..4095) and record
 /// it in b.eye_state.
-void setEye(uint8_t idx, uint8_t duty);
+void setEye(uint8_t idx, uint16_t duty);
 
 /// Apply b.eye_pwm[] to both eyes (called from the Core 0 loop).
 void applyEyes();

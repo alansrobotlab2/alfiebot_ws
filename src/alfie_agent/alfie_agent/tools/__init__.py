@@ -36,6 +36,16 @@ def configure(vault_root, qmd_url=None, qmd_skip_rerank=False, room_url=None,
     see.configure(detect=see_detect)
 
 
+def warmup_vault_search():
+    """
+    Warm the QMD daemon so the first real vault search isn't cold.
+
+    Loads the daemon's embedding model up front (a cold search is ~1.2 s vs
+    ~75 ms warm). Best effort; safe to call when qmd is down.
+    """
+    qmd_search.warmup()
+
+
 def list_tools():
     """Return the aggregated tool specs, rebuilding the dispatch map."""
     _dispatch.clear()

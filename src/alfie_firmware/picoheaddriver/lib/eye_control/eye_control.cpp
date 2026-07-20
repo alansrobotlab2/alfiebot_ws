@@ -31,14 +31,14 @@ void initEyes()
     // Enable the driver.
     digitalWrite(EYE_STBY_PIN, HIGH);
 
-    // 100 Hz, 8-bit PWM range.
+    // 100 Hz, 12-bit PWM range.
     analogWriteFreq(EYE_PWM_FREQ_HZ);
     analogWriteRange(EYE_PWM_MAX);
 
     eyesOff();
 }
 
-void setEye(uint8_t idx, uint8_t duty)
+void setEye(uint8_t idx, uint16_t duty)
 {
     if (idx >= NUM_EYES) {
         return;

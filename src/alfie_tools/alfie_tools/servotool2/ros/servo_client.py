@@ -42,7 +42,7 @@ class ServoServiceClient:
             servo_id: Servo ID (1-10)
             
         Returns:
-            GDBServoMemoryMap object or None on timeout
+            ServoMemoryMap object or None on timeout
         """
         request = GDBServoService.Request()
         request.servo = servo_id

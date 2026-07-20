@@ -152,8 +152,8 @@ class ServoVoltageMonitor(HealthCheck):
         # Only process the actual number of servos on this board
         for i in range(min(len(servo_states), self.num_servos)):
             servo = servo_states[i]
-            # Convert raw voltage (0.1V units) to actual voltage
-            voltage = servo.current_voltage / VOLTAGE_SCALE
+            # gen2 firmware reports ServoState in SI units: voltage is already volts
+            voltage = servo.current_voltage
             
             # Initialize history deque if needed
             if i not in self.servo_voltage_history:
@@ -522,31 +522,31 @@ class ServoMonitor(HealthCheck):
 # Servo Names Configuration
 # ============================================================================
 
-# Servo names for GDB0 (driver0) - Right arm and head
-# Indices 0-9 map to driver0/servo01-servo10
-GDB0_SERVO_NAMES = [
-    'R Shoulder Yaw',     # servo01
-    'R Shoulder1 Pitch',  # servo02
-    'R Shoulder2 Pitch',  # servo03 (derived)
-    'R Elbow Pitch',      # servo04
-    'R Wrist Pitch',      # servo05
-    'R Wrist Roll',       # servo06
-    'R Hand',             # servo07
-    'Head Yaw',           # servo08
-    'Head Pitch',         # servo09
-    'Head Roll',          # servo10
+# Servo names per gen2 firmware module. Order matches ArmState.joint_state /
+# HeadState.servos (the derived shoulder-pitch servo is already merged by the
+# arm firmware, so each arm reports 6 logical joints).
+LEFT_ARM_SERVO_NAMES = [
+    'L Shoulder Yaw',    # 0
+    'L Shoulder Pitch',  # 1
+    'L Elbow Pitch',     # 2
+    'L Wrist Pitch',     # 3
+    'L Wrist Roll',      # 4
+    'L Gripper',         # 5
 ]
 
-# Servo names for GDB1 (driver1) - Left arm
-# Indices 0-6 map to driver1/servo01-servo07
-GDB1_SERVO_NAMES = [
-    'L Shoulder Yaw',     # servo01
-    'L Shoulder1 Pitch',  # servo02
-    'L Shoulder2 Pitch',  # servo03 (derived)
-    'L Elbow Pitch',      # servo04
-    'L Wrist Pitch',      # servo05
-    'L Wrist Roll',       # servo06
-    'L Hand',             # servo07
+RIGHT_ARM_SERVO_NAMES = [
+    'R Shoulder Yaw',    # 0
+    'R Shoulder Pitch',  # 1
+    'R Elbow Pitch',     # 2
+    'R Wrist Pitch',     # 3
+    'R Wrist Roll',      # 4
+    'R Gripper',         # 5
+]
+
+HEAD_SERVO_NAMES = [
+    'Head Yaw',    # 0 (pan)
+    'Head Pitch',  # 1 (tilt)
+    'Head Roll',   # 2
 ]
 
 
@@ -562,89 +562,55 @@ def create_health_checks() -> Dict[str, HealthCheck]:
         Dictionary of health check name to HealthCheck instance
     """
     health_checks: Dict[str, HealthCheck] = {}
-    
+
     # ========================================================================
-    # GDB Rate Monitors
+    # Module Rate Monitors (gen2 firmware streams state at ~50 Hz)
     # ========================================================================
-    
-    health_checks['gdb0_rate'] = RateMonitor(
-        name='GDB0',
-        expected_hz=100.0,
-        tolerance_hz=10.0
-    )
-    
-    health_checks['gdb1_rate'] = RateMonitor(
-        name='GDB1',
-        expected_hz=100.0,
-        tolerance_hz=10.0
-    )
-    
+
+    health_checks['left_arm_rate'] = RateMonitor(
+        name='Left Arm', expected_hz=50.0, tolerance_hz=15.0)
+    health_checks['right_arm_rate'] = RateMonitor(
+        name='Right Arm', expected_hz=50.0, tolerance_hz=15.0)
+    health_checks['head_rate'] = RateMonitor(
+        name='Head', expected_hz=50.0, tolerance_hz=15.0)
+    health_checks['back_rate'] = RateMonitor(
+        name='Back', expected_hz=50.0, tolerance_hz=15.0)
+
     # ========================================================================
-    # GDB Voltage Monitors
+    # Servo Voltage Monitors (ServoState.current_voltage is SI volts)
     # ========================================================================
-    
-    health_checks['gdb0_voltage'] = ServoVoltageMonitor(
-        name='GDB0',
-        servo_names=GDB0_SERVO_NAMES,
-        expected_voltage=12.0,
-        tolerance_voltage=0.5
-    )
-    
-    health_checks['gdb1_voltage'] = ServoVoltageMonitor(
-        name='GDB1',
-        servo_names=GDB1_SERVO_NAMES,
-        expected_voltage=12.0,
-        tolerance_voltage=0.5
-    )
-    
+
+    health_checks['left_arm_voltage'] = ServoVoltageMonitor(
+        name='Left Arm', servo_names=LEFT_ARM_SERVO_NAMES,
+        expected_voltage=12.0, tolerance_voltage=1.0)
+    health_checks['right_arm_voltage'] = ServoVoltageMonitor(
+        name='Right Arm', servo_names=RIGHT_ARM_SERVO_NAMES,
+        expected_voltage=12.0, tolerance_voltage=1.0)
+    health_checks['head_voltage'] = ServoVoltageMonitor(
+        name='Head', servo_names=HEAD_SERVO_NAMES,
+        expected_voltage=12.0, tolerance_voltage=1.0)
+
     # ========================================================================
-    # GDB Diagnostic Timing Monitors
+    # Servo Health Monitors (temperature / status / current)
     # ========================================================================
-    
-    health_checks['gdb0_timing'] = DiagnosticTimingMonitor(
-        name='GDB0',
-        max_total_ms=10.0
-    )
-    
-    health_checks['gdb1_timing'] = DiagnosticTimingMonitor(
-        name='GDB1',
-        max_total_ms=10.0
-    )
-    
+
+    health_checks['left_arm_servos'] = ServoMonitor(
+        name='Left Arm', servo_names=LEFT_ARM_SERVO_NAMES,
+        temp_warn=50.0, current_warn_ma=3000.0)
+    health_checks['right_arm_servos'] = ServoMonitor(
+        name='Right Arm', servo_names=RIGHT_ARM_SERVO_NAMES,
+        temp_warn=50.0, current_warn_ma=3000.0)
+    health_checks['head_servos'] = ServoMonitor(
+        name='Head', servo_names=HEAD_SERVO_NAMES,
+        temp_warn=50.0, current_warn_ma=3000.0)
+
     # ========================================================================
-    # GDB Board Temperature Monitors
+    # Back Board Temperature Monitor
     # ========================================================================
-    
-    health_checks['gdb0_board_temp'] = TemperatureMonitor(
-        name='GDB0 Board Temp',
-        warn_temp=45.0,
-        critical_temp=45.0
-    )
-    
-    health_checks['gdb1_board_temp'] = TemperatureMonitor(
-        name='GDB1 Board Temp',
-        warn_temp=45.0,
-        critical_temp=45.0
-    )
-    
-    # ========================================================================
-    # Servo Health Monitors
-    # ========================================================================
-    
-    health_checks['gdb0_servos'] = ServoMonitor(
-        name='GDB0',
-        servo_names=GDB0_SERVO_NAMES,
-        temp_warn=50.0,
-        current_warn_ma=3000.0
-    )
-    
-    health_checks['gdb1_servos'] = ServoMonitor(
-        name='GDB1',
-        servo_names=GDB1_SERVO_NAMES,
-        temp_warn=50.0,
-        current_warn_ma=3000.0
-    )
-    
+
+    health_checks['back_board_temp'] = TemperatureMonitor(
+        name='Back Board Temp', warn_temp=45.0, critical_temp=45.0)
+
     # ========================================================================
     # Jetson Temperature Monitors
     # ========================================================================

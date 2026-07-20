@@ -2,8 +2,8 @@
 
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.srv import GDBServoService
-from alfie_msgs.msg import GDBServoMemoryMap
+from alfie_msgs.srv import ServoService
+from alfie_msgs.msg import ServoMemoryMap
 import sys
 
 def call_servo_service(servo_id=0, operation='r', address=0, value=0):

@@ -90,5 +90,39 @@ def test_timeout_returns_clean_error():
     assert "error" in r and "timed out" in r["error"]
 
 
+def test_read_timeout_is_tight_without_rerank():
+    # Default path must fail fast on a hung daemon, not block a voice turn.
+    qmd_search.configure("http://localhost:8181/query", skip_rerank=True)
+    assert qmd_search._TIMEOUT[1] == qmd_search._READ_TIMEOUT_NO_RERANK
+
+
+def test_read_timeout_is_longer_with_rerank():
+    qmd_search.configure("http://localhost:8181/query", skip_rerank=False)
+    assert qmd_search._TIMEOUT[1] == qmd_search._READ_TIMEOUT_RERANK
+    assert qmd_search._READ_TIMEOUT_RERANK > qmd_search._READ_TIMEOUT_NO_RERANK
+
+
+def test_warmup_fires_one_query():
+    qmd_search.configure("http://localhost:8181/query", skip_rerank=True)
+    with mock.patch.object(qmd_search.requests, "post",
+                           return_value=_fake_response({"results": []})) as post:
+        qmd_search.warmup()
+    assert post.call_count == 1
+
+
+def test_warmup_noop_when_not_configured():
+    qmd_search.configure(None)
+    with mock.patch.object(qmd_search.requests, "post") as post:
+        qmd_search.warmup()  # must not touch the network
+    assert post.call_count == 0
+
+
+def test_warmup_swallows_daemon_errors():
+    qmd_search.configure("http://localhost:8181/query")
+    with mock.patch.object(qmd_search.requests, "post",
+                           side_effect=requests.exceptions.ConnectionError()):
+        qmd_search.warmup()  # must not raise
+
+
 def test_list_tools_shape():
     assert {t["name"] for t in qmd_search.list_tools()} == {"vault_search"}

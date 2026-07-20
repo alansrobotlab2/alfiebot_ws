@@ -51,8 +51,8 @@
 #define IMU_I2C_SDA_PIN         12      ///< BNO085 I2C0 SDA pin
 #define IMU_I2C_SCL_PIN         13      ///< BNO085 I2C0 SCL pin
 #define IMU_RESET_PIN           11      ///< BNO085 active-low reset line
-#define IMU_I2C_ADDR            0x4A    ///< BNO085 default I2C address (SA0/ADR low)
-#define IMU_I2C_CLOCK_HZ        400000  ///< I2C bus clock (Fast Mode)
+#define IMU_I2C_ADDR            0x4B    ///< BNO085 I2C address (SA0/ADR high)
+#define IMU_I2C_CLOCK_HZ        100000  ///< I2C bus clock (Standard Mode)
 #define IMU_REPORT_INTERVAL_MS  10      ///< On-chip report interval (100 Hz)
 
 
@@ -157,7 +157,7 @@
 /**
  * @brief Maximum Velocities and Accelerations for Linear Actuator
  */
-#define MAX_ACTUATOR_VELOCITY       0.117     ///< Maximum linear actuator velocity (m/s) hypothetical with 176 rpm motor, no load
+#define MAX_ACTUATOR_VELOCITY       0.10     ///< Maximum linear actuator velocity (m/s) hypothetical with 176 rpm motor, no load
 #define MAX_ACTUATOR_ACCELERATION   0.75      ///< Maximum linear actuator acceleration (m/s²)
 
 /**
@@ -267,8 +267,8 @@ typedef enum {
 /**
  * @brief ROS State Machine Timing Configuration
  */
-#define ROS_TASK_FREQUENCY_HZ   100     ///< ROS task frequency (Hz)
-#define ROS_TASK_PERIOD_MS      10      ///< ROS task period (ms) = 1000/FREQUENCY
+#define ROS_TASK_FREQUENCY_HZ   50      ///< ROS task frequency (Hz)
+#define ROS_TASK_PERIOD_MS      20      ///< ROS task period (ms) = 1000/FREQUENCY
 #define AGENT_PING_INTERVAL_MS  100     ///< Interval to ping agent when waiting (ms)
 #define AGENT_HEALTH_CHECK_MS   200     ///< Interval to check connection health (ms)
 #define AGENT_PING_TIMEOUT_MS   50      ///< Timeout for agent ping when waiting (ms)

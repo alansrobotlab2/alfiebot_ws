@@ -46,9 +46,9 @@ void headCmdCallback(const void *msgin)
 {
     const alfie_msgs__msg__HeadCmd *msg = (const alfie_msgs__msg__HeadCmd *)msgin;
 
-    applyServoCmd(SERVO_PAN,  &msg->pan);
-    applyServoCmd(SERVO_TILT, &msg->tilt);
-    applyServoCmd(SERVO_ROLL, &msg->roll);
+    for (uint8_t i = 0; i < NUM_SERVOS; i++) {
+        applyServoCmd(i, &msg->servos[i]);
+    }
 
     b.eye_pwm[EYE_LEFT]  = msg->eye_pwm[0];
     b.eye_pwm[EYE_RIGHT] = msg->eye_pwm[1];
@@ -96,9 +96,9 @@ void publishHeadState(void)
     head_state_msg.header.stamp.sec     = (int32_t)(now_ns / 1000000000LL);
     head_state_msg.header.stamp.nanosec = (uint32_t)(now_ns % 1000000000LL);
 
-    fillServoState(SERVO_PAN,  &head_state_msg.pan);
-    fillServoState(SERVO_TILT, &head_state_msg.tilt);
-    fillServoState(SERVO_ROLL, &head_state_msg.roll);
+    for (uint8_t i = 0; i < NUM_SERVOS; i++) {
+        fillServoState(i, &head_state_msg.servos[i]);
+    }
 
     head_state_msg.eye_state[0] = b.eye_state[EYE_LEFT];
     head_state_msg.eye_state[1] = b.eye_state[EYE_RIGHT];

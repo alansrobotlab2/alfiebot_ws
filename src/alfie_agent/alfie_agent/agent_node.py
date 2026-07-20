@@ -119,6 +119,10 @@ class AgentNode(Node):
         tools.configure(self.vault_root, qmd_url=qmd_url,
                         qmd_skip_rerank=qmd_skip_rerank, room_url=room_url,
                         see_detect=self._nanoowl_detect)
+        # Warm the QMD daemon off the init path: the first vault search is ~1.2 s
+        # (cold embedding-model load) vs ~75 ms warm, so pay that now on a
+        # background thread instead of on the user's first turn.
+        threading.Thread(target=tools.warmup_vault_search, daemon=True).start()
         # Keep the soul + tool specs so the system prompt can be rebuilt per
         # episode with the recent-memory window folded in (see on_wake).
         self._tool_specs = tools.list_tools()

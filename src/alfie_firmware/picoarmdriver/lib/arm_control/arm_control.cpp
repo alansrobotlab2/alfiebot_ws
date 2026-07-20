@@ -7,8 +7,10 @@
 extern DriverBoard b;
 
 // ---------------------------------------------------------------------------
-// Static mapping tables (ported from alfie_bringup/servo_config.py SERVO_POLARITY
-// and master_cmd.py / master_status.py).
+// Static mapping tables. These polarity values are canonical here now; they were
+// originally the host-side SERVO_POLARITY table in alfie_bringup (formerly
+// servo_config.py, applied in master_cmd.py / master_status.py) before the gen2
+// firmware took over unit conversion and polarity.
 // ---------------------------------------------------------------------------
 
 // Per-servo sign for each side, physical-servo order:

@@ -11,24 +11,60 @@ Configured via ``configure(qmd_url)`` (the ROS node passes its ``qmd_url`` param
 If the daemon is down the tool returns a clear error dict rather than raising, so
 the agent can tell the user search is unavailable instead of crashing the turn.
 """
+import logging
+
 import requests
+
+_log = logging.getLogger(__name__)
 
 _QMD_URL = None
 _SKIP_RERANK = False
-# (connect, read). Read is generous: a cold CPU query loads the embedding model on
-# first use; the reranker adds more (skip it by default — see qmd_skip_rerank).
-_TIMEOUT = (5, 30)
+# (connect, read). Set by configure() from the rerank mode:
+#   * rerank OFF (default): lex+vec is fast — cold ~1.2 s (embedding-model load on
+#     first query), warm ~75 ms. A tight read timeout means a hung daemon fails a
+#     voice turn fast instead of blocking it.
+#   * rerank ON: the 0.6 B cross-encoder runs per query on CPU here and measured
+#     >30 s — it does NOT complete within any usable interactive budget. We give
+#     it more headroom but warn loudly, because enabling it effectively breaks
+#     vault_search on this hardware.
+_TIMEOUT = (5, 10)
+_READ_TIMEOUT_NO_RERANK = 10
+_READ_TIMEOUT_RERANK = 45
 
 
 def configure(qmd_url, skip_rerank=False):
     """Point vault search at the QMD daemon's /query URL."""
-    global _QMD_URL, _SKIP_RERANK
+    global _QMD_URL, _SKIP_RERANK, _TIMEOUT
     _QMD_URL = qmd_url
     _SKIP_RERANK = bool(skip_rerank)
+    read = _READ_TIMEOUT_NO_RERANK if _SKIP_RERANK else _READ_TIMEOUT_RERANK
+    _TIMEOUT = (5, read)
+    if not _SKIP_RERANK:
+        _log.warning(
+            "qmd_search: reranker ENABLED (skip_rerank=False). The 0.6B "
+            "cross-encoder runs per query on CPU and measured >30 s here — "
+            "vault_search will likely time out. Set qmd_skip_rerank=True.")
 
 
 def _err(msg):
     return {"error": msg}
+
+
+def warmup():
+    """
+    Fire one throwaway search so the daemon loads its embedding model now.
+
+    The first real query is otherwise ~1.2 s (cold model load) vs ~75 ms warm;
+    calling this at node startup moves that cost off the user's first turn. Best
+    effort — a down or slow daemon is swallowed (the real query path reports it).
+    """
+    if not _QMD_URL:
+        return
+    try:
+        _vault_search({"query": "warmup", "max_results": 1})
+        _log.info("qmd_search: vault search warmed up")
+    except Exception:  # never let warmup break startup
+        pass
 
 
 def _vault_search(params):

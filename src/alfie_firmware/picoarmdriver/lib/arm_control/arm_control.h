@@ -4,8 +4,8 @@
  *
  * The arm exposes 6 logical joints over ROS; physically it has 7 servos because
  * the shoulder-pitch joint is a mirrored coupled pair. This module reproduces
- * the expansion/collapse that used to run host-side in alfie_bringup
- * (master_cmd.py / master_status.py / servo_config.py):
+ * the expansion/collapse and polarity that used to run host-side in alfie_bringup
+ * (master_cmd.py / master_status.py, plus the since-removed servo_config.py):
  *
  *   - armSelectSide() : read the Pico serial, pick left/right, polarity + namespace.
  *   - applyArmCmd()   : 6 joint commands -> 7 servo register writes (b.mBuf).
