@@ -90,7 +90,8 @@ bool createRosEntities(void) {
     }
     
     // Create subscriber for /mecanumdrive topic
-    ret = rclc_subscription_init_default(
+    // BEST_EFFORT to match the master_cmd publisher (and the other pico drivers)
+    ret = rclc_subscription_init_best_effort(
         &mecanum_subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
@@ -103,7 +104,7 @@ bool createRosEntities(void) {
     }
     
     // Create publisher for odometry
-    ret = rclc_publisher_init_default(
+    ret = rclc_publisher_init_best_effort(
         &odom_publisher,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
