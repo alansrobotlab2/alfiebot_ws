@@ -20,7 +20,7 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument(
             'image_topic',
-            default_value='stereo_camera/left_center/image_raw/compressed'),
+            default_value='stereo_camera/left_wide/image_raw/compressed'),
         DeclareLaunchArgument('prompt', default_value=DEFAULT_PROMPT),
         DeclareLaunchArgument('threshold', default_value='0.1'),
         # Point this at a pre-built TensorRT engine for a big speedup (see README).

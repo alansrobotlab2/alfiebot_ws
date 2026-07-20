@@ -8,12 +8,12 @@ local HTTP endpoint (mirroring how the agent already reaches the QMD search
 daemon), keeping the vision model out of the LLM process.
 
 What it does:
-  * Subscribes to the two wide stereo eyes
-    (``stereo_camera/{left,right}_wide/image_raw/compressed``) and keeps only the
-    latest JPEG of each (BEST_EFFORT depth-1, matching the camera publisher).
+  * Subscribes to the left wide eye
+    (``stereo_camera/left_wide/image_raw/compressed``) and keeps only the
+    latest JPEG (BEST_EFFORT depth-1, matching the camera publisher).
   * Lazily loads a DINOv2 image encoder (``encoder.Encoder``) on the first
     request — no VRAM is held while idle.
-  * Fuses the two eyes into one embedding and matches it against a persistent
+  * Embeds the current view and matches it against a persistent
     ``RoomStore`` of taught rooms.
   * Serves three routes on ``127.0.0.1:<http_port>``:
       - ``POST /classify``           -> best-matching room + confidence
@@ -50,8 +50,6 @@ class RoomNode(Node):
         # --- parameters -------------------------------------------------------
         self.left_topic = self.declare_parameter(
             'left_topic', 'stereo_camera/left_wide/image_raw/compressed').value
-        self.right_topic = self.declare_parameter(
-            'right_topic', 'stereo_camera/right_wide/image_raw/compressed').value
         self.http_port = int(self.declare_parameter('http_port', 8182).value)
         self.model_path = os.path.expanduser(self.declare_parameter(
             'model_path', '~/alfiebot_ws/models/dinov2_vits14.onnx').value)
@@ -70,7 +68,6 @@ class RoomNode(Node):
         # --- frame cache (written by ROS callbacks, read by HTTP workers) -----
         self._frame_lock = threading.Lock()
         self._left_jpeg = None
-        self._right_jpeg = None
 
         # --- encoder (lazy) ---------------------------------------------------
         self._encoder = None
@@ -82,8 +79,6 @@ class RoomNode(Node):
         cam_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.create_subscription(CompressedImage, self.left_topic,
                                  self._on_left, cam_qos)
-        self.create_subscription(CompressedImage, self.right_topic,
-                                 self._on_right, cam_qos)
 
         # Latched current-room telemetry so late subscribers still get the value.
         room_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -107,17 +102,13 @@ class RoomNode(Node):
         with self._frame_lock:
             self._left_jpeg = bytes(msg.data)
 
-    def _on_right(self, msg):
-        with self._frame_lock:
-            self._right_jpeg = bytes(msg.data)
+    def _snapshot_frame(self):
+        """Return the latest left-eye JPEG bytes under the lock.
 
-    def _snapshot_frames(self):
-        """Return the latest (left, right) JPEG bytes under the lock.
-
-        Either may be None if that eye hasn't published a frame yet.
+        May be None if the eye hasn't published a frame yet.
         """
         with self._frame_lock:
-            return self._left_jpeg, self._right_jpeg
+            return self._left_jpeg
 
     # --- encoder (lazy load) --------------------------------------------------
 
@@ -149,16 +140,15 @@ class RoomNode(Node):
         return self._encoder, None
 
     def _current_embedding(self):
-        """Embed the current fused (left+right) view; returns (vec, error_str)."""
+        """Embed the current left-eye view; returns (vec, error_str)."""
         enc, err = self._get_encoder()
         if enc is None:
             return None, err
-        left, right = self._snapshot_frames()
-        jpegs = [j for j in (left, right) if j is not None]
-        if not jpegs:
+        jpeg = self._snapshot_frame()
+        if jpeg is None:
             return None, 'no camera frame received yet'
         try:
-            vec = enc.embed_jpegs_mean(jpegs)
+            vec = enc.embed_jpeg(jpeg)
         except Exception as e:
             return None, f'embedding failed: {e}'
         if vec is None:

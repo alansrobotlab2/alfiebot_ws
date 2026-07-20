@@ -91,16 +91,3 @@ class Encoder:
         if bgr is None:
             return None
         return self.embed_bgr(bgr)
-
-    def embed_jpegs_mean(self, jpeg_list):
-        """Fuse several JPEG frames into one averaged unit embedding.
-
-        Used to combine the left+right eyes into a single view descriptor.
-        Frames that fail to decode are skipped; returns None if none decode.
-        """
-        vecs = [v for v in (self.embed_jpeg(j) for j in jpeg_list) if v is not None]
-        if not vecs:
-            return None
-        mean = np.mean(np.vstack(vecs), axis=0)
-        norm = float(np.linalg.norm(mean))
-        return mean / norm if norm > 1e-12 else mean
