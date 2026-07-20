@@ -107,25 +107,12 @@ void setup1() {
  * Manages micro-ROS subscriber and publisher using a robust state machine approach
  */
 void loop1() {
-    static uint32_t last_wake_time = 0;
-    const uint32_t frequency_ms = ROS_TASK_PERIOD_MS; // 10ms = 100Hz
-    
-    // Initialize the last_wake_time variable with the current time
-    if (last_wake_time == 0) {
-        last_wake_time = millis();
-    }
-    
-    // Wait for the next cycle (precise 100 Hz timing)
-    uint32_t current_time = millis();
-    uint32_t elapsed = current_time - last_wake_time;
-    
-    if (elapsed >= frequency_ms) {
-        last_wake_time = current_time;
-        
-        // Execute ROS state machine task
-        rosStateMachineTask();
-    }
-    
+    // Drift-free 50 Hz tick: EXECUTE_AT_RATE_MS advances the deadline by a fixed
+    // ROS_TASK_PERIOD_MS (20 ms) instead of resetting it to "now", so the task's
+    // own run-time no longer stretches the true period. BackState is published
+    // once per tick, giving a stable 50 Hz.
+    EXECUTE_AT_RATE_MS(ROS_TASK_PERIOD_MS, rosStateMachineTask());
+
     // Small delay to prevent overwhelming the CPU
     delay(1);
 }

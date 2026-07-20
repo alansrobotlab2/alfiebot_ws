@@ -71,4 +71,10 @@ void SCSerial::rFlushSCS()
 
 void SCSerial::wFlushSCS()
 {
+	// Block until the UART has physically shifted out the whole packet. On the
+	// RP2040 earlephilhower core writeSCS() only queues into the TX ring buffer
+	// and returns, so without this we start reading the half-duplex bus before
+	// the request has left the wire and the auto-direction adapter drops the
+	// servo replies. (The stock Feetech library flushes here; it was a no-op.)
+	pSerial->flush();
 }

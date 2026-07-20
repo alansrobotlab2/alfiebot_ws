@@ -60,8 +60,15 @@ static void updateLed() {
 // The adapter is a transparent passthrough, so the host runs at the servos'
 // native baud. Servos speak the Feetech STS/SCS protocol (ST3215 et al.),
 // 1 Mbaud / 8N1 default.
+
+// UART0 pins for picoarmdriver
 static const uint8_t BUS_TX_PIN = 0;
 static const uint8_t BUS_RX_PIN = 1;
+
+// UART0 pins for picoheaddriver
+//static const uint8_t BUS_TX_PIN = 12;
+//static const uint8_t BUS_RX_PIN = 13;
+
 static const uint32_t BUS_BAUD = 1000000;  // 1 Mbaud
 
 // STS/SCS protocol constants

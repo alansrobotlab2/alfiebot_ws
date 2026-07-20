@@ -12,9 +12,6 @@ consumers can wait for the model (a 35B MoE takes ~30 s to load) before entering
 the conversation loop. All paths are ROS parameters so a different build/model
 can be selected at launch.
 """
-import os
-import signal
-import subprocess
 import threading
 import time
 import urllib.request
@@ -23,6 +20,9 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Bool
+
+from alfie_llm.proc_util import (
+    spawn_supervised, terminate_group, install_sigterm_shutdown)
 
 
 class MLCLLMServeNode(Node):
@@ -122,9 +122,10 @@ class MLCLLMServeNode(Node):
             f'Starting MLC-LLM server: {self.model} (lib {self.model_lib}, '
             f'{self.device}, mode {self.mode}, port {self.port})')
         try:
-            # Own session/process group so we can tear down mlc's child processes.
-            self.proc = subprocess.Popen(
-                ['bash', '-c', self._serve_cmd()], start_new_session=True)
+            # Own session/process group so we can tear down mlc's child processes,
+            # and armed with PR_SET_PDEATHSIG so the server dies with this node even
+            # on an uncatchable SIGKILL/crash (see proc_util).
+            self.proc = spawn_supervised(['bash', '-c', self._serve_cmd()])
             self.proc.wait()
             if not self._stop.is_set():
                 self.get_logger().error(
@@ -148,28 +149,22 @@ class MLCLLMServeNode(Node):
 
     def destroy_node(self):
         self._stop.set()
-        if self.proc and self.proc.poll() is None:
-            try:
-                pgid = os.getpgid(self.proc.pid)
-                os.killpg(pgid, signal.SIGINT)
-                for _ in range(20):
-                    if self.proc.poll() is not None:
-                        break
-                    time.sleep(0.25)
-                if self.proc.poll() is None:
-                    os.killpg(pgid, signal.SIGKILL)
-            except Exception:
-                pass
+        # SIGINT first so mlc releases the GPU cleanly, then escalate to SIGKILL.
+        terminate_group(self.proc, grace=5.0, logger=self.get_logger())
         super().destroy_node()
 
 
 def main(args=None):
     rclpy.init(args=args)
+    # Route SIGTERM (ros2 launch escalation / `kill`) through the same shutdown
+    # path as Ctrl-C so `destroy_node()` tears the mlc server down instead of
+    # leaking it.
+    install_sigterm_shutdown()
     node = MLCLLMServeNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info('KeyboardInterrupt received, shutting down...')
+        node.get_logger().info('Shutdown signal received, stopping MLC-LLM server...')
     finally:
         node.destroy_node()
         rclpy.shutdown()

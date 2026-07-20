@@ -194,8 +194,10 @@ class MasterStatusNode(Node):
         # Back state (linear actuator + IMU), pass-through
         robot_state.back_state = self.back_state if self.back_state is not None else BackState()
 
-        # Eye LED PWM duty from the head module (0..4095)
-        robot_state.eye_state = list(self.head_state.eye_state)
+        # Eye LED PWM duty from the head module (0..4095). head_state.eye_state is
+        # a numpy uint16 array; convert to Python ints so the RobotLowState setter's
+        # isinstance(v, int) check passes (list() alone leaves numpy.uint16 scalars).
+        robot_state.eye_state = [int(v) for v in self.head_state.eye_state]
 
         # Measured base velocity from fused wheel odometry
         robot_state.cmd_vel = self.odom.twist.twist if self.odom is not None else Twist()

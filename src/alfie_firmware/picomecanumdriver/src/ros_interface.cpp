@@ -194,9 +194,11 @@ void rosStateMachineTask(void) {
                 agent_state = (RMW_RET_OK == rmw_uros_ping_agent(AGENT_HEALTH_TIMEOUT_MS, AGENT_HEALTH_ATTEMPTS)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;
             );
             
-            // Publish odometry data
+            // Publish odometry data, throttled to a stable 50 Hz to match the
+            // master_status watchdog and avoid saturating the best-effort USB-CDC
+            // link (the ROS task still ticks at 100 Hz for low command latency).
             if (micro_ros_initialized) {
-                publishOdometry();
+                EXECUTE_AT_RATE_MS(STATE_PUBLISH_PERIOD_MS, publishOdometry());
             }
             
             // Process ROS callbacks (commands) - give it 1ms to process queued messages

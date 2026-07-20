@@ -93,6 +93,7 @@
 // =============================================================================
 #define SERVO_LOOP_PERIOD_MS    10        ///< Core 0 servo bus tick (100 Hz)
 #define ROS_TASK_PERIOD_MS      10        ///< Core 1 micro-ROS tick (100 Hz)
+#define STATE_PUBLISH_PERIOD_MS 20        ///< Outbound HeadState publish cadence (50 Hz)
 
 // =============================================================================
 // SAFETY
@@ -133,6 +134,29 @@ typedef enum {
         uint32_t current_time = millis(); \
         if (current_time - last_execution >= (uint32_t)(interval_ms)) { \
             last_execution = current_time; \
+            code; \
+        } \
+    } while (0)
+
+/**
+ * @brief Run @p code on a fixed cadence of @p interval_ms (drift-free).
+ *
+ * Unlike EXECUTE_EVERY_N_MS, which resets its deadline to "now" (so the task's
+ * own run-time stretches the true period), this advances the deadline by exactly
+ * @p interval_ms, keeping the long-run average rate exact. If the loop falls more
+ * than one interval behind (e.g. after an agent stall) the deadline is clamped
+ * forward so it never fires a catch-up burst. Signed comparison tolerates the
+ * millis() wraparound.
+ */
+#define EXECUTE_AT_RATE_MS(interval_ms, code) \
+    do { \
+        static uint32_t next_deadline_ms = 0; \
+        uint32_t now_ms = millis(); \
+        if ((int32_t)(now_ms - next_deadline_ms) >= 0) { \
+            next_deadline_ms += (uint32_t)(interval_ms); \
+            if ((int32_t)(now_ms - next_deadline_ms) >= 0) { \
+                next_deadline_ms = now_ms + (uint32_t)(interval_ms); \
+            } \
             code; \
         } \
     } while (0)

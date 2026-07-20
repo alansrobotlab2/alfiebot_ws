@@ -182,8 +182,11 @@ void rosStateMachineTask(void)
             );
 
             if (micro_ros_initialized) {
+                // Spin every tick (100 Hz) for low command latency, but throttle
+                // the outbound ArmState to a stable 50 Hz to match the master_status
+                // watchdog and avoid saturating the best-effort USB-CDC link.
                 rclc_executor_spin_some(&executor, RCL_MS_TO_NS(1));
-                publishArmState();
+                EXECUTE_AT_RATE_MS(STATE_PUBLISH_PERIOD_MS, publishArmState());
             }
             handleWatchdog();
             break;

@@ -33,8 +33,12 @@ void setup()
 
     // Serial bus servos on UART0. Remap off the default GP0/GP1 (GP1 is the
     // Eye A PWM pin) BEFORE begin().
+    // Grow the RX FIFO before begin(): the multi-servo sync-read reply arrives as
+    // one back-to-back burst that overflows the earlephilhower default 32-byte RX
+    // buffer and drops feedback. 256 absorbs the whole batch.
     Serial1.setTX(SERVO_UART_TX);
     Serial1.setRX(SERVO_UART_RX);
+    Serial1.setFIFOSize(256);
     Serial1.begin(SERVO_BAUD);
     b.st.pSerial = &Serial1;
 
@@ -75,13 +79,10 @@ void setup1()
 
 void loop1()
 {
-    static uint32_t last_ros_tick = 0;
-    uint32_t now = millis();
-
-    if (now - last_ros_tick >= ROS_TASK_PERIOD_MS) {
-        last_ros_tick = now;
-        rosStateMachineTask();
-    }
+    // Drift-free 100 Hz tick: EXECUTE_AT_RATE_MS advances the deadline by a fixed
+    // ROS_TASK_PERIOD_MS instead of resetting it to "now", so the task's own
+    // run-time no longer stretches the true period.
+    EXECUTE_AT_RATE_MS(ROS_TASK_PERIOD_MS, rosStateMachineTask());
 
     delay(1);
 }

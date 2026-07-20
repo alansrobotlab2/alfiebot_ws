@@ -306,6 +306,9 @@ int	SCS::Ack(u8 ID)
 
 int	SCS::syncReadPacketTx(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen)
 {
+	// Clear any stale bytes before issuing a fresh batch request (every other
+	// transaction brackets its I/O this way; sync-read TX did not).
+	rFlushSCS();
 	syncReadRxPacketLen = nLen;
 	u8 checkSum = (4+0xfe)+IDN+MemAddr+nLen+INST_SYNC_READ;
 	u8 i;
@@ -322,6 +325,8 @@ int	SCS::syncReadPacketTx(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen)
 	}
 	checkSum = ~checkSum;
 	writeSCS(checkSum);
+	// Ensure the request is fully on the wire before we begin reading replies.
+	wFlushSCS();
 	return nLen;
 }
 
