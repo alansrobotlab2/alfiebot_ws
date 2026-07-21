@@ -107,8 +107,7 @@ class MasterCmdNode(Node):
         head.eye_pwm = list(msg.eye_pwm)
         self.head_cmd = head
 
-        # Back/spine actuator setpoint (shoulder_height is an unused convenience
-        # field in RobotLowCmd; back_cmd is the authoritative full setpoint).
+        # Back/spine actuator setpoint (position/velocity/acceleration).
         self.back_cmd = msg.back_cmd
 
         # Base velocity: forward the Twist; the mecanum board does the kinematics.

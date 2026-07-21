@@ -1,5 +1,4 @@
 uint16[2] eye_pwm
-float32 shoulder_height
 
 BackCmd back_cmd
 

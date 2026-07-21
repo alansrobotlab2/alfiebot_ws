@@ -139,7 +139,6 @@ class RightArmEchoNode(Node):
         
         # Set other fields to safe defaults
         cmd.eye_pwm = [0, 0]
-        cmd.shoulder_height = 0.0
         cmd.cmd_vel.linear.x = 0.0
         cmd.cmd_vel.linear.y = 0.0
         cmd.cmd_vel.linear.z = 0.0

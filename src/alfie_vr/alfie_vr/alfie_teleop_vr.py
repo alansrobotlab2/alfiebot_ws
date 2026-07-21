@@ -623,7 +623,6 @@ class AlfieTeleopVRNode(Node):
         
         # Initialize other command fields
         self.robot_cmd_state.eye_pwm = [0, 0]
-        self.robot_cmd_state.shoulder_height = 0.0
         self.robot_cmd_state.back_cmd = BackCmd()
         self.robot_cmd_state.back_cmd.position = 0.390
         self.robot_cmd_state.back_cmd.velocity = 0.2

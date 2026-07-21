@@ -2,8 +2,11 @@
 
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.msg import RobotLowCmd, GDBServoCmd
+from alfie_msgs.msg import RobotLowCmd, ServoCmd
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+
+# 15 servos: 0-5 left arm, 6-11 right arm, 12-14 head
+NUM_SERVOS = 15
 
 
 class RobotLowCmdPublisher(Node):
@@ -32,20 +35,19 @@ class RobotLowCmdPublisher(Node):
         """Publish a test RobotLowCmd message with all zeros"""
         msg = RobotLowCmd()
         
-        # Set eye PWM values to 0
+        # Set eye PWM values (uint16[2], duty 0..4095)
         msg.eye_pwm = [1, 1]
-        
-        # Set driver PWM values to 0
-        msg.driver_pwm = [1, 1]
-        
-        # Create 17 servo commands with all zeros
-        for i in range(17):
-            servo_cmd = GDBServoCmd()
-            servo_cmd.torqueswitch = 0
-            servo_cmd.acceleration = 0
-            servo_cmd.targetlocation = 0
+
+        # Create 15 servo commands with all zeros (torque disabled)
+        for i in range(NUM_SERVOS):
+            servo_cmd = ServoCmd()
+            servo_cmd.enabled = False
+            servo_cmd.target_location = 0.0
+            servo_cmd.target_speed = 0.0
+            servo_cmd.target_acceleration = 0.0
+            servo_cmd.target_torque = 0.0
             msg.servo_cmd.append(servo_cmd)
-        
+
         # Publish the message
         self.publisher.publish(msg)
         

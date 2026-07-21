@@ -61,7 +61,6 @@ This node currently has no configurable parameters. It runs at a fixed 100 Hz pu
 - All non-right-arm servos are explicitly disabled in the command output
 - cmd_vel (base velocity) is set to zero
 - eye_pwm is set to [0, 0]
-- shoulder_height is set to 0.0
 - Warnings are logged if no robot state has been received yet (throttled to once per second)
 
 ## Technical Details
