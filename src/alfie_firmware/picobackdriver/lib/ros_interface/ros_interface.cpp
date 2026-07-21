@@ -22,6 +22,7 @@ rclc_executor_t executor;
 
 // Subscribers and Publishers
 rcl_subscription_t back_subscriber;
+rcl_subscription_t neck_power_subscriber;
 rcl_publisher_t state_publisher;
 
 // Services
@@ -30,6 +31,11 @@ rcl_service_t calibration_service;
 // Message instances
 alfie_msgs__msg__BackCmd back_cmd_msg;
 alfie_msgs__msg__BackState back_state_msg;
+std_msgs__msg__Empty neck_power_msg;
+
+// Compass-decouple timestamps (millis of last "power applied" signal). 0 = never.
+uint32_t last_neck_power_ms = 0;  // from the neck_power heartbeat (remote neck servo 0)
+uint32_t last_back_power_ms = 0;  // from local actuator PWM being non-zero
 
 // Service instances
 alfie_msgs__srv__BackRequestCalibration_Request calibration_request;
@@ -103,7 +109,23 @@ bool createRosEntities(void) {
         rclc_support_fini(&support);
         return false;
     }
-    
+
+    // Create subscriber for neck_power topic (uses node namespace)
+    // std_msgs/Empty heartbeat from master_low_status; presence within
+    // COMPASS_DECOUPLE_MS means neck servo 0 is drawing power.
+    ret = rclc_subscription_init_best_effort(
+        &neck_power_subscriber,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Empty),
+        "neck_power"
+    );
+    if (ret != RCL_RET_OK) {
+        (void)rcl_subscription_fini(&back_subscriber, &node);
+        (void)rcl_node_fini(&node);
+        rclc_support_fini(&support);
+        return false;
+    }
+
     // Create publisher for back state (uses node namespace)
     // Using best effort QoS for low-latency communication
     ret = rclc_publisher_init_best_effort(
@@ -113,6 +135,7 @@ bool createRosEntities(void) {
         "backstate"
     );
     if (ret != RCL_RET_OK) {
+        (void)rcl_subscription_fini(&neck_power_subscriber, &node);
         (void)rcl_subscription_fini(&back_subscriber, &node);
         (void)rcl_node_fini(&node);
         rclc_support_fini(&support);
@@ -128,24 +151,26 @@ bool createRosEntities(void) {
     );
     if (ret != RCL_RET_OK) {
         (void)rcl_publisher_fini(&state_publisher, &node);
+        (void)rcl_subscription_fini(&neck_power_subscriber, &node);
         (void)rcl_subscription_fini(&back_subscriber, &node);
         (void)rcl_node_fini(&node);
         rclc_support_fini(&support);
         return false;
     }
-    
-    // Create executor (2 handles: 1 subscription + 1 service)
-    ret = rclc_executor_init(&executor, &support.context, 2, &allocator);
+
+    // Create executor (3 handles: 2 subscriptions + 1 service)
+    ret = rclc_executor_init(&executor, &support.context, 3, &allocator);
     if (ret != RCL_RET_OK) {
         (void)rcl_service_fini(&calibration_service, &node);
         (void)rcl_publisher_fini(&state_publisher, &node);
+        (void)rcl_subscription_fini(&neck_power_subscriber, &node);
         (void)rcl_subscription_fini(&back_subscriber, &node);
         (void)rcl_node_fini(&node);
         rclc_support_fini(&support);
         return false;
     }
-    
-    // Add subscription to executor
+
+    // Add backcmd subscription to executor
     ret = rclc_executor_add_subscription(
         &executor,
         &back_subscriber,
@@ -157,12 +182,32 @@ bool createRosEntities(void) {
         rclc_executor_fini(&executor);
         (void)rcl_service_fini(&calibration_service, &node);
         (void)rcl_publisher_fini(&state_publisher, &node);
+        (void)rcl_subscription_fini(&neck_power_subscriber, &node);
         (void)rcl_subscription_fini(&back_subscriber, &node);
         (void)rcl_node_fini(&node);
         rclc_support_fini(&support);
         return false;
     }
-    
+
+    // Add neck_power subscription to executor
+    ret = rclc_executor_add_subscription(
+        &executor,
+        &neck_power_subscriber,
+        &neck_power_msg,
+        &neckPowerCallback,
+        ON_NEW_DATA
+    );
+    if (ret != RCL_RET_OK) {
+        rclc_executor_fini(&executor);
+        (void)rcl_service_fini(&calibration_service, &node);
+        (void)rcl_publisher_fini(&state_publisher, &node);
+        (void)rcl_subscription_fini(&neck_power_subscriber, &node);
+        (void)rcl_subscription_fini(&back_subscriber, &node);
+        (void)rcl_node_fini(&node);
+        rclc_support_fini(&support);
+        return false;
+    }
+
     // Add service to executor
     ret = rclc_executor_add_service(
         &executor,
@@ -175,6 +220,7 @@ bool createRosEntities(void) {
         rclc_executor_fini(&executor);
         (void)rcl_service_fini(&calibration_service, &node);
         (void)rcl_publisher_fini(&state_publisher, &node);
+        (void)rcl_subscription_fini(&neck_power_subscriber, &node);
         (void)rcl_subscription_fini(&back_subscriber, &node);
         (void)rcl_node_fini(&node);
         rclc_support_fini(&support);
@@ -195,10 +241,11 @@ void destroyRosEntities(void) {
         rclc_executor_fini(&executor);
         rcl_service_fini(&calibration_service, &node);
         rcl_publisher_fini(&state_publisher, &node);
+        rcl_subscription_fini(&neck_power_subscriber, &node);
         rcl_subscription_fini(&back_subscriber, &node);
         rcl_node_fini(&node);
         rclc_support_fini(&support);
-        
+
         micro_ros_initialized = false;
         ros_entities_created = false;
     }
@@ -297,6 +344,18 @@ void backDriveCallback(const void *msgin) {
     // Set flag to indicate new command received
     rp.new_actuator_command = true;
     last_command_time = rp.actuator_cmd.timestamp;
+}
+
+/**
+ * @brief Callback for the neck_power topic subscriber
+ * Records the arrival time of the neck-servo-0 power heartbeat so the compass
+ * stays decoupled for COMPASS_DECOUPLE_MS after the last one.
+ *
+ * @param msgin Pointer to incoming std_msgs/Empty message (unused)
+ */
+void neckPowerCallback(const void *msgin) {
+    (void)msgin;
+    last_neck_power_ms = millis();
 }
 
 /**
@@ -464,12 +523,36 @@ void publishOdometry(void) {
         back_state_msg.pwm_output = rp.actuator_state.pwm_output;
         back_state_msg.is_calibrated = rp.actuator_state.is_calibrated;
 
+        // Compass decouple: while the local actuator is driving (PWM != 0) or the
+        // neck servo 0 heartbeat is fresh, the magnetometer is corrupted, so
+        // publish the compass-free game rotation vector instead of the
+        // mag-referenced rotation vector. Re-couple COMPASS_DECOUPLE_MS after the
+        // last power signal. The != 0 guards avoid a spurious window at boot.
+        uint32_t now = millis();
+        if (rp.actuator_state.pwm_output != 0) {
+            last_back_power_ms = now;
+        }
+        bool decouple =
+            (last_neck_power_ms != 0 && (uint32_t)(now - last_neck_power_ms) < COMPASS_DECOUPLE_MS) ||
+            (last_back_power_ms != 0 && (uint32_t)(now - last_back_power_ms) < COMPASS_DECOUPLE_MS);
+
         // BNO085 IMU telemetry (latest snapshot from Core 0)
-        // Orientation quaternion (rotation vector)
-        back_state_msg.imu.orientation_x = rp.imu_data.qx;
-        back_state_msg.imu.orientation_y = rp.imu_data.qy;
-        back_state_msg.imu.orientation_z = rp.imu_data.qz;
-        back_state_msg.imu.orientation_w = rp.imu_data.qw;
+        // Orientation quaternion: rotation vector (mag-referenced) normally, or
+        // the game rotation vector (compass-free) while decoupled. The
+        // orientation_reliable flag lets absolute-yaw consumers drop the
+        // heading during the decouple window instead of following the swap.
+        if (decouple) {
+            back_state_msg.imu.orientation_x = rp.imu_data.game_qx;
+            back_state_msg.imu.orientation_y = rp.imu_data.game_qy;
+            back_state_msg.imu.orientation_z = rp.imu_data.game_qz;
+            back_state_msg.imu.orientation_w = rp.imu_data.game_qw;
+        } else {
+            back_state_msg.imu.orientation_x = rp.imu_data.qx;
+            back_state_msg.imu.orientation_y = rp.imu_data.qy;
+            back_state_msg.imu.orientation_z = rp.imu_data.qz;
+            back_state_msg.imu.orientation_w = rp.imu_data.qw;
+        }
+        back_state_msg.imu.orientation_reliable = !decouple;
         // Angular velocity (rad/s)
         back_state_msg.imu.angular_velocity_x = rp.imu_data.gyro_x;
         back_state_msg.imu.angular_velocity_y = rp.imu_data.gyro_y;

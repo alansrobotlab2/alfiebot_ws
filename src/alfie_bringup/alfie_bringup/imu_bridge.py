@@ -3,7 +3,7 @@
 BNO085 IMU bridge.
 
 The BNO085 (SparkFun BNO08x) is statically mounted at the top of the neck (it does
-NOT move with the head) and reaches ROS today only as a ``GDBImu`` field inside the
+NOT move with the head) and reaches ROS today only as an ``ImuState`` field inside the
 ``low/backstate`` (``alfie_msgs/BackState``) telemetry message. Isaac ROS cuVSLAM and
 ``robot_localization`` both want a clean, standalone ``sensor_msgs/Imu`` at a defined
 frame with populated covariances.
@@ -101,6 +101,15 @@ class ImuBridge(Node):
         imu.orientation_covariance = list(self._orient_cov)
         imu.angular_velocity_covariance = list(self._ang_cov)
         imu.linear_acceleration_covariance = list(self._lin_cov)
+
+        # When the firmware has decoupled the compass (nearby motor current
+        # corrupting the magnetometer), the quaternion is the game rotation
+        # vector with a free/relative yaw. Mark orientation unavailable to fusion
+        # via the robot_localization convention (covariance[0] = -1.0) so any
+        # absolute-yaw consumer drops it for this message instead of following
+        # the RV->GRV swap. Angular velocity / acceleration stay valid.
+        if not g.orientation_reliable:
+            imu.orientation_covariance[0] = -1.0
 
         # Sanity: an all-zero quaternion + zero accel means the firmware hasn't
         # populated the BNO085 yet. Warn once so integration status is obvious.

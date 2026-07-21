@@ -50,7 +50,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/HeadState.msg"
   "msg/ArmCmd.msg"
   "msg/ArmState.msg"
-  "msg/GDBImu.msg"
+  "msg/ImuState.msg"
   "msg/BackCmd.msg"
   "msg/BackState.msg"
   "msg/Doa.msg"

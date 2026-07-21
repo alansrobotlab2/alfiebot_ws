@@ -25,7 +25,8 @@
  * sensor_msgs/Imu.linear_acceleration semantics).
  */
 typedef struct {
-    float qw, qx, qy, qz;               ///< Orientation quaternion (rotation vector)
+    float qw, qx, qy, qz;               ///< Orientation quaternion (rotation vector, mag-referenced)
+    float game_qw, game_qx, game_qy, game_qz; ///< Compass-free quaternion (game rotation vector)
     float gyro_x, gyro_y, gyro_z;       ///< Angular velocity (rad/s)
     float accel_x, accel_y, accel_z;    ///< Linear acceleration (m/s^2, gravity incl.)
     bool valid;                         ///< True once a rotation-vector report has been received

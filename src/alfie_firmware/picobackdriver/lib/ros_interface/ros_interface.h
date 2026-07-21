@@ -26,6 +26,7 @@
 #include <alfie_msgs/msg/back_cmd.h>
 #include <alfie_msgs/msg/back_state.h>
 #include <alfie_msgs/srv/back_request_calibration.h>
+#include <std_msgs/msg/empty.h>
 #include "../../include/config.h"
 
 // =============================================================================
@@ -68,6 +69,7 @@ extern rclc_executor_t executor;
 
 // Subscribers and Publishers
 extern rcl_subscription_t back_subscriber;
+extern rcl_subscription_t neck_power_subscriber;
 extern rcl_publisher_t odom_publisher;
 
 // Services
@@ -111,6 +113,16 @@ void updateRosInterface(void);
  * @param msgin Pointer to incoming BackCmd message
  */
 void backDriveCallback(const void *msgin);
+
+/**
+ * @brief Callback function for the neck_power topic subscriber
+ * Receives a std_msgs/Empty heartbeat (published at 50 Hz while neck servo 0
+ * has torque enabled) and records the arrival time so publishOdometry() can
+ * decouple the compass while the nearby motor current corrupts the mag.
+ *
+ * @param msgin Pointer to incoming std_msgs/Empty message (unused)
+ */
+void neckPowerCallback(const void *msgin);
 
 /**
  * @brief Callback function for calibration service

@@ -6,6 +6,7 @@ from alfie_msgs.msg import ServoState
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Empty
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from .watchdog_checks import create_health_checks, HealthCheck
 
@@ -119,6 +120,12 @@ class MasterLowStatusNode(Node):
             RobotLowState, 'robotlowstate', qos_best_effort)
         self.joint_state_pub = self.create_publisher(
             JointState, 'joint_states', qos_best_effort)
+        # Neck-servo-0 (head pan) power heartbeat. Published once per 50 Hz cycle
+        # ONLY while the servo has torque enabled, so the back board's BNO085 can
+        # decouple its compass while the nearby motor current corrupts the mag.
+        # Resolves to /alfie/low/neck_power to match the Pico subscription.
+        self.neck_power_pub = self.create_publisher(
+            Empty, 'low/neck_power', qos_best_effort)
 
         # ---- Timers ---------------------------------------------------------
         self.state_timer = self.create_timer(PUBLISH_PERIOD_SEC, self.publish_robot_state)
@@ -178,6 +185,12 @@ class MasterLowStatusNode(Node):
 
     def publish_robot_state(self) -> None:
         """Combine the per-module states and publish the consolidated state."""
+        # Neck-servo-0 power heartbeat. Emitted independently of arm availability
+        # so the compass-decouple signal keeps flowing whenever the head reports
+        # torque on servo 0 (pan). Absence for >100 ms means powered off.
+        if self.head_state is not None and self.head_state.servos[0].enabled:
+            self.neck_power_pub.publish(Empty())
+
         # The servo state (15 joints) needs all three actuator modules; without
         # them there is nothing meaningful to publish.
         if self.left_arm_state is None or self.right_arm_state is None or self.head_state is None:
@@ -242,6 +255,11 @@ class MasterLowStatusNode(Node):
         imu.orientation_covariance = [0.0] * 9
         imu.angular_velocity_covariance = [0.0] * 9
         imu.linear_acceleration_covariance = [0.0] * 9
+        # Compass decoupled by the back board (see imu_bridge): the quaternion is
+        # the compass-free game rotation vector, so mark orientation unavailable
+        # to fusion via the robot_localization convention (covariance[0] = -1.0).
+        if not gdb_imu.orientation_reliable:
+            imu.orientation_covariance[0] = -1.0
         return imu
 
     def _build_servo_states(self) -> List[ServoState]:

@@ -53,7 +53,18 @@
 #define IMU_RESET_PIN           11      ///< BNO085 active-low reset line
 #define IMU_I2C_ADDR            0x4B    ///< BNO085 I2C address (SA0/ADR high)
 #define IMU_I2C_CLOCK_HZ        100000  ///< I2C bus clock (Standard Mode)
-#define IMU_REPORT_INTERVAL_MS  10      ///< On-chip report interval (100 Hz)
+// All BNO085 reports run at 50 Hz. The INT line is not wired, so the driver polls
+// the reports over the 100 kHz I2C bus from the Core 0 control loop; capping every
+// report at 50 Hz keeps that polling load well within budget (4x50 Hz < the old
+// 3x100 Hz) so the two fused-quaternion reports needed for compass decouple do not
+// overrun Core 0 and halve the BackState publish rate. 50 Hz matches the BackState
+// publish rate and stays fresh within COMPASS_DECOUPLE_MS.
+#define IMU_REPORT_INTERVAL_MS  20      ///< On-chip report interval for all reports (50 Hz)
+
+// Publish the compass-free game rotation vector instead of the mag-referenced
+// rotation vector for this long after the last "power applied" signal (local
+// actuator PWM or the neck_power heartbeat), then re-couple the compass.
+#define COMPASS_DECOUPLE_MS     100     ///< Compass decouple hold time (ms)
 
 
 // =============================================================================

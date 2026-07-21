@@ -20,9 +20,14 @@ static bool imu_ready = false;
  * @brief (Re)enable the desired BNO085 sensor reports
  */
 static void enableReports(void) {
-    myIMU.enableRotationVector(IMU_REPORT_INTERVAL_MS);  // fused quaternion
-    myIMU.enableGyro(IMU_REPORT_INTERVAL_MS);            // calibrated gyro (rad/s)
-    myIMU.enableAccelerometer(IMU_REPORT_INTERVAL_MS);   // accel incl. gravity (m/s^2)
+    // All reports at 50 Hz (IMU_REPORT_INTERVAL_MS). Running both fused-quaternion
+    // reports plus gyro/accel at 50 Hz keeps the polled 100 kHz I2C load below the
+    // pre-decouple design, avoiding Core 0 overruns that would halve the BackState
+    // publish rate.
+    myIMU.enableRotationVector(IMU_REPORT_INTERVAL_MS);      // fused quaternion (mag-referenced)
+    myIMU.enableGameRotationVector(IMU_REPORT_INTERVAL_MS);  // fused quaternion, NO magnetometer
+    myIMU.enableGyro(IMU_REPORT_INTERVAL_MS);                // calibrated gyro (rad/s)
+    myIMU.enableAccelerometer(IMU_REPORT_INTERVAL_MS);       // accel incl. gravity (m/s^2)
 }
 
 bool imuInit(void) {
@@ -64,6 +69,17 @@ bool imuUpdate(volatile ImuData_t &out) {
                 out.qy = myIMU.getQuatJ();
                 out.qz = myIMU.getQuatK();
                 out.valid = true;
+                updated = true;
+                break;
+
+            case SENSOR_REPORTID_GAME_ROTATION_VECTOR:
+                // Compass-free fused quaternion (gyro + accel only). Published in
+                // place of the rotation vector while nearby motor current would
+                // corrupt the magnetometer (see publishOdometry decouple logic).
+                out.game_qw = myIMU.getGameQuatReal();
+                out.game_qx = myIMU.getGameQuatI();
+                out.game_qy = myIMU.getGameQuatJ();
+                out.game_qz = myIMU.getGameQuatK();
                 updated = true;
                 break;
 
