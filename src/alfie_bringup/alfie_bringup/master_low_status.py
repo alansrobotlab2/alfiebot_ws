@@ -63,10 +63,10 @@ SERVO_JOINT_NAMES = LEFT_ARM_JOINT_NAMES + RIGHT_ARM_JOINT_NAMES + HEAD_JOINT_NA
 
 
 # ============================================================================
-# MasterStatusNode Class
+# MasterLowStatusNode Class
 # ============================================================================
 
-class MasterStatusNode(Node):
+class MasterLowStatusNode(Node):
     """Consolidates the per-module firmware state topics into a single
     RobotLowState (and a JointState for TF/visualization).
 
@@ -85,7 +85,7 @@ class MasterStatusNode(Node):
     """
 
     def __init__(self):
-        super().__init__('master_status_node')
+        super().__init__('master_low_status_node')
         # Use BEST_EFFORT QoS for all communication (matches the micro-ROS publishers)
         qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
@@ -125,7 +125,7 @@ class MasterStatusNode(Node):
         self.watchdog_timer = self.create_timer(WATCHDOG_PERIOD_SEC, self.run_health_checks)
 
         self.get_logger().info(
-            f'Master Status Node started - publishing at {PUBLISH_RATE_HZ}Hz, '
+            f'Master Low Status Node started - publishing at {PUBLISH_RATE_HZ}Hz, '
             f'watchdog at {WATCHDOG_RATE_HZ}Hz')
 
     # ========================================================================
@@ -316,7 +316,7 @@ class MasterStatusNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MasterStatusNode()
+    node = MasterLowStatusNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

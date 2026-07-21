@@ -29,10 +29,10 @@ HEAD_SLICE = slice(2 * NUM_ARM_SERVOS, 2 * NUM_ARM_SERVOS + NUM_HEAD_SERVOS)  # 
 
 
 # ============================================================================
-# MasterCmdNode Class
+# MasterLowCmdNode Class
 # ============================================================================
 
-class MasterCmdNode(Node):
+class MasterLowCmdNode(Node):
     """Splits a single RobotLowCmd into the per-module firmware command topics.
 
     Gen2 hardware drives actuation through independent Pico boards, each
@@ -49,7 +49,7 @@ class MasterCmdNode(Node):
     """
 
     def __init__(self):
-        super().__init__('master_cmd_node')
+        super().__init__('master_low_cmd_node')
         qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
         # Latest decomposed commands (published by the timer)
@@ -75,7 +75,7 @@ class MasterCmdNode(Node):
         # ---- Timer ----------------------------------------------------------
         self.cmd_timer = self.create_timer(PUBLISH_PERIOD_SEC, self.publish_module_commands)
 
-        self.get_logger().info(f'Master Cmd Node started - publishing at {PUBLISH_RATE_HZ}Hz')
+        self.get_logger().info(f'Master Low Cmd Node started - publishing at {PUBLISH_RATE_HZ}Hz')
 
     # ========================================================================
     # Callback Methods
@@ -162,7 +162,7 @@ class MasterCmdNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MasterCmdNode()
+    node = MasterLowCmdNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

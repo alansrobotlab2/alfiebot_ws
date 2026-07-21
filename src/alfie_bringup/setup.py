@@ -39,8 +39,8 @@ setup(
     # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'master_status = alfie_bringup.master_status:main',
-            'master_cmd = alfie_bringup.master_cmd:main',
+            'master_low_status = alfie_bringup.master_low_status:main',
+            'master_low_cmd = alfie_bringup.master_low_cmd:main',
             'master_watchdog = alfie_bringup.master_watchdog:main',
             'jetson_stats = alfie_bringup.jetson_stats:main',
             'gstreamer_camera_node = alfie_bringup.gstreamer_camera_node:main',

@@ -135,8 +135,8 @@ def generate_launch_description():
         Node(
             package='alfie_bringup',
             namespace='alfie',
-            executable='master_status',
-            name='master_status_node',
+            executable='master_low_status',
+            name='master_low_status_node',
             output='screen',
             emulate_tty=True,
             sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
@@ -147,8 +147,8 @@ def generate_launch_description():
         Node(
             package='alfie_bringup',
             namespace='alfie',
-            executable='master_cmd',
-            name='master_cmd_node',
+            executable='master_low_cmd',
+            name='master_low_cmd_node',
             output='screen',
             emulate_tty=True,
             sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown

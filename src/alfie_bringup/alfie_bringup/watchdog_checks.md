@@ -1,13 +1,13 @@
 # Watchdog Health Checks
 
-The watchdog health checks are integrated into the Master Status Node (`master_status.py`) to monitor the health of critical subsystems. The health check classes are defined in `watchdog_checks.py` and use the existing subscriptions in `master_status.py` to minimize load on microcontrollers and micro-ROS.
+The watchdog health checks are integrated into the Master Status Node (`master_low_status.py`) to monitor the health of critical subsystems. The health check classes are defined in `watchdog_checks.py` and use the existing subscriptions in `master_low_status.py` to minimize load on microcontrollers and micro-ROS.
 
 ## Architecture
 
 The watchdog functionality is split across two files:
 
 - **`watchdog_checks.py`** - Contains all health check classes and configuration
-- **`master_status.py`** - Integrates health checks using its existing topic subscriptions
+- **`master_low_status.py`** - Integrates health checks using its existing topic subscriptions
 
 This design allows the Master Status Node to:
 1. Subscribe to GDB and Jetson state topics once (not duplicated)
@@ -95,7 +95,7 @@ Each servo on both GDBs is monitored for the following conditions:
 
 ## Subscribed Topics
 
-All topics are subscribed by the Master Status Node (`master_status.py`), which shares the data with the watchdog health checks:
+All topics are subscribed by the Master Status Node (`master_low_status.py`), which shares the data with the watchdog health checks:
 
 | Topic | Message Type | QoS | Used By |
 |-------|--------------|-----|---------|
@@ -159,7 +159,7 @@ Contains:
 - `GDB0_SERVO_NAMES` / `GDB1_SERVO_NAMES` - Servo name configurations
 - `create_health_checks()` - Factory function to create all configured health checks
 
-### `master_status.py`
+### `master_low_status.py`
 
 Integrates watchdog by:
 1. Importing `create_health_checks()` and `HealthCheck` from `watchdog_checks.py`
@@ -172,11 +172,11 @@ Integrates watchdog by:
 The watchdog is now integrated into the Master Status Node:
 
 ```bash
-ros2 run alfie_bringup master_status
+ros2 run alfie_bringup master_low_status
 ```
 
 All health check failures are logged as errors to the ROS2 logging system.
 
 ## Deprecated
 
-The standalone `master_watchdog.py` node is deprecated. Its functionality has been merged into `master_status.py` to reduce duplicate topic subscriptions and system load.
+The standalone `master_watchdog.py` node is deprecated. Its functionality has been merged into `master_low_status.py` to reduce duplicate topic subscriptions and system load.

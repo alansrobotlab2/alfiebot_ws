@@ -89,13 +89,13 @@ ros2 topic echo /robotlowstate
 If the node publishes warnings about "No robot state received yet":
 1. Verify that `robotlowstate` is being published: `ros2 topic hz /robotlowstate`
 2. Check that the QoS policies match between publisher and subscriber
-3. Ensure the master_status node or equivalent state publisher is running
+3. Ensure the master_low_status node or equivalent state publisher is running
 
 ## Integration with Other Nodes
 
 This node can be run alongside:
-- `master_status` - Provides the robotlowstate data
-- `master_cmd` - Processes the robotlowcmd messages
+- `master_low_status` - Provides the robotlowstate data
+- `master_low_cmd` - Processes the robotlowcmd messages
 - Other control nodes that may publish competing commands (note: last writer wins)
 
 ⚠️ **Warning**: Running this node alongside other nodes that publish to `robotlowcmd` may cause conflicts. Ensure only one command source is active at a time.
