@@ -40,7 +40,8 @@ setup(
     entry_points={
         'console_scripts': [
             'master_low_status = alfie_bringup.master_low_status:main',
-            'master_low_cmd = alfie_bringup.master_low_cmd:main',
+            'command_mux = alfie_bringup.command_mux:main',
+            'idle_behavior = alfie_bringup.idle_behavior:main',
             'master_watchdog = alfie_bringup.master_watchdog:main',
             'jetson_stats = alfie_bringup.jetson_stats:main',
             'gstreamer_camera_node = alfie_bringup.gstreamer_camera_node:main',

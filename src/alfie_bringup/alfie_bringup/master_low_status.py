@@ -7,8 +7,16 @@ from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Empty
-from rclpy.qos import QoSProfile, ReliabilityPolicy
-from .watchdog_checks import create_health_checks, HealthCheck
+from rclpy.qos import (QoSProfile, ReliabilityPolicy, DurabilityPolicy,
+                       HistoryPolicy)
+from .watchdog_checks import (create_health_checks, HealthCheck,
+                              SERVO_STATUS_OVERLOAD, SERVO_STATUS_TEMPERATURE)
+
+
+# Auto-estop: trip a protective stop when the actuator firmware reports a servo
+# fault. Critical temperature (deg C) beyond which we also trip, independent of
+# the firmware's own temperature status bit.
+AUTO_ESTOP_CRITICAL_TEMP_C = 65.0
 
 
 # ============================================================================
@@ -101,6 +109,22 @@ class MasterLowStatusNode(Node):
         # Initialize watchdog health checks
         self.health_checks: Dict[str, HealthCheck] = create_health_checks()
 
+        # ---- Auto-estop -----------------------------------------------------
+        # Publish `estop` (latched) to the command_mux when the actuator firmware
+        # reports a servo fault (overload / overtemperature). Rising-edge only;
+        # the mux latch persists until a deliberate estop_reset.
+        self.declare_parameter('auto_estop_enabled', True)
+        self.declare_parameter('auto_estop_critical_temp_c', AUTO_ESTOP_CRITICAL_TEMP_C)
+        self.auto_estop_enabled = self.get_parameter('auto_estop_enabled').value
+        self.auto_estop_critical_temp = self.get_parameter('auto_estop_critical_temp_c').value
+        self._servo_fault_active = False       # aggregate rising-edge latch
+        self._module_faults = {'left_arm': False, 'right_arm': False, 'head': False}
+        qos_latched = QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST)
+        self.estop_pub = self.create_publisher(Empty, 'estop', qos_latched)
+
         # ---- Subscriptions --------------------------------------------------
         self.left_arm_sub = self.create_subscription(
             ArmState, 'low/left_arm/armstate', self.left_arm_callback, qos_best_effort)
@@ -144,18 +168,21 @@ class MasterLowStatusNode(Node):
         self.health_checks['left_arm_rate'].update()
         self.health_checks['left_arm_servos'].update(msg.joint_state)
         self.health_checks['left_arm_voltage'].update(msg.joint_state)
+        self._check_servo_faults('left_arm', msg.joint_state)
 
     def right_arm_callback(self, msg: ArmState) -> None:
         self.right_arm_state = msg
         self.health_checks['right_arm_rate'].update()
         self.health_checks['right_arm_servos'].update(msg.joint_state)
         self.health_checks['right_arm_voltage'].update(msg.joint_state)
+        self._check_servo_faults('right_arm', msg.joint_state)
 
     def head_callback(self, msg: HeadState) -> None:
         self.head_state = msg
         self.health_checks['head_rate'].update()
         self.health_checks['head_servos'].update(msg.servos)
         self.health_checks['head_voltage'].update(msg.servos)
+        self._check_servo_faults('head', msg.servos)
 
     def back_callback(self, msg: BackState) -> None:
         self.back_state = msg
@@ -326,6 +353,46 @@ class MasterLowStatusNode(Node):
             error_msg = check.check()
             if error_msg:
                 self.get_logger().error(error_msg)
+
+    # ========================================================================
+    # Auto-estop on servo faults
+    # ========================================================================
+
+    def _check_servo_faults(self, module: str, servos: List[ServoState]) -> None:
+        """Trip a protective stop when the firmware reports a servo fault.
+
+        Fires `estop` to the command_mux on the rising edge of any overload /
+        overtemperature condition. Checked on every state message (~50 Hz) for
+        fast response; the mux latch then holds until a deliberate estop_reset.
+        """
+        if not self.auto_estop_enabled:
+            return
+
+        faults = []
+        for i, servo in enumerate(servos):
+            status = int(servo.servo_status)
+            if status & SERVO_STATUS_OVERLOAD:
+                faults.append(f'{module}[{i}] overload')
+            if status & SERVO_STATUS_TEMPERATURE:
+                faults.append(f'{module}[{i}] firmware-overtemp')
+            if float(servo.current_temperature) >= self.auto_estop_critical_temp:
+                faults.append(f'{module}[{i}] temp={servo.current_temperature:.0f}C')
+
+        # Track this module's fault state; edge-detect on the aggregate across all
+        # modules so a healthy module's callback doesn't clear another's fault
+        # (which would otherwise re-fire estop every message).
+        self._module_faults[module] = bool(faults)
+        any_fault = any(self._module_faults.values())
+
+        if any_fault and not self._servo_fault_active:
+            self._servo_fault_active = True
+            self.estop_pub.publish(Empty())
+            self.get_logger().error(
+                f'AUTO E-STOP: servo fault(s) -> {", ".join(faults)}')
+        elif not any_fault:
+            # All modules healthy again: re-arm the trigger. The mux stays latched
+            # regardless until estop_reset; this only re-arms our rising edge.
+            self._servo_fault_active = False
 
 
 # ============================================================================

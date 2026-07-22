@@ -2,8 +2,8 @@
 """
 Joydrive Node - Mecanum drive control using a USB joystick
 
-This node subscribes to /joy topic and publishes RobotLowCmd messages
-to control the robot using mecanum drive controls.
+This node subscribes to /joy and publishes to the command_mux inputs
+(cmd/base/joy Twist + cmd/eyes/joy EyeCmd) plus the e-stop topic/service.
 - Left stick Y-axis: forward/backward (linear.x)
 - Left stick X-axis: strafe left/right (linear.y)
 - Right stick X-axis: rotation (angular.z)
@@ -19,10 +19,13 @@ Head roll ranges from -π/4 to π/4 radians (0 when trigger not pressed).
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import (QoSProfile, ReliabilityPolicy, DurabilityPolicy,
+                       HistoryPolicy)
 from sensor_msgs.msg import Joy
 from geometry_msgs.msg import Twist
-from alfie_msgs.msg import RobotLowCmd, ServoCmd
+from alfie_msgs.msg import EyeCmd
+from std_msgs.msg import Empty
+from std_srvs.srv import Trigger
 import math
 
 
@@ -47,7 +50,11 @@ class JoyDriveNode(Node):
         self.declare_parameter('invert_linear_y', False)
         self.declare_parameter('invert_angular_z', False)
         self.declare_parameter('invert_head_pitch', False)
-        
+        # E-stop / reset buttons (indices into Joy.buttons). Defaults: B=estop,
+        # Start/Menu=reset on a typical Xbox layout.
+        self.declare_parameter('estop_button', 1)
+        self.declare_parameter('estop_reset_button', 7)
+
         # Get parameters
         self.linear_x_axis = self.get_parameter('linear_x_axis').value
         self.linear_y_axis = self.get_parameter('linear_y_axis').value
@@ -62,7 +69,13 @@ class JoyDriveNode(Node):
         self.invert_linear_y = self.get_parameter('invert_linear_y').value
         self.invert_angular_z = self.get_parameter('invert_angular_z').value
         self.invert_head_pitch = self.get_parameter('invert_head_pitch').value
-        
+        self.estop_button = self.get_parameter('estop_button').value
+        self.estop_reset_button = self.get_parameter('estop_reset_button').value
+
+        # Rising-edge tracking for the estop/reset buttons
+        self._estop_btn_prev = 0
+        self._reset_btn_prev = 0
+
         # Create subscriber for joystick input
         self.joy_sub = self.create_subscription(
             Joy,
@@ -70,15 +83,22 @@ class JoyDriveNode(Node):
             self.joy_callback,
             qos_best_effort
         )
-        
-        # Create publisher for robot low-level commands
-        self.cmd_pub = self.create_publisher(
-            RobotLowCmd,
-            '/alfie/robotlowcmd',
-            qos_best_effort
-        )
-        
-        self.get_logger().info('Joydrive node started (Mecanum drive control + Head servos + Eye brightness + Head roll)')
+
+        # Per-subsystem command_mux inputs ("joy" source): base velocity + eyes.
+        self.base_pub = self.create_publisher(
+            Twist, '/alfie/cmd/base/joy', qos_best_effort)
+        self.eyes_pub = self.create_publisher(
+            EyeCmd, '/alfie/cmd/eyes/joy', qos_best_effort)
+
+        # E-stop trigger (latched) + reset service client.
+        qos_latched = QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST)
+        self.estop_pub = self.create_publisher(Empty, '/alfie/estop', qos_latched)
+        self.estop_reset_cli = self.create_client(Trigger, '/alfie/estop_reset')
+
+        self.get_logger().info('Joydrive node started (Mecanum base + Eye brightness + E-stop button)')
         self.get_logger().info(f'Drive - Linear X axis: {self.linear_x_axis}, Linear Y axis: {self.linear_y_axis}, Angular Z axis: {self.angular_z_axis}')
         self.get_logger().info(f'Head - Pitch axis: {self.head_pitch_axis}, Roll axis: {self.head_roll_axis}')
         self.get_logger().info(f'Eye - Trigger axis: {self.eye_trigger_axis}')
@@ -113,10 +133,31 @@ class JoyDriveNode(Node):
         
         return velocity
     
+    def _handle_estop_buttons(self, msg):
+        """Trip / reset the mux e-stop on the configured button rising edges."""
+        btns = msg.buttons
+        estop = btns[self.estop_button] if len(btns) > self.estop_button else 0
+        reset = btns[self.estop_reset_button] if len(btns) > self.estop_reset_button else 0
+
+        if estop and not self._estop_btn_prev:
+            self.estop_pub.publish(Empty())
+            self.get_logger().warn('E-STOP button pressed -> latching mux e-stop')
+        if reset and not self._reset_btn_prev:
+            if self.estop_reset_cli.service_is_ready():
+                self.estop_reset_cli.call_async(Trigger.Request())
+                self.get_logger().warn('Reset button pressed -> requesting estop_reset')
+            else:
+                self.get_logger().warn('Reset pressed but estop_reset service not available')
+        self._estop_btn_prev = estop
+        self._reset_btn_prev = reset
+
     def joy_callback(self, msg):
         """Process joystick input and publish drive commands using mecanum drive control"""
+        # E-stop / reset buttons first (independent of axis availability).
+        self._handle_estop_buttons(msg)
+
         # Check if we have enough axes
-        required_axes = max(self.linear_x_axis, self.linear_y_axis, 
+        required_axes = max(self.linear_x_axis, self.linear_y_axis,
                           self.angular_z_axis, self.head_pitch_axis) + 1
         if len(msg.axes) < required_axes:
             self.get_logger().warn(
@@ -193,41 +234,21 @@ class JoyDriveNode(Node):
         # When trigger is at 1 (fully pressed): eye_pwm = 255
         eye_pwm = int(1 + trigger_normalized * 254)  # 1 + (0 to 254)
         
-        # Create and populate RobotLowCmd message
-        cmd = RobotLowCmd()
-        
-        # Set eye PWM based on trigger (both eyes controlled together)
-        cmd.eye_pwm = [eye_pwm, eye_pwm]
-        
-        # Create and set Twist message for mecanum drive
-        cmd.cmd_vel = Twist()
-        cmd.cmd_vel.linear.x = linear_x_vel
-        cmd.cmd_vel.linear.y = linear_y_vel
-        cmd.cmd_vel.angular.z = angular_z_vel
-        
-        # Initialize servo commands (15 servos, all disabled by default)
-        cmd.servo_cmd = [ServoCmd() for _ in range(15)]
-        for servo in cmd.servo_cmd:
-            servo.enabled = False
-            servo.target_location = 0.0
-            servo.target_acceleration = 0.0
-            servo.target_torque = 0.0
-            
-        
-        # # Configure head pitch servo (servo 14, index 13)
-        # cmd.servo_cmd[13].enabled = True
-        # cmd.servo_cmd[13].target_location = head_pitch_rad
-        # cmd.servo_cmd[13].acceleration = 0.0  # Set to desired acceleration if needed
+        # Publish base velocity to the mux (cmd/base/joy).
+        base = Twist()
+        base.linear.x = linear_x_vel
+        base.linear.y = linear_y_vel
+        base.angular.z = angular_z_vel
+        self.base_pub.publish(base)
 
-        # # Configure head roll servo (servo 15, index 14)
-        # cmd.servo_cmd[14].enabled = True
-        # cmd.servo_cmd[14].target_location = head_roll_rad
-        # cmd.servo_cmd[14].acceleration = 0.0  # Set to desired acceleration if needed
+        # Publish eye brightness to the mux (cmd/eyes/joy).
+        eyes = EyeCmd()
+        eyes.eye_pwm = [eye_pwm, eye_pwm]
+        self.eyes_pub.publish(eyes)
 
+        # (Head servo teleop via joystick remains disabled, as before; head_pitch_rad
+        # and head_roll_rad are computed above but not commanded.)
 
-        # Publish the command
-        self.cmd_pub.publish(cmd)
-        
         # Log at debug level (only shown with --ros-args --log-level debug)
         self.get_logger().debug(
             f'Drive: X={linear_x_vel:.2f} Y={linear_y_vel:.2f} AngZ={angular_z_vel:.2f} | '

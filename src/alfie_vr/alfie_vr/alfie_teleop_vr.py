@@ -16,9 +16,11 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from alfie_msgs.msg import RobotLowCmd, RobotLowState, ServoCmd, BackCmd
+from alfie_msgs.msg import RobotLowState, ServoCmd, BackCmd, ArmCmd, HeadCmd, EyeCmd
 from alfie_msgs.srv import BackRequestCalibration
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Bool
+from rclpy.qos import DurabilityPolicy, HistoryPolicy
 
 # Local imports
 from alfie_vr.vr_monitor import VRMonitor
@@ -31,6 +33,26 @@ try:
     PYGAME_AVAILABLE = True
 except ImportError:
     PYGAME_AVAILABLE = False
+
+
+class _TeleopCmdState:
+    """Internal whole-body command scratch model for the VR node.
+
+    Replaces the former RobotLowCmd container: the VR/IK update path writes into
+    these fields and publish_robotlowcmd() slices them onto the per-subsystem
+    command_mux inputs (cmd/*/vr). There is no monolithic robotlowcmd topic.
+    Field names/shapes mirror the old RobotLowCmd so the update path is unchanged:
+      servo_cmd : ServoCmd[15]   (0-5 left arm, 6-11 right arm, 12-14 head)
+      eye_pwm   : uint16[2]
+      back_cmd  : BackCmd
+      cmd_vel   : geometry_msgs/Twist
+    """
+
+    def __init__(self):
+        self.servo_cmd = []
+        self.eye_pwm = [0, 0]
+        self.back_cmd = None
+        self.cmd_vel = None
 
 
 class ArmDebugVisualizer:
@@ -550,13 +572,22 @@ class AlfieTeleopVRNode(Node):
         # QoS profile for best effort communication
         qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         
-        # Create publisher for robot low-level commands
-        self.cmd_publisher = self.create_publisher(
-            RobotLowCmd,
-            '/alfie/robotlowcmd',
-            qos_best_effort
-        )
-        
+        # Per-subsystem command publishers (command_mux inputs, "vr" source).
+        # VR is a full-body operator source: it publishes all subsystems so the
+        # mux arbitrates it against policy/idle per-subsystem.
+        self.left_arm_publisher = self.create_publisher(
+            ArmCmd, '/alfie/cmd/left_arm/vr', qos_best_effort)
+        self.right_arm_publisher = self.create_publisher(
+            ArmCmd, '/alfie/cmd/right_arm/vr', qos_best_effort)
+        self.head_publisher = self.create_publisher(
+            HeadCmd, '/alfie/cmd/head/vr', qos_best_effort)
+        self.eyes_publisher = self.create_publisher(
+            EyeCmd, '/alfie/cmd/eyes/vr', qos_best_effort)
+        self.back_publisher = self.create_publisher(
+            BackCmd, '/alfie/cmd/back/vr', qos_best_effort)
+        self.base_publisher = self.create_publisher(
+            Twist, '/alfie/cmd/base/vr', qos_best_effort)
+
         # Create subscriber for robot low-level state
         self.state_subscriber = self.create_subscription(
             RobotLowState,
@@ -565,6 +596,18 @@ class AlfieTeleopVRNode(Node):
             qos_best_effort,
             callback_group=self.state_callback_group
         )
+
+        # E-stop state: when the mux latches, re-seed our servo setpoints to the
+        # current measured pose so that on reset we don't snap arms to stale far
+        # targets. Latched QoS mirrors the mux's estop_state publisher.
+        qos_latched = QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST)
+        self.estop_active = False
+        self.estop_state_sub = self.create_subscription(
+            Bool, '/alfie/estop_state', self.estop_state_callback, qos_latched,
+            callback_group=self.state_callback_group)
         
         # Storage for latest robot state with thread lock
         self.robot_state = None
@@ -608,8 +651,8 @@ class AlfieTeleopVRNode(Node):
             "head_roll":            14,
         }
         
-        # Initialize RobotLowCmd state with default positions and all servos activated
-        self.robot_cmd_state = RobotLowCmd()
+        # Internal whole-body command scratch model (sliced onto cmd/*/vr at publish).
+        self.robot_cmd_state = _TeleopCmdState()
         self.robot_cmd_state.servo_cmd = [ServoCmd() for _ in range(15)]
         
         # Set initial positions and activate all servos
@@ -633,7 +676,7 @@ class AlfieTeleopVRNode(Node):
         self.debug_logs = False
         
         # Create timer for 100Hz publishing
-        self.timer = self.create_timer(0.01, self.publish_robotlowcmd)  # 100Hz = 0.01s period
+        self.timer = self.create_timer(0.01, self.publish_commands)  # 100Hz = 0.01s period
         
         # Create VR monitor (pass debug_logs flag)
         self.vr_monitor = VRMonitor(debug_logs=self.debug_logs)
@@ -716,6 +759,31 @@ class AlfieTeleopVRNode(Node):
         """Get the latest robot state (thread-safe)"""
         with self.robot_state_lock:
             return self.robot_state
+
+    def estop_state_callback(self, msg: Bool):
+        """React to the command_mux e-stop latch.
+
+        On the rising edge, re-seed our arm/head servo targets to the current
+        measured pose. The mux ignores our commands while latched, but this
+        ensures that when the operator resets, VR resumes from where the robot
+        actually is instead of snapping to pre-estop setpoints.
+        """
+        engaged = bool(msg.data)
+        if engaged and not self.estop_active:
+            self._reseed_to_current_pose()
+        self.estop_active = engaged
+
+    def _reseed_to_current_pose(self):
+        """Set robot_cmd_state servo targets to the latest measured positions."""
+        state = self.get_robot_state()
+        if state is None:
+            return
+        for i in range(min(15, len(state.servo_state))):
+            self.robot_cmd_state.servo_cmd[i].target_location = \
+                state.servo_state[i].current_location
+        # Hold the back actuator at its current position too.
+        self.robot_cmd_state.back_cmd.position = state.back_state.current_position
+        self.get_logger().warn('E-stop latched: re-seeded VR setpoints to current pose')
     
     def initialize_arm_controllers(self):
         """Initialize arm and head controllers after robot state is available"""
@@ -1069,21 +1137,39 @@ class AlfieTeleopVRNode(Node):
         except Exception as e:
             self.get_logger().warn(f'Visualization update error: {e}')
     
-    def publish_robotlowcmd(self):
-        """Publish robot command at 100Hz - just publishes current state"""
+    def publish_commands(self):
+        """Publish robot command at 100Hz by slicing robot_cmd_state into the
+        per-subsystem command_mux inputs (cmd/*/vr).
+
+        robot_cmd_state remains the internal whole-body model built by the VR/IK
+        update path; here we just decompose it exactly like the legacy shim does
+        (servos 0-5 left arm, 6-11 right arm, 12-14 head; eye_pwm; back; cmd_vel)
+        and publish each on its own topic. The mux arbitrates per subsystem.
+        """
         start_time = time.time()
-        
-        # Track actual callback rate
-        # if self.last_publish_time is not None:
-        #     actual_dt = start_time - self.last_publish_time
-        #     actual_hz = 1.0 / actual_dt if actual_dt > 0 else 0
-        #     if self.publish_count % 100 == 0:
-        #         self.get_logger().info(f'Actual timer rate: {actual_hz:.1f}Hz (dt={actual_dt*1000:.2f}ms)')
-        # self.last_publish_time = start_time
-        
-        # Simply publish whatever is in robot_cmd_state
-        self.cmd_publisher.publish(self.robot_cmd_state)
-        
+
+        cmd = self.robot_cmd_state
+
+        left = ArmCmd()
+        left.joint_cmd = list(cmd.servo_cmd[0:6])
+        self.left_arm_publisher.publish(left)
+
+        right = ArmCmd()
+        right.joint_cmd = list(cmd.servo_cmd[6:12])
+        self.right_arm_publisher.publish(right)
+
+        head = HeadCmd()
+        head.servos = list(cmd.servo_cmd[12:15])
+        head.eye_pwm = [0, 0]  # eyes on the eyes channel
+        self.head_publisher.publish(head)
+
+        eyes = EyeCmd()
+        eyes.eye_pwm = [int(v) for v in cmd.eye_pwm]
+        self.eyes_publisher.publish(eyes)
+
+        self.back_publisher.publish(cmd.back_cmd)
+        self.base_publisher.publish(cmd.cmd_vel)
+
         # Performance tracking
         elapsed = time.time() - start_time
         self.publish_count += 1

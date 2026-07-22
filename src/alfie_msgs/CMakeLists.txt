@@ -48,6 +48,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ServoCmd.msg"
   "msg/HeadCmd.msg"
   "msg/HeadState.msg"
+  "msg/EyeCmd.msg"
   "msg/ArmCmd.msg"
   "msg/ArmState.msg"
   "msg/ImuState.msg"

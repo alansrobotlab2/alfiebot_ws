@@ -3,8 +3,8 @@
 Right Arm Echo Node
 
 This node reads the positions of the right arm servos from robotlowstate
-and writes them back to the right arm in robotlowcmd, effectively echoing
-the current positions as target positions.
+and writes them back as an ArmCmd on the command_mux input cmd/right_arm/hold
+(low priority), effectively echoing the current positions as target positions.
 
 Author: Alan's Robot Lab
 License: Apache-2.0
@@ -12,7 +12,7 @@ License: Apache-2.0
 
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.msg import RobotLowState, RobotLowCmd, ServoCmd
+from alfie_msgs.msg import RobotLowState, ArmCmd, ServoCmd
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 
@@ -57,10 +57,10 @@ class RightArmEchoNode(Node):
             qos_best_effort
         )
         
-        # Publisher for robot low command (use BEST_EFFORT)
+        # Publisher for the right-arm hold source into command_mux (BEST_EFFORT).
         self.cmd_pub = self.create_publisher(
-            RobotLowCmd,
-            '/alfie/robotlowcmd',
+            ArmCmd,
+            '/alfie/cmd/right_arm/hold',
             qos_best_effort
         )
         
@@ -86,67 +86,27 @@ class RightArmEchoNode(Node):
     # ========================================================================
     
     def publish_command(self) -> None:
-        """Publish command with right arm positions from latest state"""
+        """Publish an ArmCmd holding the right arm at its current measured pose.
+
+        The right arm occupies indices 6-11 in RobotLowState.servo_state; ArmCmd
+        carries 6 logical joints (0-5). This is a low-priority "hold" source in
+        the mux, so any real right-arm commander (VR, GR00T) outranks it.
+        """
         if self.latest_state is None:
             self.get_logger().warn('No robot state received yet', throttle_duration_sec=1.0)
             return
-        
-        # Create command message
-        cmd = RobotLowCmd()
-        
-        # Initialize all servo commands (15 servos total)
-        for i in range(TOTAL_SERVOS):
-            servo_cmd = ServoCmd()
-            servo_cmd.enabled = False
-            servo_cmd.target_acceleration = 0.0
-            servo_cmd.target_location = 0.0
-            cmd.servo_cmd.append(servo_cmd)
 
-        cmd.servo_cmd[6].enabled = True
-        cmd.servo_cmd[6].target_location = self.latest_state.servo_state[0].current_location
+        cmd = ArmCmd()
+        cmd.joint_cmd = []
+        for i in range(RIGHT_ARM_SERVO_COUNT):
+            servo = ServoCmd()
+            servo.enabled = True
+            servo.target_location = self.latest_state.servo_state[RIGHT_ARM_START_INDEX + i].current_location
+            servo.target_speed = 0.0
+            servo.target_acceleration = 0.0
+            servo.target_torque = 0.0
+            cmd.joint_cmd.append(servo)
 
-        cmd.servo_cmd[7].enabled = True
-        cmd.servo_cmd[7].target_location = self.latest_state.servo_state[1].current_location
-
-        cmd.servo_cmd[8].enabled = True
-        cmd.servo_cmd[8].target_location = self.latest_state.servo_state[2].current_location
-
-        cmd.servo_cmd[9].enabled = True
-        cmd.servo_cmd[9].target_location = self.latest_state.servo_state[3].current_location
-
-        cmd.servo_cmd[10].enabled = True
-        cmd.servo_cmd[10].target_location = self.latest_state.servo_state[4].current_location
-
-        cmd.servo_cmd[11].enabled = True
-        cmd.servo_cmd[11].target_location = self.latest_state.servo_state[5].current_location
-
-
-        # # Copy left arm positions from state to right arm positions in command
-        # for i in range(LEFT_ARM_START_INDEX, LEFT_ARM_END_INDEX + 1):
-        #     if self.latest_state and i < len(self.latest_state.servo_state):
-        #         state_servo = self.latest_state.servo_state[i]
-                
-        #         # Enable servo and set target to current position
-        #         if state_servo.current_location != 0.0:
-        #             cmd.servo_cmd[(i + RIGHT_ARM_START_INDEX)].enabled = False
-        #             cmd.servo_cmd[(i + RIGHT_ARM_START_INDEX)].target_location = state_servo.current_location
-
-        #         self.get_logger().debug(
-        #             f'Servo {i}: enabled={state_servo.enabled}, '
-        #             f'target={state_servo.current_location:.3f} rad',
-        #             throttle_duration_sec=1.0
-        #         )
-        
-        # Set other fields to safe defaults
-        cmd.eye_pwm = [0, 0]
-        cmd.cmd_vel.linear.x = 0.0
-        cmd.cmd_vel.linear.y = 0.0
-        cmd.cmd_vel.linear.z = 0.0
-        cmd.cmd_vel.angular.x = 0.0
-        cmd.cmd_vel.angular.y = 0.0
-        cmd.cmd_vel.angular.z = 0.0
-        
-        # Publish the command
         self.cmd_pub.publish(cmd)
 
 

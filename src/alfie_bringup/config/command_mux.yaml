@@ -1,0 +1,58 @@
+# ============================================================================
+# command_mux configuration
+# ============================================================================
+# Per-subsystem priority arbitration for Alfie's command path. Each subsystem
+# has a fixed message type + firmware output topic (defined in command_mux.py);
+# this file only declares the input SOURCES, their priority (higher wins), and a
+# per-source freshness timeout (seconds).
+#
+# The mux forwards, at forward_rate_hz, the highest-priority source that has
+# published within its timeout. When all sources for a subsystem are stale it
+# stops forwarding, so the per-board firmware watchdogs (500 ms) take over.
+#
+# Topics resolve under the node namespace (alfie): a source named "vr" on the
+# "head" subsystem subscribes /alfie/cmd/head/vr.
+# ============================================================================
+
+/**:
+  ros__parameters:
+    # Forward loop / freshness
+    forward_rate_hz: 50.0          # matches gen2 firmware comms (~50 Hz)
+
+    # Global sanity clamp applied to every servo command on the way through.
+    # Bounds snap-class faults (stale setpoints, bad IK, e-stop resume).
+    # <= 0 disables that clamp.
+    max_servo_speed: 6.0           # rad/s (clamps positive over-limit speeds)
+    max_servo_accel: 0.0           # rad/s^2 (0 = pass through)
+    # Servo APIs treat target_speed=0 as "unlimited". Leave false to preserve
+    # that (VR sends 0); set true to also bound 0 -> max_servo_speed.
+    clamp_zero_speed: false
+
+    # E-stop behavior
+    estop_hold: true               # true = hold at current pose; false = limp (torque off)
+    estop_eye_pwm: 4095            # eye LED duty while latched (indicator); 0 = dark
+    # After estop_reset, ignore any source whose last message predates the reset
+    # (forces commanders to publish fresh, post-reset setpoints).
+    resume_fence: true
+
+    # Sources per subsystem: "name: {priority, timeout}". Higher priority wins.
+    left_arm:
+      vr:     {priority: 100, timeout: 0.2}
+    right_arm:
+      vr:     {priority: 100, timeout: 0.2}
+      hold:   {priority: 5,  timeout: 0.2}
+    head:
+      vr:     {priority: 100, timeout: 0.2}
+      agent:  {priority: 30, timeout: 0.5}
+      idle:   {priority: 10, timeout: 0.5}
+    back:
+      vr:     {priority: 100, timeout: 0.2}
+      idle:   {priority: 10, timeout: 0.5}
+    base:
+      vr:     {priority: 100, timeout: 0.2}
+      joy:    {priority: 90, timeout: 0.2}
+      nav:    {priority: 40, timeout: 0.5}
+    eyes:
+      joy:    {priority: 90, timeout: 0.2}
+      agent:  {priority: 30, timeout: 0.5}
+      idle:   {priority: 10, timeout: 0.5}

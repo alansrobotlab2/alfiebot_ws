@@ -144,15 +144,39 @@ def generate_launch_description():
             respawn=True
         ),
 
+        # Command arbitration mux: per-subsystem priority mux + latched e-stop gate.
+        # Fans cmd/<subsystem>/<source> inputs out to the low/*cmd firmware topics.
+        # Command sources publish cmd/<subsystem>/<source> directly (VR, joydrive,
+        # idle, agent, nav). There is no monolithic robotlowcmd path.
         Node(
             package='alfie_bringup',
             namespace='alfie',
-            executable='master_low_cmd',
-            name='master_low_cmd_node',
+            executable='command_mux',
+            name='command_mux_node',
+            parameters=[os.path.join(
+                get_package_share_directory('alfie_bringup'),
+                'config', 'command_mux.yaml')],
             output='screen',
             emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
+        ),
+
+        # Idle "life" behavior: lowest-priority (prio 10) eyes-breathing (and,
+        # when enabled, gentle head look-around) into the mux. Any real commander
+        # outranks it. Head motion is off by default so raw bring-up / data
+        # collection is not disturbed; set head_enabled:=true for full "life".
+        Node(
+            package='alfie_bringup',
+            namespace='alfie',
+            executable='idle_behavior',
+            name='idle_behavior_node',
+            parameters=[{'head_enabled': False}],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
             respawn=True
         ),
 

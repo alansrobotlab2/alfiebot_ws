@@ -1,7 +1,7 @@
 import math
 import numpy as np
 from typing import List, Union, Tuple
-from alfie_msgs.msg import RobotLowCmd, RobotLowState, ServoCmd
+from alfie_msgs.msg import RobotLowState, ServoCmd
 
 
 
