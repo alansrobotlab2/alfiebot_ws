@@ -381,40 +381,13 @@ def generate_launch_description():
             respawn=True
         ),
 
-        # Decode the wide stereo eyes to raw + publish calibrated CameraInfo for
-        # the metric pipeline (warns until F1 calibration YAMLs exist).
-        Node(
-            package='image_transport',
-            namespace='alfie',
-            executable='republish',
-            name='left_wide_republish',
-            arguments=['compressed', 'raw'],
-            remappings=[
-                ('in/compressed', 'stereo_camera/left_wide/image_raw/compressed'),
-                ('out', 'stereo_camera/left/image_raw'),
-            ],
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',
-            sigkill_timeout='10',
-            respawn=True
-        ),
-        Node(
-            package='image_transport',
-            namespace='alfie',
-            executable='republish',
-            name='right_wide_republish',
-            arguments=['compressed', 'raw'],
-            remappings=[
-                ('in/compressed', 'stereo_camera/right_wide/image_raw/compressed'),
-                ('out', 'stereo_camera/right/image_raw'),
-            ],
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',
-            sigkill_timeout='10',
-            respawn=True
-        ),
+        # Publish calibrated CameraInfo for the metric pipeline (warns until F1
+        # calibration YAMLs exist).
+        # NOTE: the wide->raw republish nodes (left/right_wide_republish) were
+        # removed — nothing subscribed to stereo_camera/{left,right}/image_raw.
+        # Re-add them (image_transport republish) when a stereo depth consumer
+        # (stereo_image_proc / ESS / cuVSLAM) is wired in. See
+        # config/stereo_calibration/README.md.
         Node(
             package='alfie_bringup',
             namespace='alfie',

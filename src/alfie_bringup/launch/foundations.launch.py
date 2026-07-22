@@ -50,7 +50,8 @@ def generate_launch_description():
         DeclareLaunchArgument('left_yaml', default_value=os.path.join(calib_dir, 'left.yaml')),
         DeclareLaunchArgument('right_yaml', default_value=os.path.join(calib_dir, 'right.yaml')),
         DeclareLaunchArgument('enable_stereo_decode', default_value='true',
-                              description='Decode wide streams to raw for ESS/cuVSLAM.'),
+                              description='Publish calibrated stereo CameraInfo '
+                                          '(gates stereo_camera_info_pub).'),
     ]
 
     # --- IMU bridge -------------------------------------------------------
@@ -78,25 +79,11 @@ def generate_launch_description():
         condition=IfCondition(use_ekf),
     )
 
-    # --- Stereo decode + calibrated CameraInfo ---------------------------
-    left_republish = Node(
-        package='image_transport', executable='republish', name='left_wide_republish',
-        arguments=['compressed', 'raw'],
-        remappings=[
-            ('in/compressed', 'stereo_camera/left_wide/image_raw/compressed'),
-            ('out', 'stereo_camera/left/image_raw'),
-        ],
-        condition=IfCondition(enable_stereo_decode),
-    )
-    right_republish = Node(
-        package='image_transport', executable='republish', name='right_wide_republish',
-        arguments=['compressed', 'raw'],
-        remappings=[
-            ('in/compressed', 'stereo_camera/right_wide/image_raw/compressed'),
-            ('out', 'stereo_camera/right/image_raw'),
-        ],
-        condition=IfCondition(enable_stereo_decode),
-    )
+    # --- Calibrated stereo CameraInfo ------------------------------------
+    # NOTE: the wide->raw republish nodes were removed — nothing subscribed to
+    # stereo_camera/{left,right}/image_raw. Re-add them (image_transport
+    # republish) when a stereo depth consumer (stereo_image_proc / ESS / cuVSLAM)
+    # is actually wired in. See config/stereo_calibration/README.md.
     camera_info = Node(
         package='alfie_bringup', executable='stereo_camera_info_pub',
         name='stereo_camera_info_pub', output='screen',
@@ -145,7 +132,7 @@ def generate_launch_description():
         PushRosNamespace(ns),
         imu_bridge,
         odom_tf, odom_cov_relay, ekf,
-        left_republish, right_republish, camera_info,
+        camera_info,
         base_footprint, imu_tf, cam_tf, left_optical, right_optical,
     ])
 
