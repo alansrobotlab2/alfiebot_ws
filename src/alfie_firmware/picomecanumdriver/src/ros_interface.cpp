@@ -83,19 +83,20 @@ bool createRosEntities(void) {
     }
     
     // Create node
-    ret = rclc_node_init_default(&node, "mecanum_drive_controller", "", &support);
+    ret = rclc_node_init_default(&node, "mecanum_drive_controller", NAMESPACE, &support);
     if (ret != RCL_RET_OK) {
         rclc_support_fini(&support);
         return false;
     }
     
-    // Create subscriber for /mecanumdrive topic
-    // BEST_EFFORT to match the master_cmd publisher (and the other pico drivers)
+    // Create subscriber for the mecanumdrive topic (relative: resolves under the
+    // node NAMESPACE to /alfie/low/mecanumdrive).
+    // BEST_EFFORT to match the command_mux publisher (and the other pico drivers)
     ret = rclc_subscription_init_best_effort(
         &mecanum_subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-        "/alfie/low/mecanumdrive"
+        "mecanumdrive"
     );
     if (ret != RCL_RET_OK) {
         (void)rcl_node_fini(&node);
@@ -103,12 +104,17 @@ bool createRosEntities(void) {
         return false;
     }
     
-    // Create publisher for odometry
-    ret = rclc_publisher_init_best_effort(
+    // Create publisher for odometry (relative: resolves to /alfie/low/odom).
+    // RELIABLE, deliberately: serialized nav_msgs/Odometry (~720 B, two 36-double
+    // covariance blocks) exceeds the 512 B XRCE serial MTU, and best-effort
+    // streams cannot fragment — a best-effort odom publisher fails EVERY publish
+    // silently. Reliable streams fragment, and a RELIABLE publisher remains
+    // QoS-compatible with the host's BEST_EFFORT subscribers.
+    ret = rclc_publisher_init_default(
         &odom_publisher,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
-        "/alfie/low/odom"
+        "odom"
     );
     if (ret != RCL_RET_OK) {
         (void)rcl_subscription_fini(&mecanum_subscriber, &node);
@@ -170,55 +176,94 @@ void destroyRosEntities(void) {
  * @brief ROS state machine task function
  * Implements the main ROS connectivity state machine
  */
+// Time we entered WAITING_AGENT (0 == boot). Used to detect a long idle wait,
+// which leaves stale USB-CDC/XRCE state on both ends and degrades the session.
+static uint32_t waiting_since_ms = 0;
+// Consecutive failed health pings while CONNECTED (see AGENT_HEALTH_MAX_MISSES).
+static uint8_t  health_misses    = 0;
+
 void rosStateMachineTask(void) {
     switch (agent_state) {
         case WAITING_AGENT:
             // Every 100ms, check if the micro-ROS agent is available and update agentState accordingly
-            EXECUTE_EVERY_N_MS(AGENT_PING_INTERVAL_MS, 
+            EXECUTE_EVERY_N_MS(AGENT_PING_INTERVAL_MS,
                 agent_state = (RMW_RET_OK == rmw_uros_ping_agent(AGENT_PING_TIMEOUT_MS, AGENT_PING_ATTEMPTS)) ? AGENT_AVAILABLE : WAITING_AGENT;
             );
+            if (agent_state == AGENT_AVAILABLE &&
+                (millis() - waiting_since_ms) > AGENT_LONG_WAIT_REBOOT_MS) {
+                // Agent appeared after a long idle wait: reconnect from a fresh
+                // boot instead (recreates the known-good power-cycle condition;
+                // see AGENT_LONG_WAIT_REBOOT_MS in config.h).
+                rp2040.reboot();
+            }
             delay(50);
             break;
-            
+
         case AGENT_AVAILABLE:
             agent_state = createRosEntities() ? AGENT_CONNECTED : WAITING_AGENT;
             if (agent_state == WAITING_AGENT) {
                 destroyRosEntities();
+                waiting_since_ms = millis();
                 delay(50);
+            } else {
+                health_misses = 0;
             }
             break;
-            
+
         case AGENT_CONNECTED:
-            // Check connection health every 200ms
-            EXECUTE_EVERY_N_MS(AGENT_HEALTH_CHECK_MS, 
-                agent_state = (RMW_RET_OK == rmw_uros_ping_agent(AGENT_HEALTH_TIMEOUT_MS, AGENT_HEALTH_ATTEMPTS)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;
+            // Single short health ping; it still blocks this loop for up to
+            // AGENT_HEALTH_TIMEOUT_MS, so misses are tolerated up to
+            // AGENT_HEALTH_MAX_MISSES instead of retrying inline (retrying
+            // inline stalled the odometry publisher for up to 1s per check).
+            EXECUTE_EVERY_N_MS(AGENT_HEALTH_CHECK_MS,
+                if (RMW_RET_OK == rmw_uros_ping_agent(AGENT_HEALTH_TIMEOUT_MS, AGENT_HEALTH_ATTEMPTS)) {
+                    health_misses = 0;
+                } else if (++health_misses >= AGENT_HEALTH_MAX_MISSES) {
+                    agent_state = AGENT_DISCONNECTED;
+                }
             );
-            
+
+            if (agent_state != AGENT_CONNECTED) {
+                break;
+            }
+
             // Publish odometry data, throttled to a stable 50 Hz to match the
             // master_status watchdog and avoid saturating the best-effort USB-CDC
             // link (the ROS task still ticks at 100 Hz for low command latency).
             if (micro_ros_initialized) {
                 EXECUTE_AT_RATE_MS(STATE_PUBLISH_PERIOD_MS, publishOdometry());
             }
-            
+
             // Process ROS callbacks (commands) - give it 1ms to process queued messages
             if (micro_ros_initialized) {
                 rclc_executor_spin_some(&executor, RCL_MS_TO_NS(1));
             }
-            
+
             // Process velocity commands and handle watchdog
             processVelocityCommand();
             handleWatchdog();
             break;
-            
+
         case AGENT_DISCONNECTED:
+            // Safe-stop the base before tearing the session down: handleWatchdog
+            // only stops on command timeout while CONNECTED, so without this a
+            // disconnect mid-motion could leave the wheels running the last
+            // velocity. (Core 0 pushes the zero speeds on its next cycle.)
+            rp.velocity_cmd.linear_x = 0.0f;
+            rp.velocity_cmd.linear_y = 0.0f;
+            rp.velocity_cmd.angular_z = 0.0f;
+            rp.velocity_cmd.timestamp = getSystemTimeMs();
+            new_velocity_command = true;
+
             destroyRosEntities();
             delay(100);
             agent_state = WAITING_AGENT;
+            waiting_since_ms = millis();
             break;
-            
+
         default:
             agent_state = WAITING_AGENT;
+            waiting_since_ms = millis();
             break;
     }
 }
@@ -270,9 +315,14 @@ void processVelocityCommand(void) {
  * Sends current robot odometry to /odom topic
  */
 void publishOdometry(void) {
-    if (!micro_ros_initialized || !new_odometry_data) {
+    if (!micro_ros_initialized) {
         return;
     }
+    // Publish unconditionally at the STATE_PUBLISH cadence. Odometry doubles as
+    // the drive board's heartbeat: gating on new_odometry_data made the topic go
+    // fully silent whenever Core 0's encoder/I2C path stalled, which is
+    // indistinguishable from a dead board. Stale values still flow (consumers
+    // can see them frozen); the flag is cleared for Core 0 bookkeeping only.
     new_odometry_data = false;
 
     // Frame ids (point the rosidl strings at static buffers)

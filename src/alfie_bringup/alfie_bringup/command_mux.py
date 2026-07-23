@@ -72,17 +72,22 @@ SUB_OUTPUTS = {
 }
 
 # Built-in default source map (priority, timeout_sec). Overridden by YAML params.
+# "groot" is the GR00T policy (full-body: arms+head+back+base; no eyes).
 DEFAULT_SOURCES: Dict[str, Dict[str, dict]] = {
-    'left_arm': {'vr': {'priority': 100, 'timeout': 0.2}},
+    'left_arm': {'vr': {'priority': 100, 'timeout': 0.2},
+                 'groot': {'priority': 50, 'timeout': 0.2}},
     'right_arm': {'vr': {'priority': 100, 'timeout': 0.2},
-                  'hold': {'priority': 5, 'timeout': 0.2}},
+                  'groot': {'priority': 50, 'timeout': 0.2}},
     'head': {'vr': {'priority': 100, 'timeout': 0.2},
+             'groot': {'priority': 50, 'timeout': 0.2},
              'agent': {'priority': 30, 'timeout': 0.5},
              'idle': {'priority': 10, 'timeout': 0.5}},
     'back': {'vr': {'priority': 100, 'timeout': 0.2},
+             'groot': {'priority': 50, 'timeout': 0.2},
              'idle': {'priority': 10, 'timeout': 0.5}},
     'base': {'vr': {'priority': 100, 'timeout': 0.2},
              'joy': {'priority': 90, 'timeout': 0.2},
+             'groot': {'priority': 50, 'timeout': 0.2},
              'nav': {'priority': 40, 'timeout': 0.5}},
     'eyes': {'joy': {'priority': 90, 'timeout': 0.2},
              'agent': {'priority': 30, 'timeout': 0.5},

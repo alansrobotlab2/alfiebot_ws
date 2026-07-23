@@ -156,6 +156,12 @@ void destroyRosEntities(void)
 // =============================================================================
 // Connection state machine (Core 1)
 // =============================================================================
+// Time we entered WAITING_AGENT (0 == boot). Used to detect a long idle wait,
+// which leaves stale USB-CDC/XRCE state on both ends and degrades the session.
+static uint32_t waiting_since_ms = 0;
+// Consecutive failed health pings while CONNECTED (see AGENT_HEALTH_MAX_MISSES).
+static uint8_t  health_misses    = 0;
+
 void rosStateMachineTask(void)
 {
     switch (agent_state) {
@@ -164,6 +170,13 @@ void rosStateMachineTask(void)
                 agent_state = (RMW_RET_OK == rmw_uros_ping_agent(AGENT_PING_TIMEOUT_MS, AGENT_PING_ATTEMPTS))
                                   ? AGENT_AVAILABLE : WAITING_AGENT;
             );
+            if (agent_state == AGENT_AVAILABLE &&
+                (millis() - waiting_since_ms) > AGENT_LONG_WAIT_REBOOT_MS) {
+                // Agent appeared after a long idle wait: reconnect from a fresh
+                // boot instead (recreates the known-good power-cycle condition;
+                // see AGENT_LONG_WAIT_REBOOT_MS in config.h).
+                rp2040.reboot();
+            }
             delay(50);
             break;
 
@@ -171,17 +184,27 @@ void rosStateMachineTask(void)
             agent_state = createRosEntities() ? AGENT_CONNECTED : WAITING_AGENT;
             if (agent_state == WAITING_AGENT) {
                 destroyRosEntities();
+                waiting_since_ms = millis();
                 delay(50);
+            } else {
+                health_misses = 0;
             }
             break;
 
         case AGENT_CONNECTED:
+            // Single short health ping; it still blocks this loop for up to
+            // AGENT_HEALTH_TIMEOUT_MS, so misses are tolerated up to
+            // AGENT_HEALTH_MAX_MISSES instead of retrying inline (retrying
+            // inline stalled the ArmState publisher for up to 1s per check).
             EXECUTE_EVERY_N_MS(AGENT_HEALTH_CHECK_MS,
-                agent_state = (RMW_RET_OK == rmw_uros_ping_agent(AGENT_HEALTH_TIMEOUT_MS, AGENT_HEALTH_ATTEMPTS))
-                                  ? AGENT_CONNECTED : AGENT_DISCONNECTED;
+                if (RMW_RET_OK == rmw_uros_ping_agent(AGENT_HEALTH_TIMEOUT_MS, AGENT_HEALTH_ATTEMPTS)) {
+                    health_misses = 0;
+                } else if (++health_misses >= AGENT_HEALTH_MAX_MISSES) {
+                    agent_state = AGENT_DISCONNECTED;
+                }
             );
 
-            if (micro_ros_initialized) {
+            if (agent_state == AGENT_CONNECTED && micro_ros_initialized) {
                 // Spin every tick (100 Hz) for low command latency, but throttle
                 // the outbound ArmState to a stable 50 Hz to match the master_status
                 // watchdog and avoid saturating the best-effort USB-CDC link.
@@ -192,13 +215,21 @@ void rosStateMachineTask(void)
             break;
 
         case AGENT_DISCONNECTED:
+            // Safe-limp before tearing the session down: handleWatchdog only
+            // fires while CONNECTED, so without this a disconnect could leave
+            // the servos holding their last targets with no commander.
+            disableAllServoTorques();      // Core 0 applies via updateServoIdle()
+            b.last_cmd_time = 0;
+
             destroyRosEntities();
             delay(100);
             agent_state = WAITING_AGENT;
+            waiting_since_ms = millis();
             break;
 
         default:
             agent_state = WAITING_AGENT;
+            waiting_since_ms = millis();
             break;
     }
 }

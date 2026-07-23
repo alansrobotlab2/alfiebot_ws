@@ -248,6 +248,14 @@ typedef enum {
 } RosAgentState_t;
 
 /**
+ * @brief ROS node namespace (matches the head/back boards). Topics are declared
+ * relative so they resolve under it: mecanumdrive -> /alfie/low/mecanumdrive,
+ * odom -> /alfie/low/odom — same wire topics as before, but the node itself now
+ * lives at /alfie/low/mecanum_drive_controller instead of the root namespace.
+ */
+#define NAMESPACE "alfie/low"
+
+/**
  * @brief ROS State Machine Timing Configuration
  */
 #define ROS_TASK_FREQUENCY_HZ   100     ///< ROS task frequency (Hz)
@@ -256,9 +264,26 @@ typedef enum {
 #define AGENT_PING_INTERVAL_MS  100     ///< Interval to ping agent when waiting (ms)
 #define AGENT_HEALTH_CHECK_MS   200     ///< Interval to check connection health (ms)
 #define AGENT_PING_TIMEOUT_MS   50      ///< Timeout for agent ping when waiting (ms)
-#define AGENT_HEALTH_TIMEOUT_MS 100     ///< Timeout for health check ping (ms)
+
+// Health check while CONNECTED: rmw_uros_ping_agent BLOCKS the whole ROS loop
+// (including the odometry publisher) for up to timeout*attempts, so keep a single
+// short attempt and tolerate consecutive misses instead. Old config (100ms x 10)
+// stalled the loop up to 1s per check whenever the agent replied slowly, which
+// collapsed the published state rate (observed on the arms: ~15-20 Hz).
+#define AGENT_HEALTH_TIMEOUT_MS 25      ///< Timeout for health check ping (ms)
 #define AGENT_PING_ATTEMPTS     1       ///< Number of ping attempts when waiting
-#define AGENT_HEALTH_ATTEMPTS   10      ///< Number of ping attempts for health check
+#define AGENT_HEALTH_ATTEMPTS   1       ///< Single attempt; misses tolerated below
+// Consecutive failed health pings before declaring AGENT_DISCONNECTED
+// (10 x 200ms cycle = ~2s of unresponsive agent, same effective latency as before).
+#define AGENT_HEALTH_MAX_MISSES 10
+
+// If the agent only shows up after the board has been waiting this long, the
+// USB-CDC FIFOs / XRCE framing on both ends are full of hours of stale ping
+// traffic and sessions establish degraded (observed: state rate stuck at
+// ~15-20 Hz until a power cycle). Reboot instead of connecting: re-enumeration
+// recreates the known-good fresh-boot condition, and the agent (respawn=True)
+// reconnects to a seconds-old board. Normal bringup never waits this long.
+#define AGENT_LONG_WAIT_REBOOT_MS 120000
 
 /**
  * @brief Utility macro for executing code at specific intervals

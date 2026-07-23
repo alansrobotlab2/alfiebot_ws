@@ -6,7 +6,7 @@ priority (`cmd/eyes/idle`, `cmd/head/idle`). Any real commander (VR, GR00T, agen
 gaze) outranks it, so this only shows through when nothing else owns the head/eyes.
 It is a pure open-loop generator — no feedback, small amplitudes.
 
-    cmd/eyes/idle  (EyeCmd)  — slow breathing brightness
+    cmd/eyes/idle  (EyeCmd)  — constant dim glow
     cmd/head/idle  (HeadCmd) — small sinusoidal look-around (optional)
 """
 
@@ -28,9 +28,7 @@ class IdleBehaviorNode(Node):
         # ---- Parameters -----------------------------------------------------
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('eyes_enabled', True)
-        self.declare_parameter('eye_min_pwm', 200)
-        self.declare_parameter('eye_max_pwm', 2500)
-        self.declare_parameter('breath_period_sec', 4.0)
+        self.declare_parameter('eye_idle_pwm', 1)
         self.declare_parameter('head_enabled', True)
         self.declare_parameter('head_yaw_amp_rad', 0.15)
         self.declare_parameter('head_pitch_amp_rad', 0.05)
@@ -40,9 +38,7 @@ class IdleBehaviorNode(Node):
         g = self.get_parameter
         self.rate = float(g('rate_hz').value)
         self.eyes_enabled = bool(g('eyes_enabled').value)
-        self.eye_min = int(g('eye_min_pwm').value)
-        self.eye_max = int(g('eye_max_pwm').value)
-        self.breath_period = float(g('breath_period_sec').value)
+        self.eye_idle_pwm = max(0, min(4095, int(g('eye_idle_pwm').value)))
         self.head_enabled = bool(g('head_enabled').value)
         self.head_yaw_amp = float(g('head_yaw_amp_rad').value)
         self.head_pitch_amp = float(g('head_pitch_amp_rad').value)
@@ -65,11 +61,8 @@ class IdleBehaviorNode(Node):
         t = self._elapsed()
 
         if self.eyes_enabled:
-            phase = 0.5 * (1.0 + math.sin(2.0 * math.pi * t / self.breath_period))
-            pwm = int(self.eye_min + (self.eye_max - self.eye_min) * phase)
-            pwm = max(0, min(4095, pwm))
             eyes = EyeCmd()
-            eyes.eye_pwm = [pwm, pwm]
+            eyes.eye_pwm = [self.eye_idle_pwm, self.eye_idle_pwm]
             self.eyes_pub.publish(eyes)
 
         if self.head_enabled:

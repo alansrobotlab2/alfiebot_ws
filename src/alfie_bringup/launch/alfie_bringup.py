@@ -163,7 +163,7 @@ def generate_launch_description():
             respawn=True
         ),
 
-        # Idle "life" behavior: lowest-priority (prio 10) eyes-breathing (and,
+        # Idle "life" behavior: lowest-priority (prio 10) dim eye glow (and,
         # when enabled, gentle head look-around) into the mux. Any real commander
         # outranks it. Head motion is off by default so raw bring-up / data
         # collection is not disturbed; set head_enabled:=true for full "life".

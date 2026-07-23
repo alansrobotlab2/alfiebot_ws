@@ -255,53 +255,92 @@ void destroyRosEntities(void) {
  * @brief ROS state machine task function
  * Implements the main ROS connectivity state machine
  */
+// Time we entered WAITING_AGENT (0 == boot). Used to detect a long idle wait,
+// which leaves stale USB-CDC/XRCE state on both ends and degrades the session.
+static uint32_t waiting_since_ms = 0;
+// Consecutive failed health pings while CONNECTED (see AGENT_HEALTH_MAX_MISSES).
+static uint8_t  health_misses    = 0;
+
 void rosStateMachineTask(void) {
     switch (agent_state) {
         case WAITING_AGENT:
             // Every 100ms, check if the micro-ROS agent is available and update agentState accordingly
-            EXECUTE_EVERY_N_MS(AGENT_PING_INTERVAL_MS, 
+            EXECUTE_EVERY_N_MS(AGENT_PING_INTERVAL_MS,
                 agent_state = (RMW_RET_OK == rmw_uros_ping_agent(AGENT_PING_TIMEOUT_MS, AGENT_PING_ATTEMPTS)) ? AGENT_AVAILABLE : WAITING_AGENT;
             );
+            if (agent_state == AGENT_AVAILABLE &&
+                (millis() - waiting_since_ms) > AGENT_LONG_WAIT_REBOOT_MS) {
+                // Agent appeared after a long idle wait: reconnect from a fresh
+                // boot instead (recreates the known-good power-cycle condition;
+                // see AGENT_LONG_WAIT_REBOOT_MS in config.h).
+                rp2040.reboot();
+            }
             delay(50);
             break;
-            
+
         case AGENT_AVAILABLE:
             agent_state = createRosEntities() ? AGENT_CONNECTED : WAITING_AGENT;
             if (agent_state == WAITING_AGENT) {
                 destroyRosEntities();
+                waiting_since_ms = millis();
                 delay(50);
+            } else {
+                health_misses = 0;
             }
             break;
-            
+
         case AGENT_CONNECTED:
-            // Check connection health every 200ms
-            EXECUTE_EVERY_N_MS(AGENT_HEALTH_CHECK_MS, 
-                agent_state = (RMW_RET_OK == rmw_uros_ping_agent(AGENT_HEALTH_TIMEOUT_MS, AGENT_HEALTH_ATTEMPTS)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;
+            // Single short health ping; it still blocks this loop for up to
+            // AGENT_HEALTH_TIMEOUT_MS, so misses are tolerated up to
+            // AGENT_HEALTH_MAX_MISSES instead of retrying inline (retrying
+            // inline stalled the BackState publisher for up to 1s per check).
+            EXECUTE_EVERY_N_MS(AGENT_HEALTH_CHECK_MS,
+                if (RMW_RET_OK == rmw_uros_ping_agent(AGENT_HEALTH_TIMEOUT_MS, AGENT_HEALTH_ATTEMPTS)) {
+                    health_misses = 0;
+                } else if (++health_misses >= AGENT_HEALTH_MAX_MISSES) {
+                    agent_state = AGENT_DISCONNECTED;
+                }
             );
-            
+
+            if (agent_state != AGENT_CONNECTED) {
+                break;
+            }
+
             // Publish odometry data
             if (micro_ros_initialized) {
                 publishOdometry();
             }
-            
+
             // Process ROS callbacks (commands) - give it 1ms to process queued messages
             if (micro_ros_initialized) {
                 rclc_executor_spin_some(&executor, RCL_MS_TO_NS(1));
             }
-            
+
             // Process velocity commands and handle watchdog
             processVelocityCommand();
             handleWatchdog();
             break;
-            
+
         case AGENT_DISCONNECTED:
+            // Safe-hold before tearing the session down: handleWatchdog only
+            // fires while CONNECTED, so without this a disconnect mid-move could
+            // leave the actuator chasing a stale setpoint with no commander.
+            // Mirrors the watchdog action: hold the current position.
+            rp.actuator_cmd.position = rp.motor.current_position;
+            rp.actuator_cmd.velocity = 0.0f;
+            rp.actuator_cmd.acceleration = MAX_ACTUATOR_ACCELERATION;
+            rp.actuator_cmd.timestamp = getSystemTimeMs();
+            rp.new_actuator_command = true;
+
             destroyRosEntities();
             delay(100);
             agent_state = WAITING_AGENT;
+            waiting_since_ms = millis();
             break;
-            
+
         default:
             agent_state = WAITING_AGENT;
+            waiting_since_ms = millis();
             break;
     }
 }
