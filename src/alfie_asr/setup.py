@@ -14,12 +14,18 @@ setup(
     install_requires=[
         'setuptools',
         'onnx_asr',
-        'onnxruntime',
+        # The CUDA/TensorRT build — parakeet_asr_node asks for
+        # CUDAExecutionProvider. Plain `onnxruntime` is the CPU-only wheel and
+        # silently downgrades us to CPUExecutionProvider.
+        'onnxruntime-gpu',
         'silero-vad',
-        # torchaudio must match the installed torch (2.8.0, CUDA 12.6) — the
-        # unpinned wheel (2.11.0) is built for CUDA 13 and fails to load
-        # libcudart.so.13 on this Jetson.
-        'torchaudio==2.8.0',
+        # Must match the installed torch, and must come from the +cu130 index
+        # (download.pytorch.org/whl/cu130) — NOT the jetson-ai-lab sbsa/cu130
+        # wheels. Those are built for Thor (sm_110/sm_121 only); Orin is sm_87
+        # and needs the sm_80 cubins that the upstream build carries, which run
+        # on any sm_8x device. Superseded the old 2.8.0/CUDA 12.6 pin when this
+        # board moved to JetPack 7.2 / CUDA 13.2.
+        'torchaudio==2.11.0',
         'numpy',
     ],
     zip_safe=True,

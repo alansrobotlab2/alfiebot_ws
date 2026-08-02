@@ -1,0 +1,12 @@
+# Alfie reSpeaker XVF3800 raw-USB access
+#
+# respeaker_control_node talks to the mic array's DSP over libusb vendor
+# control transfers (/dev/bus/usb/...), not ALSA. Without this rule those
+# transfers fail with "USBError: [Errno 13] Access denied (insufficient
+# permissions)" and every tuning/AEC/LED write is silently skipped.
+#
+# Install:  sudo cp 99-alfie-respeaker.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload-rules && sudo udevadm trigger
+# Verify:   ls -l /dev/bus/usb/$(lsusb | sed -n 's/^Bus \([0-9]*\) Device \([0-9]*\): ID 2886:001a.*/\1\/\2/p')
+
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2886", ATTR{idProduct}=="001a", MODE="0666", TAG+="uaccess"

@@ -439,35 +439,86 @@ void calibrationServiceCallback(const void *req_msg, void *res_msg) {
     delay(50);
     
     // Calibration parameters
-    const uint8_t CALIBRATION_PWM = 150;        // Fixed PWM for slow downward motion
+    // Held to VELOCITY_PID_OUTPUT_LIMIT: this path bypasses the PID, so the duty
+    // ceiling set in config.h does not otherwise apply here.
+    //
+    // THIS PATH CARRIES ITS OWN GUARDS - do not assume the usual ones apply.
+    //
+    // Both stall and runaway detection key off motor.pwm_output, which is stale
+    // here because calibration drives the bridge directly while normal motor
+    // control is suspended. Runaway is skipped explicitly; stall silently never
+    // fires because pwm_mag reads 0. So the descent loop below implements its
+    // own encoder-motion stall guard and its own direction guard, sized by
+    // CALIBRATION_STALL_MS / CALIBRATION_MIN_COUNTS / CALIBRATION_REVERSE_COUNTS.
+    //
+    // Before those existed the only bound was CALIBRATION_TIMEOUT_MS: up to 20 s
+    // driving into the bottom stop at the full duty ceiling, with the DRV8876's
+    // ITRIP no longer providing a current limit either (see config.h, WHY THERE
+    // IS NO CURRENT TRIP). Now a jammed or already-down axis aborts in ~400 ms.
+    const uint8_t CALIBRATION_PWM = VELOCITY_PID_OUTPUT_LIMIT;
     const uint32_t CALIBRATION_TIMEOUT_MS = 20000;  // 20 second timeout
     const uint32_t LED_UPDATE_INTERVAL_MS = 100;    // Update LED every 100ms during calibration
     
     // Set LED to purple during calibration for visual feedback
     rp.statusLED.setColor(128, 0, 128); // Purple (R, G, B)
     
-    // Check if limit switch is already triggered
-    // Pin reads HIGH when switch is triggered (matches backstate.limit_switch_triggered logic)
-    bool limit_switch_triggered = (digitalRead(LIMIT_SWITCH_PIN) == HIGH);
+    // Check if limit switch is already triggered.
+    //
+    // The switch is NORMALLY CLOSED, so HIGH = at the bottom. See
+    // LIMIT_SWITCH_ACTIVE_LEVEL in config.h. This read was `== LOW`, which is
+    // inverted: during ordinary travel the pin sits LOW, so the test below
+    // ("not triggered? then drive down") failed immediately and calibration
+    // SKIPPED THE DESCENT ENTIRELY, zeroing wherever the actuator happened to
+    // be. Silent false datum - no error, no timeout, just a wrong origin.
+    bool limit_switch_triggered =
+        (digitalRead(LIMIT_SWITCH_PIN) == LIMIT_SWITCH_ACTIVE_LEVEL);
     
     if (!limit_switch_triggered) {
         // Limit switch not triggered - need to move downward toward the switch
-        digitalWrite(MOTOR_DIR1_PIN, MOTOR_DIR_DOWN_DIR1);
-        digitalWrite(MOTOR_DIR2_PIN, MOTOR_DIR_DOWN_DIR2);
-        analogWrite(MOTOR_PWM_PIN, CALIBRATION_PWM);
+        digitalWrite(MOTOR_PH_PIN, MOTOR_PH_DOWN);
+        analogWrite(MOTOR_EN_PIN, CALIBRATION_PWM);
         
         // Update actuator state to show PWM is active during calibration
         rp.actuator_state.pwm_output = CALIBRATION_PWM;
         rp.new_actuator_state = true;
         
-        // Poll limit switch until triggered or timeout
+        // Poll limit switch until triggered, stalled, reversed, or timed out.
         uint32_t start_time = millis();
         uint32_t last_led_time = start_time;
-        
+
+        // Encoder-motion guards. This loop is the only powered motion path with
+        // no stall or runaway detection behind it, so it carries its own.
+        const int32_t descent_start_count = rp.motor.encoder_count;
+        int32_t  progress_count = descent_start_count;
+        uint32_t progress_ms    = start_time;
+        bool     stalled        = false;
+        bool     reversed       = false;
+
         while (!limit_switch_triggered && (millis() - start_time) < CALIBRATION_TIMEOUT_MS) {
-            // Read pin directly: HIGH = triggered (same as backstate logic)
-            limit_switch_triggered = (digitalRead(LIMIT_SWITCH_PIN) == HIGH);
-            
+            limit_switch_triggered =
+                (digitalRead(LIMIT_SWITCH_PIN) == LIMIT_SWITCH_ACTIVE_LEVEL);
+
+            const int32_t count = rp.motor.encoder_count;
+
+            // Commanded DOWN, so the count must fall. Rising past the threshold
+            // means the motor or encoder is wired backwards - abort before a
+            // gravity-loaded axis is driven into the top stop.
+            if (count - descent_start_count > CALIBRATION_REVERSE_COUNTS) {
+                reversed = true;
+                break;
+            }
+
+            // Progress is downward motion; measure magnitude either way so a
+            // jittering axis cannot masquerade as movement.
+            const int32_t delta = count - progress_count;
+            if (delta <= -CALIBRATION_MIN_COUNTS) {
+                progress_count = count;
+                progress_ms    = millis();
+            } else if ((millis() - progress_ms) >= CALIBRATION_STALL_MS) {
+                stalled = true;
+                break;
+            }
+
             // Pulse LED during motion for visual feedback
             if (millis() - last_led_time >= LED_UPDATE_INTERVAL_MS) {
                 last_led_time = millis();
@@ -478,18 +529,27 @@ void calibrationServiceCallback(const void *req_msg, void *res_msg) {
                     rp.statusLED.setColor(64, 0, 64);   // Dimmer purple
                 }
             }
-            
+
             delay(1); // Small delay to prevent tight loop
         }
-        
-        // Immediate stop
-        analogWrite(MOTOR_PWM_PIN, 0);
-        digitalWrite(MOTOR_DIR1_PIN, LOW);
-        digitalWrite(MOTOR_DIR2_PIN, LOW);
-        
-        // Check if we timed out
-        if (!limit_switch_triggered) {
-            // Timeout - calibration failed
+
+        // Immediate stop (EN=0 is brake on the DRV8876; nSLEEP stays HIGH)
+        analogWrite(MOTOR_EN_PIN, 0);
+        rp.actuator_state.pwm_output = 0;
+        rp.new_actuator_state = true;
+
+        // Any exit other than "switch asserted" is a failure. Classify it so the
+        // caller learns something more useful than "calibration failed": a
+        // reversal is a wiring fault and must not be retried, a stall means the
+        // axis is already down or obstructed, a timeout means it never arrived.
+        if (reversed) {
+            rp.motor.runaway_detected = true;      // latches; only a reset clears
+            rp.motor.fault_detected   = true;
+            rp.calibration_in_progress = false;
+            res->success = false;
+            return;
+        }
+        if (stalled || !limit_switch_triggered) {
             rp.calibration_in_progress = false;
             res->success = false;
             return;
@@ -561,6 +621,10 @@ void publishOdometry(void) {
         back_state_msg.pulse_count = rp.actuator_state.pulses;
         back_state_msg.pwm_output = rp.actuator_state.pwm_output;
         back_state_msg.is_calibrated = rp.actuator_state.is_calibrated;
+        back_state_msg.error_code = rp.actuator_state.error_code;
+        back_state_msg.stall_position = rp.actuator_state.stall_position;
+        back_state_msg.stall_count = rp.actuator_state.stall_count;
+        back_state_msg.fault_latched = rp.actuator_state.fault_latched;
 
         // Compass decouple: while the local actuator is driving (PWM != 0) or the
         // neck servo 0 heartbeat is fresh, the magnetometer is corrupted, so

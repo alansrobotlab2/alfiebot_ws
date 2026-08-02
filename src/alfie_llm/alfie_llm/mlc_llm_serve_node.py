@@ -30,10 +30,15 @@ class MLCLLMServeNode(Node):
         super().__init__('mlc_llm_serve_node')
 
         self.mlc_dir = self.declare_parameter('mlc_dir', '/home/alfie/mlc-llm').value
+        # Weights and lib MUST come from the same build: the _fused build folds the
+        # GDN input projections into one `in_proj_qkvzab` tensor, so its lib.so looks
+        # up parameter names that only exist in the _fused weight cache (pointing it
+        # at the unfused dir fails the engine reload with "Cannot find parameter in
+        # cache: model.layers.0.linear_attn.in_proj_qkvzab.q_weight").
         self.model = self.declare_parameter(
-            'model', 'dist/qwen3_6-35B-A3B-q4f16_1').value
+            'model', 'dist/qwen3_6-35B-A3B-q4f16_1_fused').value
         self.model_lib = self.declare_parameter(
-            'model_lib', 'dist/qwen3_6-35B-A3B-q4f16_1/lib.so').value
+            'model_lib', 'dist/qwen3_6-35B-A3B-q4f16_1_fused/lib.so').value
         self.device = self.declare_parameter('device', 'cuda:0').value
         self.mode = self.declare_parameter('mode', 'interactive').value
         self.host = self.declare_parameter('host', '0.0.0.0').value

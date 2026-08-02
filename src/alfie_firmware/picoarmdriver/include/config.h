@@ -114,7 +114,7 @@
 // =============================================================================
 // LOOP TIMING
 // =============================================================================
-#define SERVO_LOOP_PERIOD_MS    10        ///< Core 0 servo bus tick (100 Hz)
+#define SERVO_LOOP_PERIOD_MS    20        ///< Core 0 servo bus tick (50 Hz)
 #define ROS_TASK_PERIOD_MS      10        ///< Core 1 micro-ROS tick (100 Hz)
 #define STATE_PUBLISH_PERIOD_MS 20        ///< Outbound ArmState publish cadence (50 Hz)
 

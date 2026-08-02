@@ -66,6 +66,13 @@ DriverBoard::DriverBoard()
     motor.velocity_error_previous = 0.0;
     motor.ramped_velocity = 0.0;
     motor.fault_detected = false;
+    motor.stall_detected = false;
+    motor.motor_blocked = false;
+    motor.stall_position = 0.0;
+    motor.stall_count = 0;
+    motor.fault_latched = false;
+    motor.driver_fault = false;
+    motor.runaway_detected = false;
     motor.is_moving = false;
     motor.encoder_a_state = false;
     motor.encoder_b_state = false;
@@ -97,6 +104,10 @@ DriverBoard::DriverBoard()
     actuator_state.current_acceleration = 0.0;
     actuator_state.pulses = 0;
     actuator_state.is_calibrated = false;
+    actuator_state.error_code = ERROR_NONE;
+    actuator_state.stall_position = 0.0;
+    actuator_state.stall_count = 0;
+    actuator_state.fault_latched = false;
     actuator_state.timestamp = 0;
     
     new_actuator_command = false;
@@ -131,19 +142,40 @@ void DriverBoard::initializePeripherals(void) {
         statusLED.setColor(0, 0, 50);
     }
     
-    // Initialize TB6612FNG motor driver power and control pins
-    // VCC pin - power the motor driver logic (must be HIGH)
-    pinMode(MOTOR_VCC_PIN, OUTPUT);
-    digitalWrite(MOTOR_VCC_PIN, HIGH);
-    
-    // Standby pin - must be HIGH for normal operation, LOW puts driver in standby mode
-    pinMode(MOTOR_STANDBY_PIN, OUTPUT);
-    digitalWrite(MOTOR_STANDBY_PIN, HIGH);
-    
-    // Motor control pins (direction and PWM)
-    pinMode(MOTOR_PWM_PIN, OUTPUT);
-    pinMode(MOTOR_DIR1_PIN, OUTPUT);
-    pinMode(MOTOR_DIR2_PIN, OUTPUT);
+    // Initialize DRV8876 motor driver control pins.
+    //
+    // ORDER IS LOAD-BEARING. The rising edge on nSLEEP latches PMODE, so PMODE
+    // must be driven first; and the bridge must be parked before it goes live.
+    // Sequence: PMODE -> EN/PH parked -> nFAULT -> nSLEEP.
+
+    // PMODE LOW selects PH/EN mode. This pin is driven rather than strapped, so
+    // if it is ever left floating the part latches into independent half-bridge
+    // mode, which inverts the down direction and disables current regulation.
+    // Drive it hard and never switch it to INPUT.
+    pinMode(MOTOR_PMODE_PIN, OUTPUT);
+    digitalWrite(MOTOR_PMODE_PIN, LOW);
+
+    pinMode(MOTOR_EN_PIN, OUTPUT);
+    digitalWrite(MOTOR_EN_PIN, LOW);
+    pinMode(MOTOR_PH_PIN, OUTPUT);
+    digitalWrite(MOTOR_PH_PIN, MOTOR_PH_UP);
+
+    // nFAULT is open-drain on the driver, so pull it up here. LOW = fault.
+    pinMode(MOTOR_NFAULT_PIN, INPUT_PULLUP);
+
+    // nSLEEP HIGH keeps the bridge active; LOW puts the outputs in Hi-Z (coast).
+    // Datasheet tWAKE is 1 ms from nSLEEP rising to outputs live. This edge is
+    // also what samples PMODE and IMODE, hence the ordering above.
+    pinMode(MOTOR_NSLEEP_PIN, OUTPUT);
+    digitalWrite(MOTOR_NSLEEP_PIN, HIGH);
+    delay(2);
+
+    // Make PWM_FREQUENCY real. Until this call existed the define was dead and
+    // the bridge ran at whatever the core defaulted analogWrite() to. 4 kHz sits
+    // above audible while staying long-period against the DRV8876's 25 us
+    // current-regulation off-time - see the rationale in config.h.
+    analogWriteFreq(PWM_FREQUENCY);
+    analogWriteRange(PWM_MAX_DUTY);
     
     // Encoder pins with pull-up resistors
     pinMode(MOTOR_ENCODER_A, INPUT_PULLUP);
@@ -206,7 +238,20 @@ void DriverBoard::updateMotorControl(void) {
     if (calibration_in_progress) {
         return;
     }
-    
+
+    // A latched fault holds the bridge in brake until handleMotorSafety() clears
+    // it. Enforced here as well as there because safety runs after this function
+    // in updatePeripherals(), so without this the PID would re-command the motor
+    // for one 2 ms cycle after every fault.
+    if (motor.fault_detected) {
+        analogWrite(MOTOR_EN_PIN, 0);
+        motor.pwm_output = 0;
+        motor.velocity_error_integral = 0.0;
+        motor.velocity_error_previous = 0.0;
+        motor.ramped_velocity = 0.0;
+        return;
+    }
+
     static uint32_t last_control_time = 0;
     uint32_t current_time = millis();
     float dt = (current_time - last_control_time) / 1000.0; // Convert to seconds
@@ -237,7 +282,6 @@ void DriverBoard::updateMotorControl(void) {
         // Position control: Calculate velocity needed to reach target position
         // Velocity and acceleration from command are constraints, not direct control inputs
         float position_error = motor.target_position - motor.current_position;
-        const float POSITION_TOLERANCE = 0.002; // 2mm tolerance
         
         // Simple proportional position control to generate velocity setpoint
         const float POSITION_KP = 5.0; // Position gain - increased from 3.0 for faster settling
@@ -249,7 +293,7 @@ void DriverBoard::updateMotorControl(void) {
         desired_velocity = constrain(desired_velocity, -max_vel, max_vel);
         
         // Stop if within tolerance
-        if (fabs(position_error) < POSITION_TOLERANCE) {
+        if (fabs(position_error) < POSITION_TOLERANCE_M) {
             desired_velocity = 0.0;
         }
         
@@ -272,10 +316,11 @@ void DriverBoard::updateMotorControl(void) {
                                            dt);
         
         
-        // Apply PWM to motor
-        analogWrite(MOTOR_PWM_PIN, abs((int)motor.pwm_output));
-        digitalWrite(MOTOR_DIR1_PIN, motor.pwm_output >= 0 ? MOTOR_DIR_UP_DIR1 : MOTOR_DIR_DOWN_DIR1);
-        digitalWrite(MOTOR_DIR2_PIN, motor.pwm_output >= 0 ? MOTOR_DIR_UP_DIR2 : MOTOR_DIR_DOWN_DIR2);
+        // Direction first, then magnitude. The old TB6612 code wrote PWM before
+        // the DIR pins, which briefly applied the new duty in the old direction
+        // on a sign flip.
+        digitalWrite(MOTOR_PH_PIN, motor.pwm_output >= 0 ? MOTOR_PH_UP : MOTOR_PH_DOWN);
+        analogWrite(MOTOR_EN_PIN, abs((int)motor.pwm_output));
     }
 }
 
@@ -347,9 +392,15 @@ void DriverBoard::updateActuatorState(void) {
             last_temp_update = current_time;
         }
         
-        // Read limit switch state (active high, goes LOW when triggered)
-        // Reading inverted: LOW (triggered) = true, HIGH (not triggered) = false
-        actuator_state.limit_switch_triggered = (digitalRead(LIMIT_SWITCH_PIN) == HIGH);
+        // Limit switch is normally-open to GND with INPUT_PULLUP, so LOW = pressed.
+        // CONFIRMED ON HARDWARE: at -5.19 mm (on the switch) the pin reads LOW; at
+        // 0.00 mm (clear of it) it reads HIGH. The code previously tested == HIGH,
+        // which inverted the sense - a disconnected switch read as permanently
+        // triggered, and sitting ON the switch read as clear. The latter is the
+        // dangerous half: calibration drives down "until triggered", so it would
+        // have kept driving into the hard stop while already on the switch.
+        actuator_state.limit_switch_triggered =
+            (digitalRead(LIMIT_SWITCH_PIN) == LIMIT_SWITCH_ACTIVE_LEVEL);
         
         // Populate actuator state for ROS publishing
         actuator_state.command_position = actuator_cmd.position;
@@ -361,6 +412,14 @@ void DriverBoard::updateActuatorState(void) {
         actuator_state.current_acceleration = motor.current_acceleration;
         actuator_state.pulses = motor.encoder_count;
         actuator_state.pwm_output = (uint8_t)abs(motor.pwm_output);
+        // Fault state snapshot. handleMotorSafety() runs after this in
+        // updatePeripherals(), so these lag by one 2 ms cycle - immaterial next
+        // to the 50 Hz publish rate, and it keeps all Core 1 reads coming from
+        // the same struct rather than reaching into Core 0's motor state.
+        actuator_state.error_code = robot_status;
+        actuator_state.stall_position = motor.stall_position;
+        actuator_state.stall_count = motor.stall_count;
+        actuator_state.fault_latched = motor.fault_latched;
         actuator_state.timestamp = current_time;
         new_actuator_state = true;
         
@@ -370,16 +429,201 @@ void DriverBoard::updateActuatorState(void) {
 
 /**
  * @brief Check for motor faults and safety conditions
- * Monitors motor currents, temperatures, and error conditions
+ *
+ * Two independent detectors, because IPROPI is strapped to GND and there is
+ * therefore no current measurement anywhere in the system:
+ *
+ *  1. Stall - commanding real duty while the encoder reports no motion. This is
+ *     the condition that destroyed the TB6612 and it is inferred, not measured.
+ *  2. nFAULT - the driver's own signal. With current regulation disabled it has
+ *     exactly one meaning: a real device fault (OCP / TSD / UVLO). No
+ *     disambiguation against the commanded state is needed any more.
+ *
+ * Both latch, with different recovery. A driver fault re-arms itself with an
+ * nSLEEP cycle on a timer. A stall latches soft and self-clears after a cooldown
+ * for the first STALL_MAX_RETRIES attempts, then escalates to a hard latch that
+ * only a command for a materially different position releases - so a transient
+ * jam recovers unattended, but a real obstruction is not ground against forever.
  */
 void DriverBoard::handleMotorSafety(void) {
-    // TODO: Implement safety monitoring
-    // Check for overcurrent, overtemperature, encoder faults, etc.
-    
-    // Reset fault flag (placeholder)
-    motor.fault_detected = false;
-    
-    robot_status = ERROR_NONE;
+    // stall_count and stall_position live on MotorState_t rather than here so
+    // they can be published; everything else is private to this detector.
+    static uint32_t stall_start_ms = 0;
+    static uint32_t stall_latch_ms = 0;
+    static float    last_target = 0.0f;
+    static uint32_t moving_since_ms = 0;
+    static bool     moved_this_attempt = false;
+    static uint32_t runaway_start_ms = 0;
+    static uint8_t  nfault_low_run = 0;
+    static uint32_t driver_fault_ms = 0;
+
+    const uint32_t now = millis();
+    const uint16_t pwm_mag = (uint16_t)abs((int)motor.pwm_output);
+    const bool nfault_low = (digitalRead(MOTOR_NFAULT_PIN) == LOW);
+
+    // -------------------------------------------------------------------------
+    // nFAULT: device fault
+    // -------------------------------------------------------------------------
+    // Current regulation is disabled (IPROPI strapped to GND), so nFAULT never
+    // pulses for chopping. Any sustained low is a real fault - OCP, thermal
+    // shutdown or UVLO - whether or not the bridge is being driven. Debounced
+    // only because the line is held up by a weak internal pull-up.
+    if (nfault_low) {
+        if (nfault_low_run < 255) nfault_low_run++;
+        if (nfault_low_run >= NFAULT_DEBOUNCE_SAMPLES && !motor.driver_fault) {
+            motor.driver_fault = true;
+            driver_fault_ms = now;
+        }
+    } else {
+        nfault_low_run = 0;
+    }
+
+    // A latched driver fault is cleared on the DRV8876 side by an nSLEEP cycle,
+    // which is also what re-latches PMODE/IMODE. MOTOR_PMODE_PIN is a GPIO held
+    // LOW as an output, so it keeps its level across this cycle and PH/EN mode
+    // re-latches correctly - no need to re-assert it here. Rate-limited so a
+    // persistent fault does not become a fast re-arm loop. The ~3 ms of blocking
+    // delay costs one control cycle, acceptable on a fault path.
+    if (motor.driver_fault && (uint32_t)(now - driver_fault_ms) >= DRIVER_FAULT_RETRY_MS) {
+        digitalWrite(MOTOR_NSLEEP_PIN, LOW);
+        delayMicroseconds(1500);            // > tSLEEP (1 ms)
+        digitalWrite(MOTOR_NSLEEP_PIN, HIGH);
+        delayMicroseconds(1500);            // > tWAKE (1 ms)
+        motor.driver_fault = false;
+        nfault_low_run = 0;
+        driver_fault_ms = now;
+    }
+
+    // -------------------------------------------------------------------------
+    // Runaway detection - the inverse of a stall, and more dangerous
+    // -------------------------------------------------------------------------
+    // Skipped during calibration: that routine drives the bridge directly, so
+    // motor.pwm_output is stale and the reversal test would compare against the
+    // wrong command. Calibration is bounded by its own timeout instead.
+    if (!calibration_in_progress && !motor.runaway_detected) {
+        const float v = motor.current_velocity;
+
+        // Faster than any speed we ever command. Sits above brake-limited free
+        // fall (~0.063 m/s for 3 kg) and below no-load speed (0.222 m/s), so it
+        // separates powered runaway from every legitimate motion.
+        const bool overspeed = fabs(v) > RUNAWAY_VELOCITY_MPS;
+
+        // Moving against the command while genuinely being driven. Catches the
+        // sign inversions that overspeed alone would miss.
+        const bool reversed = (pwm_mag >= STALL_PWM_THRESHOLD) &&
+                              (fabs(v) > RUNAWAY_REVERSE_MPS) &&
+                              ((motor.pwm_output > 0) != (v > 0));
+
+        if (overspeed || reversed) {
+            if (runaway_start_ms == 0) {
+                runaway_start_ms = now;
+            } else if ((uint32_t)(now - runaway_start_ms) >= RUNAWAY_CONFIRM_MS) {
+                motor.runaway_detected = true;
+                emergencyStop();
+            }
+        } else {
+            runaway_start_ms = 0;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Stall detection
+    // -------------------------------------------------------------------------
+    const bool driving = (pwm_mag >= STALL_PWM_THRESHOLD);
+    const bool stopped = (fabs(motor.current_velocity) < STALL_VELOCITY_MPS);
+
+    // Track whether real motion was achieved during THIS move attempt. This is
+    // the only evidence available to tell an obstruction from an overload - both
+    // present identically as "duty commanded, encoder still".
+    if (fabs(motor.target_position - last_target) > POSITION_TOLERANCE_M) {
+        last_target = motor.target_position;
+        moved_this_attempt = false;
+        moving_since_ms = 0;
+    }
+    if (!stopped) {
+        if (moving_since_ms == 0) {
+            moving_since_ms = now;
+        } else if ((uint32_t)(now - moving_since_ms) >= MOVED_CONFIRM_MS) {
+            moved_this_attempt = true;
+        }
+        motor.stall_count = 0;    // real motion, so retire the retry count
+    } else {
+        moving_since_ms = 0;
+    }
+
+    if (driving && stopped && !motor.stall_detected) {
+        if (stall_start_ms == 0) {
+            stall_start_ms = now;
+        } else if ((uint32_t)(now - stall_start_ms) >= STALL_TIMEOUT_MS) {
+            motor.stall_detected = true;
+            // Moving first, then stopped => something got in the way. Never
+            // moving at all => could not break away from the load.
+            motor.motor_blocked = moved_this_attempt;
+            stall_latch_ms = now;
+            if (motor.stall_count < 255) motor.stall_count++;
+            // Brakes the bridge and parks actuator_cmd at the current position,
+            // so latch the position AFTER it runs: the release test below asks
+            // whether a later command moved away from where we gave up.
+            emergencyStop();
+            motor.stall_position = actuator_cmd.position;
+        }
+    } else {
+        stall_start_ms = 0;
+    }
+
+    if (motor.stall_detected) {
+        // A block hard-latches on the first occurrence: whatever stopped a moving
+        // actuator could be a hand, and the soft-retry cycle would grind at it
+        // three more times over nine seconds. An overload keeps the retries -
+        // nothing is in the way and the load is simply heavy.
+        if (!motor.motor_blocked && motor.stall_count < STALL_MAX_RETRIES) {
+            // Soft latch: self-clearing, for transient jams. Harmless even if it
+            // releases into the same condition - the command is parked at the
+            // current position, so the PID has nothing to drive toward until a
+            // real command arrives.
+            if ((uint32_t)(now - stall_latch_ms) >= STALL_RECOVERY_MS) {
+                motor.stall_detected = false;
+                stall_start_ms = 0;
+            }
+        } else {
+            // Hard latch: repeated stalls mean a genuine obstruction or a load
+            // the gearing cannot lift. Only a command for a materially different
+            // position releases it.
+            if (fabs(actuator_cmd.position - motor.stall_position) > POSITION_TOLERANCE_M) {
+                motor.stall_detected = false;
+                motor.motor_blocked = false;
+                stall_start_ms = 0;
+                motor.stall_count = 0;
+                moved_this_attempt = false;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Roll up
+    // -------------------------------------------------------------------------
+    motor.fault_detected = motor.stall_detected || motor.driver_fault ||
+                           motor.runaway_detected;
+
+    // Hard latch = will not clear on its own, needs a materially different target.
+    // A block latches hard on the first occurrence; an overload only after it has
+    // used up its retries. A driver fault always re-arms itself on a timer. A
+    // runaway never clears at all - only a reset does.
+    motor.fault_latched = motor.runaway_detected ||
+                          (motor.stall_detected &&
+                           (motor.motor_blocked || motor.stall_count >= STALL_MAX_RETRIES));
+
+    // Runaway outranks everything: it means the hardware is not what the firmware
+    // believes it to be, so any other diagnosis derived from that belief is suspect.
+    if (motor.runaway_detected) {
+        robot_status = ERROR_MOTOR_RUNAWAY;
+    } else if (motor.stall_detected) {
+        robot_status = motor.motor_blocked ? ERROR_MOTOR_BLOCKED : ERROR_LOAD_EXCEEDED;
+    } else if (motor.driver_fault) {
+        robot_status = ERROR_DRIVER_FAULT;
+    } else {
+        robot_status = ERROR_NONE;
+    }
 }
 
 /**
@@ -395,12 +639,13 @@ void DriverBoard::updateStatusLED(void) {
  * Immediately stops motor output for safety
  */
 void DriverBoard::emergencyStop(void) {
-    // Stop motor by setting PWM to 0 and both direction pins LOW (brake mode for TB6612FNG)
-    analogWrite(MOTOR_PWM_PIN, 0);
-    digitalWrite(MOTOR_DIR1_PIN, LOW);
-    digitalWrite(MOTOR_DIR2_PIN, LOW);
-    // Note: MOTOR_STANDBY_PIN remains HIGH to keep driver active
-    // Set it LOW only if you want to disable the driver completely
+    // EN=0 with nSLEEP HIGH is brake (low-side slow decay) on the DRV8876, which
+    // is what this function always claimed to do. The old TB6612 code set both
+    // DIR pins LOW, which on that part is Stop/high-impedance - a coast, not a
+    // brake. At 56:1 the gearbox back-drives, so coasting drops the back.
+    analogWrite(MOTOR_EN_PIN, 0);
+    // nSLEEP stays HIGH to hold the brake. Taking it LOW would Hi-Z the bridge
+    // and let the actuator free-fall.
     
     // Reset command (field-by-field assignment for volatile)
     actuator_cmd.position = motor.current_position;
@@ -444,44 +689,85 @@ void DriverBoard::setupEncoderInterrupts(void) {
 }
 
 /**
+ * @brief Quadrature transition table, indexed by (previous_state << 2) | current
+ *
+ * State is (A << 1) | B. Entries are +1 for a forward transition, -1 for
+ * reverse, and 0 for both "nothing changed" and the illegal both-pins-changed
+ * case. Forward is the sequence 00 -> 10 -> 11 -> 01 -> 00, which preserves the
+ * sign convention of the decoder this replaced: up is still increasing count.
+ */
+static const int8_t QUAD_TABLE[16] = {
+     0, -1,  1,  0,
+     1,  0,  0, -1,
+    -1,  0,  0,  1,
+     0,  1, -1,  0
+};
+
+/**
  * @brief Process encoder interrupt
- * @param pin_state Current state of the encoder pin that triggered interrupt
- * @param is_pin_a True if pin A triggered interrupt, false if pin B
+ *
+ * REWRITTEN - the previous decoder lost position cumulatively. It read both pins
+ * at interrupt time, inferred direction from their CURRENT levels, and counted
+ * +/-1 unconditionally on every interrupt. Three ways that drifts:
+ *
+ *   1. No memory of the previous state, so it assumed the pin still held its
+ *      post-edge value by the time digitalRead() ran. Under ISR latency or
+ *      electrical dither it does not.
+ *   2. It counted on EVERY interrupt, including glitches that never advanced the
+ *      quadrature state. A correct decoder returns zero for a non-transition.
+ *   3. Direction came from levels rather than from the transition, so a stale
+ *      read counted the WRONG WAY - two counts of error, not one.
+ *
+ * Measured on hardware: the actuator ended 20 mm high after one full round trip
+ * and 32 mm after two, growing every cycle, with no mechanical slip (pulleys
+ * verified tight, no belt skip). The descent registered ~6% more counts per mm
+ * than the ascent - descent is faster and jerkier (0.134 m/s peak against a
+ * 0.040 steady), which is precisely when edge dither is worst.
+ *
+ * The table below counts only valid Gray-code transitions and yields 0 for both
+ * "no change" and the illegal both-pins-changed case, so dither at an edge nets
+ * to zero instead of accumulating. Resolution is unchanged at 4 counts per
+ * quadrature cycle.
+ *
+ * @param pin_state Unused - retained for call-site compatibility. The state
+ *                  table needs no knowledge of which pin fired.
+ * @param is_pin_a  Unused, same reason.
  */
 void DriverBoard::processEncoderInterrupt(bool pin_state, bool is_pin_a) {
-    // Read current states of both encoder pins
-    bool state_a = digitalRead(encoder.pin_a);
-    bool state_b = digitalRead(encoder.pin_b);
-    
-    // Store current states in motor structure
+    (void)pin_state;
+    (void)is_pin_a;
+
+    static uint8_t prev_state = 0xFF;    // 0xFF = uninitialised
+
+    const bool state_a = digitalRead(encoder.pin_a);
+    const bool state_b = digitalRead(encoder.pin_b);
+    const uint8_t state = (uint8_t)((state_a ? 2 : 0) | (state_b ? 1 : 0));
+
     motor.encoder_a_state = state_a;
     motor.encoder_b_state = state_b;
-    
-    // Determine direction based on quadrature encoding
-    // For hall effect encoders, we typically see a 90-degree phase shift between A and B
-    bool direction_forward;
-    
-    if (is_pin_a) {
-        // Pin A changed - determine direction based on B state
-        direction_forward = (state_a == state_b) ? false : true;
-    } else {
-        // Pin B changed - determine direction based on A state  
-        direction_forward = (state_a == state_b) ? true : false;
+
+    // First edge after boot only establishes the reference; counting a delta
+    // against an unknown previous state would be a guess.
+    if (prev_state == 0xFF) {
+        prev_state = state;
+        return;
     }
-    
-    // Update encoder count based on direction
-    if (direction_forward) {
-        encoder.count++;
-    } else {
-        encoder.count--;
+
+    const int8_t delta = QUAD_TABLE[(prev_state << 2) | state];
+    prev_state = state;
+
+    // Zero means no advance (dither or a glitch). Do not count it, and do not
+    // let it refresh the pulse timing - a stalled axis that is merely vibrating
+    // must still look stalled to the safety detectors.
+    if (delta == 0) {
+        return;
     }
-    
-    // Store direction and timing information
-    encoder.direction = direction_forward;
+
+    encoder.count += delta;
+    encoder.direction = (delta > 0);
     encoder.last_time = micros();
     motor.last_pulse_time = encoder.last_time;
-    
-    // Update motor encoder count (thread-safe copy)
+
     motor.encoder_count = encoder.count;
 }
 
@@ -619,13 +905,26 @@ void DriverBoard::updateRgbLED(void) {
     extern RosAgentState_t agent_state;
     extern bool ros_entities_created;
     
-    // Check for fault conditions first
+    // Faults first. Solid vs blinking red separates "needs a human" from "will
+    // try again on its own", which is the distinction that matters when you are
+    // looking at the robot rather than at the topic.
     if (motor.fault_detected || robot_status != ERROR_NONE) {
-        // Solid red for errors
-        statusLED.setColor(100, 0, 0);
+        if (motor.runaway_detected) {
+            // Fast red strobe - the most severe state, and unrecoverable without
+            // a reset. Deliberately more urgent than either stall pattern.
+            bool on = ((millis() / 80) % 2) == 0;
+            statusLED.setColor(on ? 150 : 0, 0, 0);
+        } else if (motor.motor_blocked) {
+            statusLED.setColor(100, 0, 0);              // solid red - obstruction, hard latched
+        } else if (motor.stall_detected) {
+            bool on = ((millis() / 250) % 2) == 0;      // blinking red - overload, retrying
+            statusLED.setColor(on ? 100 : 0, 0, 0);
+        } else {
+            statusLED.setColor(100, 0, 0);              // driver fault
+        }
         return;
     }
-    
+
     // Update LED pattern every LED_BLINK_PERIOD_MS (125ms) to match main.cpp pattern timing
     if (current_time - last_update_time >= LED_BLINK_PERIOD_MS) {
         last_update_time = current_time;

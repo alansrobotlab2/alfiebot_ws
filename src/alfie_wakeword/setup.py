@@ -16,7 +16,8 @@ setup(
         # along with their .onnx graph — else the model fails to load.
         ('share/' + package_name + '/models', glob('models/*')),
     ],
-    install_requires=['setuptools', 'openwakeword', 'numpy'],
+    # openwakeword >= 0.5 for the wakeword_models/inference_framework API.
+    install_requires=['setuptools', 'openwakeword>=0.5.0', 'numpy'],
     zip_safe=True,
     maintainer='alfie',
     maintainer_email='alansrobotlab@gmail.com',

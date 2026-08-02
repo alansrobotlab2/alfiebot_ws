@@ -30,7 +30,7 @@ reply `bool ok`, `string message`, `Detections detections`. An empty request
 
 | Param | Default | Notes |
 |-------|---------|-------|
-| `image_topic` | `stereo_camera/left_center/image_raw/compressed` | compressed input stream |
+| `image_topic` | `stereo_camera/left_center/image_raw/compressed` | compressed input stream (the launch file overrides this to `left_wide`) |
 | `detect_service` | `nanoowl/detect` | service name |
 | `prompt` | broad default list | comma-separated queries used when a request omits its own (`[a, b]` also accepted) |
 | `threshold` | `0.1` | sigmoid confidence cutoff |
@@ -41,45 +41,69 @@ reply `bool ok`, `string message`, `Detections detections`. An empty request
 
 ## Install NanoOWL
 
-Not pulled in by rosdep — install into the same Python env the workspace uses:
+Not pulled in by rosdep — install into the same Python env the workspace uses
+(system python3.12, user site-packages; PEP 668 means `--break-system-packages`):
 
 ```bash
-pip install transformers Pillow
-pip install git+https://github.com/NVIDIA-AI-IOT/nanoowl
+PIP="pip install --user --break-system-packages"
+
+$PIP transformers                       # Pillow / opencv / cv_bridge already present
+
+# torchvision must match the installed torch exactly and come from the same
+# CUDA index, or pip will drag in a CPU torch and clobber the Jetson build.
+# torch 2.11.0+cu130 -> torchvision 0.26.0+cu130
+$PIP --no-deps --index-url https://download.pytorch.org/whl/cu130 torchvision==0.26.0+cu130
+
+$PIP --no-deps git+https://github.com/NVIDIA-AI-IOT/nanoowl
 ```
 
-torch / torchvision / opencv / cv_bridge are already present on the robot.
+`--no-deps` on nanoowl is deliberate: its setup.py declares nothing, but pip
+still resolves fine — the flag just guarantees it can never touch torch.
 
-### TensorRT image-encoder engine (built)
+### TensorRT image-encoder engine
 
 The pure-PyTorch encoder works out of the box but is slow (~370–590 ms/frame).
-The FP16 TensorRT engine cuts that to ~130 ms/frame (encoder itself ~6 ms) and
-loads in ~2 s instead of ~18 s. It is already built at:
+The FP16 TensorRT engine cuts that to **~12 ms/frame** (encoder itself ~6 ms) and
+loads in ~3 s instead of ~15 s. Build it to:
 
-    ~/nanoowl_data/owl_image_encoder_patch32.engine   # 183 MB, sm_87 / fp16
+    ~/nanoowl_data/owl_image_encoder_patch32.engine   # 182 MB, sm_87 / fp16
 
-Launch with `image_encoder_engine:=~/nanoowl_data/owl_image_encoder_patch32.engine`.
+The launch file picks that path up automatically when it exists, so nothing to
+pass; otherwise `image_encoder_engine:=<path>`.
 
-To rebuild it (e.g. after a JetPack/TensorRT upgrade):
+Build (or rebuild after a JetPack/TensorRT upgrade):
 
 ```bash
+# ONNX export deps — torch >= 2.9 routes torch.onnx.export through onnxscript
+pip install --user --break-system-packages onnx onnxscript
+pip install --user --break-system-packages --no-build-isolation --no-deps \
+    git+https://github.com/NVIDIA-AI-IOT/torch2trt
+
 mkdir -p ~/nanoowl_data
 python3 -m nanoowl.build_image_encoder_engine \
     ~/nanoowl_data/owl_image_encoder_patch32.engine
 ```
 
-**TensorRT on this Orin — important.** The engine build (and `torch2trt`) needs a
-*Tegra* TensorRT, not the pip `tensorrt` wheel. The pip wheel pulls
-`tensorrt-cu13` (CUDA 13, dGPU archs, no sm_87) and fails at builder creation
-with `CUDA initialization failure with error: 35`. Use the JetPack apt build:
+Takes ~2 min (ONNX export is silent for most of it, then `trtexec` runs).
+
+**TensorRT must be the apt/JetPack build, not a pip wheel.** The pip `tensorrt`
+package pulls dGPU CUDA libs with no sm_87 and dies at builder creation with
+`CUDA initialization failure with error: 35`. Since the JetPack 7 / CUDA 13
+upgrade this is already correct on the robot — apt `libnvinfer*` +
+`python3-libnvinfer` 10.16.2.10 in `/usr/lib/python3.12/dist-packages`, with
+`trtexec` at `/usr/bin/trtexec`. Verify before building:
 
 ```bash
-pip uninstall -y tensorrt tensorrt-cu13 tensorrt_cu13_bindings tensorrt_cu13_libs
-sudo apt install tensorrt                       # 10.3.0.30+cuda12.5, ships trtexec
-sudo apt install --allow-change-held-packages nvidia-l4t-dla-compiler  # libnvdla_compiler.so
-sudo ldconfig
-pip install --no-build-isolation git+https://github.com/NVIDIA-AI-IOT/torch2trt
+python3 -c "import tensorrt as t; t.Builder(t.Logger()); print(t.__file__, t.__version__)"
+# -> /usr/lib/python3.12/dist-packages/tensorrt/__init__.py 10.16.2.10
 ```
+
+If it resolves to `~/.local/...` instead, remove the pip copy:
+`pip uninstall -y tensorrt tensorrt-cu13 tensorrt_cu13_bindings tensorrt_cu13_libs`.
+
+**Harmless warning at startup:** torch 2.11.0+cu130 ships no sm_87 cubin, so it
+logs `GPU0 Orin which is of compute capability 8.7 ... except {8.7}` and JITs
+from PTX. Detection is correct and the hot path is the TensorRT engine anyway.
 
 ## Build & run
 

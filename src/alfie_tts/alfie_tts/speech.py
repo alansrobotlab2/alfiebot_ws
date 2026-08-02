@@ -26,6 +26,12 @@ from alfie_msgs.msg import Speaking
 # unit-specific serial and the ALSA card index is not stable across replugs).
 RESPEAKER_SINK_MATCH = ('respeaker', 'seeed')
 
+# PortAudio device to play through, in order of preference. We must open the
+# sound server explicitly: ALSA's `default` on this Jetson is the Tegra APE
+# card, so an unqualified stream bypasses PipeWire entirely and the audio is
+# silently discarded regardless of which sink pactl has made default.
+OUTPUT_DEVICE_PREFERENCE = ('pipewire', 'pulse')
+
 # Piper yields coarse chunks (often a whole sentence). To drive an amplitude-
 # reactive LED, we write each chunk in small windows and publish an RMS level per
 # window on `tts/level` — fine-grained and paced to playback by the blocking
@@ -75,6 +81,11 @@ class AlfieTTS(Node):
             self.get_logger().error(
                 "reSpeaker PulseAudio sink not found; TTS has no output device. "
                 "Check the reSpeaker connection.")
+
+        # Which PortAudio device to hand to sounddevice (see
+        # OUTPUT_DEVICE_PREFERENCE). Resolved once; the index is stable for the
+        # life of the process.
+        self.output_device = self._resolve_output_device()
 
         self.speaking_pub = self.create_publisher(
             Speaking,
@@ -129,6 +140,23 @@ class AlfieTTS(Node):
             low = name.lower()
             if any(m in low for m in RESPEAKER_SINK_MATCH):
                 return name
+        return None
+
+    def _resolve_output_device(self):
+        """Return the PortAudio index of the sound server, or None for default."""
+        try:
+            devices = sd.query_devices()
+        except Exception as e:
+            self.get_logger().warn(f"Could not query audio devices: {e}")
+            return None
+        for want in OUTPUT_DEVICE_PREFERENCE:
+            for index, dev in enumerate(devices):
+                if dev['max_output_channels'] > 0 and dev['name'].lower() == want:
+                    self.get_logger().info(f"Using output device '{dev['name']}' (index {index})")
+                    return index
+        self.get_logger().warn(
+            "No PipeWire/PulseAudio output device found; falling back to the "
+            "ALSA default, which may not reach the reSpeaker speaker.")
         return None
 
     def publish_speaking(self, is_speaking):
@@ -186,6 +214,7 @@ class AlfieTTS(Node):
                 channels=1,
                 dtype='int16',
                 latency=self.latency,
+                device=self.output_device,
             ) as output_stream:
                 with self._stream_lock:
                     self._stream = output_stream

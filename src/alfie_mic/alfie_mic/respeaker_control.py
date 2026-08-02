@@ -10,6 +10,7 @@ This is the *single* owner of the pyusb control handle. Audio capture
 (audio_publisher) goes through ALSA and does not touch USB control, so the two
 nodes can run side by side without fighting over the device.
 """
+import errno
 import re
 import subprocess
 
@@ -56,28 +57,32 @@ XVF3800_PCM_MAX = 60
 
 DOA_POLL_HZ = 10.0
 
+# The board re-enumerates on a power blip or replug, which invalidates the pyusb
+# handle permanently: every transfer then fails with ENODEV and the node would
+# sit there warning forever. Drop the handle and re-find() the device instead.
+RECONNECT_PERIOD_S = 2.0
+# errnos that mean "this handle is dead, stop using it".
+USB_DEAD_ERRNOS = (errno.ENODEV, errno.ENXIO, errno.EPIPE)
+# ...and a transient error (e.g. EIO) that keeps repeating means the same thing.
+USB_FAIL_LIMIT = 5
+
 
 class ReSpeakerControl(Node):
     def __init__(self):
         super().__init__('respeaker_control')
 
-        self.mic = xvf3800.find()
-        if self.mic is None:
-            self.get_logger().error(
-                'reSpeaker XVF3800 not found on USB (2886:001a). '
-                'DOA/LED control disabled; check the udev rule and connection.')
-        else:
-            try:
-                version = '.'.join(str(v) for v in self.mic.read("VERSION"))
-                self.get_logger().info(f'reSpeaker XVF3800 found, firmware {version}')
-            except Exception as e:
-                self.get_logger().info(f'reSpeaker XVF3800 found (version read failed: {e})')
-            self._apply_tuning()
-            self._setup_aec_params()
+        self.mic = None
+        self._usb_fails = 0
+        # Last values written to the ring, so streamed animations (e.g. the
+        # THINKING crossfade at 30 Hz) only issue a USB write for the field that
+        # actually changed — usually just LED_COLOR — keeping the DOA poll on the
+        # same USB handle responsive. Cleared on reconnect: a re-enumerated board
+        # is back at its defaults, so every field must be rewritten.
+        self._led_last = {}
 
-        # Playback gain is an ALSA control, so set it regardless of whether the
-        # USB DSP handle came up.
-        self._apply_playback_gain()
+        # Params are declared once, up front; their values are (re)written to the
+        # device on every connect.
+        self._setup_aec_params()
 
         # DOA publisher (best-effort, latest-sample telemetry).
         doa_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -86,43 +91,113 @@ class ReSpeakerControl(Node):
         # LED command subscriber (reliable — commands should not be dropped).
         self.led_sub = self.create_subscription(
             LedCommand, 'respeaker/led_command', self._on_led_command, 10)
-        # Last values written to the ring, so streamed animations (e.g. the
-        # THINKING crossfade at 30 Hz) only issue a USB write for the field that
-        # actually changed — usually just LED_COLOR — keeping the DOA poll on the
-        # same USB handle responsive.
-        self._led_last = {}
 
+        if not self._connect():
+            self.get_logger().error(
+                'reSpeaker XVF3800 not found on USB (2886:001a). '
+                'DOA/LED control disabled until it appears; '
+                'check the udev rule and connection.')
+            # Playback gain is an ALSA control, so try it even without the USB
+            # DSP handle — the card may still be enumerated.
+            self._apply_playback_gain()
+
+        self.create_timer(1.0 / DOA_POLL_HZ, self._poll_doa)
+        self.create_timer(RECONNECT_PERIOD_S, self._reconnect)
+
+    # ------------------------------------------------------------------
+    # connection management
+    # ------------------------------------------------------------------
+    def _connect(self):
+        """Open the USB control handle and push all device state to it.
+
+        Also the post-replug recovery path, so everything the board forgets on
+        re-enumeration (DSP tuning, AEC params, LED ring, ALSA playback mixer)
+        gets reapplied here. Returns True if the device was found.
+        """
+        mic = xvf3800.find()
+        if mic is None:
+            return False
+
+        self.mic = mic
+        self._usb_fails = 0
+        self._led_last = {}
+        try:
+            version = '.'.join(str(v) for v in self.mic.read("VERSION"))
+            self.get_logger().info(f'reSpeaker XVF3800 found, firmware {version}')
+        except Exception as e:
+            self.get_logger().info(f'reSpeaker XVF3800 found (version read failed: {e})')
+        self._apply_tuning()
+        self._write_all_aec()
+        self._apply_playback_gain()
+        return True
+
+    def _reconnect(self):
         if self.mic is not None:
-            self.create_timer(1.0 / DOA_POLL_HZ, self._poll_doa)
+            return
+        if self._connect():
+            self.get_logger().info('reSpeaker XVF3800 reconnected.')
+
+    def _drop_device(self, reason):
+        """Release a handle that can no longer be used; _reconnect picks it up."""
+        if self.mic is None:
+            return
+        self.get_logger().warn(
+            f'reSpeaker USB handle lost ({reason}); will retry every '
+            f'{RECONNECT_PERIOD_S:g}s.')
+        try:
+            self.mic.close()
+        except Exception:
+            pass
+        self.mic = None
+        self._usb_fails = 0
+
+    def _note_usb_error(self, what, exc):
+        """Log a failed transfer and drop the handle if the device is gone."""
+        self.get_logger().warn(f'{what} failed ({type(exc).__name__}: {exc})',
+                               throttle_duration_sec=5.0)
+        # USBError subclasses OSError, so a dead device shows up as errno.
+        code = getattr(exc, 'errno', None)
+        if code in USB_DEAD_ERRNOS:
+            self._drop_device(f'errno {code}')
+            return
+        self._usb_fails += 1
+        if self._usb_fails >= USB_FAIL_LIMIT:
+            self._drop_device(f'{self._usb_fails} consecutive errors')
 
     def _apply_tuning(self):
         for name, value in XVF3800_TUNING:
             try:
                 self.mic.write(name, value)
             except Exception as e:
-                self.get_logger().warn(
-                    f'Mic tuning {name}={value} failed ({type(e).__name__}: {e})')
+                self._note_usb_error(f'Mic tuning {name}={value}', e)
 
     def _setup_aec_params(self):
-        """Declare the AEC/post-processing params, write them, and register a
-        live-update callback so they can be tuned at runtime."""
-        for pname, (_xvf, is_float, default) in AEC_TUNABLES.items():
-            val = self.declare_parameter(pname, default).value
-            self._write_aec(pname, float(val) if is_float else int(val))
+        """Declare the AEC/post-processing params and register a live-update
+        callback so they can be tuned at runtime. Values reach the device in
+        _write_all_aec(), which runs on every connect."""
+        for pname, (_xvf, _is_float, default) in AEC_TUNABLES.items():
+            self.declare_parameter(pname, default)
         self.add_on_set_parameters_callback(self._on_set_params)
+
+    def _write_all_aec(self):
+        """Push every declared AEC param to the (re)connected device."""
+        for pname in AEC_TUNABLES:
+            self._write_aec(pname, self.get_parameter(pname).value)
         applied = {p: self.get_parameter(p).value for p in AEC_TUNABLES}
         self.get_logger().info(f'AEC params: {applied}')
 
     def _write_aec(self, pname, value):
         """Write one AEC param to the device (skips float sentinels < 0)."""
+        if self.mic is None:
+            return
         xvf, is_float, _ = AEC_TUNABLES[pname]
+        value = float(value) if is_float else int(value)
         if is_float and value < 0:
             return   # sentinel: leave firmware default
         try:
-            self.mic.write(xvf, [float(value) if is_float else int(value)])
+            self.mic.write(xvf, [value])
         except Exception as e:
-            self.get_logger().warn(
-                f'AEC write {xvf}={value} failed ({type(e).__name__}: {e})')
+            self._note_usb_error(f'AEC write {xvf}={value}', e)
 
     def _on_set_params(self, params):
         for p in params:
@@ -164,13 +239,15 @@ class ReSpeakerControl(Node):
         return None
 
     def _poll_doa(self):
+        if self.mic is None:
+            return
         try:
             angle, speech = self.mic.read("DOA_VALUE")
         except Exception as e:
-            self.get_logger().warn(f'DOA read failed ({type(e).__name__}: {e})',
-                                   throttle_duration_sec=5.0)
+            self._note_usb_error('DOA read', e)
             return
 
+        self._usb_fails = 0
         msg = Doa()
         msg.header = Header()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -198,8 +275,9 @@ class ReSpeakerControl(Node):
                 self.mic.write(name, [value])
                 self._led_last[name] = value
             except Exception as e:
-                self.get_logger().warn(
-                    f'LED write {name}={value} failed ({type(e).__name__}: {e})')
+                self._note_usb_error(f'LED write {name}={value}', e)
+                if self.mic is None:
+                    return
 
     def destroy_node(self):
         if self.mic is not None:

@@ -66,7 +66,7 @@ class AgentNode(Node):
         self.llm_base_url = self.declare_parameter(
             'llm_base_url', 'http://localhost:8000/v1').value
         model_id_fallback = self.declare_parameter(
-            'model_id', 'dist/qwen3_6-35B-A3B-q4f16_1').value
+            'model_id', 'dist/qwen3_6-35B-A3B-q4f16_1_fused').value
         # Shared-with-lloyd obsidian vault; point this at your placeholder folder
         # until the real vault is hooked up.
         self.vault_root = self.declare_parameter('vault_root', '~/obsidian').value

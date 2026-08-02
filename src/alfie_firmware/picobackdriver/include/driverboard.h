@@ -50,7 +50,14 @@ typedef struct {
     float ramped_velocity;      ///< Velocity after applying acceleration limits
     
     // Status flags
-    bool fault_detected;        ///< Motor fault flag
+    bool fault_detected;        ///< Set while any latched fault is active (stall or driver)
+    bool stall_detected;        ///< Latched: driving at duty but the encoder is not moving
+    bool motor_blocked;         ///< Classifies the latched stall: true = obstruction, false = overload
+    float stall_position;       ///< Position where the last stall latched (m)
+    uint8_t stall_count;        ///< Consecutive stall attempts; cleared by any real motion
+    bool fault_latched;         ///< True = hard latch needing a new target, false = will self-clear
+    bool driver_fault;          ///< Latched: DRV8876 nFAULT low (OCP/TSD/UVLO - chopping is disabled)
+    bool runaway_detected;      ///< Latched until reset: overspeed or motion against the command
     bool is_moving;             ///< True if motor is currently moving
     bool encoder_a_state;       ///< Current state of encoder A pin
     bool encoder_b_state;       ///< Current state of encoder B pin
@@ -82,7 +89,7 @@ typedef struct {
  */
 typedef struct {
     uint8_t board_temp;         ///< Board temperature from RP2040 internal sensor (°C)
-    bool limit_switch_triggered; ///< True when lower limit switch is triggered (active low)
+    bool limit_switch_triggered; ///< True at the bottom stop. NC switch, so active HIGH - see LIMIT_SWITCH_ACTIVE_LEVEL
     float command_position;     ///< Commanded position (m)
     float command_velocity;     ///< Commanded velocity (m/s)
     float command_acceleration; ///< Commanded acceleration (m/s²)
@@ -93,6 +100,10 @@ typedef struct {
     int64_t pulses;             ///< Encoder pulse count
     uint8_t pwm_output;         ///< Current PWM output magnitude (0-255)
     bool is_calibrated;         ///< True if system has been successfully calibrated
+    uint8_t error_code;         ///< Latched fault code (ERROR_* in config.h)
+    float stall_position;       ///< Position where the last stall latched (m)
+    uint8_t stall_count;        ///< Consecutive stall attempts
+    bool fault_latched;         ///< True = hard latch needing a new target, false = will self-clear
     uint32_t timestamp;         ///< State timestamp
 } ActuatorState_t;
 
