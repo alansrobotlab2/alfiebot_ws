@@ -273,7 +273,12 @@ def generate_launch_description():
             emulate_tty=True,
             sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
             sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
+            respawn=True,
+            # The node now exits when the server dies or hangs (see its _fail()),
+            # so respawn is live for the LLM. Delay it: a broken model/lib config
+            # fails only AFTER an ~18 GB load, and back-to-back reloads thrash the
+            # GPU instead of leaving the log readable.
+            respawn_delay=10.0
         ),
 
         Node(

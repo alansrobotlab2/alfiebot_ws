@@ -12,11 +12,13 @@ consumers can wait for the model (a 35B MoE takes ~30 s to load) before entering
 the conversation loop. All paths are ROS parameters so a different build/model
 can be selected at launch.
 """
+import sys
 import threading
 import time
 import urllib.request
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Bool
@@ -88,6 +90,13 @@ class MLCLLMServeNode(Node):
             self.declare_parameter('prefix_cache_recycling_seqs', 0).value)
         self.gpu_memory_utilization = float(
             self.declare_parameter('gpu_memory_utilization', 0.5).value)
+        # How long the server gets to answer /v1/models before we call it hung.
+        # A cold 35B MoE load is ~30-60 s; anything past this is a real failure —
+        # notably an engine-thread death (weights/lib mismatch, rnn_state slot
+        # exhaustion), which leaves the process ALIVE and listening on nothing, so
+        # neither the child nor this node ever exits and launch never respawns.
+        self.ready_timeout = float(
+            self.declare_parameter('ready_timeout', 300.0).value)
 
         # Latched so a consumer that subscribes after the model is up still sees it.
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -97,6 +106,8 @@ class MLCLLMServeNode(Node):
 
         self.proc = None
         self._stop = threading.Event()
+        self._failed = threading.Event()
+        self.exit_code = 0
         threading.Thread(target=self._run_server, daemon=True).start()
         threading.Thread(target=self._wait_ready, daemon=True).start()
 
@@ -104,6 +115,25 @@ class MLCLLMServeNode(Node):
         msg = Bool()
         msg.data = bool(value)
         self.ready_pub.publish(msg)
+
+    def _fail(self, reason):
+        """Fail fast: drop the ready latch and take the whole node down.
+
+        The node is launched with respawn=True, but launch only respawns on
+        PROCESS EXIT — so staying alive next to a dead or hung server reads as
+        healthy and silently strands every LLM consumer forever. Exiting is what
+        actually recovers; destroy_node() reaps the child on the way out.
+        Idempotent: whichever of the two worker threads notices first wins.
+        """
+        if self._failed.is_set():
+            return
+        self._failed.set()
+        self.get_logger().error(f'{reason} Exiting so launch can respawn the node.')
+        self.exit_code = 1
+        self._publish_ready(False)
+        self._stop.set()
+        if rclpy.ok():
+            rclpy.shutdown()
 
     def _serve_cmd(self):
         # Source .envrc.local (vendored TVM/mlc_llm env) then exec the server.
@@ -133,14 +163,13 @@ class MLCLLMServeNode(Node):
             self.proc = spawn_supervised(['bash', '-c', self._serve_cmd()])
             self.proc.wait()
             if not self._stop.is_set():
-                self.get_logger().error(
-                    f'MLC-LLM server exited (code {self.proc.returncode}).')
-                self._publish_ready(False)
+                self._fail(f'MLC-LLM server exited (code {self.proc.returncode}).')
         except Exception as e:
-            self.get_logger().error(f'Failed to launch MLC-LLM server: {e}')
+            self._fail(f'Failed to launch MLC-LLM server: {e}')
 
     def _wait_ready(self):
         url = f'http://localhost:{self.port}/v1/models'
+        deadline = time.monotonic() + self.ready_timeout
         while not self._stop.is_set():
             try:
                 with urllib.request.urlopen(url, timeout=2) as r:
@@ -150,6 +179,12 @@ class MLCLLMServeNode(Node):
                         return
             except Exception:
                 pass
+            if time.monotonic() >= deadline:
+                self._fail(
+                    f'MLC-LLM server never answered {url} within '
+                    f'{self.ready_timeout:.0f}s (process alive but not serving — '
+                    'usually a dead engine thread; check the server log).')
+                return
             time.sleep(2.0)
 
     def destroy_node(self):
@@ -170,9 +205,16 @@ def main(args=None):
         rclpy.spin(node)
     except KeyboardInterrupt:
         node.get_logger().info('Shutdown signal received, stopping MLC-LLM server...')
+    except ExternalShutdownException:
+        pass  # _fail() shut the context down; it already logged why.
     finally:
+        exit_code = node.exit_code
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
+    # Non-zero on failure so the respawn shows up as a restart-after-error in the
+    # launch log rather than looking like a clean exit.
+    sys.exit(exit_code)
 
 
 if __name__ == '__main__':
