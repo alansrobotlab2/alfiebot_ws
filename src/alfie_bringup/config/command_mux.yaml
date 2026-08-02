@@ -30,25 +30,39 @@
 
     # E-stop behavior
     estop_hold: true               # true = hold at current pose; false = limp (torque off)
-    estop_eye_pwm: 4095            # eye LED duty while latched (indicator); 0 = dark
+    # Eyes alternate left/right while latched: a dim blink reads as "stopped but
+    # powered" from a distance, where a steady stare looked like normal running.
+    estop_eye_pwm: 1               # duty of the lit eye (0..4095); 0 = dark
+    estop_eye_flash_hz: 1.0        # full L->R->L cycles/sec; <= 0 = steady both eyes
     # After estop_reset, ignore any source whose last message predates the reset
     # (forces commanders to publish fresh, post-reset setpoints).
     resume_fence: true
 
     # Sources per subsystem: "name: {priority, timeout}". Higher priority wins.
     # "groot" is the GR00T policy (full-body: arms+head+back+base; no eyes).
+    #
+    # "tool" is servotool3 (ros2 run alfie_tools servotool). It outranks every
+    # autonomous source *and* vr on purpose: it is a bench tool with an explicit
+    # take/release per subsystem and its own operator deadman, so whoever is
+    # standing at the robot with it open is the one who should win. It only
+    # publishes while a subsystem is held, so it is invisible the rest of the
+    # time.
     left_arm:
+      tool:   {priority: 110, timeout: 0.5}
       vr:     {priority: 100, timeout: 0.2}
       groot:  {priority: 50, timeout: 0.2}
     right_arm:
+      tool:   {priority: 110, timeout: 0.5}
       vr:     {priority: 100, timeout: 0.2}
       groot:  {priority: 50, timeout: 0.2}
     head:
+      tool:   {priority: 110, timeout: 0.5}
       vr:     {priority: 100, timeout: 0.2}
       groot:  {priority: 50, timeout: 0.2}
       agent:  {priority: 30, timeout: 0.5}
       idle:   {priority: 10, timeout: 0.5}
     back:
+      tool:   {priority: 110, timeout: 0.5}
       vr:     {priority: 100, timeout: 0.2}
       groot:  {priority: 50, timeout: 0.2}
       idle:   {priority: 10, timeout: 0.5}
@@ -58,6 +72,7 @@
       groot:  {priority: 50, timeout: 0.2}
       nav:    {priority: 40, timeout: 0.5}
     eyes:
+      tool:   {priority: 110, timeout: 0.5}
       joy:    {priority: 90, timeout: 0.2}
       agent:  {priority: 30, timeout: 0.5}
       idle:   {priority: 10, timeout: 0.5}

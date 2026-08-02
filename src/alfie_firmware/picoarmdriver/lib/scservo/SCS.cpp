@@ -347,10 +347,26 @@ int SCS::syncReadPacketRx(u8 ID, u8 *nDat)
 	if(bBuf[1]!=(syncReadRxPacketLen+2)){
 		return 0;
 	}
-	Error = bBuf[2];
 	if(readSCS(nDat, syncReadRxPacketLen)!=syncReadRxPacketLen){
 		return 0;
 	}
+	// Trailing checksum: ~(ID + LEN + ERR + payload). The stock library skipped
+	// this (and left the byte on the wire for the next checkHead() to absorb),
+	// so a single corrupted payload byte was mirrored into mBuf as valid
+	// feedback -- a garbled temperature byte would trip the host auto-e-stop.
+	// The length check above already proves the byte is part of this frame.
+	if(readSCS(bBuf+3, 1)!=1){
+		return 0;
+	}
+	u8 calSum = bBuf[0]+bBuf[1]+bBuf[2];
+	for(u8 i=0; i<syncReadRxPacketLen; i++){
+		calSum += nDat[i];
+	}
+	calSum = ~calSum;
+	if(calSum!=bBuf[3]){
+		return 0;
+	}
+	Error = bBuf[2];
 	return syncReadRxPacketLen;
 }
 

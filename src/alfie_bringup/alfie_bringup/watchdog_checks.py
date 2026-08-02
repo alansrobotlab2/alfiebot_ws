@@ -482,7 +482,20 @@ class ServoMonitor(HealthCheck):
         if not trimmed:
             return None
         return sum(trimmed) / len(trimmed)
-    
+
+    def filtered_temp(self, servo_idx: int, min_samples: int = 1) -> Optional[float]:
+        """
+        Public accessor for the spike-rejected temperature used by check().
+
+        Returns None until the rolling window holds at least min_samples
+        readings, so a caller that trips a protective stop never acts on a
+        window too thin for the trimmed mean to reject an outlier.
+        """
+        history = self.servo_temp_history.get(servo_idx)
+        if not history or len(history) < min_samples:
+            return None
+        return self._get_trimmed_mean_temp(servo_idx)
+
     def check(self) -> Optional[str]:
         """Check all servos for warning conditions"""
         if not self.servo_states:

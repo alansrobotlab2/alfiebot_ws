@@ -8,6 +8,7 @@ A wake/stop detection briefly flashes the whole ring (green for a wake word,
 red for "stop"), overlaid on top of the current state.
 
 State priority (highest first):
+  ESTOP     (command_mux latched) -> solid red, overrides everything
   SPEAKING  (tts is talking)      -> cyan amplitude pulse
   THINKING  (llm is generating)   -> animated cyan<->green crossfade breath
   LISTENING (resting/default)     -> DOA follow (ring points at the speaker)
@@ -27,7 +28,8 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import (QoSProfile, ReliabilityPolicy, DurabilityPolicy,
+                       HistoryPolicy)
 
 from std_msgs.msg import Bool, Float32, String
 from alfie_msgs.msg import LedCommand, Speaking
@@ -63,6 +65,10 @@ SPK_MIN_BRIGHT = 25               # floor so the ring never blacks out between w
 SPK_GAIN = 4.0                    # RMS -> 0..1 (speech RMS is small)
 SPK_RELEASE = 0.08                # envelope decay per frame (~0.4 s fall at 30 Hz)
 SPK_LEVEL_TIMEOUT_S = 0.3         # treat level as 0 if no update for this long
+
+# --- ESTOP: solid red while the command_mux is latched, above every other state ---
+ESTOP_COLOR = (255, 0, 0)
+ESTOP_BRIGHTNESS = 255
 # ============================================================================
 
 
@@ -73,6 +79,7 @@ def _pack(rgb):
 
 # Static looks: (effect, brightness, speed, color 0x00RRGGBB), published on change.
 STATE_LED = {
+    'ESTOP':     (EFFECT_SOLID, ESTOP_BRIGHTNESS, 0, _pack(ESTOP_COLOR)),
     'LISTENING': (EFFECT_DOA,   40, 0, 0x0000FF),   # ring follows the speaker
     'IDLE':      (EFFECT_SOLID,  10, 0, 0x101010),  # dim resting glow
 }
@@ -94,7 +101,15 @@ class LedBehavior(Node):
         self.create_subscription(Float32, 'tts/level', self.on_level, qos)
         # wakeword_node publishes RELIABLE, so match it for the detection flash.
         self.create_subscription(String, 'wakeword/detection', self.on_detection, led_qos)
+        # command_mux publishes estop_state latched, so a node started while the
+        # robot is already stopped still picks up the red ring.
+        estop_qos = QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST)
+        self.create_subscription(Bool, 'estop_state', self.on_estop_state, estop_qos)
 
+        self.estopped = False
         self.speaking = False
         self.generating = False
         self._last_state = None
@@ -134,10 +149,19 @@ class LedBehavior(Node):
         self._flash_until = time.monotonic() + FLASH_DURATION_S
         self._mark_active()
 
+    def on_estop_state(self, msg):
+        if msg.data != self.estopped:
+            self.get_logger().warn(
+                f'e-stop {"engaged" if msg.data else "cleared"} — ring '
+                f'{"-> red" if msg.data else "released"}')
+        self.estopped = msg.data
+
     def _mark_active(self):
         self._last_activity = self.get_clock().now()
 
     def _desired_state(self):
+        if self.estopped:
+            return 'ESTOP'
         if self.speaking:
             return 'SPEAKING'
         if self.generating:
@@ -148,8 +172,10 @@ class LedBehavior(Node):
         return 'LISTENING'
 
     def _tick(self):
-        # Wake/stop flash overrides everything for its brief duration.
-        if time.monotonic() < self._flash_until:
+        # Wake/stop flash overrides everything for its brief duration -- except
+        # an e-stop, which must never be masked by a wake word landing while the
+        # robot is latched.
+        if not self.estopped and time.monotonic() < self._flash_until:
             self._publish(EFFECT_SOLID, 255, 0, _pack(self._flash_color))
             self._flashing = True
             return

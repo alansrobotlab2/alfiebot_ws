@@ -76,10 +76,13 @@ within 5% of the theoretical 6.11 for 110 rpm through a 40 mm pulley.
 
 | duty | speed (up) | 350 mm | stall current |
 |---|---|---|---|
-| 160 | 27.7 mm/s | 12.6 s | 2.28 A |
+| 160 | 35.1 mm/s † | 10.0 s | 2.28 A |
 | 200 | 46.1 mm/s | 7.7 s | 2.85 A |
 | **220** ← ceiling | **51.5 mm/s** | **6.9 s** | 3.14 A |
-| 245 | 51.9 mm/s | 6.7 s | 3.50 A ← OCP floor |
+| 245 | 58.4 mm/s † | 6.0 s | 3.50 A ← OCP floor |
+
+† extrapolated from the measured fit `v = 5.82 × (V_applied − 1.50)` mm/s;
+duty 200 and 220 are measured full-stroke runs.
 
 Descent is gravity-assisted and ~35% faster: 69.7 mm/s at duty 220.
 

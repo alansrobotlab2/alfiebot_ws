@@ -73,23 +73,32 @@ SUB_OUTPUTS = {
 
 # Built-in default source map (priority, timeout_sec). Overridden by YAML params.
 # "groot" is the GR00T policy (full-body: arms+head+back+base; no eyes).
+# "tool" is servotool3, the bench bring-up UI. It outranks everything including
+# vr: it has an explicit per-subsystem take/release plus an operator deadman, so
+# the person standing at the robot with it open wins. It publishes only while a
+# subsystem is held. It never drives the base.
 DEFAULT_SOURCES: Dict[str, Dict[str, dict]] = {
-    'left_arm': {'vr': {'priority': 100, 'timeout': 0.2},
+    'left_arm': {'tool': {'priority': 110, 'timeout': 0.5},
+                 'vr': {'priority': 100, 'timeout': 0.2},
                  'groot': {'priority': 50, 'timeout': 0.2}},
-    'right_arm': {'vr': {'priority': 100, 'timeout': 0.2},
+    'right_arm': {'tool': {'priority': 110, 'timeout': 0.5},
+                  'vr': {'priority': 100, 'timeout': 0.2},
                   'groot': {'priority': 50, 'timeout': 0.2}},
-    'head': {'vr': {'priority': 100, 'timeout': 0.2},
+    'head': {'tool': {'priority': 110, 'timeout': 0.5},
+             'vr': {'priority': 100, 'timeout': 0.2},
              'groot': {'priority': 50, 'timeout': 0.2},
              'agent': {'priority': 30, 'timeout': 0.5},
              'idle': {'priority': 10, 'timeout': 0.5}},
-    'back': {'vr': {'priority': 100, 'timeout': 0.2},
+    'back': {'tool': {'priority': 110, 'timeout': 0.5},
+             'vr': {'priority': 100, 'timeout': 0.2},
              'groot': {'priority': 50, 'timeout': 0.2},
              'idle': {'priority': 10, 'timeout': 0.5}},
     'base': {'vr': {'priority': 100, 'timeout': 0.2},
              'joy': {'priority': 90, 'timeout': 0.2},
              'groot': {'priority': 50, 'timeout': 0.2},
              'nav': {'priority': 40, 'timeout': 0.5}},
-    'eyes': {'joy': {'priority': 90, 'timeout': 0.2},
+    'eyes': {'tool': {'priority': 110, 'timeout': 0.5},
+             'joy': {'priority': 90, 'timeout': 0.2},
              'agent': {'priority': 30, 'timeout': 0.5},
              'idle': {'priority': 10, 'timeout': 0.5}},
 }
@@ -118,7 +127,8 @@ class CommandMuxNode(Node):
         self.max_servo_accel = float(self._p('max_servo_accel', 0.0))
         self.clamp_zero_speed = bool(self._p('clamp_zero_speed', False))
         self.estop_hold = bool(self._p('estop_hold', True))
-        self.estop_eye_pwm = int(self._p('estop_eye_pwm', 4095))
+        self.estop_eye_pwm = int(self._p('estop_eye_pwm', 1))
+        self.estop_eye_flash_hz = float(self._p('estop_eye_flash_hz', 1.0))
         self.estop_hold_speed = float(self._p('estop_hold_speed', 1.0))
         self.estop_back_accel = float(self._p('estop_back_accel', 0.05))
         self.resume_fence = bool(self._p('resume_fence', True))
@@ -347,6 +357,23 @@ class CommandMuxNode(Node):
         m.data = self.estopped
         self.estop_state_pub.publish(m)
 
+    def _estop_eye_pwm(self) -> List[int]:
+        """Left/right alternating flash for the eyes while latched.
+
+        A dim alternating blink reads as "stopped but powered" from across the
+        room; the previous full-brightness stare was both harsh up close and
+        easy to mistake for normal operation at a glance. Phase comes from the
+        clock rather than a counter so the pattern is continuous regardless of
+        which path (forward tick or the engage callback) publishes it.
+
+        estop_eye_flash_hz <= 0 restores the old steady-both-eyes behavior.
+        """
+        if self.estop_eye_flash_hz <= 0.0:
+            return [self.estop_eye_pwm, self.estop_eye_pwm]
+        t = self.get_clock().now().nanoseconds / 1e9
+        left_on = (t * self.estop_eye_flash_hz) % 1.0 < 0.5
+        return [self.estop_eye_pwm, 0] if left_on else [0, self.estop_eye_pwm]
+
     def _publish_estop_commands(self) -> None:
         """Actively drive every subsystem to a stop while latched."""
         # Base: always stop immediately (better than the 500 ms watchdog).
@@ -362,7 +389,7 @@ class CommandMuxNode(Node):
 
             head = HeadCmd()
             head.servos = self._hold_servos(st.servo_state[HEAD_SLICE])
-            head.eye_pwm = [self.estop_eye_pwm, self.estop_eye_pwm]
+            head.eye_pwm = self._estop_eye_pwm()
             self.pub['head'].publish(head)
 
             bc = BackCmd()
@@ -380,7 +407,7 @@ class CommandMuxNode(Node):
 
             head = HeadCmd()
             head.servos = [self._disabled_servo() for _ in range(NUM_HEAD_SERVOS)]
-            head.eye_pwm = [self.estop_eye_pwm, self.estop_eye_pwm]
+            head.eye_pwm = self._estop_eye_pwm()
             self.pub['head'].publish(head)
 
 

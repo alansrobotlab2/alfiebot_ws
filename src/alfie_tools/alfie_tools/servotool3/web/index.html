@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ServoTool3 - Alfie</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>%F0%9F%A6%BE</text></svg>">
+  <!-- React is vendored, not bundled: the robot has no node/npm toolchain, and
+       the tool must come up on a fresh image with only ROS installed. htm gives
+       us JSX-like syntax through tagged templates, so there is no build step. -->
+  <script src="vendor/react.production.min.js"></script>
+  <script src="vendor/react-dom.production.min.js"></script>
+  <script src="vendor/htm.js"></script>
+</head>
+<body>
+  <div id="root">
+    <div class="boot">Loading ServoTool3&hellip;</div>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -18,6 +18,12 @@ from .watchdog_checks import (create_health_checks, HealthCheck,
 # the firmware's own temperature status bit.
 AUTO_ESTOP_CRITICAL_TEMP_C = 65.0
 
+# Glitch rejection for the auto-estop criteria (see _check_servo_faults).
+# Readings arrive at ~50 Hz, so 10 samples is ~0.2 s of history before the
+# temperature trigger arms, and 3 strikes is ~60 ms of a persistent status bit.
+AUTO_ESTOP_MIN_TEMP_SAMPLES = 10
+AUTO_ESTOP_STATUS_STRIKES = 3
+
 
 # ============================================================================
 # Constants and Configuration
@@ -119,6 +125,9 @@ class MasterLowStatusNode(Node):
         self.auto_estop_critical_temp = self.get_parameter('auto_estop_critical_temp_c').value
         self._servo_fault_active = False       # aggregate rising-edge latch
         self._module_faults = {'left_arm': False, 'right_arm': False, 'head': False}
+        # Per-module {servo_index: consecutive messages with a fault status bit}
+        self._status_strikes: Dict[str, Dict[int, int]] = {
+            'left_arm': {}, 'right_arm': {}, 'head': {}}
         qos_latched = QoSProfile(
             depth=1, reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -364,19 +373,38 @@ class MasterLowStatusNode(Node):
         Fires `estop` to the command_mux on the rising edge of any overload /
         overtemperature condition. Checked on every state message (~50 Hz) for
         fast response; the mux latch then holds until a deliberate estop_reset.
+
+        Both criteria are filtered rather than read off a single sample. The
+        servo bus is a noisy half-duplex line and a corrupted payload byte
+        looks exactly like a real fault for one message: temperature uses the
+        ServoMonitor's trimmed mean over its rolling window, and the status
+        bits must persist for AUTO_ESTOP_STATUS_STRIKES consecutive messages.
+        Servo thermal mass means a genuine overtemp lasts many seconds, so the
+        sub-second delay this adds costs nothing protective.
         """
         if not self.auto_estop_enabled:
             return
 
+        monitor = self.health_checks.get(f'{module}_servos')
+        strikes = self._status_strikes[module]
+
         faults = []
         for i, servo in enumerate(servos):
             status = int(servo.servo_status)
+            bits = []
             if status & SERVO_STATUS_OVERLOAD:
-                faults.append(f'{module}[{i}] overload')
+                bits.append('overload')
             if status & SERVO_STATUS_TEMPERATURE:
-                faults.append(f'{module}[{i}] firmware-overtemp')
-            if float(servo.current_temperature) >= self.auto_estop_critical_temp:
-                faults.append(f'{module}[{i}] temp={servo.current_temperature:.0f}C')
+                bits.append('firmware-overtemp')
+
+            strikes[i] = strikes.get(i, 0) + 1 if bits else 0
+            if bits and strikes[i] >= AUTO_ESTOP_STATUS_STRIKES:
+                faults.append(f'{module}[{i}] {"+".join(bits)}')
+
+            temp = (monitor.filtered_temp(i, AUTO_ESTOP_MIN_TEMP_SAMPLES)
+                    if monitor is not None else None)
+            if temp is not None and temp >= self.auto_estop_critical_temp:
+                faults.append(f'{module}[{i}] temp={temp:.0f}C')
 
         # Track this module's fault state; edge-detect on the aggregate across all
         # modules so a healthy module's callback doesn't clear another's fault
