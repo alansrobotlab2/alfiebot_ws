@@ -364,7 +364,7 @@ def generate_launch_description():
             executable='nanoowl_node',
             name='nanoowl_node',
             parameters=[{
-                'image_topic': 'stereo_camera/left_center/image_raw/compressed',
+                'image_topic': 'stereo_camera/left_wide/image_raw/compressed',
                 'image_encoder_engine':
                     '/home/alfie/nanoowl_data/owl_image_encoder_patch32.engine',
             }],
