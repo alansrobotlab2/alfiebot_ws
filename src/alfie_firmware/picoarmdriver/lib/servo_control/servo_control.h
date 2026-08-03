@@ -39,6 +39,11 @@ void disableAllServoTorques();
 /// target to its current position (so nothing jumps on enable). Call at init.
 void initServoState();
 
+/// Serve a pending register-map read parked by the ROS service on Core 1.
+/// Call from the Core 0 servo tick, alongside the sync read/write pair - the
+/// bus must only ever be driven from one core.
+void serviceMemoryRequest();
+
 // ---- SI (radian) <-> servo-count conversions ------------------------------
 
 /// Radians (-pi..pi about center) -> STS count (0..4095), clamped to the

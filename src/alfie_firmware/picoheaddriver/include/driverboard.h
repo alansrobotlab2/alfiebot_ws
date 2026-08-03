@@ -48,6 +48,22 @@ public:
     volatile bool new_head_command = false;  ///< set by Core1 callback, cleared by Core0
     volatile uint32_t last_cmd_time = 0;      ///< millis() of last HeadCmd (watchdog)
 
+    // ---- Register-map service (core 1 asks, core 0 serves) ----------------
+    // The servo bus belongs to Core 0; a ROS service callback runs on Core 1
+    // and must not touch it, or its transaction interleaves with the sync
+    // read/write burst and both come back corrupt. Core 1 parks a request
+    // here, Core 0 performs the read on its own tick, and Core 1 picks up the
+    // result. `mem_req_pending` is the handshake and is cleared LAST.
+    volatile uint8_t mem_req_id      = 0;      ///< bus id 1..NUM_SERVOS
+    volatile uint8_t mem_req_op      = 0;      ///< SERVO_SERVICE_OP_* verb
+    volatile uint8_t mem_req_addr    = 0;      ///< register address (write only)
+    volatile int16_t mem_req_value   = 0;      ///< value to write
+    volatile bool    mem_req_pending = false;  ///< set by Core 1, cleared by Core 0
+    volatile bool    mem_req_ok      = false;  ///< Core 0: read returned a full map
+    volatile uint8_t mem_req_write_result = 0; ///< Core 0: SERVO_WRITE_* outcome
+    volatile uint8_t mem_req_width   = 0;      ///< bytes written (0, 1 or 2)
+    MemoryReplyBuf   mem_req_buf     = {};     ///< Core 0 fills, Core 1 reads
+
     DriverBoard()
         : statusLED(WS2812B_PIN, 800000)
     {

@@ -62,6 +62,7 @@ void loop()
         updateServoActive();   // sync-write pos/speed/accel/torque (enabled servos)
         updateServoIdle();     // sync-write torque-off (disabled servos)
         applyEyes();           // push b.eye_pwm[] to the TB6612
+        serviceMemoryRequest();// one-shot register read parked by the ROS service
     }
 
     updateStatusLED();         // self-throttled to LED_BLINK_PERIOD_MS

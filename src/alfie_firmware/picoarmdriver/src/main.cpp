@@ -68,6 +68,7 @@ void loop()
         updateServoStatus();   // sync-read feedback -> mBuf
         updateServoActive();   // sync-write pos/speed/accel/torque (enabled servos)
         updateServoIdle();     // sync-write torque-off (disabled servos)
+        serviceMemoryRequest();// one-shot register read parked by the ROS service
     }
 
     updateStatusLED();         // self-throttled to LED_BLINK_PERIOD_MS

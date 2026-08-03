@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional
 
 from alfie_msgs.msg import ArmCmd, ArmState, BackCmd, BackState, EyeCmd, HeadCmd, HeadState
-from alfie_msgs.srv import BackRequestCalibration
+from alfie_msgs.srv import BackRequestCalibration, ServoService
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
@@ -129,6 +129,10 @@ class ServoBridge:
         self.forward_rate = float(node.declare_parameter('forward_rate_hz', 20.0).value)
         self.control_timeout = float(node.declare_parameter('control_timeout', 1.5).value)
         self.max_speed = float(node.declare_parameter('max_speed', jc.MAX_SPEED).value)
+        # Register reads are bus transactions squeezed into the module's 50 Hz
+        # servo tick, so this stays low: it is a config view, not telemetry.
+        self.memory_poll_rate = float(
+            node.declare_parameter('memory_poll_hz', 2.0).value)
 
         # Absolute topic names, so the tool works from a bare `ros2 run` without
         # having to be launched inside the robot namespace (same approach as
@@ -158,6 +162,16 @@ class ServoBridge:
                 JointTarget() for _ in jc.JOINTS_BY_SUBSYSTEM[subsystem]]
         self._last_heartbeat = 0.0
         self._deadman_warned = False
+
+        # ---- Register-map view ----------------------------------------------
+        # The UI shows one servo at a time, so only that one is polled. Selection
+        # is server-side state rather than a query parameter so the SSE stream can
+        # carry the map without the browser round-tripping for it.
+        self.selection = {'subsystem': jc.LEFT_ARM, 'bus_id': 1}
+        self._memory: Optional[Dict[str, Any]] = None
+        self._memory_stamp = 0.0
+        self._memory_error: Optional[str] = None
+        self._memory_busy = False
 
         # ---- ROS entities ---------------------------------------------------
         group = ReentrantCallbackGroup()
@@ -195,7 +209,19 @@ class ServoBridge:
         self.calibrate_cli = node.create_client(
             BackRequestCalibration, f'{p}low/calibrate_back', callback_group=group)
 
+        # Register-map service, one per servo module (read-only in this build).
+        self.memory_cli = {
+            jc.LEFT_ARM: node.create_client(
+                ServoService, f'{p}low/left_arm/servoservice', callback_group=group),
+            jc.RIGHT_ARM: node.create_client(
+                ServoService, f'{p}low/right_arm/servoservice', callback_group=group),
+            jc.HEAD: node.create_client(
+                ServoService, f'{p}low/headservoservice', callback_group=group),
+        }
+
         node.create_timer(1.0 / self.forward_rate, self._forward, callback_group=group)
+        node.create_timer(1.0 / self.memory_poll_rate, self._poll_memory,
+                          callback_group=group)
 
         node.get_logger().info(
             f'servo bridge up: publishing {p}cmd/<subsystem>/{self.source} at '
@@ -451,6 +477,184 @@ class ServoBridge:
         cmd.target_torque = float(target.torque)
 
     # ======================================================================
+    # Register map
+    # ======================================================================
+
+    def select(self, subsystem: str, bus_id: int) -> Dict[str, Any]:
+        """Point the register view at one physical servo."""
+        servo = jc.bus_servo(subsystem, bus_id)
+        if servo is None:
+            return {'ok': False, 'error': f'no bus servo {subsystem}/{bus_id}'}
+        with self._lock:
+            changed = (self.selection['subsystem'], self.selection['bus_id']) != (
+                subsystem, bus_id)
+            self.selection = {'subsystem': subsystem, 'bus_id': bus_id}
+            if changed:
+                # Drop the old map rather than show one servo's registers under
+                # another's name until the next poll lands.
+                self._memory = None
+                self._memory_stamp = 0.0
+                self._memory_error = None
+        return {'ok': True}
+
+    def write_register(self, subsystem: str, bus_id: int, address: int,
+                       value: int) -> Dict[str, Any]:
+        """Write one register on one physical servo.
+
+        The firmware is the authority on what may be written, how wide it is,
+        and whether the lock and torque state permit it; this checks the same
+        things only to give a better message before spending a bus transaction.
+        Every write ends with a read-back on the module, so the returned map is
+        what the servo actually holds.
+        """
+        register = next((r for r in jc.REGISTERS if r.address == address), None)
+        if register is None or not register.writable:
+            return {'ok': False, 'error': f'register 0x{address:02X} is not writable'}
+        if not register.vmin <= value <= register.vmax:
+            return {'ok': False,
+                    'error': f'{register.label} must be {register.vmin}..{register.vmax}'}
+        return self._memory_op(subsystem, bus_id, ord('w'), address, value)
+
+    def set_lock(self, subsystem: str, bus_id: int, locked: bool) -> Dict[str, Any]:
+        """Set or clear the servo's EEPROM write lock (register 0x37)."""
+        return self._memory_op(subsystem, bus_id, ord('l') if locked else ord('u'), 0, 0)
+
+    def _memory_op(self, subsystem: str, bus_id: int, operation: int,
+                   address: int, value: int) -> Dict[str, Any]:
+        """Run one register-service operation and fold the result into the view."""
+        client = self.memory_cli.get(subsystem)
+        if client is None or not client.service_is_ready():
+            return {'ok': False,
+                    'error': f'{jc.SUBSYSTEM_LABELS.get(subsystem, subsystem)} register '
+                             f'service not available - is the module firmware flashed?'}
+
+        request = ServoService.Request()
+        request.servo = int(bus_id)
+        request.operation = int(operation)
+        request.address = int(address)
+        request.value = int(value)
+
+        # Writes and the poll share one bus; hold the slot so a poll cannot
+        # interleave and report a pre-write map as the post-write state.
+        with self._lock:
+            self._memory_busy = True
+        try:
+            result = self._call(client, request, timeout=2.0)
+        finally:
+            with self._lock:
+                self._memory_busy = False
+
+        if result is None:
+            return {'ok': False, 'error': 'register write timed out'}
+
+        memory = result.memorymap
+        outcome = int(memory.writebyteresult)
+
+        if int(memory.readmemoryresult) == 1:
+            with self._lock:
+                if (self.selection['subsystem'], self.selection['bus_id']) == (
+                        subsystem, bus_id):
+                    self._memory = self._decode_memory(memory)
+                    self._memory_stamp = time.monotonic()
+                    self._memory_error = None
+
+        if outcome == 0:
+            # The firmware only reports "no write attempted" for a plain read, so
+            # on a write verb it means the module did not recognise the verb at
+            # all - i.e. it is running the earlier read-only build.
+            return {'ok': False, 'code': 0,
+                    'error': f'{jc.SUBSYSTEM_LABELS.get(subsystem, subsystem)} firmware '
+                             f'predates the write path - reflash the module'}
+        if outcome != jc.WRITE_OK:
+            return {'ok': False,
+                    'error': jc.WRITE_RESULTS.get(outcome, f'write failed ({outcome})'),
+                    'code': outcome}
+        return {'ok': True, 'message': jc.WRITE_RESULTS[jc.WRITE_OK],
+                'width': int(memory.writewordresult)}
+
+    def _poll_memory(self) -> None:
+        """Refresh the selected servo's register map.
+
+        Runs on the ROS executor. Only one read is ever in flight: the module
+        serves these from its servo tick, so a backlog would just queue behind
+        the bus and stale the view further.
+        """
+        with self._lock:
+            if self._memory_busy:
+                return
+            subsystem = self.selection['subsystem']
+            bus_id = self.selection['bus_id']
+            self._memory_busy = True
+
+        try:
+            client = self.memory_cli.get(subsystem)
+            if client is None or not client.service_is_ready():
+                with self._lock:
+                    self._memory_error = (
+                        f'{jc.SUBSYSTEM_LABELS.get(subsystem, subsystem)} register '
+                        f'service not available - firmware may predate it')
+                    self._memory = None
+                return
+
+            request = ServoService.Request()
+            request.servo = int(bus_id)
+            request.operation = ord('r')
+            request.address = 0
+            request.value = 0
+
+            result = self._call(client, request, timeout=1.0)
+            if result is None:
+                with self._lock:
+                    self._memory_error = 'register read timed out'
+                return
+
+            memory = result.memorymap
+            if int(memory.readmemoryresult) != 1:
+                with self._lock:
+                    self._memory_error = (
+                        f'servo {bus_id} did not answer the register read')
+                    self._memory = None
+                return
+
+            decoded = self._decode_memory(memory)
+            with self._lock:
+                self._memory = decoded
+                self._memory_stamp = time.monotonic()
+                self._memory_error = None
+        finally:
+            with self._lock:
+                self._memory_busy = False
+
+    @staticmethod
+    def _decode_memory(memory) -> Dict[str, Any]:
+        """ServoMemoryMap -> {field: int}, only the fields the UI knows about."""
+        return {reg.field: int(getattr(memory, reg.field))
+                for reg in jc.REGISTERS if hasattr(memory, reg.field)}
+
+    def _memory_snapshot(self) -> Dict[str, Any]:
+        servo = jc.bus_servo(self.selection['subsystem'], self.selection['bus_id'])
+        age = (round(time.monotonic() - self._memory_stamp, 2)
+               if self._memory_stamp else None)
+        values = self._memory
+        locked = None
+        if values is not None and 'lockmark' in values:
+            locked = values['lockmark'] != jc.LOCK_UNLOCKED
+        return {
+            'subsystem': self.selection['subsystem'],
+            'bus_id': self.selection['bus_id'],
+            'label': servo.label if servo else '',
+            'joint_index': servo.joint_index if servo else None,
+            'mirrored': bool(servo.mirrored) if servo else False,
+            'reported': bool(servo.reported) if servo else False,
+            'values': values,
+            'age': age,
+            'error': self._memory_error,
+            'locked': locked,
+            'faults': (jc.decode_status(values['servostatus'])
+                       if values and 'servostatus' in values else []),
+        }
+
+    # ======================================================================
     # E-stop / services
     # ======================================================================
 
@@ -511,6 +715,27 @@ class ServoBridge:
                  'bus_ids': list(j.bus_ids), 'lower': j.lower, 'upper': j.upper}
                 for j in jc.JOINTS
             ],
+            # Physical servos, which is how the register map is addressed.
+            'bus_servos': {
+                subsystem: [
+                    {'bus_id': s.bus_id, 'label': s.label, 'joint_index': s.joint_index,
+                     'mirrored': s.mirrored, 'reported': s.reported}
+                    for s in servos
+                ]
+                for subsystem, servos in jc.BUS_SERVOS.items()
+            },
+            'register_groups': [{'key': k, 'label': label}
+                                for k, label in jc.REGISTER_GROUPS],
+            'registers': [
+                {'field': r.field, 'address': r.address, 'label': r.label,
+                 'group': r.group, 'kind': r.kind, 'unit': r.unit,
+                 'scale': r.scale, 'scaled_unit': r.scaled_unit, 'note': r.note,
+                 'writable': r.writable, 'vmin': r.vmin, 'vmax': r.vmax}
+                for r in jc.REGISTERS
+            ],
+            'lock': {'unlocked': jc.LOCK_UNLOCKED, 'locked': jc.LOCK_LOCKED},
+            'memory_poll_hz': self.memory_poll_rate,
+            'memory_writable': True,
             'limits': {
                 'max_speed': self.max_speed,
                 'max_accel': jc.MAX_ACCEL,
@@ -565,6 +790,7 @@ class ServoBridge:
                     }
                     for name, control in self.control.items()
                 },
+                'memory': self._memory_snapshot(),
                 'heartbeat_age': round(now - self._last_heartbeat, 2)
                 if self._last_heartbeat else None,
             }

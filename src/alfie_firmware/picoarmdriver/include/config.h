@@ -124,6 +124,44 @@
 // If no ArmCmd arrives within this window, disable all servo torque.
 #define WATCHDOG_TIMEOUT_MS     500
 
+// -----------------------------------------------------------------------------
+// Register-map service
+// -----------------------------------------------------------------------------
+// Operations accepted by the register-map service. Anything else is rejected.
+#define SERVO_SERVICE_OP_READ    'r'   ///< read the whole register table
+#define SERVO_SERVICE_OP_WRITE   'w'   ///< write `value` to `address`
+#define SERVO_SERVICE_OP_UNLOCK  'u'   ///< clear the EEPROM write lock
+#define SERVO_SERVICE_OP_LOCK    'l'   ///< set the EEPROM write lock
+
+// Lock flag (0x37). The vendor table is counter-intuitive here: writing 0
+// DISABLES the lock, so 0 means EEPROM is writable.
+#define SBS_LOCK                 0x37
+#define SERVO_EPROM_UNLOCKED     0
+#define SERVO_EPROM_LOCKED       1
+
+// First SRAM address. Everything below this is EEPROM: it survives power
+// cycles, wears out with writes, and is refused while the servo is locked or
+// holding torque.
+#define SERVO_EPROM_END          0x28
+
+// Write outcome, reported in ServoMemoryMap.writebyteresult.
+#define SERVO_WRITE_NONE         0     ///< no write attempted (plain read)
+#define SERVO_WRITE_OK           1
+#define SERVO_WRITE_NOT_WRITABLE 2     ///< address not in the writable table
+#define SERVO_WRITE_LOCKED       3     ///< EEPROM write while the lock is set
+#define SERVO_WRITE_TORQUE_ON    4     ///< EEPROM write while the servo holds torque
+#define SERVO_WRITE_BUS_FAILED   5     ///< the servo did not acknowledge
+#define SERVO_WRITE_MISMATCH     6     ///< wrote, but the read-back disagrees
+#define SERVO_WRITE_BAD_VALUE    7     ///< value does not fit the register width
+
+// How long the Core 1 service callback waits for Core 0 to run the operation on
+// its servo tick. One tick is SERVO_LOOP_PERIOD_MS, so this is several ticks of
+// slack; exceeding it means Core 0 is wedged and the service reports failure
+// rather than blocking the ROS executor indefinitely. A write does up to four
+// bus transactions (lock check, write, re-read), so it needs more room than a
+// plain read.
+#define MEM_REQ_TIMEOUT_MS       250
+
 // =============================================================================
 // MATH
 // =============================================================================

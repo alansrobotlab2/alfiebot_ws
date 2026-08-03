@@ -16,6 +16,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ServoState.msg"
   "msg/ArmCmd.msg"
   "msg/ArmState.msg"
+  "msg/ServoMemoryMap.msg"
+  "srv/ServoService.srv"
   DEPENDENCIES std_msgs
 )
 

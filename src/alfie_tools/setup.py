@@ -13,15 +13,13 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         # Install launch files
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
-        # Install UI file to lib directory for runtime access
-        ('lib/python3.10/site-packages/' + package_name + '/servotool', ['alfie_tools/servotool/servotool.ui']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.py'))
     ],
     # servotool3 ships its web UI (React is vendored, there is no build step) as
     # package data next to the module, so it lands beside servotool3/web at
     # whatever python version the install uses.
     package_data={
-        'alfie_tools.servotool3': [
+        'alfie_tools.servotool': [
             'web/*.html', 'web/*.css', 'web/*.js',
             'web/components/*.js', 'web/vendor/*.js',
         ],
@@ -36,9 +34,7 @@ setup(
     entry_points={
         'console_scripts': [
             'servo_memory_reader = alfie_tools.servo_memory_reader:main',
-            'servotool = alfie_tools.servotool3.servotool3_node:main',
-            'servotool3 = alfie_tools.servotool3.servotool3_node:main',
-            'servotool2 = alfie_tools.servotool2.servotool2_node:main',
+            'servotool = alfie_tools.servotool.servotool_node:main',
             'joydrive = alfie_tools.joydrive.joydrive_node:main',
         ],
     },

@@ -16,6 +16,11 @@ static rclc_executor_t  executor;
 
 static rcl_subscription_t arm_subscriber;
 static rcl_publisher_t    state_publisher;
+static rcl_service_t      servo_service;
+
+static alfie_msgs__srv__ServoService_Request  servo_srv_req;
+static alfie_msgs__srv__ServoService_Response servo_srv_res;
+
 
 static alfie_msgs__msg__ArmCmd   arm_cmd_msg;
 static alfie_msgs__msg__ArmState arm_state_msg;
@@ -70,6 +75,120 @@ void handleWatchdog(void)
 }
 
 // =============================================================================
+// Register-map service (Core 1 half)
+// =============================================================================
+// Read-only: the request's `operation` must be 'r'. Writes are rejected here
+// rather than silently ignored, so a caller aiming at EEPROM gets a failure it
+// can see instead of believing a value was stored.
+//
+// The response's readmemoryresult is 1 on a good read, 0 otherwise (bad servo
+// id, unsupported operation, or the bus read came back short).
+
+static void fillMemoryMap(const MemoryStruct *m, alfie_msgs__msg__ServoMemoryMap *out)
+{
+    out->firmwaremajor        = m->firmwareMajor;
+    out->firmwaresub          = m->firmwareSub;
+    out->servomajor           = m->servoMajor;
+    out->servosub             = m->servoSub;
+    out->servoid              = m->servoID;
+    out->baudrate             = m->baudRate;
+    out->returndelay          = m->returnDelay;
+    out->responsestatuslevel  = m->responseStatusLevel;
+    out->minanglelimit        = (uint16_t)m->minAngleLimit;
+    out->maxanglelimit        = (uint16_t)m->maxAngleLimit;
+    out->maxtemplimit         = m->maxTempLimit;
+    out->maxinputvoltage      = m->maxInputVoltage;   // 0x0E
+    out->mininputvoltage      = m->minInputVoltage;   // 0x0F
+    out->maxtorque            = m->maxTorque;
+    out->phase                = m->phase;
+    out->unloadingcondition   = m->unloadingCondition;
+    out->ledalarmcondition    = m->LEDAlarmCondition;
+    out->pcoefficient         = m->Pcoefficient;
+    out->dcoefficient         = m->Dcoefficient;
+    out->icoefficient         = m->Icoefficient;
+    out->minstartupforce      = m->minStartupForce;
+    out->clockwiseinsensitivearea            = m->clockwiseInsensitiveArea;
+    out->counterclockwiseinsensitiveregion   = m->counterclockwiseInsensitiveRegion;
+    out->protectioncurrent    = m->protectionCurrent;
+    out->angularresolution    = m->angularResolution;
+    out->positioncorrection   = m->positionCorrection;
+    out->operationmode        = m->operationMode;
+    out->protectivetorque     = m->protectiveTorque;
+    out->protectiontime       = m->protectionTime;
+    out->overloadtorque       = m->overloadTorque;
+    out->speedclosedlooppcoefficient  = m->speedClosedLoopPcoefficient;
+    out->overcurrentprotectiontime    = m->OvercurrentProtectionTime;
+    out->velocityclosedloopicoefficient = m->velocityClosedLoopIcoefficient;
+    out->torqueswitch         = m->torqueSwitch;
+    out->acceleration         = m->acceleration;
+    out->targetlocation       = m->targetLocation;
+    out->runningtime          = m->runningTime;
+    out->runningspeed         = m->runningSpeed;
+    out->torquelimit          = m->torqueLimit;
+    out->lockmark             = m->lockMark;
+    out->currentlocation      = m->currentLocation;
+    out->currentspeed         = m->currentSpeed;
+    out->currentload          = m->currentLoad;
+    out->currentvoltage       = m->currentVoltage;
+    out->currenttemperature   = m->currentTemperature;
+    out->asyncwriteflag       = m->asyncWriteFlag;
+    out->servostatus          = m->servoStatus;
+    out->mobilesign           = m->mobileSign;
+    out->currentcurrent       = m->currentCurrent;
+}
+
+void servoServiceCallback(const void *reqin, void *resin)
+{
+    const alfie_msgs__srv__ServoService_Request *req =
+        (const alfie_msgs__srv__ServoService_Request *)reqin;
+    alfie_msgs__srv__ServoService_Response *res =
+        (alfie_msgs__srv__ServoService_Response *)resin;
+
+    memset(&res->memorymap, 0, sizeof(res->memorymap));
+
+    const uint8_t op = req->operation;
+    if (op != SERVO_SERVICE_OP_READ && op != SERVO_SERVICE_OP_WRITE &&
+        op != SERVO_SERVICE_OP_UNLOCK && op != SERVO_SERVICE_OP_LOCK) {
+        return;                                  // readmemoryresult stays 0
+    }
+    if (req->servo < 1 || req->servo > NUM_SERVOS) {
+        return;
+    }
+
+    // Park the request for Core 0 and wait for it to run on the servo tick.
+    b.mem_req_id    = req->servo;
+    b.mem_req_op    = op;
+    b.mem_req_addr  = req->address;
+    b.mem_req_value = req->value;
+    b.mem_req_ok    = false;
+    b.mem_req_write_result = SERVO_WRITE_NONE;
+    b.mem_req_width = 0;
+    __sync_synchronize();
+    b.mem_req_pending = true;
+
+    const uint32_t started = millis();
+    while (b.mem_req_pending && (millis() - started) < MEM_REQ_TIMEOUT_MS) {
+        delay(1);
+    }
+
+    if (b.mem_req_pending) {
+        b.mem_req_pending = false;               // abandon it; Core 0 is wedged
+        return;
+    }
+
+    __sync_synchronize();
+
+    if (b.mem_req_ok) {
+        fillMemoryMap(&b.mem_req_buf.memory, &res->memorymap);
+        res->memorymap.readmemoryresult = 1;
+    }
+    // Reported even when the read failed, so a caller can tell "the write was
+    // refused" apart from "the servo stopped answering".
+    res->memorymap.writebyteresult = b.mem_req_write_result;
+    res->memorymap.writewordresult = b.mem_req_width;
+}
+
+// =============================================================================
 // Entity lifecycle
 // =============================================================================
 void initializeRosInterface(void)
@@ -114,7 +233,20 @@ bool createRosEntities(void)
         return false;
     }
 
-    if (rclc_executor_init(&executor, &support.context, 1, &allocator) != RCL_RET_OK) {
+    if (rclc_service_init_default(
+            &servo_service, &node,
+            ROSIDL_GET_SRV_TYPE_SUPPORT(alfie_msgs, srv, ServoService),
+            "servoservice") != RCL_RET_OK) {
+        rcl_publisher_fini(&state_publisher, &node);
+        rcl_subscription_fini(&arm_subscriber, &node);
+        rcl_node_fini(&node);
+        rclc_support_fini(&support);
+        return false;
+    }
+
+    // 2 handles: the command subscription + the register-map service.
+    if (rclc_executor_init(&executor, &support.context, 2, &allocator) != RCL_RET_OK) {
+        rcl_service_fini(&servo_service, &node);
         rcl_publisher_fini(&state_publisher, &node);
         rcl_subscription_fini(&arm_subscriber, &node);
         rcl_node_fini(&node);
@@ -126,6 +258,19 @@ bool createRosEntities(void)
             &executor, &arm_subscriber, &arm_cmd_msg,
             &armCmdCallback, ON_NEW_DATA) != RCL_RET_OK) {
         rclc_executor_fini(&executor);
+        rcl_service_fini(&servo_service, &node);
+        rcl_publisher_fini(&state_publisher, &node);
+        rcl_subscription_fini(&arm_subscriber, &node);
+        rcl_node_fini(&node);
+        rclc_support_fini(&support);
+        return false;
+    }
+
+    if (rclc_executor_add_service(
+            &executor, &servo_service, &servo_srv_req, &servo_srv_res,
+            &servoServiceCallback) != RCL_RET_OK) {
+        rclc_executor_fini(&executor);
+        rcl_service_fini(&servo_service, &node);
         rcl_publisher_fini(&state_publisher, &node);
         rcl_subscription_fini(&arm_subscriber, &node);
         rcl_node_fini(&node);
@@ -144,6 +289,7 @@ void destroyRosEntities(void)
         return;
     }
     rclc_executor_fini(&executor);
+    rcl_service_fini(&servo_service, &node);
     rcl_publisher_fini(&state_publisher, &node);
     rcl_subscription_fini(&arm_subscriber, &node);
     rcl_node_fini(&node);

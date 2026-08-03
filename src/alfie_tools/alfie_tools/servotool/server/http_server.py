@@ -104,6 +104,9 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         handler: Optional[Callable[[Dict[str, Any]], Any]] = {
             '/api/heartbeat': self._post_heartbeat,
+            '/api/select': self._post_select,
+            '/api/register': self._post_register,
+            '/api/lock': self._post_lock,
             '/api/control': self._post_control,
             '/api/command': self._post_command,
             '/api/torque_off': self._post_torque_off,
@@ -134,6 +137,35 @@ class _Handler(BaseHTTPRequestHandler):
     def _post_heartbeat(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
         self.bridge.touch()
         return {'ok': True}
+
+    def _post_select(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Point the register view at one physical bus servo."""
+        try:
+            bus_id = int(payload.get('bus_id'))
+        except (TypeError, ValueError):
+            return {'ok': False, 'error': 'bus_id must be an integer'}
+        return self.bridge.select(payload.get('subsystem'), bus_id)
+
+    def _post_register(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Write one servo register."""
+        try:
+            bus_id = int(payload['bus_id'])
+            address = int(payload['address'])
+            value = int(payload['value'])
+        except (KeyError, TypeError, ValueError):
+            return {'ok': False,
+                    'error': 'bus_id, address and value must all be integers'}
+        return self.bridge.write_register(
+            payload.get('subsystem'), bus_id, address, value)
+
+    def _post_lock(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Set or clear the EEPROM write lock."""
+        try:
+            bus_id = int(payload['bus_id'])
+        except (KeyError, TypeError, ValueError):
+            return {'ok': False, 'error': 'bus_id must be an integer'}
+        return self.bridge.set_lock(
+            payload.get('subsystem'), bus_id, bool(payload.get('locked')))
 
     def _post_control(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         subsystem = payload.get('subsystem')

@@ -1,6 +1,12 @@
 // ServoTool3 - React front end for gen2 Alfie servo bring-up.
 //
-// State model: the SSE snapshot is the truth for everything measured, and for
+// The page shows ONE physical servo at a time, picked with the target + servo
+// dropdowns: angle control down the left, that servo's register map on the
+// right. Register access is addressed per physical servo (7 per arm), while
+// commands are addressed per logical joint (6 per arm) - the selected servo's
+// `joint_index` is what bridges the two.
+//
+// State model: the SSE snapshot is the truth for everything measured and for
 // whether a subsystem is under tool control. What the operator is *asking for*
 // lives in a local draft, seeded from the server the moment control is taken.
 // Without that split, every slider would fight the 10 Hz snapshot echo.
@@ -8,7 +14,10 @@
 import { React, ReactDOM, html, api, sendJoint, sendPatch,
          useSnapshot, useHeartbeat, useEffect, useMemo, useState } from './api.js';
 import { TopBar } from './components/TopBar.js';
-import { ServoPanel } from './components/ServoPanel.js';
+import { ServoSelector } from './components/ServoSelector.js';
+import { AngleColumn } from './components/AngleColumn.js';
+import { LiveStrip } from './components/LiveStrip.js';
+import { MemoryPanel } from './components/MemoryPanel.js';
 import { EyesPanel } from './components/EyesPanel.js';
 import { BackPanel } from './components/BackPanel.js';
 
@@ -67,11 +76,9 @@ function App() {
     return map;
   }, [snapshot]);
 
-  const jointsBySubsystem = useMemo(() => {
-    const map = { left_arm: [], right_arm: [], head: [] };
-    for (const info of (config ? config.joints : [])) {
-      if (map[info.subsystem]) map[info.subsystem].push(info);
-    }
+  const jointsByKey = useMemo(() => {
+    const map = {};
+    for (const info of (config ? config.joints : [])) map[info.key] = info;
     return map;
   }, [config]);
 
@@ -83,9 +90,6 @@ function App() {
     else if (res && res.message) setToast(res.message);
     return res;
   };
-
-  const takeControl = (subsystem) => report(api.take(subsystem), `take ${subsystem}`);
-  const releaseControl = (subsystem) => report(api.release(subsystem), `release ${subsystem}`);
 
   const onJointChange = (subsystem, index, patch) => {
     setDraft((prev) => {
@@ -120,12 +124,28 @@ function App() {
     report(api.torqueOff(subsystem), 'torque off');
   };
 
-  if (!config) {
-    return html`<div class="boot">Loading configuration…</div>`;
+  if (!config || !snapshot) {
+    return html`<div class="boot">Loading ServoTool3…</div>`;
   }
 
-  const estopped = !!(snapshot && snapshot.estop.engaged);
-  const modules = (snapshot && snapshot.modules) || {};
+  const estopped = !!snapshot.estop.engaged;
+  const modules = snapshot.modules || {};
+  const memory = snapshot.memory || {};
+  const subsystem = memory.subsystem || 'left_arm';
+
+  const servo = (config.bus_servos[subsystem] || [])
+    .find((s) => s.bus_id === memory.bus_id) || null;
+  const jointIndex = servo ? servo.joint_index : null;
+  const joint = jointIndex === null || jointIndex === undefined
+    ? null
+    : jointsByKey[`${subsystem}.${jointIndex}`];
+  const owned = !!(control[subsystem] && control[subsystem].owned);
+  // The firmware refuses EEPROM writes while the servo holds torque. Read it
+  // from the register map when we have one (it covers the derived servo too),
+  // and fall back to joint feedback.
+  const torqueOn = memory.values && memory.values.torqueswitch !== undefined
+    ? memory.values.torqueswitch !== 0
+    : !!(joint && jointStates[joint.key] && jointStates[joint.key].enabled);
 
   return html`
     <div class="app">
@@ -145,53 +165,82 @@ function App() {
                </div>`
         : null}
 
-      <main class="grid">
-        ${SERVO_SUBSYSTEMS.map((subsystem) => html`
-          <${ServoPanel}
-            key=${subsystem}
-            subsystem=${subsystem}
-            label=${subsystem === 'head' ? 'Head' : subsystem === 'left_arm' ? 'Left arm' : 'Right arm'}
-            module=${modules[subsystem]}
-            joints=${jointsBySubsystem[subsystem]}
-            states=${jointStates}
-            draft=${draft[subsystem]}
-            owned=${!!(control[subsystem] && control[subsystem].owned)}
-            limits=${config.limits}
-            estopped=${estopped}
-            onTake=${() => takeControl(subsystem)}
-            onRelease=${() => releaseControl(subsystem)}
-            onTorqueOff=${() => onTorqueOff(subsystem)}
-            onJointChange=${(i, patch) => onJointChange(subsystem, i, patch)} />`)}
+      <${ServoSelector}
+        targets=${SERVO_SUBSYSTEMS}
+        busServos=${config.bus_servos}
+        selection=${{ subsystem, bus_id: memory.bus_id }}
+        module=${modules[subsystem]}
+        onSelect=${(target, busId) =>
+          report(api.select(target, busId), 'select servo')} />
 
+      <main class="servo-page">
+        <${AngleColumn}
+          servo=${servo || { bus_id: memory.bus_id, mirrored: false }}
+          joint=${joint}
+          target=${owned && jointIndex !== null && draft[subsystem]
+            ? draft[subsystem][jointIndex] : null}
+          feedback=${joint ? jointStates[joint.key] : null}
+          owned=${owned}
+          limits=${config.limits}
+          estopped=${estopped}
+          moduleOnline=${!!(modules[subsystem] && modules[subsystem].online)}
+          onTake=${() => report(api.take(subsystem), `take ${subsystem}`)}
+          onRelease=${() => report(api.release(subsystem), `release ${subsystem}`)}
+          onTorqueOff=${() => onTorqueOff(subsystem)}
+          onChange=${(patch) => onJointChange(subsystem, jointIndex, patch)} />
+
+        <div class="servo-detail">
+          <${LiveStrip}
+            joint=${joint}
+            feedback=${joint ? jointStates[joint.key] : null}
+            servo=${servo} />
+
+          <${MemoryPanel}
+            memory=${memory}
+            groups=${config.register_groups}
+            registers=${config.registers}
+            writable=${config.memory_writable}
+            faults=${memory.faults}
+            torqueOn=${torqueOn}
+            onWrite=${(register, value) => report(
+              api.writeRegister(subsystem, memory.bus_id, register.address, value),
+              register.label)}
+            onLock=${(locked) => report(
+              api.setLock(subsystem, memory.bus_id, locked),
+              locked ? 'lock' : 'unlock')} />
+        </div>
+      </main>
+
+      <section class="aux">
         <${EyesPanel}
-          eyes=${snapshot && snapshot.eyes}
+          eyes=${snapshot.eyes}
           draft=${draft.eyes}
           owned=${!!(control.eyes && control.eyes.owned)}
           max=${config.limits.eye_pwm_max}
           estopped=${estopped}
-          onTake=${() => takeControl('eyes')}
-          onRelease=${() => releaseControl('eyes')}
+          onTake=${() => report(api.take('eyes'), 'take eyes')}
+          onRelease=${() => report(api.release('eyes'), 'release eyes')}
           onChange=${onEyesChange} />
 
         <${BackPanel}
-          back=${snapshot && snapshot.back}
+          back=${snapshot.back}
           draft=${draft.back}
           owned=${!!(control.back && control.back.owned)}
           limits=${config.limits.back}
           estopped=${estopped}
-          onTake=${() => takeControl('back')}
-          onRelease=${() => releaseControl('back')}
+          onTake=${() => report(api.take('back'), 'take back')}
+          onRelease=${() => report(api.release('back'), 'release back')}
           onChange=${onBackChange}
           onCalibrate=${() => report(api.calibrateBack(), 'calibrate back')} />
-      </main>
+      </section>
 
       <footer class="foot">
         ${''/* htm neither decodes entities nor keeps a newline-only gap between a
               tag and the text after it, so "<subsystem>" is an expression and the
               space before "at" is explicit. */}
         Commands go to <code>${config.prefix}cmd/${'<subsystem>'}/${config.source}</code>${' '}
-        at ${config.forward_rate_hz} Hz through command_mux. Register-level servo
-        configuration does not exist in gen2 - the module firmware owns the memory map.
+        at ${config.forward_rate_hz} Hz through command_mux; registers are read
+        from the module firmware at ${config.memory_poll_hz} Hz.
       </footer>
 
       ${toast ? html`<div class="toast">${toast}</div>` : null}

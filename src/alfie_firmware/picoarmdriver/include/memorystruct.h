@@ -20,8 +20,12 @@ typedef struct {
     int16_t minAngleLimit;
     int16_t maxAngleLimit;
     uint8_t maxTempLimit;
-    uint8_t minInputVoltage;
+    // Vendor map (ST3215 V3.7): 0x0E is MAXIMUM input voltage, 0x0F is MINIMUM.
+    // These two were named the wrong way round; the struct is read by offset so
+    // nothing behaved differently, but anything reading them by name got the
+    // limits swapped.
     uint8_t maxInputVoltage;
+    uint8_t minInputVoltage;
     uint16_t maxTorque;
     uint8_t phase;
     uint8_t unloadingCondition;

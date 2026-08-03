@@ -22,6 +22,11 @@ async function post(path, body) {
 
 export const api = {
   config: () => fetch('/api/config').then((r) => r.json()),
+  select: (subsystem, busId) => post('/api/select', { subsystem, bus_id: busId }),
+  writeRegister: (subsystem, busId, address, value) =>
+    post('/api/register', { subsystem, bus_id: busId, address, value }),
+  setLock: (subsystem, busId, locked) =>
+    post('/api/lock', { subsystem, bus_id: busId, locked }),
   take: (subsystem) => post('/api/control', { subsystem, action: 'take' }),
   release: (subsystem) => post('/api/control', { subsystem, action: 'release' }),
   releaseAll: () => post('/api/control', { action: 'release_all' }),
