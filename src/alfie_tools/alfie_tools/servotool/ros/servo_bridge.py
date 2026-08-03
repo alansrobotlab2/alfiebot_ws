@@ -1,4 +1,4 @@
-"""ROS side of servotool3: state aggregation + arbitrated joint commanding.
+"""ROS side of servotool: state aggregation + arbitrated joint commanding.
 
 Everything the web UI does goes through this class. It:
 
@@ -31,7 +31,7 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
 from std_msgs.msg import Bool, Empty
 from std_srvs.srv import Trigger
 
-from alfie_tools.servotool3.ros import joint_config as jc
+from alfie_tools.servotool.ros import joint_config as jc
 
 # A module is "online" if its last state message is newer than this.
 STALE_AFTER_SEC = 0.5
@@ -73,7 +73,7 @@ class _RateMeter:
 
 @dataclass
 class JointTarget:
-    """What servotool3 is commanding for one joint while it holds control."""
+    """What servotool is commanding for one joint while it holds control."""
 
     enabled: bool = False
     location: float = 0.0
@@ -93,7 +93,7 @@ class JointTarget:
 
 @dataclass
 class BackTarget:
-    """What servotool3 is commanding for the back actuator."""
+    """What servotool is commanding for the back actuator."""
 
     position: float = 0.0
     velocity: float = jc.BACK_DEFAULT_VELOCITY
@@ -118,7 +118,7 @@ class Control:
 
 
 class ServoBridge:
-    """Owns every ROS entity servotool3 needs, and the tool's command state."""
+    """Owns every ROS entity servotool needs, and the tool's command state."""
 
     def __init__(self, node: Node) -> None:
         self.node = node
@@ -661,8 +661,8 @@ class ServoBridge:
     def engage_estop(self) -> Dict[str, Any]:
         """Latch the mux e-stop. Everything the tool holds is released too."""
         self.estop_pub.publish(Empty())
-        self.release_all('e-stop engaged from servotool3')
-        self.node.get_logger().warn('E-STOP engaged from servotool3')
+        self.release_all('e-stop engaged from servotool')
+        self.node.get_logger().warn('E-STOP engaged from servotool')
         return {'ok': True}
 
     def reset_estop(self, timeout: float = 3.0) -> Dict[str, Any]:

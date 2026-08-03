@@ -1,9 +1,9 @@
-"""Static description of Alfie's gen2 servo layout, as servotool3 presents it.
+"""Static description of Alfie's gen2 servo layout, as servotool presents it.
 
 Gen2 hardware splits actuation across independent Pico driver boards. There is
 no GDBState / GDBServoService any more, and with them went register-level access
 to the servos: the firmware owns the memory map and exposes only SI-unit command
-and state messages. servotool3 is therefore built around what gen2 actually
+and state messages. servotool is therefore built around what gen2 actually
 publishes:
 
     left arm   alfie/low/left_arm/armstate    ArmState   (6 logical joints)
@@ -57,7 +57,7 @@ TORQUE_MAX = 1000.0
 DEFAULT_TORQUE = 1000.0
 
 # target_speed = 0 means "unlimited" to the servo firmware, which is how a
-# freshly commanded joint snaps. servotool3 always sends a real speed.
+# freshly commanded joint snaps. servotool always sends a real speed.
 DEFAULT_SPEED = 1.0            # rad/s
 MAX_SPEED = 6.0                # rad/s, matches command_mux's max_servo_speed
 DEFAULT_ACCEL = 0.0            # rad/s^2, 0 = servo's own acceleration limit

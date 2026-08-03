@@ -1,4 +1,4 @@
-"""Stdlib HTTP server for servotool3: static React app + JSON API + SSE stream.
+"""Stdlib HTTP server for servotool: static React app + JSON API + SSE stream.
 
 Deliberately dependency-free. The robot's Jetson has no node/npm and no web
 framework installed, so the frontend is plain (build-free) React served from
@@ -34,7 +34,7 @@ class _Handler(BaseHTTPRequestHandler):
     """Request handler. One instance per request, many threads at once."""
 
     protocol_version = 'HTTP/1.1'
-    server_version = 'servotool3'
+    server_version = 'servotool'
 
     # -- plumbing ----------------------------------------------------------
 

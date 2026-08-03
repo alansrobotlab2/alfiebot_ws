@@ -28,8 +28,8 @@ import threading
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
 
-from alfie_tools.servotool3.ros.servo_bridge import ServoBridge
-from alfie_tools.servotool3.server.http_server import ServoToolServer
+from alfie_tools.servotool.ros.servo_bridge import ServoBridge
+from alfie_tools.servotool.server.http_server import ServoToolServer
 
 
 def _lan_address():
@@ -69,7 +69,7 @@ def _urls(host: str, port: int):
 def main(args=None):
     """Start the ROS bridge and serve the web UI until interrupted."""
     rclpy.init(args=args)
-    node = rclpy.create_node('servotool3')
+    node = rclpy.create_node('servotool')
     logger = node.get_logger()
 
     host = node.declare_parameter('host', '0.0.0.0').value
@@ -95,19 +95,19 @@ def main(args=None):
         rclpy.shutdown()
         sys.exit(1)
 
-    logger.info(f'servotool3 web UI: {"  ".join(_urls(host, port))}')
+    logger.info(f'servotool web UI: {"  ".join(_urls(host, port))}')
     if host in ('0.0.0.0', '::', ''):
-        logger.warn('servotool3 is unauthenticated and reachable from the whole '
+        logger.warn('servotool is unauthenticated and reachable from the whole '
                     'network - anyone who can open it can move the arms')
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        logger.info('shutting down servotool3')
+        logger.info('shutting down servotool')
     finally:
         # Drop control before the process goes away, so nothing is left holding
         # a subsystem it can no longer refresh.
-        bridge.release_all('servotool3 shutting down')
+        bridge.release_all('servotool shutting down')
         server.stop()
         executor.shutdown()
         node.destroy_node()

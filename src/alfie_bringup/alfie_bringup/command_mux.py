@@ -73,7 +73,7 @@ SUB_OUTPUTS = {
 
 # Built-in default source map (priority, timeout_sec). Overridden by YAML params.
 # "groot" is the GR00T policy (full-body: arms+head+back+base; no eyes).
-# "tool" is servotool3, the bench bring-up UI. It outranks everything including
+# "tool" is servotool, the bench bring-up UI. It outranks everything including
 # vr: it has an explicit per-subsystem take/release plus an operator deadman, so
 # the person standing at the robot with it open wins. It publishes only while a
 # subsystem is held. It never drives the base.

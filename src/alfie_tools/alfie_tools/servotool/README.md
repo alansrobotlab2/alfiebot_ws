@@ -20,7 +20,7 @@ units:
 | head | `alfie/low/headstate` (`HeadState`) | `alfie/low/headcmd` |
 | back | `alfie/low/backstate` (`BackState`) | `alfie/low/backcmd` |
 
-So servotool3 is not a register editor — there is nothing to edit over ROS. It
+So servotool is not a register editor — there is nothing to edit over ROS. It
 is a **live monitor and joint commander**: radians, rad/s, rad/s², and the
 0-1000 torque limit, exactly as `ServoCmd`/`ServoState` define them.
 
@@ -30,7 +30,7 @@ talking to the bus directly with the standalone firmware utilities in
 
 ## Command path
 
-servotool3 never publishes to the firmware topics. It publishes to
+servotool never publishes to the firmware topics. It publishes to
 **command_mux** as the source `tool`:
 
 ```
@@ -90,7 +90,7 @@ tablet or phone on the same wifi as the robot. Startup logs the URLs that
 actually work, e.g.
 
 ```
-[INFO] [servotool3]: servotool3 web UI: http://192.168.50.201:7870/  http://alfiebot.local:7870/  http://127.0.0.1:7870/
+[INFO] [servotool]: servotool web UI: http://192.168.50.201:7870/  http://alfiebot.local:7870/  http://127.0.0.1:7870/
 ```
 
 Prefer the `alfiebot.local` form — avahi publishes it, so it survives the robot
@@ -115,7 +115,7 @@ ssh -N -L 7870:127.0.0.1:7870 alfie@alfiebot.local               # on the laptop
 ## Layout
 
 ```
-servotool3/
+servotool/
 ├── servotool3_node.py       ROS entry point (node + executor + HTTP server)
 ├── ros/
 │   ├── joint_config.py      joint table, URDF limits, status-bit decode

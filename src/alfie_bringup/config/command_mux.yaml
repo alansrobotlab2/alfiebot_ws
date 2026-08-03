@@ -41,7 +41,7 @@
     # Sources per subsystem: "name: {priority, timeout}". Higher priority wins.
     # "groot" is the GR00T policy (full-body: arms+head+back+base; no eyes).
     #
-    # "tool" is servotool3 (ros2 run alfie_tools servotool). It outranks every
+    # "tool" is servotool (ros2 run alfie_tools servotool). It outranks every
     # autonomous source *and* vr on purpose: it is a bench tool with an explicit
     # take/release per subsystem and its own operator deadman, so whoever is
     # standing at the robot with it open is the one who should win. It only

@@ -15,8 +15,8 @@ setup(
         # Install launch files
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py'))
     ],
-    # servotool3 ships its web UI (React is vendored, there is no build step) as
-    # package data next to the module, so it lands beside servotool3/web at
+    # servotool ships its web UI (React is vendored, there is no build step) as
+    # package data next to the module, so it lands beside servotool/web at
     # whatever python version the install uses.
     package_data={
         'alfie_tools.servotool': [
