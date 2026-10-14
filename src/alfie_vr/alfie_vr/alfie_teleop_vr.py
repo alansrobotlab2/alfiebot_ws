@@ -243,7 +243,7 @@ class AlfieTeleopVRNode(Node):
         self.left_grip_active = False
         self.right_grip_active = False
 
-        # Velocity scaling for joystick input (actual rate limiting done by master_cmd)
+        # Velocity scaling for joystick input (actual rate limiting done by command_mux)
         self.max_linear_vel = 0.15  # m/s - max linear speed request
         self.max_angular_vel = 0.5  # rad/s - max rotation speed request
 
@@ -594,7 +594,7 @@ class AlfieTeleopVRNode(Node):
 
             self.right_thumbstick_pressed = thumbstick_button
 
-        # Apply target velocities to command (rate limiting handled by master_cmd)
+        # Apply target velocities to command (rate limiting handled by command_mux)
         self.robot_cmd_state.cmd_vel.linear.x = target_linear_x
         self.robot_cmd_state.cmd_vel.linear.y = target_linear_y
         self.robot_cmd_state.cmd_vel.angular.z = target_angular_z

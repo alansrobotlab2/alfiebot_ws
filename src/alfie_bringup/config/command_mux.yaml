@@ -38,6 +38,13 @@
     # (forces commanders to publish fresh, post-reset setpoints).
     resume_fence: true
 
+    # Base velocity limits applied to the winning base source before it reaches
+    # low/mecanumdrive: clamp to max vel, then slew at max accel. <= 0 disables.
+    base_max_linear_vel: 0.7       # m/s
+    base_max_angular_vel: 1.5      # rad/s
+    base_max_linear_accel: 1.0     # m/s^2
+    base_max_angular_accel: 3.0    # rad/s^2
+
     # Sources per subsystem: "name: {priority, timeout}". Higher priority wins.
     # "groot" is the GR00T policy (full-body: arms+head+back+base; no eyes).
     #

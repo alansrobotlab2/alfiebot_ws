@@ -5,10 +5,8 @@ import sys
 os.environ['ORT_DISABLE_AFFINITY'] = '1'  # Disable thread affinity
 os.environ['OMP_NUM_THREADS'] = '4'  # Set number of OpenMP threads
 
-# Boot fully offline: the Parakeet model is already in the local HF cache, so
-# resolve it from there instead of hitting HuggingFace on every startup.
-os.environ.setdefault('HF_HUB_OFFLINE', '1')
-os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')
+# No HF_HUB_OFFLINE here: model_manager loads from ~/.alfie_asr/models and only
+# touches HuggingFace for the one-time download when that directory is empty.
 
 import threading
 import time

@@ -23,11 +23,19 @@ While latched, all cmd/* inputs are ignored and the mux actively drives a stop
 any source whose last message predates the reset, so commanders must publish fresh
 setpoints (prevents snap-to-stale-target).
 
+Base velocity limiting: the winning base Twist is clamped to base_max_*_vel and
+slewed at base_max_*_accel before it reaches low/mecanumdrive, whichever source
+won. Both the raw winner and the limited output are republished on
+low/command_cmd_vel and low/current_cmd_vel (master_low_status folds them into
+RobotLowState for GR00T data capture).
+
 Config: alfie_bringup/config/command_mux.yaml (overrides the built-in defaults).
 """
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+
+import math
 
 import rclpy
 from rclpy.node import Node
@@ -133,6 +141,14 @@ class CommandMuxNode(Node):
         self.estop_back_accel = float(self._p('estop_back_accel', 0.05))
         self.resume_fence = bool(self._p('resume_fence', True))
 
+        # Base velocity / acceleration limits (<= 0 disables that limit)
+        self.base_max_linear_vel = float(self._p('base_max_linear_vel', 0.7))
+        self.base_max_angular_vel = float(self._p('base_max_angular_vel', 1.5))
+        self.base_max_linear_accel = float(self._p('base_max_linear_accel', 1.0))
+        self.base_max_angular_accel = float(self._p('base_max_angular_accel', 3.0))
+        self.base_current = Twist()   # rate-limited velocity actually being sent
+        self.base_last_ns = 0         # 0 = slew state reset (base was starved)
+
         # ---- E-stop state ---------------------------------------------------
         self.estopped = False
         self.reset_ns = 0            # resume-fence cutoff
@@ -161,6 +177,8 @@ class CommandMuxNode(Node):
         self.pub: Dict[str, object] = {}
         for sub, topic in SUB_OUTPUTS.items():
             self.pub[sub] = self.create_publisher(SUB_TYPES[sub], topic, self.qos_cmd)
+        self.command_cmd_vel_pub = self.create_publisher(Twist, 'low/command_cmd_vel', self.qos_cmd)
+        self.current_cmd_vel_pub = self.create_publisher(Twist, 'low/current_cmd_vel', self.qos_cmd)
 
         # ---- E-stop wiring --------------------------------------------------
         self.create_subscription(Empty, 'estop', self._on_estop, qos_latched)
@@ -308,14 +326,61 @@ class CommandMuxNode(Node):
                 self._clamp_servos(w.msg.joint_cmd)
                 self.pub[name].publish(w.msg)
 
-        # Back + base: forward the winner as-is.
-        for name in ('back', 'base'):
-            w = self._winner(name)
-            if w is not None:
-                self.pub[name].publish(w.msg)
+        # Back: forward the winner as-is.
+        w = self._winner('back')
+        if w is not None:
+            self.pub['back'].publish(w.msg)
+
+        # Base: clamp + slew the winner.
+        self._forward_base(self._winner('base'))
 
         # Head + eyes: merge into a single low/headcmd (head owns servos + eyes).
         self._publish_head(self._winner('head'), self._winner('eyes'))
+
+    def _forward_base(self, win: Optional[Source]) -> None:
+        if win is None:
+            # Starved: firmware watchdog stops the base, so restart the slew from 0.
+            # Report the stop once so RobotLowState doesn't latch the last velocity.
+            if self.base_last_ns:
+                self.command_cmd_vel_pub.publish(Twist())
+                self.current_cmd_vel_pub.publish(Twist())
+            self._reset_base_slew()
+            return
+
+        now = self._now_ns()
+        dt = (now - self.base_last_ns) / 1e9 if self.base_last_ns else 1.0 / self.forward_rate
+        dt = max(0.001, min(dt, 0.1))
+        self.base_last_ns = now
+
+        cmd: Twist = win.msg
+        cur = self.base_current
+        lv, av = self.base_max_linear_vel, self.base_max_angular_vel
+        la, aa = self.base_max_linear_accel, self.base_max_angular_accel
+        cur.linear.x = self._slew(cur.linear.x, self._clamp(cmd.linear.x, lv), la, dt)
+        cur.linear.y = self._slew(cur.linear.y, self._clamp(cmd.linear.y, lv), la, dt)
+        cur.angular.z = self._slew(cur.angular.z, self._clamp(cmd.angular.z, av), aa, dt)
+
+        self.pub['base'].publish(cur)
+        self.command_cmd_vel_pub.publish(cmd)
+        self.current_cmd_vel_pub.publish(cur)
+
+    def _reset_base_slew(self) -> None:
+        self.base_current = Twist()
+        self.base_last_ns = 0
+
+    @staticmethod
+    def _clamp(v: float, limit: float) -> float:
+        return max(-limit, min(limit, v)) if limit > 0.0 else v
+
+    @staticmethod
+    def _slew(current: float, target: float, max_accel: float, dt: float) -> float:
+        if max_accel <= 0.0:
+            return target
+        delta = target - current
+        max_delta = max_accel * dt
+        if abs(delta) <= max_delta:
+            return target
+        return current + math.copysign(max_delta, delta)
 
     def _publish_head(self, head_win: Optional[Source], eyes_win: Optional[Source]) -> None:
         if head_win is None and eyes_win is None:
@@ -377,6 +442,7 @@ class CommandMuxNode(Node):
     def _publish_estop_commands(self) -> None:
         """Actively drive every subsystem to a stop while latched."""
         # Base: always stop immediately (better than the 500 ms watchdog).
+        self._reset_base_slew()
         self.pub['base'].publish(Twist())
 
         hold = self.estop_hold and self.state is not None

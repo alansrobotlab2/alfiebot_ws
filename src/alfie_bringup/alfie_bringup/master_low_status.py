@@ -110,6 +110,8 @@ class MasterLowStatusNode(Node):
         self.head_state: Optional[HeadState] = None
         self.back_state: Optional[BackState] = None
         self.odom: Optional[Odometry] = None
+        self.current_cmd_vel: Optional[Twist] = None
+        self.command_cmd_vel: Optional[Twist] = None
         self.jetson_state: Optional[JetsonState] = None
 
         # Initialize watchdog health checks
@@ -145,6 +147,11 @@ class MasterLowStatusNode(Node):
             BackState, 'low/backstate', self.back_callback, qos_best_effort)
         self.odom_sub = self.create_subscription(
             Odometry, 'low/odom', self.odom_callback, qos_best_effort)
+        # Base velocity command, raw and rate-limited, from command_mux
+        self.current_cmd_vel_sub = self.create_subscription(
+            Twist, 'low/current_cmd_vel', self.current_cmd_vel_callback, qos_best_effort)
+        self.command_cmd_vel_sub = self.create_subscription(
+            Twist, 'low/command_cmd_vel', self.command_cmd_vel_callback, qos_best_effort)
         self.jetson_sub = self.create_subscription(
             JetsonState, 'low/jetsonstate', self.jetson_callback, qos_best_effort)
 
@@ -201,6 +208,12 @@ class MasterLowStatusNode(Node):
     def odom_callback(self, msg: Odometry) -> None:
         self.odom = msg
 
+    def current_cmd_vel_callback(self, msg: Twist) -> None:
+        self.current_cmd_vel = msg
+
+    def command_cmd_vel_callback(self, msg: Twist) -> None:
+        self.command_cmd_vel = msg
+
     def jetson_callback(self, msg: JetsonState) -> None:
         self.jetson_state = msg
         self.health_checks['jetson_cpu_temp'].update(msg.cpu_temp)
@@ -250,6 +263,10 @@ class MasterLowStatusNode(Node):
 
         # Measured base velocity from fused wheel odometry
         robot_state.cmd_vel = self.odom.twist.twist if self.odom is not None else Twist()
+
+        # Base velocity command from command_mux: rate-limited (sent) and raw
+        robot_state.current_cmd_vel = self.current_cmd_vel if self.current_cmd_vel is not None else Twist()
+        robot_state.command_cmd_vel = self.command_cmd_vel if self.command_cmd_vel is not None else Twist()
 
         # 15 servos: left arm (0-5), right arm (6-11), head (12-14)
         robot_state.servo_state = self._build_servo_states()

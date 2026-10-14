@@ -34,7 +34,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
 
-from alfie_msgs.msg import BackCmd, RobotLowCmd, RobotLowState
+from alfie_msgs.msg import BackCmd, RobotLowState
 from alfie_msgs.srv import BackRequestCalibration
 
 from ..core.action_publisher import ActionPublisher
@@ -538,18 +538,17 @@ class GrootClientNode(Node):
         target = self.back_init_height
         self.get_logger().info(f'Moving back to {target:.3f} m ...')
 
-        cmd = RobotLowCmd()
-        cmd.back_cmd = BackCmd()
-        cmd.back_cmd.position = target
-        cmd.back_cmd.velocity = 0.2
-        cmd.back_cmd.acceleration = 0.1
+        back_cmd = BackCmd()
+        back_cmd.position = target
+        back_cmd.velocity = 0.2
+        back_cmd.acceleration = 0.1
 
         move_deadline = time.monotonic() + MOVE_TIMEOUT
         reached = False
 
         while time.monotonic() < move_deadline:
             rclpy.spin_once(self, timeout_sec=0.0)
-            self.action_publisher.cmd_pub.publish(cmd)
+            self.action_publisher.cmd_pub.publish_back(back_cmd)
 
             if latest_state[0] is not None:
                 current_pos = latest_state[0].back_state.current_position

@@ -16,7 +16,7 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
-from alfie_msgs.msg import BackCmd, RobotLowCmd, ServoCmd
+from alfie_msgs.msg import ArmCmd, BackCmd, HeadCmd, RobotLowCmd, ServoCmd
 
 from ..utils.safety import SafetyMonitor
 
@@ -47,8 +47,42 @@ DEFAULT_SERVO_CONFIG = {
 }
 
 
+class GrootCmdPublisher:
+    """Slices a whole-body RobotLowCmd onto the command_mux "groot" inputs.
+
+    There is no monolithic robotlowcmd topic: command_mux arbitrates each
+    subsystem separately (cmd/<subsystem>/<source>). Servo layout matches
+    RobotLowCmd.servo_cmd: 0-5 left arm, 6-11 right arm, 12-14 head. GR00T does
+    not drive the eyes.
+    """
+
+    def __init__(self, node: Node, qos: QoSProfile, cmd_prefix: str = '/alfie/cmd'):
+        topic = lambda sub: f'{cmd_prefix}/{sub}/groot'
+        self.left_arm_pub = node.create_publisher(ArmCmd, topic('left_arm'), qos)
+        self.right_arm_pub = node.create_publisher(ArmCmd, topic('right_arm'), qos)
+        self.head_pub = node.create_publisher(HeadCmd, topic('head'), qos)
+        self.back_pub = node.create_publisher(BackCmd, topic('back'), qos)
+        self.base_pub = node.create_publisher(Twist, topic('base'), qos)
+
+    def publish(self, msg: RobotLowCmd):
+        left = ArmCmd()
+        left.joint_cmd = list(msg.servo_cmd[0:6])
+        right = ArmCmd()
+        right.joint_cmd = list(msg.servo_cmd[6:12])
+        head = HeadCmd()
+        head.servos = list(msg.servo_cmd[12:15])
+        self.left_arm_pub.publish(left)
+        self.right_arm_pub.publish(right)
+        self.head_pub.publish(head)
+        self.back_pub.publish(msg.back_cmd)
+        self.base_pub.publish(msg.cmd_vel)
+
+    def publish_back(self, back_cmd: BackCmd):
+        self.back_pub.publish(back_cmd)
+
+
 class ActionPublisher:
-    """Publishes GR00T action predictions to /alfie/robotlowcmd.
+    """Publishes GR00T action predictions to the command_mux groot inputs.
 
     Converts 22D raw action vectors (physical units) to RobotLowCmd messages with:
     - Base velocity capping and acceleration limiting
@@ -75,7 +109,7 @@ class ActionPublisher:
     def __init__(
         self,
         node: Node,
-        cmd_topic: str = '/alfie/robotlowcmd',
+        cmd_prefix: str = '/alfie/cmd',
         safety: Optional[SafetyMonitor] = None,
         base_smoothing_alpha: float = 1.0,
         joint_smoothing_alpha: float = 0.95,
@@ -138,8 +172,8 @@ class ActionPublisher:
             depth=1,
         )
 
-        # Create publisher
-        self.cmd_pub = node.create_publisher(RobotLowCmd, cmd_topic, qos_cmd)
+        # Create publisher (per-subsystem command_mux inputs, cmd/*/groot)
+        self.cmd_pub = GrootCmdPublisher(node, qos_cmd, cmd_prefix)
 
         # Action smoothing state
         self._last_action: Optional[np.ndarray] = None
