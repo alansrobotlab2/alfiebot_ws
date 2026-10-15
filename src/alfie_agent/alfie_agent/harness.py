@@ -15,6 +15,12 @@ blocks, which we parse out of the streamed text (mirroring lloyd's tolerant
 Cancellation: an ``is_current`` predicate is checked before every LLM call and
 every tool call, so a barge-in or newer turn aborts and returns ``None`` without
 speaking.
+
+Streaming: with ``on_text`` the spoken part of every generation is handed out
+as it streams (``SpokenFilter`` keeps ``<think>`` and ``<tool_call>`` blocks
+out of it), so the caller can speak while the model writes — including text the
+model says *before* a tool call ("Let me look."), which is heard before the
+tool runs. ``on_tool(name)`` fires just before each tool executes.
 """
 import json
 import re
@@ -90,6 +96,76 @@ def strip_markup(text):
     if "<tool_call>" in text:  # dangling unterminated tool call
         text = text.split("<tool_call>")[0]
     return text.strip()
+
+
+class SpokenFilter:
+    """Pass streamed model text through, minus ``<think>``/``<tool_call>`` blocks.
+
+    Tags can be split across deltas, so a trailing fragment that could still
+    become a tag is held until the next delta decides it. Once a tool call
+    opens, nothing else in that generation is spoken: the protocol asks the
+    model to stop after it, and anything it adds is not meant for the listener.
+    Leading whitespace is never emitted (Qwen's empty ``<think></think>`` under
+    /no_think leaves a run of newlines).
+    """
+
+    _OPEN = ("<think>", "<tool_call>")
+
+    def __init__(self):
+        self._buf = ""
+        self._state = "out"     # "out" | "think" | "tool"
+        self._started = False   # emitted any non-whitespace yet
+        self.saw_tool = False
+
+    def feed(self, delta):
+        self._buf += delta or ""
+        out = []
+        while self._buf:
+            if self._state == "tool":
+                self._buf = ""
+                break
+            if self._state == "think":
+                end = self._buf.find("</think>")
+                if end < 0:
+                    # Keep only a tail that could be the start of "</think>".
+                    self._buf = self._buf[-(len("</think>") - 1):]
+                    break
+                self._buf = self._buf[end + len("</think>"):]
+                self._state = "out"
+                continue
+            lt = self._buf.find("<")
+            if lt < 0:
+                out.append(self._buf)
+                self._buf = ""
+                break
+            out.append(self._buf[:lt])
+            rest = self._buf[lt:]
+            if rest.startswith("<think>"):
+                self._state, self._buf = "think", rest[len("<think>"):]
+            elif rest.startswith("</think>"):
+                self._buf = rest[len("</think>"):]  # stray close: drop the tag
+            elif rest.startswith("<tool_call>"):
+                self._state, self._buf, self.saw_tool = "tool", "", True
+            elif any(t.startswith(rest) for t in self._OPEN + ("</think>",)):
+                self._buf = rest     # could still become a tag: wait
+                break
+            else:
+                out.append("<")
+                self._buf = rest[1:]
+        return self._emit("".join(out))
+
+    def flush(self):
+        """End of the generation: release a held fragment that never became a tag."""
+        rest = self._buf if self._state == "out" else ""
+        self._buf = ""
+        return self._emit(rest)
+
+    def _emit(self, text):
+        if not self._started:
+            text = text.lstrip()
+            if text:
+                self._started = True
+        return text
 
 
 def _tool_response_turn(pairs):
@@ -174,7 +250,8 @@ def summarize(turns, llm, *, max_tokens=256):
 
 
 def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
-             logger=None, max_tool_iters=4, max_tokens=None):
+             logger=None, max_tool_iters=4, max_tokens=None, on_text=None,
+             on_tool=None, on_first_delta=None):
     """
     Run one conversational turn, resolving any tool calls.
 
@@ -185,10 +262,41 @@ def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
     The recent-memory window (if any) is folded into ``system_prompt`` by the
     prompt builder — MLC-LLM only accepts a system prompt at position 0, so it
     cannot ride in as a second ``system`` message.
+
+    ``on_text(text)`` receives the spoken part of each generation as it streams
+    (see ``SpokenFilter``); ``on_tool(name)`` is called before each tool runs;
+    ``on_first_delta()`` once, at the first token of the turn.
     """
     messages = ([{"role": "system", "content": system_prompt}]
                 + list(history)
                 + [{"role": "user", "content": user_text}])
+
+    first = {"seen": False}
+
+    def generate():
+        """One streamed completion, its spoken text forwarded to ``on_text``."""
+        if on_text is None and on_first_delta is None:
+            return llm.stream_completion(messages, is_current=is_current,
+                                         max_tokens=max_tokens)
+        filt = SpokenFilter()
+
+        def on_delta(piece):
+            if not first["seen"]:
+                first["seen"] = True
+                if on_first_delta is not None:
+                    on_first_delta()
+            if on_text is not None:
+                text = filt.feed(piece)
+                if text:
+                    on_text(text)
+
+        raw = llm.stream_completion(messages, is_current=is_current,
+                                    max_tokens=max_tokens, on_delta=on_delta)
+        if raw is not None and on_text is not None:
+            text = filt.flush()
+            if text:
+                on_text(text)
+        return raw
 
     turn_t0 = time.monotonic()
     for gen in range(max_tool_iters):
@@ -196,8 +304,7 @@ def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
             return None
         t0 = time.monotonic()
         prompt_tok = sum(approx_tokens(m.get("content", "")) for m in messages)
-        raw = llm.stream_completion(messages, is_current=is_current,
-                                    max_tokens=max_tokens)
+        raw = generate()
         if raw is None:
             return None  # cancelled mid-stream
         if logger:
@@ -228,6 +335,8 @@ def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
                 continue
             if logger:
                 logger(f"tool call: {name}({call['arguments']})")
+            if on_tool is not None:
+                on_tool(name)
             try:
                 result = call_tool(name, call["arguments"])
             except Exception as e:  # tools shouldn't raise, but never crash a turn
@@ -241,8 +350,7 @@ def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
     messages.append({"role": "user",
                      "content": "Answer now in plain spoken language without "
                                 "calling any more tools."})
-    raw = llm.stream_completion(messages, is_current=is_current,
-                                max_tokens=max_tokens)
+    raw = generate()
     if raw is None:
         return None
     if logger:

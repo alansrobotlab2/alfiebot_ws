@@ -1,3 +1,26 @@
+"""
+asr_node — hearing: Silero VAD + turn-1-mini end-of-turn + Parakeet ASR.
+
+Audio arrives on `audio_frames` (int16[512] @ 16 kHz). Three threads, so no
+stage can starve another (lloyd's "one stream, one clock, one thread"):
+
+  * the ROS callback only enqueues frames on an *unbounded* queue — a bounded
+    one that dropped would reintroduce the silent gaps this rework removes;
+  * the hearing thread runs ``hearing.HearingPipeline`` (VAD with pre-roll, the
+    streamed turn model, the hold) and publishes `vad/speech` edges at once;
+  * the transcription thread runs Parakeet on each committed turn and publishes
+    `asrresult` with timing fields for the agent's latency log.
+
+Topics:
+  `vad/speech` (Bool)    true at a speech onset, false when a segment closes.
+                         The agent uses it for sustained-speech barge-in.
+  `asrresult` (ASRResult) one committed turn: transcript + speech_end time,
+                         durations, the turn score and the commit reason.
+
+Optional `capture_dir`: every committed turn is saved as a 16 kHz WAV plus a
+JSON line, so misses can be replayed through the same pipeline
+(`ros2 run alfie_asr replay <wav>`).
+"""
 import os
 import sys
 
@@ -8,27 +31,33 @@ os.environ['OMP_NUM_THREADS'] = '4'  # Set number of OpenMP threads
 # No HF_HUB_OFFLINE here: model_manager loads from ~/.alfie_asr/models and only
 # touches HuggingFace for the one-time download when that directory is empty.
 
+import json
+import queue
 import threading
 import time
+import wave
+from pathlib import Path
+
 import numpy as np
 import onnxruntime as ort
 import onnx_asr
-import gc
-import psutil
 
-from alfie_asr.model_manager import ensure_models, ModelNotAvailableError
+from alfie_asr.model_manager import (ensure_models, ensure_turn_model,
+                                     ModelNotAvailableError)
 
-# IMPORTANT: Load ASR model BEFORE importing PyTorch/Silero to avoid cuBLAS conflict
-# ONNX Runtime and PyTorch both try to create cuBLAS handles, but ONNX Runtime fails
-# if PyTorch initializes CUDA first
+# IMPORTANT: Load the ASR model before anything that might initialise CUDA
+# through PyTorch (cuBLAS handle conflict). Nothing below imports torch any more
+# — the VAD runs through onnxruntime directly (hearing.SileroOnnx) — but the
+# order is kept so a future import can't reintroduce the clash.
 print("Checking for local models...")
 try:
     _asr_model_dir, _vad_model_path = ensure_models()
 except ModelNotAvailableError as e:
     print(f"FATAL: {e}")
     sys.exit(1)
+_turn_model_path = ensure_turn_model()
 
-print("Pre-loading Parakeet ASR model with GPU (before PyTorch)...")
+print("Pre-loading Parakeet ASR model with GPU...")
 ort.set_default_logger_severity(3)
 _sess_options = ort.SessionOptions()
 _sess_options.intra_op_num_threads = 4
@@ -45,122 +74,142 @@ _asr_model = onnx_asr.load_model(
 )
 print("ASR model pre-loaded successfully")
 
-# Now safe to import PyTorch-based libraries
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.msg import AudioFrame, ASRResult
-from silero_vad import load_silero_vad, VADIterator
-from silero_vad.utils_vad import OnnxWrapper
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from ament_index_python.packages import get_package_share_directory
-import shutil
+from std_msgs.msg import Bool
+from alfie_msgs.msg import AudioFrame, ASRResult
 
-SAMPLE_RATE = 16000  # Updated to match audio publisher
-BLOCKSIZE = 512   # Updated to match AudioFrame message
-VAD_BLOCK = 512   # VAD requires minimum 512 samples (32ms at 16kHz)
-FRAMES_PER_VAD = VAD_BLOCK // BLOCKSIZE  # 2 frames needed for VAD
-MAX_SPEECH_SECONDS = 10 # Max speech segment length
-MAX_AUDIO_BUFFER_SIZE = SAMPLE_RATE * MAX_SPEECH_SECONDS  # max buffer (safety limit)
+from alfie_asr.hearing import SAMPLE_RATE, build_pipeline
 
 
 class ASRNode(Node):
     def __init__(self):
         super().__init__('asr_node')
-        
-        # Configure ONNX Runtime for GPU usage
-        ort.set_default_logger_severity(3)  # Reduce logging verbosity
-        
-        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self.audio_buffer = bytearray()
-        self.micstate = 'IDLE'
 
-        # Memory monitoring
-        self.process = psutil.Process()
-        self.callback_count = 0
-        self.last_memory_log = 0
-        
-        # Use the pre-loaded ASR model (loaded at module level before PyTorch)
+        # --- parameters (lloyd's measured defaults; see hearing.py) ---
+        vad_threshold = float(self.declare_parameter('vad_threshold', 0.45).value)
+        # 0 = auto: 380 ms with the turn model, 500 ms without.
+        min_silence_ms = int(self.declare_parameter('min_silence_ms', 0).value)
+        speech_pad_ms = int(self.declare_parameter('speech_pad_ms', 220).value)
+        min_utterance_ms = int(self.declare_parameter('min_utterance_ms', 250).value)
+        max_utterance_ms = int(self.declare_parameter('max_utterance_ms', 30000).value)
+        turn_enabled = bool(self.declare_parameter('turn_enabled', True).value)
+        turn_path = self.declare_parameter(
+            'turn_model_path', str(_turn_model_path or '')).value
+        turn_threshold = float(self.declare_parameter('turn_threshold', 0.06).value)
+        hold_timeout_ms = int(self.declare_parameter('hold_timeout_ms', 2200).value)
+        hold_max_s = float(self.declare_parameter('hold_max_s', 12.0).value)
+        capture_dir = self.declare_parameter('capture_dir', '').value
+
+        self.pipeline = build_pipeline(
+            _vad_model_path, turn_path if turn_enabled else None,
+            vad_threshold=vad_threshold, min_silence_ms=min_silence_ms,
+            speech_pad_ms=speech_pad_ms, min_utterance_ms=min_utterance_ms,
+            max_utterance_ms=max_utterance_ms, turn_threshold=turn_threshold,
+            hold_timeout_ms=hold_timeout_ms, hold_max_s=hold_max_s,
+            log=self.get_logger().warn)
         self.asr_model = _asr_model
-        self.get_logger().info('Using pre-loaded Parakeet ASR model')
+        self._capture_dir = Path(capture_dir).expanduser() if capture_dir else None
+        if self._capture_dir:
+            self._capture_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load VAD model from local path
-        self.get_logger().info(f'Loading Silero VAD model from {_vad_model_path}...')
-        self.silero_model = OnnxWrapper(str(_vad_model_path), force_onnx_cpu=True)
-        self.vad_iterator = VADIterator(
-            self.silero_model,
-            sampling_rate=SAMPLE_RATE,
-            min_silence_duration_ms=500,
-            speech_pad_ms=30,
-            threshold=0.35,
-        )
-        
+        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.publisher_ = self.create_publisher(ASRResult, 'asrresult', qos)
+        self.vad_pub = self.create_publisher(Bool, 'vad/speech', qos)
 
-        self.subscription = self.create_subscription(
-            AudioFrame,
-            'audio_frames',
-            self.audio_callback,
-            qos)
+        # (frame, wall arrival time). Unbounded on purpose: never drop audio.
+        self._frames = queue.Queue()
+        self._turns = queue.Queue()
+        threading.Thread(target=self._hearing_loop, daemon=True).start()
+        threading.Thread(target=self._asr_loop, daemon=True).start()
 
-        self.get_logger().info('ASRNode initialized.')
+        self.create_subscription(AudioFrame, 'audio_frames', self.audio_callback, qos)
+
+        seg = self.pipeline.segmenter
+        self.get_logger().info(
+            f'ASRNode initialized: vad thr {seg.threshold:.2f}, min silence '
+            f'{seg._min_silence * 1000 // SAMPLE_RATE} ms, pad {speech_pad_ms} ms, '
+            f'turn model {"on (thr %.2f)" % turn_threshold if self.pipeline.turn else "off"}.')
 
     def audio_callback(self, msg):
-        # Memory monitoring (every 1000 callbacks)
-        # self.callback_count += 1
-        # if self.callback_count % 1000 == 0:
-        #     mem_info = self.process.memory_info()
-        #     mem_mb = mem_info.rss / 1024 / 1024
-        #     self.get_logger().info(f'Memory usage: {mem_mb:.1f} MB | Buffer size: {len(self.audio_buffer)} bytes')
-        #     self.last_memory_log = mem_mb
-
         # Audio is always processed (even while the robot speaks): the reSpeaker's
-        # hardware AEC removes the robot's own voice. Wake-word barge-in and the
-        # agent's wake gating decide what actually gets acted on.
-        samples = np.frombuffer(msg.audioframe, dtype=np.int16)
-        # Use the full 256-sample frame for VAD
-        vad_input = samples.astype(np.float32) / 32768.0
-        speech = self.vad_iterator(vad_input)
-        #self.get_logger().info(f'VAD output: {speech}')
-        if speech:
-            key, = speech
-            print(key, " ", speech)
-        else:
-            key = "speaking"
+        # hardware AEC removes the robot's own voice, and the agent decides what
+        # an utterance during speech means (barge-in, backchannel or echo).
+        self._frames.put((np.frombuffer(msg.audioframe, dtype=np.int16).copy(),
+                          time.time()))
 
-        if self.micstate == 'IDLE' and key == 'start':
-            self.get_logger().info('Speech start detected')
-            self.audio_buffer = bytearray()
-            self.audio_buffer.extend(samples.tobytes())
-            self.micstate = 'SPEECH'
-        elif self.micstate == 'SPEECH' and key == 'speaking':
-            # Safety check: prevent buffer overflow
-            if len(self.audio_buffer) < MAX_AUDIO_BUFFER_SIZE * 2:
-                self.audio_buffer.extend(samples.tobytes())
-            else:
-                self.get_logger().warn('Audio buffer exceeded maximum size, resetting')
-                self.micstate = 'IDLE'
-                self.audio_buffer = bytearray()
-                self.vad_iterator.reset_states()
-        elif self.micstate == 'SPEECH' and key == 'end':
-            self.get_logger().info('Speech end detected, transcribing...')
-            self.audio_buffer.extend(samples.tobytes())
-            # onnx_asr.recognize() requires float32 PCM in [-1, 1]; passing the
-            # raw int16 buffer raises WrongDataTypeError.
-            audio_np = np.frombuffer(self.audio_buffer, dtype=np.int16).astype(np.float32) / 32768.0
-            result = self.asr_model.recognize(audio_np, sample_rate=SAMPLE_RATE)
-            asr_msg = ASRResult()
-            asr_msg.asrresult = str(result)
-            self.get_logger().info('Speech detected, publishing result: ' + asr_msg.asrresult)
-            self.publisher_.publish(asr_msg)
+    def _publish_vad(self, value):
+        m = Bool()
+        m.data = value
+        self.vad_pub.publish(m)
 
-            # Explicit cleanup
-            del audio_np
-            self.audio_buffer = bytearray()
-            self.micstate = 'IDLE'
-            self.vad_iterator.reset_states()
+    def _hearing_loop(self):
+        while rclpy.ok():
+            frame, arrived = self._frames.get()
+            try:
+                events = self.pipeline.feed(frame)
+            except Exception as e:
+                self.get_logger().error(f'hearing pipeline failed: {e}')
+                continue
+            # `arrived` is the wall time of the newest audio; events refer back
+            # into it by sample count.
+            backlog = self._frames.qsize()
+            if backlog > 30:  # ~1 s behind real time
+                self.get_logger().warn(f'hearing is {backlog} frames behind',
+                                       throttle_duration_sec=5.0)
+            for ev in events:
+                if ev.kind == 'speech_start':
+                    self._publish_vad(True)
+                elif ev.kind == 'speech_end':
+                    self._publish_vad(False)
+                elif ev.kind == 'turn':
+                    speech_end = arrived - ev.lag_samples / SAMPLE_RATE
+                    self.get_logger().info(
+                        f'turn committed: {ev.audio.size / SAMPLE_RATE:.2f}s '
+                        f'({ev.reason}, p={ev.turn_prob:.3f})')
+                    self._turns.put((ev, speech_end))
 
-            # Force garbage collection after transcription
-            gc.collect()
+    def _asr_loop(self):
+        while rclpy.ok():
+            ev, speech_end = self._turns.get()
+            if ev.audio is None or ev.audio.size == 0:
+                continue
+            t0 = time.monotonic()
+            try:
+                text = str(self.asr_model.recognize(ev.audio, sample_rate=SAMPLE_RATE))
+            except Exception as e:
+                self.get_logger().error(f'transcription failed: {e}')
+                continue
+            asr_s = time.monotonic() - t0
+            msg = ASRResult()
+            msg.asrresult = text
+            msg.speech_end = float(speech_end)
+            msg.duration = float(ev.audio.size / SAMPLE_RATE)
+            msg.asr_seconds = float(asr_s)
+            msg.turn_prob = float(ev.turn_prob)
+            msg.reason = ev.reason
+            self.publisher_.publish(msg)
+            self.get_logger().info(
+                f'[asr] {msg.duration:.2f}s audio in {asr_s * 1000:.0f} ms: {text!r}')
+            if self._capture_dir:
+                self._capture(ev, msg)
+
+    def _capture(self, ev, msg):
+        stamp = time.strftime('%Y%m%d_%H%M%S') + f'_{int(time.time() * 1000) % 1000:03d}'
+        try:
+            pcm = np.clip(ev.audio * 32768.0, -32768, 32767).astype(np.int16)
+            with wave.open(str(self._capture_dir / f'{stamp}.wav'), 'wb') as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(SAMPLE_RATE)
+                w.writeframes(pcm.tobytes())
+            with open(self._capture_dir / 'turns.jsonl', 'a') as f:
+                f.write(json.dumps({'wav': f'{stamp}.wav', 'text': msg.asrresult,
+                                    'reason': msg.reason, 'turn_prob': msg.turn_prob,
+                                    'asr_seconds': msg.asr_seconds}) + '\n')
+        except Exception as e:
+            self.get_logger().warn(f'capture failed: {e}')
 
 
 def main(args=None):
@@ -173,6 +222,7 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

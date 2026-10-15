@@ -44,7 +44,7 @@ class LLMClient:
         return self._model_id
 
     def stream_completion(self, messages, *, is_current, max_tokens=None,
-                          debug_config=None):
+                          debug_config=None, on_delta=None):
         """
         Stream a chat completion and return the raw accumulated text.
 
@@ -55,6 +55,9 @@ class LLMClient:
         ``{"pinned_system_prompt": True}`` to pin a resident system-prompt parent.
         Requires the server to run with ``--enable-debug`` or it is silently
         dropped (see mlc_llm_serve_node).
+
+        ``on_delta(piece)`` is called with each content delta as it arrives, so
+        the caller can start speaking before the completion is finished.
         """
         payload = {
             "model": self.resolve_model_id(),
@@ -84,4 +87,6 @@ class LLMClient:
                 piece = delta.get("content")
                 if piece:
                     parts.append(piece)
+                    if on_delta is not None:
+                        on_delta(piece)
         return "".join(parts)

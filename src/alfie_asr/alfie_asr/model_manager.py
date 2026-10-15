@@ -23,6 +23,11 @@ ASR_MODEL_PATTERNS = [
 
 VAD_MODEL_NAME = "silero_vad.onnx"
 
+# turn-1-mini (p99lab, Apache-2.0): streaming end-of-turn model. Optional — the
+# ASR node fails open to VAD-silence-only turns when it is missing.
+TURN_REPO_ID = "p99lab/turn-1-mini"
+TURN_MODEL_FILE = "onnx/turn-1-mini.step.onnx"
+
 
 def get_models_dir() -> Path:
     """Get the models directory path in the package share directory."""
@@ -43,6 +48,30 @@ def get_asr_model_dir() -> Path:
 def get_vad_model_path() -> Path:
     """Get the VAD model file path."""
     return get_models_dir() / VAD_MODEL_NAME
+
+
+def get_turn_model_path() -> Path:
+    """Get the turn-1-mini ONNX path."""
+    return get_models_dir() / "turn-1-mini" / TURN_MODEL_FILE
+
+
+def ensure_turn_model():
+    """Return the turn-1-mini path, downloading it once if possible; else None."""
+    path = get_turn_model_path()
+    if path.exists():
+        return path
+    if not check_internet_connection():
+        print(f"turn-1-mini not found at {path} and no internet; continuing without it.")
+        return None
+    try:
+        from huggingface_hub import hf_hub_download
+        print(f"Downloading turn-1-mini to {path.parent.parent}...")
+        hf_hub_download(repo_id=TURN_REPO_ID, filename=TURN_MODEL_FILE,
+                        local_dir=str(path.parent.parent))
+        return path if path.exists() else None
+    except Exception as e:
+        print(f"turn-1-mini download failed ({e}); continuing without it.")
+        return None
 
 
 def check_internet_connection(host: str = "huggingface.co", port: int = 443, timeout: float = 3.0) -> bool:

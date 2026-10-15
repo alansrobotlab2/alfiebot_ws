@@ -3,9 +3,11 @@
 The conversation **brain** for Alfie. It bridges ASR and TTS: it takes a
 transcript (`asrresult`), runs an agentic turn against the local MLC-LLM server
 (Qwen3.6 35B-A3B) — which can call **tools** such as reading, writing, and
-searching notes in a shared Obsidian vault — and publishes the spoken reply as a
-`speechrequest`. Ported (minimal slice) from the [lloyd](https://github.com/alansrobotlab2/lloyd)
-agent.
+searching notes in a shared Obsidian vault — and publishes the spoken reply as
+`speechrequest`s, clause by clause while the model is still writing. Ported
+(minimal slice) from the [lloyd](https://github.com/alansrobotlab2/lloyd) agent;
+the voice behaviour follows lloyd's `architecture/voice.md` (see
+[Voice behaviour](#voice-behaviour)).
 
 ## Architecture
 
@@ -18,8 +20,13 @@ asrresult ─▶ agent_node ─▶ harness.run_turn ──▶ MLC-LLM (localhost
                 └─▶ speechrequest (TTS),  generating (thinking LED)
 ```
 
-- **`agent_node.py`** — ROS node: topic I/O, wake-window gating, turn-id / barge-in
-  cancellation. Delegates thinking to the harness.
+- **`agent_node.py`** — ROS node: topic I/O, wake gating, conversation rules,
+  pause-then-decide barge-in, turn-id cancellation, fillers, latency log.
+  Delegates thinking to the harness.
+- **`speakable.py`** — `ClauseStream`: streamed text → speakable clauses (lloyd's).
+- **`conversation.py`** — backchannel / closer / stopper vocabularies, transcript
+  wake, mention and echo detection, tool fillers.
+- **`timeline.py`** — the per-turn `[latency]` line.
 - **`harness.py`** — the tool-calling loop. MLC-LLM can't do native OpenAI
   tool-calling, so tools are described in the system prompt and Qwen emits
   `<tool_call>{...}</tool_call>` blocks that the harness parses and dispatches.
@@ -40,10 +47,15 @@ asrresult ─▶ agent_node ─▶ harness.run_turn ──▶ MLC-LLM (localhost
 |---|---|---|
 | in | `asrresult` | `alfie_msgs/ASRResult` |
 | in | `wake` | `std_msgs/String` (RELIABLE) |
-| in | `barge_in` | `std_msgs/Empty` |
+| in | `barge_in` | `std_msgs/Empty` — hard stop (stop word / wake over speech) |
+| in | `barge_in/soft` | `std_msgs/Empty` — energy-gate candidate: pause, then decide |
+| in | `vad/speech` | `std_msgs/Bool` — ASR node's VAD edges (sustained-speech barge-in) |
 | in | `speaking` | `alfie_msgs/Speaking` |
+| in | `tts/spoken` | `std_msgs/String` — clauses TTS finished playing (what was heard) |
 | in | `llm/ready` | `std_msgs/Bool` (latched) |
-| out | `speechrequest` | `alfie_msgs/SpeechRequest` |
+| out | `speechrequest` | `alfie_msgs/SpeechRequest` (RELIABLE) — one clause, `turn_id`, `more_follows` |
+| out | `tts/pause` | `std_msgs/Bool` — true pauses, false resumes |
+| out | `tts/stop` | `std_msgs/Empty` — stop and drop queued clauses |
 | out | `generating` | `std_msgs/Bool` |
 
 ### ROS parameters (declared with defaults)
@@ -62,6 +74,36 @@ asrresult ─▶ agent_node ─▶ harness.run_turn ──▶ MLC-LLM (localhost
 | `recent_max_items` | `5` | max recent-interaction summaries injected at episode start |
 | `compaction_enabled` | `true` | write episode summaries into memory on idle |
 | `max_tokens` / `temperature` | `200` / `0.7` | generation |
+| `followup_window_s` | `6.0` | listening window after a wake / after each reply |
+| `question_window_s` | `20.0` | window after a reply that ended with a question |
+| `text_wake` | `true` | a transcript that opens with a wake phrase wakes Alfie |
+| `barge_mode` | `pause` | `pause` (pause, then decide on the transcript) or `off` |
+| `barge_min_speech_s` | `0.5` | sustained speech needed to pause |
+| `barge_warmup_s` | `2.0` | no speech-triggered pause in the first seconds of a reply |
+| `false_interruption_s` | `2.0` | resume if no words this long after the speaker goes quiet |
+| `max_pause_s` | `10.0` | resume a pause no transcript ever resolved |
+| `echo_overlap` | `0.6` | word overlap (plus a 3-word run) that marks a transcript as own echo |
+| `filler_after_s` | `2.5` | say "One moment." if nothing has been said by then |
+| `progress_every_s` | `8.0` | progress line during a long tool phase |
+
+## Voice behaviour
+
+- **Streaming reply.** The harness hands out the spoken part of each generation
+  as it streams (`SpokenFilter` drops `<think>`/`<tool_call>`); `ClauseStream`
+  cuts it into clauses — the first may be cut at a comma once 20 chars long — and
+  each is published immediately with `more_follows=true`. An empty request with
+  `more_follows=false` ends the reply. Text written before a tool call ("Let me
+  look.") is spoken before the tool runs.
+- **Fillers.** Nothing said 2.5 s in → "One moment."; a tool about to run with
+  nothing said → a contextual line ("Let me take a look.", "Let me check my
+  notes."); long tool phases → "Still working on it." every 8 s.
+- **Barge-in: pause, then decide.** See `alfie_wakeword/README.md#barge-in`. A new
+  request — including one made during a silent tool phase — supersedes the running
+  turn, and the next turn is told what the listener actually heard and not to
+  resume or repeat the interrupted reply.
+- **Latency.** Each turn logs one line, e.g.
+  `[latency] eos->audio 1.30s | speech_end -> asr_done +451ms -> turn_start +1ms -> first_delta +479ms -> first_clause +303ms -> first_audio +56ms -> done +550ms | asr 120ms/1.5s (complete, p=0.50)`.
+  `eos->audio` is end of speech to the first sound Alfie makes.
 
 ## Context management & memory
 

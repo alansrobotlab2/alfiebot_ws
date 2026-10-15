@@ -38,6 +38,7 @@ setup(
     entry_points={
         'console_scripts': [
             'parakeet_asr_node = alfie_asr.parakeet_asr_node:main',
+            'replay = alfie_asr.replay:main',
         ],
     },
 )

@@ -5,7 +5,14 @@ Runs one or more openWakeWord models over `audio_frames` and:
   * publishes `wake` (std_msgs/String = spoken phrase) when a model fires — this
     opens/extends the agent's conversation window;
   * publishes `barge_in` (std_msgs/Empty) if a wake fires while TTS is speaking,
-    so you can interrupt Alfie by saying its name.
+    so you can interrupt Alfie by saying its name;
+  * the "stop" cancel word is *armed* only while Alfie is speaking or thinking
+    (lloyd's stop word: a "stop" in idle room chatter means nothing to him);
+  * publishes `barge_in/soft` (std_msgs/Empty) when a sustained loud mic says
+    someone is talking over him. That is a *candidate*: the agent pauses TTS
+    and lets the transcript decide (words -> stop, a cough or "yeah" -> resume),
+    instead of a hard stop on any loud noise. `barge_mode: hard` restores the
+    old behaviour.
 
 Fully offline: the oww base models (melspectrogram + embedding) and the wake
 models are bundled in this package's `models/` dir and loaded by path — nothing
@@ -27,7 +34,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from rcl_interfaces.msg import SetParametersResult
 from ament_index_python.packages import get_package_share_directory
 
-from std_msgs.msg import String, Empty
+from std_msgs.msg import Bool, String, Empty
 from alfie_msgs.msg import AudioFrame, Speaking
 
 from openwakeword.model import Model
@@ -83,6 +90,8 @@ class WakeWordNode(Node):
         self._barge_threshold = float(
             self.declare_parameter('barge_energy_threshold', BARGE_THRESHOLD_DEFAULT).value)
         self._barge_hold = int(self.declare_parameter('barge_hold_hops', BARGE_HOLD_DEFAULT).value)
+        # 'soft' -> barge_in/soft (agent pauses and decides); 'hard' -> barge_in.
+        self._barge_mode = self.declare_parameter('barge_mode', 'soft').value
 
         wake_paths = [os.path.join(model_dir, m) for m in wake_models]
         for p in wake_paths:
@@ -112,6 +121,7 @@ class WakeWordNode(Node):
         self._buf = np.zeros(0, dtype=np.int16)
         self._last_fire = {}
         self.speaking = False
+        self.generating = False
         self._barge_run = 0        # consecutive loud hops while speaking
         self._last_barge = 0.0
 
@@ -124,9 +134,11 @@ class WakeWordNode(Node):
         # Every detection (wake or cancel) is echoed here for LED feedback.
         self.detect_pub = self.create_publisher(String, 'wakeword/detection', wake_qos)
         self.barge_pub = self.create_publisher(Empty, 'barge_in', audio_qos)
+        self.soft_barge_pub = self.create_publisher(Empty, 'barge_in/soft', audio_qos)
 
         self.create_subscription(AudioFrame, 'audio_frames', self.on_audio, audio_qos)
         self.create_subscription(Speaking, 'speaking', self.on_speaking, audio_qos)
+        self.create_subscription(Bool, 'generating', self.on_generating, audio_qos)
 
         self.get_logger().info('WakeWordNode initialized.')
 
@@ -134,6 +146,9 @@ class WakeWordNode(Node):
         self.speaking = msg.is_speaking
         if not msg.is_speaking:
             self._barge_run = 0
+
+    def on_generating(self, msg):
+        self.generating = bool(msg.data)
 
     def _on_set_params(self, params):
         # Live tuning: `thr_<key>` thresholds + the barge-in energy gate.
@@ -151,6 +166,8 @@ class WakeWordNode(Node):
                 self.get_logger().info(f'barge hold -> {self._barge_hold}')
             elif p.name == 'barge_enabled':
                 self._barge_enabled = bool(p.value)
+            elif p.name == 'barge_mode':
+                self._barge_mode = str(p.value)
         return SetParametersResult(successful=True)
 
     def on_audio(self, msg):
@@ -183,8 +200,11 @@ class WakeWordNode(Node):
         if self._barge_run >= self._barge_hold and (now - self._last_barge) > self._debounce:
             self._last_barge = now
             self._barge_run = 0
-            self.get_logger().info(f'Energy barge-in (rms {rms:.0f})')
-            self.barge_pub.publish(Empty())
+            self.get_logger().info(f'Energy barge-in candidate (rms {rms:.0f})')
+            if self._barge_mode == 'hard':
+                self.barge_pub.publish(Empty())
+            else:
+                self.soft_barge_pub.publish(Empty())
             d = String(); d.data = 'bargein'   # red LED flash
             self.detect_pub.publish(d)
 
@@ -202,6 +222,10 @@ class WakeWordNode(Node):
 
     def _fire_wake(self, key, score):
         phrase = _key_to_phrase(key)
+        if key in self._cancel_keys and not (self.speaking or self.generating):
+            # Cancel words are armed only while there is something to stop.
+            self.get_logger().info(f"'{phrase}' ignored ({score:.2f}): nothing to stop")
+            return
         # Echo the raw key for LED feedback (green flash for wake, red for cancel).
         d = String()
         d.data = key
