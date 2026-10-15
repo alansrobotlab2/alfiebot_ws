@@ -1,6 +1,9 @@
 // Foxglove WebSocket Connection Manager
 // Reusable module for connecting to Foxglove Bridge
-// Based on patterns from urdf_viewer.js and vr_app.js
+//
+// Subscriptions are declared by topic and persist across reconnects: whenever a
+// matching channel is advertised (initially, later, or after a reconnect) the
+// subscription is (re)sent automatically.
 
 const FOXGLOVE_PORT = 8082;
 
@@ -14,22 +17,27 @@ class FoxgloveConnection {
             onConnect: options.onConnect || null,
             onDisconnect: options.onDisconnect || null,
             onAdvertise: options.onAdvertise || null,
-            onMessage: options.onMessage || null,
-            onBinaryMessage: options.onBinaryMessage || null,
             ...options
         };
 
         this.client = null;
         this.isConnected = false;
-        this.subscriptions = new Map(); // channelId -> { id, topic, handler }
+        this.serverCapabilities = [];
+        this.reconnectTimer = null;
+
+        // Desired subscriptions (persist across reconnects): topic -> handler
+        this.topicHandlers = new Map();
+
+        // Per-connection state (cleared on close)
+        this.channelsById = new Map();    // channelId -> channel
+        this.activeBySubId = new Map();   // subscriptionId -> { id, channelId, topic }
+        this.activeByTopic = new Map();   // topic -> subscriptionId
         this.nextSubscriptionId = 1;
-        this.channels = []; // Available channels from advertise message
-        
-        // TF rate tracking
-        this.tfRateCount = 0;
-        this.tfRateHz = 0;
-        this.lastRateUpdate = performance.now();
-        this.tfRateInterval = null;
+    }
+
+    // Available channels from advertise messages (merged)
+    get channels() {
+        return Array.from(this.channelsById.values());
     }
 
     // Connect to Foxglove Bridge
@@ -46,8 +54,7 @@ class FoxgloveConnection {
                 console.log('Connected to Foxglove Bridge');
                 this.isConnected = true;
                 this.updateStatusIndicator('Connected', 'connected');
-                this.startTFRateTracking();
-                
+
                 if (this.options.onConnect) {
                     this.options.onConnect();
                 }
@@ -65,8 +72,9 @@ class FoxgloveConnection {
             this.client.onclose = (event) => {
                 console.log('Foxglove WebSocket closed. Code:', event.code, 'Reason:', event.reason);
                 this.isConnected = false;
+                this.client = null;
+                this.resetConnectionState();
                 this.updateStatusIndicator('Disconnected', 'disconnected');
-                this.stopTFRateTracking();
 
                 if (this.options.onDisconnect) {
                     this.options.onDisconnect(event);
@@ -74,15 +82,31 @@ class FoxgloveConnection {
 
                 // Attempt reconnection (but not for protocol errors)
                 if (event.code !== 1002 && event.code !== 1003) {
-                    setTimeout(() => this.connect(), this.options.reconnectInterval);
+                    this.scheduleReconnect();
                 }
             };
 
         } catch (error) {
             console.error('Failed to connect to Foxglove:', error);
             this.updateStatusIndicator('Connection failed', 'error');
-            setTimeout(() => this.connect(), this.options.reconnectInterval);
+            this.scheduleReconnect();
         }
+    }
+
+    scheduleReconnect() {
+        if (this.reconnectTimer) return;
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this.connect();
+        }, this.options.reconnectInterval);
+    }
+
+    // Channels and subscription ids are only valid for one connection
+    resetConnectionState() {
+        this.channelsById.clear();
+        this.activeBySubId.clear();
+        this.activeByTopic.clear();
+        this.nextSubscriptionId = 1;
     }
 
     // Handle incoming WebSocket messages
@@ -107,22 +131,39 @@ class FoxgloveConnection {
                 this.serverCapabilities = message.capabilities || [];
                 break;
 
-            case 'advertise':
-                console.log('Available channels:', message.channels?.length);
-                this.channels = message.channels || [];
+            case 'advertise': {
+                // Advertise messages are incremental - merge, don't replace
+                const channels = message.channels || [];
+                for (const channel of channels) {
+                    this.channelsById.set(channel.id, channel);
+                }
+                console.log(`Advertised channels: +${channels.length} (total ${this.channelsById.size})`);
+                this.subscribePending();
                 if (this.options.onAdvertise) {
                     this.options.onAdvertise(this.channels);
                 }
                 break;
+            }
+
+            case 'unadvertise': {
+                const channelIds = message.channelIds || [];
+                for (const channelId of channelIds) {
+                    const channel = this.channelsById.get(channelId);
+                    this.channelsById.delete(channelId);
+                    // Server drops subscriptions on removed channels
+                    for (const [subId, sub] of this.activeBySubId) {
+                        if (sub.channelId === channelId) {
+                            this.activeBySubId.delete(subId);
+                            this.activeByTopic.delete(sub.topic);
+                        }
+                    }
+                    if (channel) console.log(`Unadvertised ${channel.topic} (channelId: ${channelId})`);
+                }
+                break;
+            }
 
             case 'status':
                 console.log('Foxglove status:', message);
-                break;
-
-            case 'message':
-                if (this.options.onMessage) {
-                    this.options.onMessage(message);
-                }
                 break;
         }
     }
@@ -137,102 +178,56 @@ class FoxgloveConnection {
             const timestamp = view.getBigUint64(5, true);
             const messageData = new Uint8Array(data, 13);
 
-            // Find subscription handler
-            for (const [channelId, sub] of this.subscriptions) {
-                if (sub.id === subscriptionId) {
-                    // Track TF rate for TF topics
-                    if (sub.topic.includes('/tf')) {
-                        this.tfRateCount++;
-                    }
-                    
-                    if (sub.handler) {
-                        sub.handler(messageData, timestamp, sub.topic);
-                    }
-                    break;
-                }
-            }
-
-            // Also call generic binary handler if provided
-            if (this.options.onBinaryMessage) {
-                this.options.onBinaryMessage(subscriptionId, messageData, timestamp);
+            const sub = this.activeBySubId.get(subscriptionId);
+            if (!sub) return;
+            const handler = this.topicHandlers.get(sub.topic);
+            if (handler) {
+                handler(messageData, timestamp, sub.topic);
             }
         }
     }
 
-    // Subscribe to a topic
+    // Declare a subscription by topic. It is sent now if the channel is known,
+    // otherwise as soon as it is advertised (including after reconnects).
+    // Returns true if currently subscribed.
     subscribe(topic, handler = null) {
-        const channel = this.channels.find(c => c.topic === topic);
-        if (!channel) {
-            console.warn(`Topic not found: ${topic}`);
-            return null;
-        }
-
-        const subscriptionId = this.nextSubscriptionId++;
-        this.subscriptions.set(channel.id, {
-            id: subscriptionId,
-            channelId: channel.id,
-            topic: topic,
-            handler: handler
-        });
-
-        const subscribeMsg = {
-            op: 'subscribe',
-            subscriptions: [{ id: subscriptionId, channelId: channel.id }]
-        };
-
-        this.client.send(JSON.stringify(subscribeMsg));
-        console.log(`Subscribed to ${topic} (channelId: ${channel.id}, subId: ${subscriptionId})`);
-        
-        return subscriptionId;
+        this.topicHandlers.set(topic, handler);
+        this.subscribePending();
+        return this.isSubscribed(topic);
     }
 
-    // Subscribe to multiple topics at once
-    subscribeMultiple(topicsWithHandlers) {
+    isSubscribed(topic) {
+        return this.activeByTopic.has(topic);
+    }
+
+    // Send subscribe for every desired topic that has a channel but no active subscription
+    subscribePending() {
+        if (!this.client || !this.isConnected || this.client.readyState !== WebSocket.OPEN) return;
+
         const subscriptions = [];
-        
-        for (const { topic, handler } of topicsWithHandlers) {
-            const channel = this.channels.find(c => c.topic === topic);
-            if (channel) {
-                const subscriptionId = this.nextSubscriptionId++;
-                this.subscriptions.set(channel.id, {
-                    id: subscriptionId,
-                    channelId: channel.id,
-                    topic: topic,
-                    handler: handler
-                });
-                subscriptions.push({ id: subscriptionId, channelId: channel.id });
-                console.log(`Subscribing to ${topic} (channelId: ${channel.id}, subId: ${subscriptionId})`);
-            } else {
-                console.warn(`Topic not found: ${topic}`);
-            }
+        for (const topic of this.topicHandlers.keys()) {
+            if (this.activeByTopic.has(topic)) continue;
+            const channel = this.findChannel(topic);
+            if (!channel) continue;
+
+            const subscriptionId = this.nextSubscriptionId++;
+            this.activeBySubId.set(subscriptionId, { id: subscriptionId, channelId: channel.id, topic: topic });
+            this.activeByTopic.set(topic, subscriptionId);
+            subscriptions.push({ id: subscriptionId, channelId: channel.id });
+            console.log(`Subscribing to ${topic} (channelId: ${channel.id}, subId: ${subscriptionId})`);
         }
 
         if (subscriptions.length > 0) {
             this.client.send(JSON.stringify({ op: 'subscribe', subscriptions }));
-            console.log(`Subscribed to ${subscriptions.length} topics`);
         }
-
-        return subscriptions.length;
     }
 
-    // Find a channel by topic pattern
-    findChannel(topicPattern) {
-        if (typeof topicPattern === 'string') {
-            return this.channels.find(c => c.topic === topicPattern);
-        } else if (topicPattern instanceof RegExp) {
-            return this.channels.find(c => topicPattern.test(c.topic));
+    // Find a channel by exact topic name
+    findChannel(topic) {
+        for (const channel of this.channelsById.values()) {
+            if (channel.topic === topic) return channel;
         }
         return null;
-    }
-
-    // Get all channels matching a pattern
-    findChannels(topicPattern) {
-        if (typeof topicPattern === 'string') {
-            return this.channels.filter(c => c.topic.includes(topicPattern));
-        } else if (topicPattern instanceof RegExp) {
-            return this.channels.filter(c => topicPattern.test(c.topic));
-        }
-        return [];
     }
 
     // Update the status indicator element
@@ -244,132 +239,19 @@ class FoxgloveConnection {
         }
     }
 
-    // TF Rate tracking
-    startTFRateTracking() {
-        this.tfRateInterval = setInterval(() => {
-            const now = performance.now();
-            const elapsed = (now - this.lastRateUpdate) / 1000;
-            this.tfRateHz = this.tfRateCount / elapsed;
-            this.tfRateCount = 0;
-            this.lastRateUpdate = now;
-            
-            this.updateTFRateDisplay();
-        }, 5000); // Update every 5 seconds
-    }
-
-    stopTFRateTracking() {
-        if (this.tfRateInterval) {
-            clearInterval(this.tfRateInterval);
-            this.tfRateInterval = null;
-        }
-        this.updateTFRateDisplay(0);
-    }
-
-    updateTFRateDisplay(rate = null) {
-        const tfRateElement = document.getElementById('tfRate');
-        if (tfRateElement) {
-            const displayRate = rate !== null ? rate : this.tfRateHz;
-            tfRateElement.textContent = displayRate > 0 ? `${displayRate.toFixed(1)} Hz` : '-- Hz';
-        }
-    }
-
     // Disconnect from Foxglove
     disconnect() {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         if (this.client) {
+            this.client.onclose = null;
             this.client.close();
             this.client = null;
         }
         this.isConnected = false;
-        this.stopTFRateTracking();
-    }
-
-    // Send a message to the server
-    send(message) {
-        if (this.client && this.isConnected) {
-            if (typeof message === 'object') {
-                this.client.send(JSON.stringify(message));
-            } else {
-                this.client.send(message);
-            }
-        }
-    }
-
-    // Track advertised client channels
-    _clientChannels = new Map();  // topic -> { channelId, ready }
-    _nextClientChannelId = 1;
-    serverCapabilities = [];
-
-    // Advertise a topic for publishing (call once per topic before publishing)
-    advertiseChannel(topic, messageType) {
-        if (this._clientChannels.has(topic)) {
-            return this._clientChannels.get(topic).channelId;
-        }
-
-        // Check if server supports clientPublish
-        if (!this.serverCapabilities.includes('clientPublish')) {
-            console.warn('Server does not support clientPublish capability');
-            console.log('Server capabilities:', this.serverCapabilities);
-        }
-
-        const channelId = this._nextClientChannelId++;
-        this._clientChannels.set(topic, { channelId, ready: true });
-
-        const advertiseMsg = {
-            op: 'clientAdvertise',
-            channels: [{
-                id: channelId,
-                topic: topic,
-                encoding: 'json',
-                schemaName: messageType,
-                schema: ''
-            }]
-        };
-
-        this.client.send(JSON.stringify(advertiseMsg));
-        console.log(`Advertised client channel ${channelId} for ${topic} (type: ${messageType})`);
-        return channelId;
-    }
-
-    // Publish a ROS message to a topic using Foxglove client publish protocol
-    publish(topic, messageType, message) {
-        if (!this.isConnected) {
-            console.warn('Cannot publish: not connected to Foxglove');
-            return false;
-        }
-
-        try {
-            // Get or create channel
-            let channelInfo = this._clientChannels.get(topic);
-            if (!channelInfo) {
-                const channelId = this.advertiseChannel(topic, messageType);
-                channelInfo = this._clientChannels.get(topic);
-            }
-
-            const channelId = channelInfo.channelId;
-
-            // Encode message as JSON string then to bytes
-            const messageJson = JSON.stringify(message);
-            const messageBytes = new TextEncoder().encode(messageJson);
-
-            // Build binary message: opcode (1 byte) + channelId (4 bytes LE) + data
-            const buffer = new ArrayBuffer(1 + 4 + messageBytes.length);
-            const view = new DataView(buffer);
-            view.setUint8(0, 1);  // Opcode 0x01 = client message
-            view.setUint32(1, channelId, true);  // Little-endian channel ID
-            new Uint8Array(buffer, 5).set(messageBytes);
-
-            this.client.send(buffer);
-            console.log(`Published to ${topic} (ch ${channelId}):`, message, `[${messageBytes.length} bytes]`);
-            return true;
-        } catch (error) {
-            console.error('Error publishing message:', error);
-            return false;
-        }
-    }
-
-    // Get Foxglove URL for certificate acceptance
-    getCertUrl() {
-        return `https://${window.location.hostname}:${FOXGLOVE_PORT}/`;
+        this.resetConnectionState();
     }
 }
 

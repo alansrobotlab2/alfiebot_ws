@@ -1,823 +1,634 @@
 #!/usr/bin/env python3
 """
-VR Head Tracker - ROS2 node that publishes head tracking data from VR headset
-Uses the VRMonitor class for VR communication.
+Alfie VR teleop - ROS2 node that turns VR headset/controller input into
+per-subsystem command_mux inputs (cmd/<subsystem>/vr).
+
+VR only claims a subsystem while it is actually being driven, so the mux can
+hand control to other sources (GR00T, idle, joy) the rest of the time:
+  head      claimed while the headset link is fresh; released on link loss
+  base      claimed while a controller link is fresh; on link loss sends zero
+            velocity for base_stop_sec, then releases
+  left/right arm
+            claimed on first grip (or Y reset), seeded from the measured pose;
+            held at the last target on link loss (hold_timeout)
+  back      claimed on first A/B press, seeded from the measured height; held
+            on link loss (hold_timeout)
+Published joint targets are rate-limited (max_joint_speed), so no claim, reset
+or IK jump can snap a joint.
 """
 
-# Standard library imports
 import asyncio
 import math
+import os
+import signal
 import threading
 import time
 
-# ROS2 imports
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
-from alfie_msgs.msg import RobotLowState, ServoCmd, BackCmd, ArmCmd, HeadCmd, EyeCmd
+from alfie_msgs.msg import RobotLowState, ServoCmd, BackCmd, ArmCmd, HeadCmd
 from alfie_msgs.srv import BackRequestCalibration
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool
-from rclpy.qos import DurabilityPolicy, HistoryPolicy
+from scipy.spatial.transform import Rotation as R
 
-# Local imports
 from alfie_vr.vr_monitor import VRMonitor
-from alfie_vr.kinematics import AlfieArmKinematics
-from alfie_vr.kinematics import SimpleTeleopArm
-
+from alfie_vr.kinematics import AlfieArmKinematics, SimpleTeleopArm, ARM_JOINTS
 from alfie_vr.arm_debug_visualizer import ArmDebugVisualizer, PYGAME_AVAILABLE
 
+NUM_SERVOS = 15          # 0-5 left arm, 6-11 right arm, 12-14 head
+ARM_OFFSET = {'left': 0, 'right': 6}
+HEAD_YAW, HEAD_PITCH, HEAD_ROLL = 12, 13, 14
 
-class _TeleopCmdState:
-    """Internal whole-body command scratch model for the VR node.
+BACK_MIN = 0.000
+BACK_MAX = 0.390
+BACK_MAX_RATE = 0.02     # m/s while A/B held
 
-    Replaces the former RobotLowCmd container: the VR/IK update path writes into
-    these fields and publish_robotlowcmd() slices them onto the per-subsystem
-    command_mux inputs (cmd/*/vr). There is no monolithic robotlowcmd topic.
-    Field names/shapes mirror the old RobotLowCmd so the update path is unchanged:
-      servo_cmd : ServoCmd[15]   (0-5 left arm, 6-11 right arm, 12-14 head)
-      eye_pwm   : uint16[2]
-      back_cmd  : BackCmd
-      cmd_vel   : geometry_msgs/Twist
-    """
-
-    def __init__(self):
-        self.servo_cmd = []
-        self.eye_pwm = [0, 0]
-        self.back_cmd = None
-        self.cmd_vel = None
+# Headset yaw beyond this (deg) is ambiguous (operator turned around); hold yaw.
+HEAD_YAW_WRAP_GUARD_DEG = 150.0
 
 
-# Joint mapping configurations
-LEFT_ARM_JOINT_MAP = {
-    "shoulder_yaw": "left_arm_shoulder_yaw",
-    "shoulder_pitch": "left_arm_shoulder_pitch",
-    "elbow_pitch": "left_arm_elbow_pitch",
-    "wrist_pitch": "left_arm_wrist_pitch",
-    "wrist_roll": "left_arm_wrist_roll",
-    "gripper": "left_arm_gripper",
-}
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
 
-RIGHT_ARM_JOINT_MAP = {
-    "shoulder_yaw": "right_arm_shoulder_yaw",
-    "shoulder_pitch": "right_arm_shoulder_pitch",
-    "elbow_pitch": "right_arm_elbow_pitch",
-    "wrist_pitch": "right_arm_wrist_pitch",
-    "wrist_roll": "right_arm_wrist_roll",
-    "gripper": "right_arm_gripper",
-}
 
-HEAD_JOINT_MAP = {
-    "head_yaw": "head_yaw",
-    "head_pitch": "head_pitch",
-    "head_roll": "head_roll",
-}
+def _button(buttons, name):
+    return bool(buttons.get(name, False) or buttons.get(name.upper(), False))
 
 
 class AlfieTeleopVRNode(Node):
-    """ROS2 node that publishes head tracking data from VR headset"""
+    """ROS2 node that drives Alfie from a VR headset and controllers."""
 
     def __init__(self):
         super().__init__('alfiebot_teleop_vr_node')
 
-        # Declare parameters
+        def param(name, default, desc):
+            self.declare_parameter(name, default, ParameterDescriptor(description=desc))
+            return self.get_parameter(name).value
+
+        self.link_timeout = param(
+            'link_timeout', 0.15, 'Seconds without data before a VR device counts as lost')
+        self.hold_timeout = param(
+            'hold_timeout', -1.0,
+            'Seconds to keep holding arms/back after link loss before releasing them '
+            '(arms go limp when released). < 0 = hold until a new VR session takes over')
+        self.base_stop_sec = param(
+            'base_stop_sec', 0.3, 'Seconds of explicit zero velocity sent after link loss')
+        self.max_joint_speed = param(
+            'max_joint_speed', 4.0, 'Rate limit on published arm/head joint targets (rad/s)')
+        self.head_yaw_limit = param('head_yaw_limit', 1.5708, 'Head yaw command limit (rad)')
+        self.head_pitch_limit = param('head_pitch_limit', 1.0472, 'Head pitch command limit (rad)')
+        self.head_roll_limit = param('head_roll_limit', 0.35, 'Head roll command limit (rad)')
+        # Head tracking multipliers (headset rotation -> robot head rotation)
+        self.head_yaw_multiplier = param('head_yaw_multiplier', 2.0, 'Headset yaw gain')
+        self.head_pitch_multiplier = param('head_pitch_multiplier', 2.0, 'Headset pitch gain')
+        self.head_roll_multiplier = param('head_roll_multiplier', 2.0, 'Headset roll gain')
+        # Joystick velocity scaling (acceleration limiting is done by command_mux)
+        self.max_linear_vel = param('max_linear_vel', 0.15, 'Max joystick linear speed (m/s)')
+        self.max_angular_vel = param('max_angular_vel', 0.5, 'Max joystick rotation speed (rad/s)')
+        self.tunable_params = {
+            'link_timeout', 'hold_timeout', 'base_stop_sec', 'max_joint_speed',
+            'head_yaw_limit', 'head_pitch_limit', 'head_roll_limit',
+            'head_yaw_multiplier', 'head_pitch_multiplier', 'head_roll_multiplier',
+            'max_linear_vel', 'max_angular_vel'}
         self.declare_parameter(
-            'back_height',
-            0.390,
-            ParameterDescriptor(description='Target back height in meters (0.0 to 0.390)')
-        )
-
-        # Get initial parameter value
-        self.back_height = self.get_parameter('back_height').value
-
-        # Register callback for parameter updates
+            'back_height', 0.390,
+            ParameterDescriptor(description='Set to command a back height in meters (0.0 to 0.390)'))
         self.add_on_set_parameters_callback(self._on_parameter_change)
 
-        # Head tracking multipliers (headset rotation -> robot head rotation)
-        self.head_pitch_multiplier = 2.0
-        self.head_roll_multiplier = 2.0
-        self.head_yaw_multiplier = 2.0
-        
-        # Create callback group for state subscription
         self.state_callback_group = ReentrantCallbackGroup()
-        
-        # QoS profile for best effort communication
         qos_best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        
-        # Per-subsystem command publishers (command_mux inputs, "vr" source).
-        # VR is a full-body operator source: it publishes all subsystems so the
-        # mux arbitrates it against policy/idle per-subsystem.
-        self.left_arm_publisher = self.create_publisher(
-            ArmCmd, '/alfie/cmd/left_arm/vr', qos_best_effort)
-        self.right_arm_publisher = self.create_publisher(
-            ArmCmd, '/alfie/cmd/right_arm/vr', qos_best_effort)
-        self.head_publisher = self.create_publisher(
-            HeadCmd, '/alfie/cmd/head/vr', qos_best_effort)
-        self.eyes_publisher = self.create_publisher(
-            EyeCmd, '/alfie/cmd/eyes/vr', qos_best_effort)
-        self.back_publisher = self.create_publisher(
-            BackCmd, '/alfie/cmd/back/vr', qos_best_effort)
-        self.base_publisher = self.create_publisher(
-            Twist, '/alfie/cmd/base/vr', qos_best_effort)
 
-        # Create subscriber for robot low-level state
+        # Per-subsystem command_mux inputs ("vr" source). Eyes are not a VR channel.
+        self.left_arm_publisher = self.create_publisher(ArmCmd, '/alfie/cmd/left_arm/vr', qos_best_effort)
+        self.right_arm_publisher = self.create_publisher(ArmCmd, '/alfie/cmd/right_arm/vr', qos_best_effort)
+        self.head_publisher = self.create_publisher(HeadCmd, '/alfie/cmd/head/vr', qos_best_effort)
+        self.back_publisher = self.create_publisher(BackCmd, '/alfie/cmd/back/vr', qos_best_effort)
+        self.base_publisher = self.create_publisher(Twist, '/alfie/cmd/base/vr', qos_best_effort)
+
         self.state_subscriber = self.create_subscription(
-            RobotLowState,
-            '/alfie/robotlowstate',
-            self.robot_state_callback,
-            qos_best_effort,
-            callback_group=self.state_callback_group
-        )
+            RobotLowState, '/alfie/robotlowstate', self.robot_state_callback,
+            qos_best_effort, callback_group=self.state_callback_group)
 
-        # E-stop state: when the mux latches, re-seed our servo setpoints to the
-        # current measured pose so that on reset we don't snap arms to stale far
-        # targets. Latched QoS mirrors the mux's estop_state publisher.
+        # E-stop state (latched, mirrors the mux's estop_state publisher).
         qos_latched = QoSProfile(
             depth=1, reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            history=HistoryPolicy.KEEP_LAST)
+            durability=DurabilityPolicy.TRANSIENT_LOCAL, history=HistoryPolicy.KEEP_LAST)
         self.estop_active = False
         self.estop_state_sub = self.create_subscription(
             Bool, '/alfie/estop_state', self.estop_state_callback, qos_latched,
             callback_group=self.state_callback_group)
-        
-        # Storage for latest robot state with thread lock
+
         self.robot_state = None
         self.robot_state_lock = threading.Lock()
+        # Guards everything below that both the control timer and the
+        # e-stop/parameter callbacks touch.
+        self.cmd_lock = threading.Lock()
 
-        # Initialize servo positions dictionary (radians)
-        self.init_positions = {
-            "left_shoulder_yaw":    0.0000,
-            "left_shoulder_pitch":  0.1089,
-            "left_elbow_pitch":    -1.4864,
-            "left_wrist_pitch":    -0.1442,
-            "left_wrist_roll":      0.0000,
-            "left_gripper":         0.0000,
-            "right_shoulder_yaw":   0.0000,
-            "right_shoulder_pitch": 0.1089,
-            "right_elbow_pitch":   -1.4864,
-            "right_wrist_pitch":   -0.1442,
-            "right_wrist_roll":     0.0000,
-            "right_gripper":        0.0000,
-            "head_yaw":             0.0000,
-            "head_pitch":           0.0000,
-            "head_roll":            0.0000,
-        }
-        
-        # Servo index mapping
-        self.servo_indices = {
-            "left_shoulder_yaw":    0,
-            "left_shoulder_pitch":  1,
-            "left_elbow_pitch":     2,
-            "left_wrist_pitch":     3,
-            "left_wrist_roll":      4,
-            "left_gripper":         5,
-            "right_shoulder_yaw":   6,
-            "right_shoulder_pitch": 7,
-            "right_elbow_pitch":    8,
-            "right_wrist_pitch":    9,
-            "right_wrist_roll":     10,
-            "right_gripper":        11,
-            "head_yaw":             12,
-            "head_pitch":           13,
-            "head_roll":            14,
-        }
-        
-        # Internal whole-body command scratch model (sliced onto cmd/*/vr at publish).
-        self.robot_cmd_state = _TeleopCmdState()
-        self.robot_cmd_state.servo_cmd = [ServoCmd() for _ in range(15)]
-        
-        # Set initial positions and activate all servos
-        for servo_name, position in self.init_positions.items():
-            servo_idx = self.servo_indices[servo_name]
-            self.robot_cmd_state.servo_cmd[servo_idx].enabled = True
-            self.robot_cmd_state.servo_cmd[servo_idx].target_location = position
-            self.robot_cmd_state.servo_cmd[servo_idx].target_speed = 0.0
-            self.robot_cmd_state.servo_cmd[servo_idx].target_acceleration = 0.0
-            self.robot_cmd_state.servo_cmd[servo_idx].target_torque = 0.0
-        
-        # Initialize other command fields
-        self.robot_cmd_state.eye_pwm = [0, 0]
-        self.robot_cmd_state.back_cmd = BackCmd()
-        self.robot_cmd_state.back_cmd.position = self.back_height
-        self.robot_cmd_state.back_cmd.velocity = 0.2
-        self.robot_cmd_state.back_cmd.acceleration = 0.1
-        self.robot_cmd_state.cmd_vel = Twist()
-        
-        # Debug logging flag - set to True to enable verbose debug output
-        self.debug_logs = False
-        
-        # Create timer for 100Hz publishing
-        self.timer = self.create_timer(0.01, self.publish_commands)  # 100Hz = 0.01s period
-        
-        # Create VR monitor (pass debug_logs flag)
-        self.vr_monitor = VRMonitor(debug_logs=self.debug_logs)
-        
-        # Thread for running VR monitor async loop
-        self.vr_thread = None
-        self.vr_loop = None
-        
-        # Track headset connection status
+        # Desired joint targets (from VR/IK) and the rate-limited targets actually published.
+        self.desired = [0.0] * NUM_SERVOS
+        self.published = [0.0] * NUM_SERVOS
+        self.back_target = None
+        self.cmd_vel = Twist()
+
+        # Which subsystems VR currently owns.
+        self.claimed = {'left_arm': False, 'right_arm': False, 'head': False, 'back': False, 'base': False}
+
+        self.arms = {'left': None, 'right': None}
+        self.kinematics = {'left': None, 'right': None}
+        self.grip_active = {'left': False, 'right': False}
+
         self.headset_connected = False
-        
-        # Performance tracking
-        self.last_publish_time = None
-        self.publish_count = 0
-        self.publish_time_sum = 0.0
-        self.max_publish_time = 0.0
-        
-        # Create separate timer for async VR data processing at 90Hz
-        self.vr_update_timer = self.create_timer(0.011, self.update_from_vr_data)  # 90Hz
-        
-        # Arm and head controllers (initialized after first robot state)
-        self.left_arm = None
-        self.right_arm = None
-        self.head = None
-        self.kinematics_left = None
-        self.kinematics_right = None
-        
-        # Grip button state tracking for delta control
-        self.left_grip_active = False
-        self.right_grip_active = False
+        self.controllers_connected = False
+        self.link_lost_time = None      # monotonic time all VR input went stale
+        self.base_stop_until = 0.0
+        self.last_release_count = 0
+        self.last_tick = None
 
-        # Velocity scaling for joystick input (actual rate limiting done by command_mux)
-        self.max_linear_vel = 0.15  # m/s - max linear speed request
-        self.max_angular_vel = 0.5  # rad/s - max rotation speed request
-
-        # Passthrough mode toggle state (triggered by X button on left controller)
+        # Edge detection
         self.passthrough_mode_active = False
-        self.left_x_button_pressed = False  # Track X button state for edge detection
-
-        # Recording toggle state (triggered by right thumbstick button)
+        self.left_x_button_pressed = False
+        self.left_y_button_pressed = False
         self.is_recording = False
-        self.right_thumbstick_pressed = False  # Track thumbstick button state for edge detection
+        self.right_thumbstick_pressed = False
 
-        # Recording control publishers (use same QoS as data_recorder subscribers)
         qos_recording = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.recording_start_pub = self.create_publisher(Bool, '/alfie/recording/start', qos_recording)
         self.recording_stop_pub = self.create_publisher(Bool, '/alfie/recording/stop', qos_recording)
 
-        # Debug visualizer (initialized after arm controllers)
+        self.debug_logs = False
         self.debug_visualizer = None
-        self.enable_debug_viz = False  # Set to False to disable
-        self.latest_left_controller_goal = None  # Store for visualization
-        
-        # Create timer for visualization data update at 30Hz (just pushes data to viz thread)
-        self.viz_timer = self.create_timer(0.033, self.update_visualization)  # ~30Hz
-        
+        self.enable_debug_viz = False
+        self.latest_goals = {'left': None, 'right': None}
+
+        self.vr_monitor = VRMonitor(debug_logs=self.debug_logs)
+        self.vr_thread = None
+        self.vr_loop = None
+
+        # Timers start in main() once the first robot state has arrived.
+        self.control_timer = None
+        self.viz_timer = None
+
         self.get_logger().info('Alfie Teleop VR Node initialized')
-        
-        # Start VR monitor in separate thread
         self.start_vr_monitor()
-    
+
     def debug_log(self, msg: str):
         """Log a debug message only if debug_logs is enabled."""
         if self.debug_logs:
             self.get_logger().info(msg)
 
     def _on_parameter_change(self, params):
-        """Callback for parameter updates at runtime."""
+        """Runtime parameter updates."""
         for param in params:
             if param.name == 'back_height':
-                new_value = param.value
-                # Clamp to valid range
-                new_value = max(0.0, min(0.390, new_value))
-                self.back_height = new_value
-                self.robot_cmd_state.back_cmd.position = new_value
-                self.get_logger().info(f'back_height parameter updated to {new_value:.3f}')
+                state = self.get_robot_state()
+                if state is None:
+                    return SetParametersResult(successful=False, reason='no robot state yet')
+                with self.cmd_lock:
+                    self._claim_back(state)
+                    self.back_target = _clamp(float(param.value), BACK_MIN, BACK_MAX)
+                self.get_logger().info(f'back_height set to {self.back_target:.3f}')
+            elif param.name in self.tunable_params:
+                setattr(self, param.name, param.value)
         return SetParametersResult(successful=True)
 
+    # ------------------------------------------------------------------
+    # Setup
+    # ------------------------------------------------------------------
+
     def start_vr_monitor(self):
-        """Start VR monitor in a separate thread"""
-        # Initialize VR monitor
-        self.get_logger().info('Initializing VR monitor...')
-        if not self.vr_monitor.initialize():
-            self.get_logger().error('VR monitor initialization failed')
-            return
-        
+        """Run the VR web/websocket servers in a background asyncio thread."""
         def run_vr_loop():
             self.vr_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.vr_loop)
             try:
                 self.vr_loop.run_until_complete(self.vr_monitor.start_monitoring())
             except Exception as e:
-                self.get_logger().error(f'VR monitor error: {e}')
-        
+                # Without the servers there is no VR input: exit so launch respawns us.
+                self.get_logger().fatal(f'VR monitor error: {e}; shutting down')
+                os.kill(os.getpid(), signal.SIGINT)
+
         self.vr_thread = threading.Thread(target=run_vr_loop, daemon=True)
         self.vr_thread.start()
         self.get_logger().info('VR monitor started in background thread')
-    
+
     def robot_state_callback(self, msg: RobotLowState):
-        """Callback for robot state messages - stores latest state"""
         with self.robot_state_lock:
             self.robot_state = msg
-    
+
     def get_robot_state(self):
-        """Get the latest robot state (thread-safe)"""
         with self.robot_state_lock:
             return self.robot_state
 
-    def estop_state_callback(self, msg: Bool):
-        """React to the command_mux e-stop latch.
-
-        On the rising edge, re-seed our arm/head servo targets to the current
-        measured pose. The mux ignores our commands while latched, but this
-        ensures that when the operator resets, VR resumes from where the robot
-        actually is instead of snapping to pre-estop setpoints.
-        """
-        engaged = bool(msg.data)
-        if engaged and not self.estop_active:
-            self._reseed_to_current_pose()
-        self.estop_active = engaged
-
-    def _reseed_to_current_pose(self):
-        """Set robot_cmd_state servo targets to the latest measured positions."""
-        state = self.get_robot_state()
-        if state is None:
-            return
-        for i in range(min(15, len(state.servo_state))):
-            self.robot_cmd_state.servo_cmd[i].target_location = \
-                state.servo_state[i].current_location
-        # Hold the back actuator at its current position too.
-        self.robot_cmd_state.back_cmd.position = state.back_state.current_position
-        self.get_logger().warn('E-stop latched: re-seeded VR setpoints to current pose')
-    
-    def initialize_arm_controllers(self):
-        """Initialize arm and head controllers after robot state is available"""
+    def initialize_controllers(self):
+        """Create arm controllers and start control once robot state is available."""
         robot_state = self.get_robot_state()
         if robot_state is None:
             self.get_logger().error('Cannot initialize arm controllers: no robot state')
             return False
-        
-        self.kinematics_left = AlfieArmKinematics()
-        self.kinematics_right = AlfieArmKinematics()
-        
-        self.left_arm = SimpleTeleopArm(
-            joint_map=LEFT_ARM_JOINT_MAP,
-            robotlowstate=robot_state,
-            kinematics=self.kinematics_left,
-            prefix='left',
-            kp=1,
-            debug_logs=self.debug_logs
-        )
-        self.right_arm = SimpleTeleopArm(
-            joint_map=RIGHT_ARM_JOINT_MAP,
-            robotlowstate=robot_state,
-            kinematics=self.kinematics_right,
-            prefix='right',
-            kp=1,
-            debug_logs=self.debug_logs
-        )
 
-        # Call back calibration service if not already calibrated
-        if not robot_state.back_state.is_calibrated:
-            self.get_logger().info('Back not calibrated, calling calibration service...')
-            calibrate_client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
-            if calibrate_client.wait_for_service(timeout_sec=5.0):
-                request = BackRequestCalibration.Request()
-                future = calibrate_client.call_async(request)
-                rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
-                if future.result() is not None:
-                    if future.result().success:
-                        self.get_logger().info('Back calibration successful')
-                    else:
-                        self.get_logger().warn('Back calibration returned failure')
-                else:
-                    self.get_logger().warn('Back calibration service call failed')
-            else:
-                self.get_logger().warn('Back calibration service not available')
-        else:
-            self.get_logger().info('Back already calibrated, skipping calibration')
-        
-        self.get_logger().info('Arm and head controllers initialized')
-        
-        # Start debug visualizer (can switch between left/right arms)
+        for side in ('left', 'right'):
+            self.kinematics[side] = AlfieArmKinematics()
+            self.arms[side] = SimpleTeleopArm(
+                robotlowstate=robot_state, kinematics=self.kinematics[side],
+                prefix=side, debug_logs=self.debug_logs)
+        self._seed_from_state(robot_state, range(NUM_SERVOS))
+
+        self._calibrate_back_if_needed(robot_state)
+
         if self.enable_debug_viz and PYGAME_AVAILABLE:
             self.debug_visualizer = ArmDebugVisualizer(
-                self.kinematics_left, 
-                self.kinematics_right, 
-                prefix="left"
-            )
+                self.kinematics['left'], self.kinematics['right'], prefix="left")
             if self.debug_visualizer.start():
-                self.get_logger().info('Debug visualizer started successfully (press L/R/Tab to switch arms)')
+                self.get_logger().info('Debug visualizer started (press L/R/Tab to switch arms)')
             else:
                 self.get_logger().warn('Debug visualizer failed to start')
                 self.debug_visualizer = None
-        
-        # Store latest controller goals for visualization
-        self.latest_right_controller_goal = None
-        
+
+        self.control_timer = self.create_timer(0.01, self.control_tick)   # 100 Hz
+        self.viz_timer = self.create_timer(0.033, self.update_visualization)
+        self.get_logger().info('Arm and head controllers initialized')
         return True
-    
-    def _apply_arm_targets(self, arm, prefix):
-        """Apply arm target positions to robot command state"""
-        offset = 0 if prefix == "left" else 6
-        
-        # Map SimpleTeleopArm joint names to servo indices
-        # SimpleTeleopArm uses: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper
-        # Our servos are: shoulder_yaw(0), shoulder_pitch(1), elbow_pitch(2), wrist_pitch(3), wrist_roll(4), gripper(5)
-        joint_to_local_idx = {
-            "shoulder_pan": 0,    # maps to shoulder_yaw
-            "shoulder_lift": 1,   # maps to shoulder_pitch  
-            "elbow_flex": 2,      # maps to elbow_pitch
-            "wrist_flex": 3,      # maps to wrist_pitch
-            "wrist_roll": 4,      # maps to wrist_roll
-            "gripper": 5,         # maps to gripper
-        }
-        
-        for joint, local_idx in joint_to_local_idx.items():
-            if joint in arm.target_positions:
-                # SimpleTeleopArm now uses radians directly - no conversion needed
-                target_rad = arm.target_positions[joint]
-                self.robot_cmd_state.servo_cmd[offset + local_idx].target_location = target_rad
-    
-    def update_from_vr_data(self):
-        """Update robot command state from VR data asynchronously (runs at 90Hz)"""
-        # Get headset and controller goals from VR monitor
-        dual_goals = self.vr_monitor.get_latest_goal_nowait()
-        headset_goal = dual_goals.get("headset") if dual_goals else None
-        left_controller_goal = dual_goals.get("left") if dual_goals else None
-        right_controller_goal = dual_goals.get("right") if dual_goals else None
-        
-        # Track connection status changes
-        if headset_goal is None:
-            if self.headset_connected:
-                self.headset_connected = False
-                self.get_logger().info('Headset disconnected')
+
+    def _calibrate_back_if_needed(self, robot_state):
+        if robot_state.back_state.is_calibrated:
+            self.get_logger().info('Back already calibrated, skipping calibration')
             return
-        
-        # Log when headset connects
-        if not self.headset_connected:
-            self.headset_connected = True
-            self.get_logger().info('Headset connected')
+        self.get_logger().info('Back not calibrated, calling calibration service...')
+        client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
+        if not client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warn('Back calibration service not available')
+            return
+        future = client.call_async(BackRequestCalibration.Request())
+        rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+        result = future.result()
+        if result is None:
+            self.get_logger().warn('Back calibration service call failed')
+        elif result.success:
+            self.get_logger().info('Back calibration successful')
+        else:
+            self.get_logger().warn('Back calibration returned failure')
 
-        # Extract rotation angles from headset goal metadata
-        # The VR system sends rotation as {'x': pitch, 'y': yaw, 'z': roll}
-        if hasattr(headset_goal, 'metadata') and headset_goal.metadata:
-            rotation = headset_goal.metadata.get('rotation', {})
-            
-            if rotation:
-                # Servo 12: Head Pan (yaw - rotation around Z-axis)
-                # VR sends this as 'y' key
-                if 'y' in rotation:
-                    yaw_deg = float(rotation['y']) * self.head_yaw_multiplier
-                    yaw_rad = math.radians(yaw_deg)
-                    self.robot_cmd_state.servo_cmd[12].target_location = yaw_rad
-                
-                # Servo 13: Head Tilt (pitch - rotation around Y-axis)
-                # VR sends this as 'x' key
-                if 'x' in rotation:
-                    pitch_deg = float(rotation['x']) * self.head_pitch_multiplier
-                    pitch_rad = math.radians(pitch_deg)
-                    self.robot_cmd_state.servo_cmd[13].target_location = pitch_rad
-                
-                # Servo 14: Head Roll (roll - rotation around X-axis)
-                # VR sends this as 'z' key
-                if 'z' in rotation:
-                    roll_deg = float(rotation['z']) * self.head_roll_multiplier
-                    roll_rad = math.radians(roll_deg)
-                    self.robot_cmd_state.servo_cmd[14].target_location = roll_rad
-        
-        # Process joystick input for cmd_vel
-        # Target velocities from joystick input
-        target_linear_x = 0.0
-        target_linear_y = 0.0
-        target_angular_z = 0.0
+    # ------------------------------------------------------------------
+    # Claims / seeding (call with cmd_lock held)
+    # ------------------------------------------------------------------
 
-        # Left joystick controls linear velocity (forward/back and strafe left/right)
-        if left_controller_goal and hasattr(left_controller_goal, 'metadata') and left_controller_goal.metadata:
-            thumbstick = left_controller_goal.metadata.get('thumbstick', {})
-            if thumbstick:
-                # X-axis: strafe (positive = right, negative = left)
-                # Y-axis: forward/back (positive = forward, negative = back)
-                joy_x = float(thumbstick.get('x', 0.0))
-                joy_y = float(thumbstick.get('y', 0.0))
+    def _seed_from_state(self, state, indices):
+        """Set desired and published targets for servo indices to the measured pose."""
+        n = len(state.servo_state)
+        for i in indices:
+            if i < n:
+                self.desired[i] = self.published[i] = state.servo_state[i].current_location
 
-                # Map joystick values (-1 to 1) to target velocity limits
-                target_linear_x = -joy_y * self.max_linear_vel  # forward/back (negated)
-                target_linear_y = joy_x * self.max_linear_vel  # strafe left/right
-            
-            # Y button: reset both arms to zero positions
-            buttons = left_controller_goal.metadata.get('buttons', {})
-            button_y = buttons.get('y', False) or buttons.get('Y', False)
-            
-            # X button: toggle passthrough mode
-            button_x = buttons.get('x', False) or buttons.get('X', False)
-            
-            # Detect X button press (rising edge)
+    def _claim_arm(self, side, state):
+        key = f'{side}_arm'
+        if self.claimed[key]:
+            return
+        off = ARM_OFFSET[side]
+        self.arms[side].reseed(state)
+        self._seed_from_state(state, range(off, off + 6))
+        self.claimed[key] = True
+        self.get_logger().info(f'VR claimed {key}')
+
+    def _claim_head(self, state):
+        if self.claimed['head']:
+            return
+        self._seed_from_state(state, (HEAD_YAW, HEAD_PITCH, HEAD_ROLL))
+        self.claimed['head'] = True
+        self.get_logger().info('VR claimed head')
+
+    def _claim_back(self, state):
+        if self.claimed['back']:
+            return
+        self.back_target = _clamp(state.back_state.current_position, BACK_MIN, BACK_MAX)
+        self.claimed['back'] = True
+        self.get_logger().info('VR claimed back')
+
+    def _release(self, *keys):
+        for key in keys:
+            if self.claimed[key]:
+                self.claimed[key] = False
+                self.get_logger().info(f'VR released {key}')
+
+    def _hold_current_pose(self, state):
+        """Re-seed every claimed subsystem to the measured pose (no motion)."""
+        for side in ('left', 'right'):
+            if self.claimed[f'{side}_arm']:
+                off = ARM_OFFSET[side]
+                self.arms[side].reseed(state)
+                self._seed_from_state(state, range(off, off + 6))
+        if self.claimed['head']:
+            self._seed_from_state(state, (HEAD_YAW, HEAD_PITCH, HEAD_ROLL))
+        if self.claimed['back']:
+            self.back_target = _clamp(state.back_state.current_position, BACK_MIN, BACK_MAX)
+
+    def estop_state_callback(self, msg: Bool):
+        """React to the command_mux e-stop latch.
+
+        While latched, VR input is ignored and every claimed subsystem holds the
+        measured pose, so after reset VR resumes from where the robot actually is
+        (the mux's resume fence then admits our fresh hold commands).
+        """
+        engaged = bool(msg.data)
+        with self.cmd_lock:
+            if engaged and not self.estop_active:
+                state = self.get_robot_state()
+                if state is not None:
+                    self._hold_current_pose(state)
+                self.cmd_vel = Twist()
+                self.get_logger().warn('E-stop latched: VR holding current pose')
+            elif not engaged and self.estop_active:
+                for arm in self.arms.values():
+                    if arm is not None:
+                        arm.reset_tracking()
+                self.get_logger().info('E-stop reset: VR input re-enabled')
+            self.estop_active = engaged
+
+    # ------------------------------------------------------------------
+    # Control loop
+    # ------------------------------------------------------------------
+
+    def control_tick(self):
+        """100 Hz: read fresh VR input, update targets, publish claimed subsystems."""
+        now = time.monotonic()
+        dt = 0.01 if self.last_tick is None else _clamp(now - self.last_tick, 0.0, 0.1)
+        self.last_tick = now
+
+        goals = self.vr_monitor.get_latest_goals(max_age=self.link_timeout)
+        state = self.get_robot_state()
+
+        with self.cmd_lock:
+            self._update_link_state(goals, now)
+            if state is not None and not self.estop_active:
+                self._apply_vr_input(goals, state, dt)
+            self._publish(now, dt)
+
+    def _update_link_state(self, goals, now):
+        release_count, reason = self.vr_monitor.get_release_state()
+        if release_count != self.last_release_count:
+            self.last_release_count = release_count
+            self.get_logger().info(f'VR client released control ({reason})')
+
+        headset = goals['headset'] is not None
+        controllers = goals['left'] is not None or goals['right'] is not None
+
+        if headset != self.headset_connected:
+            self.headset_connected = headset
+            self.get_logger().info(f'Headset {"connected" if headset else "lost"}')
+            if not headset and not self.passthrough_mode_active:
+                self._release('head')
+
+        # Passthrough (X) stops headset telemetry but keeps the head locked in
+        # place; release it once the controllers are gone too.
+        if not headset and not controllers:
+            self._release('head')
+
+        if controllers != self.controllers_connected:
+            self.controllers_connected = controllers
+            self.get_logger().info(f'Controllers {"connected" if controllers else "lost"}')
+            if not controllers and self.claimed['base']:
+                self._release('base')
+                self.base_stop_until = now + self.base_stop_sec
+
+        for side in ('left', 'right'):
+            if goals[side] is None and self.grip_active[side]:
+                self.grip_active[side] = False
+                self.debug_log(f'{side} controller lost - arm tracking stopped')
+
+        if headset or controllers:
+            self.link_lost_time = None
+        elif self.link_lost_time is None:
+            self.link_lost_time = now
+        elif self.hold_timeout >= 0 and now - self.link_lost_time > self.hold_timeout:
+            self._release('left_arm', 'right_arm', 'back')
+
+    def _apply_vr_input(self, goals, state, dt):
+        if goals['headset'] is not None:
+            self._claim_head(state)
+            self._update_head(goals['headset'])
+
+        left, right = goals['left'], goals['right']
+        self.latest_goals = {'left': left, 'right': right}
+        lx = ly = az = 0.0
+
+        if left is not None:
+            meta = left.metadata or {}
+            stick = meta.get('thumbstick') or {}
+            lx = -float(stick.get('y', 0.0)) * self.max_linear_vel  # forward/back (negated)
+            ly = float(stick.get('x', 0.0)) * self.max_linear_vel   # strafe
+            buttons = meta.get('buttons') or {}
+
+            button_x = _button(buttons, 'x')
             if button_x and not self.left_x_button_pressed:
-                # Toggle passthrough mode
                 self.passthrough_mode_active = not self.passthrough_mode_active
                 self.get_logger().info(f'Passthrough mode: {"ON" if self.passthrough_mode_active else "OFF"}')
-                
-                # Send passthrough mode command to VR headset
                 self.vr_monitor.set_passthrough_mode(self.passthrough_mode_active)
-            
             self.left_x_button_pressed = button_x
-            
-            if button_y:
-                self.get_logger().info('Y button pressed - resetting both arms to zero positions')
-                
-                if self.left_arm is not None:
-                    self.left_arm.move_to_zero_position()
-                    self._apply_arm_targets(self.left_arm, "left")
-                
-                if self.right_arm is not None:
-                    self.right_arm.move_to_zero_position()
-                    self._apply_arm_targets(self.right_arm, "right")
-        
-        # Right joystick X-axis controls angular velocity (rotate left/right)
-        # A/B buttons control back height
-        if right_controller_goal and hasattr(right_controller_goal, 'metadata') and right_controller_goal.metadata:
-            thumbstick = right_controller_goal.metadata.get('thumbstick', {})
-            if thumbstick:
-                # X-axis: rotation (positive = rotate right, negative = rotate left)
-                joy_x = float(thumbstick.get('x', 0.0))
 
-                # Map joystick value (-1 to 1) to target angular velocity
-                target_angular_z = joy_x * self.max_angular_vel  # Rotation
-            
-            # A/B buttons: back height control (range 0.000 to 0.390)
-            # B button increases height, A button decreases height
-            # Max rate: 0.1 m/s at 100Hz = 0.001 m per tick
-            buttons = right_controller_goal.metadata.get('buttons', {})
-            
-            # Debug: log buttons dictionary when it has content
-            # if buttons:
-            #     self.get_logger().info(f'Buttons received: {buttons}')
-            
-            button_a = buttons.get('a', False) or buttons.get('A', False)
-            button_b = buttons.get('b', False) or buttons.get('B', False)
-            
-            BACK_MAX_RATE = 0.02  # m/s
-            BACK_MIN = 0.000
-            BACK_MAX = 0.390
-            dt = 0.01  # 100Hz update rate
-            
-            # Calculate delta based on button presses
-            back_delta = 0.0
-            if button_b:
-                back_delta = BACK_MAX_RATE * dt  # B increases height
-            elif button_a:
-                back_delta = -BACK_MAX_RATE * dt  # A decreases height
-            
-            if back_delta != 0.0:
-                new_back_pos = self.robot_cmd_state.back_cmd.position + back_delta
-                # Clamp to valid range
-                new_back_pos = max(BACK_MIN, min(BACK_MAX, new_back_pos))
-                self.robot_cmd_state.back_cmd.position = new_back_pos
+            button_y = _button(buttons, 'y')
+            if button_y and not self.left_y_button_pressed:
+                self.get_logger().info('Y pressed - moving both arms to zero position')
+                for side in ('left', 'right'):
+                    self._claim_arm(side, state)
+                    self.arms[side].move_to_zero_position()
+                    self._copy_arm_targets(side)
+            self.left_y_button_pressed = button_y
 
-                # Debug log
-                self.debug_log(f'Back height: {new_back_pos:.3f} ({"B" if button_b else "A"} pressed)')
+        if right is not None:
+            meta = right.metadata or {}
+            stick = meta.get('thumbstick') or {}
+            az = float(stick.get('x', 0.0)) * self.max_angular_vel
+            buttons = meta.get('buttons') or {}
 
-            # Thumbstick button: toggle recording (edge detection)
-            thumbstick_button = buttons.get('thumbstick', False)
+            # B raises, A lowers the back
+            button_a, button_b = _button(buttons, 'a'), _button(buttons, 'b')
+            if button_a or button_b:
+                self._claim_back(state)
+                step = BACK_MAX_RATE * dt * (1.0 if button_b else -1.0)
+                self.back_target = _clamp(self.back_target + step, BACK_MIN, BACK_MAX)
+                self.debug_log(f'Back height: {self.back_target:.3f}')
 
+            thumbstick_button = bool(buttons.get('thumbstick', False))
             if thumbstick_button and not self.right_thumbstick_pressed:
-                # Rising edge - toggle recording state
-                msg = Bool()
-                msg.data = True
-
-                if not self.is_recording:
-                    # Start recording
-                    self.recording_start_pub.publish(msg)
-                    self.is_recording = True
-                    self.get_logger().info('Recording: STARTED (right thumbstick pressed)')
-                else:
-                    # Stop recording
-                    self.recording_stop_pub.publish(msg)
-                    self.is_recording = False
-                    self.get_logger().info('Recording: STOPPED (right thumbstick pressed)')
-
+                self._toggle_recording()
             self.right_thumbstick_pressed = thumbstick_button
 
-        # Apply target velocities to command (rate limiting handled by command_mux)
-        self.robot_cmd_state.cmd_vel.linear.x = target_linear_x
-        self.robot_cmd_state.cmd_vel.linear.y = target_linear_y
-        self.robot_cmd_state.cmd_vel.angular.z = target_angular_z
+        if left is not None or right is not None:
+            self.claimed['base'] = True
+        self.cmd_vel = Twist()
+        self.cmd_vel.linear.x, self.cmd_vel.linear.y, self.cmd_vel.angular.z = lx, ly, az
 
-        # Debug log (only when commanded velocity is non-zero)
-        if abs(target_linear_x) > 0.01 or abs(target_linear_y) > 0.01 or abs(target_angular_z) > 0.01:
-            self.debug_log(f'Cmd_vel: linear=({target_linear_x:.2f}, {target_linear_y:.2f}), angular={target_angular_z:.2f}')
+        for side, goal in (('left', left), ('right', right)):
+            self._update_arm(side, goal, state, dt)
 
-        # Process arm control using SimpleTeleopArm with VR controller input
-        # Only process when grip button is held (delta control relative to grip press)
-        if self.left_arm is not None and left_controller_goal is not None:
-            try:
-                # Check grip button state from metadata
-                left_grip_active = False
-                if hasattr(left_controller_goal, 'metadata') and left_controller_goal.metadata:
-                    left_grip_active = left_controller_goal.metadata.get('grip_active', False)
-                    # Also check for 'gripActive' key (alternative naming)
-                    if not left_grip_active:
-                        left_grip_active = left_controller_goal.metadata.get('gripActive', False)
-                
-                # Detect grip press (transition from not pressed to pressed)
-                if left_grip_active and not self.left_grip_active:
-                    self.debug_log('Left grip pressed - starting arm tracking')
-                    # Reset delta tracking by clearing previous position
-                    if hasattr(self.left_arm, 'prev_vr_pos'):
-                        delattr(self.left_arm, 'prev_vr_pos')
-                    if hasattr(self.left_arm, 'prev_wrist_flex'):
-                        delattr(self.left_arm, 'prev_wrist_flex')
-                    if hasattr(self.left_arm, 'prev_wrist_roll'):
-                        delattr(self.left_arm, 'prev_wrist_roll')
-                
-                # Detect grip release
-                if not left_grip_active and self.left_grip_active:
-                    self.debug_log('Left grip released - stopping arm tracking')
-                
-                self.left_grip_active = left_grip_active
-                
-                # Only process arm movement if grip is held
-                if left_grip_active:
-                    gripper_state = None
-                    self.left_arm.handle_vr_input(left_controller_goal, gripper_state)
-                    self._apply_arm_targets(self.left_arm, "left")
-                
-                # Store VR goal for visualization
-                self.latest_left_controller_goal = left_controller_goal
-            except Exception as e:
-                self.get_logger().warn(f'Left arm VR input error: {e}')
+    def _update_head(self, headset_goal):
+        """Headset orientation (WebXR local space, Y up) -> head yaw/pitch/roll targets."""
+        meta = headset_goal.metadata or {}
+        q = meta.get('quaternion') or {}
+        if all(k in q for k in ('x', 'y', 'z', 'w')):
+            yaw, pitch, roll = R.from_quat([q['x'], q['y'], q['z'], q['w']]).as_euler('YXZ')
         else:
-            # Still store goal even if arm not active (for visualization)
-            self.latest_left_controller_goal = left_controller_goal
-        
-        if self.right_arm is not None and right_controller_goal is not None:
+            rot = meta.get('rotation') or {}
+            if not rot:
+                return
+            yaw, pitch, roll = (math.radians(float(rot.get(k, 0.0))) for k in ('y', 'x', 'z'))
+
+        if abs(math.degrees(yaw)) < HEAD_YAW_WRAP_GUARD_DEG:
+            self.desired[HEAD_YAW] = _clamp(
+                yaw * self.head_yaw_multiplier, -self.head_yaw_limit, self.head_yaw_limit)
+        self.desired[HEAD_PITCH] = _clamp(
+            pitch * self.head_pitch_multiplier, -self.head_pitch_limit, self.head_pitch_limit)
+        self.desired[HEAD_ROLL] = _clamp(
+            roll * self.head_roll_multiplier, -self.head_roll_limit, self.head_roll_limit)
+
+    def _update_arm(self, side, goal, state, dt):
+        """Grip-held delta tracking for one arm."""
+        arm = self.arms[side]
+        grip = bool(goal is not None and (goal.metadata or {}).get('grip_active', False))
+
+        if grip and not self.grip_active[side]:
+            self.debug_log(f'{side} grip pressed - starting arm tracking')
+            self._claim_arm(side, state)   # seeds from the measured pose on first claim
+            arm.reset_tracking()
+        elif not grip and self.grip_active[side]:
+            self.debug_log(f'{side} grip released - stopping arm tracking')
+        self.grip_active[side] = grip
+
+        if grip:
             try:
-                # Check grip button state from metadata
-                right_grip_active = False
-                if hasattr(right_controller_goal, 'metadata') and right_controller_goal.metadata:
-                    right_grip_active = right_controller_goal.metadata.get('grip_active', False)
-                    if not right_grip_active:
-                        right_grip_active = right_controller_goal.metadata.get('gripActive', False)
-                
-                # Detect grip press
-                if right_grip_active and not self.right_grip_active:
-                    self.debug_log('Right grip pressed - starting arm tracking')
-                    if hasattr(self.right_arm, 'prev_vr_pos'):
-                        delattr(self.right_arm, 'prev_vr_pos')
-                    if hasattr(self.right_arm, 'prev_wrist_flex'):
-                        delattr(self.right_arm, 'prev_wrist_flex')
-                    if hasattr(self.right_arm, 'prev_wrist_roll'):
-                        delattr(self.right_arm, 'prev_wrist_roll')
-                
-                # Detect grip release
-                if not right_grip_active and self.right_grip_active:
-                    self.debug_log('Right grip released - stopping arm tracking')
-                
-                self.right_grip_active = right_grip_active
-                
-                # Only process arm movement if grip is held
-                if right_grip_active:
-                    gripper_state = None
-                    self.right_arm.handle_vr_input(right_controller_goal, gripper_state)
-                    self._apply_arm_targets(self.right_arm, "right")
-                
-                # Store VR goal for visualization
-                self.latest_right_controller_goal = right_controller_goal
+                arm.handle_vr_input(goal, dt)
+                self._copy_arm_targets(side)
             except Exception as e:
-                self.get_logger().warn(f'Right arm VR input error: {e}')
+                self.get_logger().warn(f'{side} arm VR input error: {e}')
+
+    def _copy_arm_targets(self, side):
+        off = ARM_OFFSET[side]
+        targets = self.arms[side].target_positions
+        for i, joint in enumerate(ARM_JOINTS):
+            self.desired[off + i] = targets[joint]
+
+    def _toggle_recording(self):
+        msg = Bool()
+        msg.data = True
+        if not self.is_recording:
+            self.recording_start_pub.publish(msg)
+            self.get_logger().info('Recording: STARTED (right thumbstick pressed)')
         else:
-            # Still store goal even if arm not active (for visualization)
-            self.latest_right_controller_goal = right_controller_goal
-    
+            self.recording_stop_pub.publish(msg)
+            self.get_logger().info('Recording: STOPPED (right thumbstick pressed)')
+        self.is_recording = not self.is_recording
+
+    # ------------------------------------------------------------------
+    # Publishing
+    # ------------------------------------------------------------------
+
+    def _rate_limit(self, indices, dt):
+        step = self.max_joint_speed * dt
+        for i in indices:
+            self.published[i] += _clamp(self.desired[i] - self.published[i], -step, step)
+
+    def _servo_cmds(self, indices):
+        cmds = []
+        for i in indices:
+            s = ServoCmd()
+            s.enabled = True
+            s.target_location = float(self.published[i])
+            s.target_speed = 0.0          # motion is rate-limited here
+            s.target_acceleration = 0.0
+            s.target_torque = 0.0
+            cmds.append(s)
+        return cmds
+
+    def _publish(self, now, dt):
+        """Publish only the subsystems VR has claimed (the mux arbitrates per subsystem)."""
+        for side, pub in (('left', self.left_arm_publisher), ('right', self.right_arm_publisher)):
+            if self.claimed[f'{side}_arm']:
+                off = ARM_OFFSET[side]
+                self._rate_limit(range(off, off + 6), dt)
+                msg = ArmCmd()
+                msg.joint_cmd = self._servo_cmds(range(off, off + 6))
+                pub.publish(msg)
+
+        if self.claimed['head']:
+            idx = (HEAD_YAW, HEAD_PITCH, HEAD_ROLL)
+            self._rate_limit(idx, dt)
+            msg = HeadCmd()
+            msg.servos = self._servo_cmds(idx)
+            msg.eye_pwm = [0, 0]  # eyes come from the eyes channel
+            self.head_publisher.publish(msg)
+
+        if self.claimed['back']:
+            msg = BackCmd()
+            msg.position = float(self.back_target)
+            msg.velocity = 0.2
+            msg.acceleration = 0.1
+            self.back_publisher.publish(msg)
+
+        if self.claimed['base']:
+            self.base_publisher.publish(Twist() if self.estop_active else self.cmd_vel)
+        elif now < self.base_stop_until:
+            # Explicit stop so the mux doesn't forward our last velocity for its timeout.
+            self.base_publisher.publish(Twist())
+
     def update_visualization(self):
-        """Update debug visualization data at 30Hz - just pushes data to viz thread"""
+        """Push data to the debug visualizer thread (30 Hz)."""
         if self.debug_visualizer is None:
             return
-        
         try:
-            # Determine which arm to visualize based on visualizer's current target
-            current_prefix = self.debug_visualizer.get_current_prefix()
-            
-            if current_prefix == "left" and self.left_arm is not None:
-                arm = self.left_arm
-                vr_goal = self.latest_left_controller_goal
-            elif current_prefix == "right" and self.right_arm is not None:
-                arm = self.right_arm
-                vr_goal = self.latest_right_controller_goal
-            else:
+            side = self.debug_visualizer.get_current_prefix()
+            arm = self.arms.get(side)
+            if arm is None:
                 return
-            
-            if not self.debug_visualizer.update_data(arm, vr_goal):
-                # User explicitly closed visualizer window (pressed Q or closed window)
+            if not self.debug_visualizer.update_data(arm, self.latest_goals.get(side)):
                 self.get_logger().info('Debug visualizer closed by user')
                 self.debug_visualizer.stop()
                 self.debug_visualizer = None
         except Exception as e:
             self.get_logger().warn(f'Visualization update error: {e}')
-    
-    def publish_commands(self):
-        """Publish robot command at 100Hz by slicing robot_cmd_state into the
-        per-subsystem command_mux inputs (cmd/*/vr).
 
-        robot_cmd_state remains the internal whole-body model built by the VR/IK
-        update path; here we just decompose it exactly like the legacy shim does
-        (servos 0-5 left arm, 6-11 right arm, 12-14 head; eye_pwm; back; cmd_vel)
-        and publish each on its own topic. The mux arbitrates per subsystem.
-        """
-        start_time = time.time()
-
-        cmd = self.robot_cmd_state
-
-        left = ArmCmd()
-        left.joint_cmd = list(cmd.servo_cmd[0:6])
-        self.left_arm_publisher.publish(left)
-
-        right = ArmCmd()
-        right.joint_cmd = list(cmd.servo_cmd[6:12])
-        self.right_arm_publisher.publish(right)
-
-        head = HeadCmd()
-        head.servos = list(cmd.servo_cmd[12:15])
-        head.eye_pwm = [0, 0]  # eyes on the eyes channel
-        self.head_publisher.publish(head)
-
-        eyes = EyeCmd()
-        eyes.eye_pwm = [int(v) for v in cmd.eye_pwm]
-        self.eyes_publisher.publish(eyes)
-
-        self.back_publisher.publish(cmd.back_cmd)
-        self.base_publisher.publish(cmd.cmd_vel)
-
-        # Performance tracking
-        elapsed = time.time() - start_time
-        self.publish_count += 1
-        self.publish_time_sum += elapsed
-        self.max_publish_time = max(self.max_publish_time, elapsed)
-        
-        # Log performance stats every 100 publishes (~1 second at 100Hz)
-        # if self.publish_count % 100 == 0:
-        #     avg_time = self.publish_time_sum / 100
-        #     self.get_logger().info(
-        #         f'Publish stats: avg={avg_time*1000:.2f}ms, max={self.max_publish_time*1000:.2f}ms, '
-        #         f'theoretical_hz={1.0/avg_time:.1f}Hz'
-        #     )
-        #     # Reset counters
-        #     self.publish_time_sum = 0.0
-        #     self.max_publish_time = 0.0
-    
     def shutdown(self):
-        """Shutdown the node and VR monitor"""
-        self.get_logger().info('Shutting down head tracker...')
-        
-        # Stop debug visualizer (it handles its own pygame cleanup in its thread)
+        """Stop the visualizer and VR servers."""
+        self.get_logger().info('Shutting down VR teleop...')
         if self.debug_visualizer:
             self.debug_visualizer.stop()
             self.debug_visualizer = None
-            self.get_logger().info('Debug visualizer stopped')
-        
-        if self.vr_loop:
-            self.vr_loop.call_soon_threadsafe(self.vr_loop.stop)
+        if self.vr_loop and self.vr_loop.is_running():
+            self.vr_monitor.is_running = False  # monitor loop exits and stops the servers
         if self.vr_thread:
-            self.vr_thread.join(timeout=2.0)
+            self.vr_thread.join(timeout=3.0)
 
 
 def main():
     """Main function"""
-    print("🎮 Alfie Teleop- VR Headset to Robot Control")
-    print("=" * 60)
-    
-    # Initialize ROS2
     rclpy.init()
-    
-    # Create node
     node = AlfieTeleopVRNode()
 
-    # wait for first robot state message
-    print("⏳ Waiting for first robot state message...")
-    while rclpy.ok():
+    node.get_logger().info('Waiting for first robot state message...')
+    while rclpy.ok() and node.get_robot_state() is None:
         rclpy.spin_once(node, timeout_sec=0.1)
-        if node.get_robot_state() is not None:
-            print("✅ Received first robot state message")
-            break   
 
-    # Initialize arm and head controllers now that we have robot state
-    if node.initialize_arm_controllers():
-        print("✅ Arm and head controllers initialized")
-    else:
-        print("❌ Failed to initialize arm controllers")
-    
-    # Create multi-threaded executor for state subscription
+    # Before adding the node to the executor: back calibration spins the node itself.
+    ok = rclpy.ok() and node.initialize_controllers()
+
     executor = MultiThreadedExecutor(num_threads=3)
     executor.add_node(node)
-    
     try:
-        # Spin the node with multi-threaded executor
-        executor.spin()
+        if ok:
+            executor.spin()
+        else:
+            node.get_logger().error('Failed to initialize arm controllers')
     except KeyboardInterrupt:
-        print("\n👋 Teleop stopped by user")
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        pass
     finally:
         node.shutdown()
         executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

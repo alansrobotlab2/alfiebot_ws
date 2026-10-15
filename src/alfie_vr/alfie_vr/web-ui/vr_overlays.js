@@ -1,33 +1,21 @@
 // VR Overlays Module
-// Handles FPS overlay, status panels for immersive VR mode
+// Rosout (bottom) and bearing (top) panels, plus the aggregate per-frame
+// update / draw / dispose entry points for every head-locked VR panel.
 
 import {
     stereoSettings,
-    connectionState,
     headsetPose,
-    preAllocatedBuffers,
 } from './state.js';
-
-import {
-    setStreamPanelContext,
-    updateStreamPanelGlContext,
-    drawStreamPanel,
-} from './stream_panel.js';
-
-import {
-    setStatePanelContext,
-    updateStatePanelGlContext,
-    drawStatePanel,
-} from './state_panel.js';
-
-// Re-export panel functions
-export { drawStreamPanel, drawStatePanel };
+import { TexturedPanel, drawRoundedRect } from './gl_panel.js';
+import { getRosoutMessages } from './robot_state.js';
+import { vrLog } from './ui_status.js';
+import { updateStatePanel, drawStatePanel, disposeStatePanel } from './state_panel.js';
+import { updateStreamPanel, drawStreamPanel, disposeStreamPanel } from './stream_panel.js';
+import { updateUrdfPanel, drawUrdfPanel } from './vr_urdf_panel.js';
 
 // ========================================
 // Panel Configuration (adjust these values)
 // ========================================
-
-
 
 // Bottom rosout log panel configuration
 const ROSOUT_PANEL_CONFIG = {
@@ -40,7 +28,9 @@ const ROSOUT_PANEL_CONFIG = {
     canvasScale: 1280,          // Multiplier to convert panel size to canvas pixels
     titleFontSize: 17,          // Title font size in pixels
     bodyFontSize: 13,           // Body text font size in pixels
-    maxMessages: 3              // Number of log messages to display
+    maxMessages: 3,             // Number of log messages to display
+    cornerRadius: 0.02,         // Shader corner radius
+    refreshFrames: 10,          // Repaint canvas every N XR frames (reduce CPU load)
 };
 
 // Top bearing indicator panel configuration
@@ -55,692 +45,119 @@ const BEARING_PANEL_CONFIG = {
     fontSize: 32,               // Main yaw display font size
     nominalThreshold: 5,        // Degrees for green (nominal)
     warningThreshold: 30,       // Degrees for yellow (warning), beyond is red
-    displayMultiplier: 2        // Multiplier for displayed bearing value
+    displayMultiplier: 2,       // Multiplier for displayed bearing value
+    cornerRadius: 0.0,          // Shader corner radius
+    refreshFrames: 5,           // Repaint every N XR frames (bearing needs responsive updates)
 };
+
+const LEVEL_COLORS = {
+    'DEBUG': '#888888',
+    'INFO': '#44ff44',
+    'WARN': '#f39c12',
+    'ERROR': '#e74c3c',
+    'FATAL': '#ff00ff'
+};
+
+// Centered panel rect helper (no IPD offset, no rotation)
+function centeredRect(config) {
+    const panelCenterX = config.horizontalOffset;
+    const panelCenterY = stereoSettings.verticalOffset + config.verticalOffset;
+    return {
+        left: panelCenterX - config.width / 2,
+        bottom: panelCenterY - config.height / 2,
+        width: config.width,
+        height: config.height,
+    };
+}
 
 // ========================================
 // Module State
 // ========================================
 
-// FPS overlay state
-let fpsOverlayCanvas = null;
-let fpsOverlayCtx = null;
-let fpsOverlayTexture = null;
-let fpsOverlayShader = null;
-let fpsOverlayPositionBuffer = null;
-let fpsOverlayTexCoordBuffer = null;
-let fpsOverlayCachedLocations = null;
+const rosoutPanel = new TexturedPanel({
+    name: 'rosout',
+    canvasWidth: Math.round(ROSOUT_PANEL_CONFIG.width * ROSOUT_PANEL_CONFIG.canvasScale),
+    canvasHeight: Math.round(ROSOUT_PANEL_CONFIG.height * ROSOUT_PANEL_CONFIG.canvasScale),
+    angle: ROSOUT_PANEL_CONFIG.angle,
+    cornerRadius: ROSOUT_PANEL_CONFIG.cornerRadius,
+    ipdScale: 0.0,  // Zero IPD offset for centered UI panels
+    computeRect: () => centeredRect(ROSOUT_PANEL_CONFIG),
+});
 
-
-
-// Bearing panel state
-let bearingPanelCanvas = null;
-let bearingPanelCtx = null;
-let bearingPanelTexture = null;
-let bearingPanelPositionBuffer = null;
-let bearingPanelTexCoordBuffer = null;
-let bearingPanelInitialized = false;
-
-
-// ========================================
-// Context and Callback References
-// ========================================
-
-// These are set by the main module via setOverlayContext
-let gl = null;
-let vrLogFn = (msg) => console.log('[VR]', msg);
-let getFrameCounterFn = () => 0;
-let getCurrentVrFpsFn = () => 0;
-let getCurrentBatteryLevelFn = () => null;
-let getCurrentBatteryChargingFn = () => false;
-let getLastFrameReceivedTimestampFn = () => 0;
-let getFoxgloveConnFn = () => null;
-let getTfRateFn = () => 0;
-let getLinkNamesLengthFn = () => 0;
-let getUrdfStringFn = () => null;
-let getShaderProgramFn = () => null;
-let getCachedLocationsFn = () => null;
-let invertMatrixFn = null;
-let viewMatrixBuffer = null;
-
-// Set the GL context and callbacks from main module
-export function setOverlayContext(context) {
-    gl = context.gl;
-    vrLogFn = context.vrLog || vrLogFn;
-    getFrameCounterFn = context.getFrameCounter || getFrameCounterFn;
-    getCurrentVrFpsFn = context.getCurrentVrFps || getCurrentVrFpsFn;
-    getCurrentBatteryLevelFn = context.getCurrentBatteryLevel || getCurrentBatteryLevelFn;
-    getCurrentBatteryChargingFn = context.getCurrentBatteryCharging || getCurrentBatteryChargingFn;
-    getLastFrameReceivedTimestampFn = context.getLastFrameReceivedTimestamp || getLastFrameReceivedTimestampFn;
-    getFoxgloveConnFn = context.getFoxgloveConn || getFoxgloveConnFn;
-    getTfRateFn = context.getTfRate || getTfRateFn;
-    getLinkNamesLengthFn = context.getLinkNamesLength || getLinkNamesLengthFn;
-    getUrdfStringFn = context.getUrdfString || getUrdfStringFn;
-    getShaderProgramFn = context.getShaderProgram || getShaderProgramFn;
-    getCachedLocationsFn = context.getCachedLocations || getCachedLocationsFn;
-    invertMatrixFn = context.invertMatrix || invertMatrixFn;
-    viewMatrixBuffer = context.viewMatrixBuffer || preAllocatedBuffers.viewMatrix;
-    
-    // Also set context for panel modules
-    setStreamPanelContext(context);
-    setStatePanelContext(context);
-}
-
-// Update GL context (called when XR session starts)
-export function updateGlContext(newGl) {
-    gl = newGl;
-    // Reset initialization flags since textures need to be recreated
-    fpsOverlayCanvas = null;
-    fpsOverlayTexture = null;
-    fpsOverlayShader = null;
-    
-    // Also update panel GL contexts
-    updateStreamPanelGlContext(newGl);
-    updateStatePanelGlContext(newGl);
-}
-
-// ========================================
-// Helper Functions
-// ========================================
-
-// Helper function to draw a rounded rectangle
-function drawRoundedRect(ctx, x, y, width, height, radius) {
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.lineTo(x + width - radius, y);
-    ctx.arcTo(x + width, y, x + width, y + radius, radius);
-    ctx.lineTo(x + width, y + height - radius);
-    ctx.arcTo(x + width, y + height, x + width - radius, y + height, radius);
-    ctx.lineTo(x + radius, y + height);
-    ctx.arcTo(x, y + height, x, y + height - radius, radius);
-    ctx.lineTo(x, y + radius);
-    ctx.arcTo(x, y, x + radius, y, radius);
-    ctx.closePath();
-    ctx.fill();
-}
-
-// Helper function to create a rotated model matrix (yaw rotation around Y axis)
-// WebGL uses column-major 4x4 matrices
-// baseMatrix is multiplied by a Y-axis rotation matrix
-function createRotatedModelMatrix(baseMatrix, yawDegrees, outMatrix) {
-    const yawRad = yawDegrees * Math.PI / 180;
-    const cosY = Math.cos(yawRad);
-    const sinY = Math.sin(yawRad);
-    
-    // Rotation matrix around Y axis (column-major):
-    // Column 0: [cosY, 0, -sinY, 0]
-    // Column 1: [0, 1, 0, 0]
-    // Column 2: [sinY, 0, cosY, 0]
-    // Column 3: [0, 0, 0, 1]
-    
-    // For baseMatrix * rotationMatrix:
-    // Result column 0 = baseMatrix * [cosY, 0, -sinY, 0]^T
-    // Result column 1 = baseMatrix * [0, 1, 0, 0]^T
-    // Result column 2 = baseMatrix * [sinY, 0, cosY, 0]^T
-    // Result column 3 = baseMatrix * [0, 0, 0, 1]^T
-    
-    const m = baseMatrix;
-    
-    // Column 0: m * [cosY, 0, -sinY, 0]
-    outMatrix[0] = m[0] * cosY + m[8] * (-sinY);
-    outMatrix[1] = m[1] * cosY + m[9] * (-sinY);
-    outMatrix[2] = m[2] * cosY + m[10] * (-sinY);
-    outMatrix[3] = m[3] * cosY + m[11] * (-sinY);
-    
-    // Column 1: m * [0, 1, 0, 0] = column 1 of m
-    outMatrix[4] = m[4];
-    outMatrix[5] = m[5];
-    outMatrix[6] = m[6];
-    outMatrix[7] = m[7];
-    
-    // Column 2: m * [sinY, 0, cosY, 0]
-    outMatrix[8] = m[0] * sinY + m[8] * cosY;
-    outMatrix[9] = m[1] * sinY + m[9] * cosY;
-    outMatrix[10] = m[2] * sinY + m[10] * cosY;
-    outMatrix[11] = m[3] * sinY + m[11] * cosY;
-    
-    // Column 3: m * [0, 0, 0, 1] = column 3 of m (translation)
-    outMatrix[12] = m[12];
-    outMatrix[13] = m[13];
-    outMatrix[14] = m[14];
-    outMatrix[15] = m[15];
-}
-
-// ========================================
-// FPS Overlay Functions
-// ========================================
-
-function initFpsOverlay() {
-    if (!gl) {
-        vrLogFn('FPS overlay: no GL context');
-        return;
-    }
-    
-    vrLogFn('Init FPS overlay...');
-    
-    // Create canvas for FPS text (larger for better visibility)
-    fpsOverlayCanvas = document.createElement('canvas');
-    fpsOverlayCanvas.width = 256;
-    fpsOverlayCanvas.height = 64;
-    fpsOverlayCtx = fpsOverlayCanvas.getContext('2d');
-    
-    // Create texture
-    fpsOverlayTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, fpsOverlayTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    
-    // Initial update
-    updateFpsOverlayCanvas();
-    
-    // Initialize overlay shader
-    initFpsOverlayShader();
-    
-    vrLogFn('FPS overlay: ' + (fpsOverlayShader ? 'OK' : 'FAIL'));
-}
-
-function updateFpsOverlayCanvas() {
-    if (!fpsOverlayCtx) return;
-    
-    const currentVrFps = getCurrentVrFpsFn();
-    const currentBatteryLevel = getCurrentBatteryLevelFn();
-    const currentBatteryCharging = getCurrentBatteryChargingFn();
-    
-    // Clear canvas
-    fpsOverlayCtx.clearRect(0, 0, fpsOverlayCanvas.width, fpsOverlayCanvas.height);
-    
-    // Bright red background for high visibility (testing)
-    fpsOverlayCtx.fillStyle = 'rgba(200, 0, 0, 0.8)';
-    fpsOverlayCtx.fillRect(0, 0, fpsOverlayCanvas.width, fpsOverlayCanvas.height);
-    
-    // White border
-    fpsOverlayCtx.strokeStyle = '#ffffff';
-    fpsOverlayCtx.lineWidth = 3;
-    fpsOverlayCtx.strokeRect(2, 2, fpsOverlayCanvas.width - 4, fpsOverlayCanvas.height - 4);
-    
-    // Draw FPS text in white
-    fpsOverlayCtx.fillStyle = '#ffffff';
-    fpsOverlayCtx.font = 'bold 24px monospace';
-    fpsOverlayCtx.textBaseline = 'middle';
-    fpsOverlayCtx.textAlign = 'center';
-    
-    // Build display text with FPS and battery
-    let displayText = `FPS: ${currentVrFps.toFixed(1)}`;
-    if (currentBatteryLevel !== null) {
-        const batteryIcon = currentBatteryCharging ? 'CHG' : 'BAT';
-        displayText += ` | ${batteryIcon}: ${currentBatteryLevel}%`;
-    }
-    fpsOverlayCtx.fillText(displayText, fpsOverlayCanvas.width / 2, fpsOverlayCanvas.height / 2);
-    
-    // Update texture if GL context is available
-    if (gl && fpsOverlayTexture) {
-        gl.bindTexture(gl.TEXTURE_2D, fpsOverlayTexture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, fpsOverlayCanvas);
-    }
-}
-
-function initFpsOverlayShader() {
-    if (!gl) return;
-    
-    // Simple 2D overlay shader (screen-space, no 3D transforms)
-    const vertexShader = gl.createShader(gl.VERTEX_SHADER);
-    gl.shaderSource(vertexShader, `
-        attribute vec2 a_position;
-        attribute vec2 a_texCoord;
-        varying vec2 v_texCoord;
-        
-        void main() {
-            gl_Position = vec4(a_position, 0.0, 1.0);
-            v_texCoord = a_texCoord;
-        }
-    `);
-    gl.compileShader(vertexShader);
-    
-    if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
-        console.error('FPS overlay vertex shader error:', gl.getShaderInfoLog(vertexShader));
-        return;
-    }
-    
-    const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
-    gl.shaderSource(fragmentShader, `
-        precision mediump float;
-        varying vec2 v_texCoord;
-        uniform sampler2D u_texture;
-        
-        void main() {
-            gl_FragColor = texture2D(u_texture, v_texCoord);
-        }
-    `);
-    gl.compileShader(fragmentShader);
-    
-    if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
-        console.error('FPS overlay fragment shader error:', gl.getShaderInfoLog(fragmentShader));
-        return;
-    }
-    
-    fpsOverlayShader = gl.createProgram();
-    gl.attachShader(fpsOverlayShader, vertexShader);
-    gl.attachShader(fpsOverlayShader, fragmentShader);
-    gl.linkProgram(fpsOverlayShader);
-    
-    if (!gl.getProgramParameter(fpsOverlayShader, gl.LINK_STATUS)) {
-        vrLogFn('FPS shader link FAIL');
-        fpsOverlayShader = null;
-        return;
-    }
-    
-    vrLogFn('FPS shader linked');
-    
-    // Create buffers for overlay quad (upper left corner, screen space coords)
-    const overlayWidth = 0.5;
-    const overlayHeight = 0.15;
-    const marginX = -0.95;
-    const marginY = 0.95;
-    
-    fpsOverlayPositionBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayPositionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-        marginX, marginY - overlayHeight,
-        marginX + overlayWidth, marginY - overlayHeight,
-        marginX, marginY,
-        marginX + overlayWidth, marginY,
-    ]), gl.STATIC_DRAW);
-    
-    fpsOverlayTexCoordBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayTexCoordBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-        0, 1,
-        1, 1,
-        0, 0,
-        1, 0,
-    ]), gl.STATIC_DRAW);
-    
-    // Cache locations
-    fpsOverlayCachedLocations = {
-        position: gl.getAttribLocation(fpsOverlayShader, 'a_position'),
-        texCoord: gl.getAttribLocation(fpsOverlayShader, 'a_texCoord'),
-        texture: gl.getUniformLocation(fpsOverlayShader, 'u_texture')
-    };
-}
-
-export function drawFpsOverlay(view, viewport) {
-    const frameCounter = getFrameCounterFn();
-    
-    // Initialize on first call
-    if (!fpsOverlayCanvas) {
-        initFpsOverlay();
-    }
-    
-    // Check if initialization succeeded
-    if (!fpsOverlayShader || !fpsOverlayTexture || !fpsOverlayCachedLocations) {
-        if (frameCounter < 20 && frameCounter % 5 === 0) {
-            vrLogFn('FPS ovl not ready');
-        }
-        return;
-    }
-    
-    if (frameCounter === 15) {
-        vrLogFn('Drawing FPS overlay');
-    }
-    
-    // Save current WebGL state
-    const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
-    
-    // Enable blending for transparency
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    
-    // Disable depth test so overlay is always visible
-    gl.disable(gl.DEPTH_TEST);
-    
-    gl.useProgram(fpsOverlayShader);
-    
-    // Disable any previously enabled vertex attrib arrays that might interfere
-    for (let i = 0; i < 8; i++) {
-        gl.disableVertexAttribArray(i);
-    }
-    
-    // Bind position buffer
-    gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayPositionBuffer);
-    gl.enableVertexAttribArray(fpsOverlayCachedLocations.position);
-    gl.vertexAttribPointer(fpsOverlayCachedLocations.position, 2, gl.FLOAT, false, 0, 0);
-    
-    // Bind texcoord buffer
-    gl.bindBuffer(gl.ARRAY_BUFFER, fpsOverlayTexCoordBuffer);
-    gl.enableVertexAttribArray(fpsOverlayCachedLocations.texCoord);
-    gl.vertexAttribPointer(fpsOverlayCachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
-    
-    // Bind texture
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, fpsOverlayTexture);
-    gl.uniform1i(fpsOverlayCachedLocations.texture, 0);
-    
-    // Draw overlay
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    
-    // Restore state
-    gl.disable(gl.BLEND);
-    gl.enable(gl.DEPTH_TEST);
-    
-    if (prevProgram) {
-        gl.useProgram(prevProgram);
-    }
-}
+const bearingPanel = new TexturedPanel({
+    name: 'bearing',
+    canvasWidth: Math.round(BEARING_PANEL_CONFIG.width * BEARING_PANEL_CONFIG.canvasScale),
+    canvasHeight: Math.round(BEARING_PANEL_CONFIG.height * BEARING_PANEL_CONFIG.canvasScale),
+    angle: BEARING_PANEL_CONFIG.angle,
+    cornerRadius: BEARING_PANEL_CONFIG.cornerRadius,
+    ipdScale: 0.0,  // Zero IPD offset for centered UI panels
+    computeRect: () => centeredRect(BEARING_PANEL_CONFIG),
+});
 
 // ========================================
 // Rosout Log Panel Functions (Bottom Panel)
 // ========================================
 
-// Rosout panel state
-let rosoutPanelCanvas = null;
-let rosoutPanelCtx = null;
-let rosoutPanelTexture = null;
-let rosoutPanelPositionBuffer = null;
-let rosoutPanelTexCoordBuffer = null;
-let rosoutPanelInitialized = false;
-const rosoutPanelModelMatrix = new Float32Array(16);
-
-// Rosout messages callback
-let getRosoutMessagesFn = () => [];
-
-export function setRosoutMessagesCallback(callback) {
-    getRosoutMessagesFn = callback;
-}
-
-function initRosoutPanel() {
-    if (!gl) {
-        vrLogFn('Rosout panel: no GL context');
-        return;
-    }
-    
-    vrLogFn('Init rosout panel...');
-    
-    // Create canvas for log text
-    rosoutPanelCanvas = document.createElement('canvas');
-    rosoutPanelCanvas.width = Math.round(ROSOUT_PANEL_CONFIG.width * ROSOUT_PANEL_CONFIG.canvasScale);
-    rosoutPanelCanvas.height = Math.round(ROSOUT_PANEL_CONFIG.height * ROSOUT_PANEL_CONFIG.canvasScale);
-    rosoutPanelCtx = rosoutPanelCanvas.getContext('2d');
-    
-    // Create texture
-    rosoutPanelTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, rosoutPanelTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    
-    // Create position buffer for 3D quad (centered at bottom)
-    const panelHeight = ROSOUT_PANEL_CONFIG.height;
-    const panelWidth = ROSOUT_PANEL_CONFIG.width;
-    
-    const panelCenterX = ROSOUT_PANEL_CONFIG.horizontalOffset;
-    const panelCenterY = stereoSettings.verticalOffset + ROSOUT_PANEL_CONFIG.verticalOffset;
-    
-    rosoutPanelPositionBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, rosoutPanelPositionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-        panelCenterX - panelWidth/2, panelCenterY - panelHeight/2,
-        panelCenterX + panelWidth/2, panelCenterY - panelHeight/2,
-        panelCenterX - panelWidth/2, panelCenterY + panelHeight/2,
-        panelCenterX + panelWidth/2, panelCenterY + panelHeight/2,
-    ]), gl.STATIC_DRAW);
-    
-    rosoutPanelTexCoordBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, rosoutPanelTexCoordBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-        0, 1,
-        1, 1,
-        0, 0,
-        1, 0,
-    ]), gl.STATIC_DRAW);
-    
-    // Initial update
-    updateRosoutPanelCanvas();
-    
-    rosoutPanelInitialized = true;
-    vrLogFn('Rosout panel: OK');
-}
-
 function updateRosoutPanelCanvas() {
-    if (!rosoutPanelCtx) return;
-    
-    const messages = getRosoutMessagesFn();
-    const canvas = rosoutPanelCanvas;
-    const ctx = rosoutPanelCtx;
-    
+    const messages = getRosoutMessages();
+    const canvas = rosoutPanel.canvas;
+    const ctx = rosoutPanel.ctx;
+
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
+
     // Semi-transparent dark background with rounded corners
     ctx.fillStyle = `rgba(20, 20, 30, ${ROSOUT_PANEL_CONFIG.backgroundAlpha})`;
     drawRoundedRect(ctx, 0, 0, canvas.width, canvas.height, 12);
-    
+
     // Title
     ctx.fillStyle = '#f39c12';
     ctx.font = `bold ${ROSOUT_PANEL_CONFIG.titleFontSize}px monospace`;
     ctx.textBaseline = 'top';
     ctx.fillText('📋 ROS Logs', 10, 6);
-    
+
     // Draw last N messages
     const displayMessages = messages.slice(-ROSOUT_PANEL_CONFIG.maxMessages);
     ctx.font = `${ROSOUT_PANEL_CONFIG.bodyFontSize}px monospace`;
-    
+
     const startY = 24;
     const lineHeight = 15;
-    
+
     displayMessages.forEach((msg, i) => {
         const y = startY + i * lineHeight;
-        
-        // Level color
-        const levelColors = {
-            'DEBUG': '#888888',
-            'INFO': '#44ff44',
-            'WARN': '#f39c12',
-            'ERROR': '#e74c3c',
-            'FATAL': '#ff00ff'
-        };
-        const levelColor = levelColors[msg.levelName] || '#cccccc';
-        
+
         // Format: [LEVEL] message
-        ctx.fillStyle = levelColor;
+        ctx.fillStyle = LEVEL_COLORS[msg.levelName] || '#cccccc';
         ctx.fillText(`[${msg.levelName}]`, 10, y);
-        
+
         // Truncate message if too long
         const maxMsgLen = 90;
-        const truncatedMsg = msg.msg.length > maxMsgLen ? 
+        const truncatedMsg = msg.msg.length > maxMsgLen ?
             msg.msg.substring(0, maxMsgLen) + '...' : msg.msg;
         ctx.fillText(truncatedMsg, 70, y);
     });
-    
+
     // If no messages, show placeholder
     if (displayMessages.length === 0) {
         ctx.fillStyle = '#666666';
         ctx.fillText('Waiting for log messages...', 10, startY);
     }
-    
-    // Update texture
-    if (gl && rosoutPanelTexture) {
-        gl.bindTexture(gl.TEXTURE_2D, rosoutPanelTexture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-    }
+
+    rosoutPanel.markDirty();
 }
 
-export function drawRosoutPanel(view, viewport, modelMatrix) {
-    const frameCounter = getFrameCounterFn();
-    const shaderProgram = getShaderProgramFn();
-    const cachedLocations = getCachedLocationsFn();
-    
-    // Initialize on first call
-    if (!rosoutPanelInitialized) {
-        initRosoutPanel();
-    }
-    
-    // Check if initialization succeeded
-    if (!rosoutPanelTexture || !shaderProgram || !cachedLocations) {
-        return;
-    }
-    
-    // Update canvas every 10 frames (reduce CPU load)
-    if (frameCounter % 10 === 0) {
-        updateRosoutPanelCanvas();
-    }
-    
-    // Save current WebGL state
-    const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
-    
-    // Enable blending for transparency
-    // Use blendFuncSeparate to preserve destination alpha (prevents AR passthrough showing through)
-    gl.enable(gl.BLEND);
-    gl.blendFuncSeparate(
-        gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA,
-        gl.ZERO, gl.ONE
-    );
-    
-    // Disable depth test so panel is always visible
-    gl.disable(gl.DEPTH_TEST);
-    
-    gl.useProgram(shaderProgram);
-    
-    // Bind position buffer
-    gl.bindBuffer(gl.ARRAY_BUFFER, rosoutPanelPositionBuffer);
-    if (cachedLocations.position !== -1 && cachedLocations.position !== null) {
-        gl.enableVertexAttribArray(cachedLocations.position);
-        gl.vertexAttribPointer(cachedLocations.position, 2, gl.FLOAT, false, 0, 0);
-    }
-    
-    // Bind texcoord buffer
-    gl.bindBuffer(gl.ARRAY_BUFFER, rosoutPanelTexCoordBuffer);
-    if (cachedLocations.texCoord !== -1 && cachedLocations.texCoord !== null) {
-        gl.enableVertexAttribArray(cachedLocations.texCoord);
-        gl.vertexAttribPointer(cachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
-    }
-    
-    // Set uniforms
-    if (cachedLocations.projection !== null) {
-        gl.uniformMatrix4fv(cachedLocations.projection, false, view.projectionMatrix);
-    }
-    
-    if (cachedLocations.view !== null && invertMatrixFn) {
-        invertMatrixFn(view.transform.matrix, viewMatrixBuffer);
-        gl.uniformMatrix4fv(cachedLocations.view, false, viewMatrixBuffer);
-    }
-    
-    if (cachedLocations.model !== null) {
-        if (modelMatrix) {
-            gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix);
-        } else {
-            gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
-        }
-    }
-    
-    if (cachedLocations.distance !== null) {
-        gl.uniform1f(cachedLocations.distance, stereoSettings.screenDistance);
-    }
-    
-    if (cachedLocations.ipdOffset !== null) {
-        // Zero IPD offset for centered UI panels
-        gl.uniform1f(cachedLocations.ipdOffset, 0.0);
-    }
-    
-    if (cachedLocations.isLeftEye !== null) {
-        gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
-    }
-    
-    if (cachedLocations.useDirectVideo !== null) {
-        gl.uniform1f(cachedLocations.useDirectVideo, 0.0);
-    }
-    
-    if (cachedLocations.cornerRadius !== null) {
-        gl.uniform1f(cachedLocations.cornerRadius, 0.02);  // Rounded corners
-    }
-    
-    if (cachedLocations.texture !== null) {
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, rosoutPanelTexture);
-        gl.uniform1i(cachedLocations.texture, 0);
-    }
-    
-    // Draw the panel
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    
-    // Restore state
-    gl.disable(gl.BLEND);
-    gl.enable(gl.DEPTH_TEST);
-    
-    if (prevProgram) {
-        gl.useProgram(prevProgram);
-    }
-}
 // ========================================
 // Bearing Panel Functions (Top Panel)
 // ========================================
 
-function initBearingPanel() {
-    if (!gl) {
-        vrLogFn('Bearing panel: no GL context');
-        return;
-    }
-    
-    vrLogFn('Init bearing panel...');
-    
-    // Create canvas for bearing display
-    bearingPanelCanvas = document.createElement('canvas');
-    bearingPanelCanvas.width = Math.round(BEARING_PANEL_CONFIG.width * BEARING_PANEL_CONFIG.canvasScale);
-    bearingPanelCanvas.height = Math.round(BEARING_PANEL_CONFIG.height * BEARING_PANEL_CONFIG.canvasScale);
-    bearingPanelCtx = bearingPanelCanvas.getContext('2d');
-    
-    // Create texture
-    bearingPanelTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, bearingPanelTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    
-    // Create position buffer for 3D quad (centered at top)
-    const panelHeight = BEARING_PANEL_CONFIG.height;
-    const panelWidth = BEARING_PANEL_CONFIG.width;
-    
-    const panelCenterX = BEARING_PANEL_CONFIG.horizontalOffset;
-    const panelCenterY = stereoSettings.verticalOffset + BEARING_PANEL_CONFIG.verticalOffset;
-    
-    bearingPanelPositionBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, bearingPanelPositionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-        panelCenterX - panelWidth/2, panelCenterY - panelHeight/2,
-        panelCenterX + panelWidth/2, panelCenterY - panelHeight/2,
-        panelCenterX - panelWidth/2, panelCenterY + panelHeight/2,
-        panelCenterX + panelWidth/2, panelCenterY + panelHeight/2,
-    ]), gl.STATIC_DRAW);
-    
-    bearingPanelTexCoordBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, bearingPanelTexCoordBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-        0, 1,
-        1, 1,
-        0, 0,
-        1, 0,
-    ]), gl.STATIC_DRAW);
-    
-    // Initial update
-    updateBearingPanelCanvas();
-    
-    bearingPanelInitialized = true;
-    vrLogFn('Bearing panel: OK');
-}
-
 function updateBearingPanelCanvas() {
-    if (!bearingPanelCtx) return;
-    
-    const canvas = bearingPanelCanvas;
-    const ctx = bearingPanelCtx;
-    
+    const canvas = bearingPanel.canvas;
+    const ctx = bearingPanel.ctx;
+
     // Get current yaw from headset pose (multiplied for display)
     const yaw = headsetPose.rotation ? Math.round(headsetPose.rotation.y * BEARING_PANEL_CONFIG.displayMultiplier) : 0;
     const absYaw = Math.abs(yaw);
-    
+
     // Determine color based on yaw threshold
     let color;
     if (absYaw <= BEARING_PANEL_CONFIG.nominalThreshold) {
@@ -750,39 +167,39 @@ function updateBearingPanelCanvas() {
     } else {
         color = '#ff4444';  // Red - danger
     }
-    
+
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
+
     // Semi-transparent dark background with rounded corners
     ctx.fillStyle = `rgba(20, 20, 30, ${BEARING_PANEL_CONFIG.backgroundAlpha})`;
     drawRoundedRect(ctx, 0, 0, canvas.width, canvas.height, 12);
-    
+
     // Set font for measurements
     ctx.font = `bold ${BEARING_PANEL_CONFIG.fontSize}px monospace`;
     ctx.textBaseline = 'middle';
-    
+
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
-    
+
     // Format yaw text
     const yawText = `${yaw}°`;
-    
+
     // Measure text width for centering
     const textWidth = ctx.measureText(yawText).width;
-    
+
     // Draw yaw value centered
     ctx.fillStyle = color;
     ctx.textAlign = 'center';
     ctx.fillText(yawText, centerX, centerY);
-    
+
     // Draw arrow if outside nominal range (pointing direction to return to center)
     if (absYaw > BEARING_PANEL_CONFIG.nominalThreshold) {
         const arrowSize = BEARING_PANEL_CONFIG.fontSize * 1.6;
         const arrowOffset = textWidth / 2 + 25;
-        
+
         ctx.font = `bold ${arrowSize}px monospace`;
-        
+
         if (yaw > 0) {
             // Yaw is positive (looking right), arrow points right
             ctx.fillText('▶', centerX + arrowOffset, centerY);
@@ -791,112 +208,47 @@ function updateBearingPanelCanvas() {
             ctx.fillText('◀', centerX - arrowOffset, centerY);
         }
     }
-    
-    // Update texture
-    if (gl && bearingPanelTexture) {
-        gl.bindTexture(gl.TEXTURE_2D, bearingPanelTexture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-    }
+
+    bearingPanel.markDirty();
 }
 
-export function drawBearingPanel(view, viewport, modelMatrix) {
-    const frameCounter = getFrameCounterFn();
-    const shaderProgram = getShaderProgramFn();
-    const cachedLocations = getCachedLocationsFn();
-    
-    // Initialize on first call
-    if (!bearingPanelInitialized) {
-        initBearingPanel();
+function updatePanel(panel, gl, frameCounter, refreshFrames, repaint) {
+    const created = panel.init(gl);
+    if (created) vrLog(`${panel.name} panel: OK`);
+    if (created || frameCounter % refreshFrames === 0) {
+        repaint();
     }
-    
-    // Check if initialization succeeded
-    if (!bearingPanelTexture || !shaderProgram || !cachedLocations) {
-        return;
-    }
-    
-    // Update canvas every 5 frames (bearing needs responsive updates)
-    if (frameCounter % 5 === 0) {
-        updateBearingPanelCanvas();
-    }
-    
-    // Save current WebGL state
-    const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
-    
-    // Enable blending for transparency
-    gl.enable(gl.BLEND);
-    gl.blendFuncSeparate(
-        gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA,
-        gl.ZERO, gl.ONE
-    );
-    
-    // Disable depth test so panel is always visible
-    gl.disable(gl.DEPTH_TEST);
-    
-    gl.useProgram(shaderProgram);
-    
-    // Bind position buffer
-    gl.bindBuffer(gl.ARRAY_BUFFER, bearingPanelPositionBuffer);
-    if (cachedLocations.position !== -1 && cachedLocations.position !== null) {
-        gl.enableVertexAttribArray(cachedLocations.position);
-        gl.vertexAttribPointer(cachedLocations.position, 2, gl.FLOAT, false, 0, 0);
-    }
-    
-    // Bind texcoord buffer
-    gl.bindBuffer(gl.ARRAY_BUFFER, bearingPanelTexCoordBuffer);
-    if (cachedLocations.texCoord !== -1 && cachedLocations.texCoord !== null) {
-        gl.enableVertexAttribArray(cachedLocations.texCoord);
-        gl.vertexAttribPointer(cachedLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
-    }
-    
-    // Set uniforms
-    if (cachedLocations.projection !== null) {
-        gl.uniformMatrix4fv(cachedLocations.projection, false, view.projectionMatrix);
-    }
-    
-    if (cachedLocations.view !== null && invertMatrixFn) {
-        invertMatrixFn(view.transform.matrix, viewMatrixBuffer);
-        gl.uniformMatrix4fv(cachedLocations.view, false, viewMatrixBuffer);
-    }
-    
-    if (cachedLocations.model !== null) {
-        if (modelMatrix) {
-            gl.uniformMatrix4fv(cachedLocations.model, false, modelMatrix);
-        } else {
-            gl.uniformMatrix4fv(cachedLocations.model, false, cachedLocations.identityMatrix);
-        }
-    }
-    
-    if (cachedLocations.distance !== null) {
-        gl.uniform1f(cachedLocations.distance, stereoSettings.screenDistance);
-    }
-    
-    if (cachedLocations.ipdOffset !== null) {
-        // Zero IPD offset for centered UI panels
-        gl.uniform1f(cachedLocations.ipdOffset, 0.0);
-    }
-    
-    if (cachedLocations.isLeftEye !== null) {
-        gl.uniform1f(cachedLocations.isLeftEye, view.eye === 'left' ? 1.0 : 0.0);
-    }
-    
-    if (cachedLocations.useDirectVideo !== null) {
-        gl.uniform1f(cachedLocations.useDirectVideo, 0.0);
-    }
-    
-    if (cachedLocations.texture !== null) {
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, bearingPanelTexture);
-        gl.uniform1i(cachedLocations.texture, 0);
-    }
-    
-    // Draw the panel
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    
-    // Restore state
-    gl.disable(gl.BLEND);
-    gl.enable(gl.DEPTH_TEST);
-    
-    if (prevProgram) {
-        gl.useProgram(prevProgram);
-    }
+    panel.uploadIfDirty();
+}
+
+// ========================================
+// Aggregate Panel Entry Points
+// ========================================
+
+// Call once per XR frame (before the per-eye loop): repaint + upload changed panels
+export function updateOverlayPanels(gl, frameCounter) {
+    updateStatePanel(gl, frameCounter);
+    updateStreamPanel(gl, frameCounter);
+    updatePanel(bearingPanel, gl, frameCounter, BEARING_PANEL_CONFIG.refreshFrames, updateBearingPanelCanvas);
+    updatePanel(rosoutPanel, gl, frameCounter, ROSOUT_PANEL_CONFIG.refreshFrames, updateRosoutPanelCanvas);
+    updateUrdfPanel(gl, frameCounter);
+}
+
+// Draw all head-locked panels for one eye
+export function drawOverlayPanels(view, viewMatrix, headMatrix, prog) {
+    if (!prog) return;
+    drawStatePanel(view, viewMatrix, headMatrix, prog);
+    drawStreamPanel(view, viewMatrix, headMatrix, prog);
+    bearingPanel.draw(view, viewMatrix, headMatrix, prog);
+    rosoutPanel.draw(view, viewMatrix, headMatrix, prog);
+    drawUrdfPanel(view, viewMatrix, headMatrix, prog);
+}
+
+// Release GL resources of the canvas panels (URDF panel is disposed separately,
+// since it also owns a Three.js renderer and TF/URDF listeners)
+export function disposeOverlayPanels() {
+    disposeStatePanel();
+    disposeStreamPanel();
+    bearingPanel.dispose();
+    rosoutPanel.dispose();
 }

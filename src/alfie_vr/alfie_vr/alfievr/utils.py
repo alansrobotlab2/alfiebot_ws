@@ -5,8 +5,6 @@ Utility functions for the teleoperation system.
 import os
 import subprocess
 import logging
-from pathlib import Path
-from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +36,7 @@ def generate_ssl_certificates(cert_path: str = "cert.pem", key_path: str = "key.
             "-subj", "/C=US/ST=Test/L=Test/O=Test/OU=Test/CN=localhost"
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
         
         # Set appropriate permissions (readable by owner only for security)
         os.chmod(key_path, 0o600)

@@ -17,11 +17,9 @@ setup(
     ],
     package_data={
         package_name: [
-            'alfievr/**/*.py',
             'web-ui/*.html',
             'web-ui/*.js',
             'web-ui/*.css',
-            'web-ui/media/*',
             'web-ui/libs/*',
             'cert.pem',
             'key.pem',
@@ -33,18 +31,12 @@ setup(
         'websockets',
         'numpy',
         'scipy',
-        'python-socketio',
-        'fastapi',
-        'uvicorn',
-        'aiortc',
-        'aiohttp',
-        'opencv-python',
-        'av',
+        'pyyaml',
     ],
     zip_safe=False,
     maintainer='alansrobotlab',
     maintainer_email='alansrobotlab@todo.todo',
-    description='TODO: Package description',
+    description='VR (WebXR) teleoperation for the Alfie robot',
     license='TODO: License declaration',
     extras_require={
         'test': [
@@ -54,9 +46,6 @@ setup(
     entry_points={
         'console_scripts': [
             'alfie_teleop_vr = alfie_vr.alfie_teleop_vr:main',
-            'ros_video_webrtc = alfie_vr.ros_video_webrtc:main',
-            'ros_video_webrtc_hw = alfie_vr.ros_video_webrtc_hw:main',
-            'ros_video_webrtc_stereo = alfie_vr.ros_video_webrtc_stereo:main',
         ],
     },
 )

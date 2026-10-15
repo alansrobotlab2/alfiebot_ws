@@ -1,295 +1,171 @@
 #!/usr/bin/env python3
 """
-VR Monitor - Independent VR control information monitoring script
-Can call AlfieVR's VR functionality from other folders and read/print VR control information
+VR Monitor - runs the HTTPS web UI server and the VR WebSocket server, and keeps
+the latest goal per device (left/right controller, headset) for the teleop node.
 """
 
-import os
-import sys
 import asyncio
-import json
-import logging
-import threading
 import http.server
-import ssl
+import mimetypes
+import os
+import posixpath
 import socket
-from pathlib import Path
+import ssl
+import threading
+import time
 from typing import Optional
+from urllib.parse import unquote, urlsplit
 
-# Set the absolute path to the alfievr folder
-ALFIEVR_PATH = "/home/alfie/alfiebot_ws/src/alfie_vr/alfie_vr"
-# Path to URDF meshes
-MESHES_PATH = "/home/alfie/alfiebot_ws/src/alfie_urdf/meshes"
+from alfie_vr.alfievr.config import AlfieVRConfig
+from alfie_vr.alfievr.inputs.vr_ws_server import VRWebSocketServer
 
-def setup_alfievr_environment():
-    """Setup alfievr environment"""
-    # Add alfievr path to Python path
-    if ALFIEVR_PATH not in sys.path:
-        sys.path.insert(0, ALFIEVR_PATH)
-    
-    # Set working directory
-    os.chdir(ALFIEVR_PATH)
-    
-    # Set environment variables
-    os.environ['PYTHONPATH'] = f"{ALFIEVR_PATH}:{os.environ.get('PYTHONPATH', '')}"
+DEVICES = ('left', 'right', 'headset')
+
+CONTENT_TYPES = {
+    '.html': 'text/html',
+    '.js': 'application/javascript',
+    '.css': 'text/css',
+    '.json': 'application/json',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.ico': 'image/x-icon',
+    '.obj': 'model/obj',
+    '.mtl': 'text/plain',
+}
+
+
+def _meshes_dir() -> Optional[str]:
+    """URDF meshes from the alfie_urdf share directory (None if not installed)."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        return os.path.join(get_package_share_directory('alfie_urdf'), 'meshes')
+    except Exception:
+        return None
+
 
 def get_local_ip():
     """Get the local IP address of this machine."""
     try:
-        # Connect to a remote address to determine the local IP
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
             return s.getsockname()[0]
     except Exception:
         try:
-            # Fallback: get hostname IP
             return socket.gethostbyname(socket.gethostname())
         except Exception:
-            # Final fallback
             return "localhost"
 
-def import_alfievr_modules():
-    """Import alfievr modules"""
-    try:
-        from alfievr.config import AlfieVRConfig
-        from alfievr.inputs.vr_ws_server import VRWebSocketServer
-        from alfievr.inputs.base import ControlGoal, ControlMode
-        return AlfieVRConfig, VRWebSocketServer, ControlGoal, ControlMode
-    except ImportError as e:
-        print(f"Error importing alfievr modules: {e}")
-        print(f"Make sure ALFIEVR_PATH is correct: {ALFIEVR_PATH}")
-        return None, None, None, None
+
+def _safe_join(root: str, rel: str) -> Optional[str]:
+    """Join rel under root, refusing anything that escapes root.
+
+    Lexical check (abspath, not realpath) so a --symlink-install tree, whose
+    files link back into src/, still serves.
+    """
+    root_abs = os.path.abspath(root)
+    path = os.path.abspath(os.path.join(root_abs, rel))
+    if os.path.commonpath([root_abs, path]) != root_abs:
+        return None
+    return path
+
 
 class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
-    """Simplified HTTP request handler, only provides basic web services"""
-    
+    """Static file handler for the web UI (web-ui/) and URDF meshes (/meshes/)."""
+
     def end_headers(self):
         """Add CORS headers to all responses."""
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         try:
             super().end_headers()
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, ssl.SSLError):
             pass
-    
+
     def do_OPTIONS(self):
         """Handle preflight CORS requests."""
         self.send_response(200)
         self.end_headers()
-    
+
     def log_message(self, format, *args):
-        """Override to reduce HTTP request logging noise."""
-        pass  # Disable default HTTP logging
-    
+        """Disable default per-request logging."""
+        pass
+
     def do_GET(self):
-        """Handle GET requests."""
-        if self.path == '/' or self.path == '/index.html':
-            # Serve main page from web-ui directory
-            self.serve_file('web-ui/index.html', 'text/html')
-        elif self.path == '/stereo' or self.path == '/stereo_vr.html':
-            # Serve stereo VR 3D vision page
-            self.serve_file('web-ui/stereo_vr.html', 'text/html')
-        elif self.path.endswith('.html'):
-            # Serve other HTML files from web-ui directory
-            self.serve_file(f'web-ui{self.path}', 'text/html')
-        elif self.path == '/api/status':
-            # Serve system status as JSON
-            self.serve_status()
-        elif self.path == '/foxglove-cert':
-            # Serve a page to help accept the Foxglove Bridge certificate
-            self.serve_foxglove_cert_page()
-        elif self.path.endswith('.css'):
-            # Serve CSS files from web-ui directory
-            self.serve_file(f'web-ui{self.path}', 'text/css')
-        elif self.path.endswith('.js'):
-            # Serve JS files from web-ui directory
-            self.serve_file(f'web-ui{self.path}', 'application/javascript')
-        elif self.path.endswith('.json'):
-            # Serve JSON files from web-ui directory
-            self.serve_file(f'web-ui{self.path}', 'application/json')
-        elif self.path.endswith('.ico'):
-            self.serve_file(self.path[1:], 'image/x-icon')
-        elif self.path.endswith(('.jpg', '.jpeg', '.png', '.gif')):
-            # Serve image files from web-ui directory
-            content_type = 'image/jpeg' if self.path.endswith(('.jpg', '.jpeg')) else 'image/png' if self.path.endswith('.png') else 'image/gif'
-            self.serve_file(f'web-ui{self.path}', content_type)
-        elif self.path.startswith('/meshes/') and self.path.endswith('.obj'):
-            # Serve OBJ mesh files from alfie_urdf meshes directory
-            mesh_name = self.path[8:]  # Remove '/meshes/' prefix
-            self.serve_mesh_file(mesh_name)
-        elif self.path.startswith('/meshes/') and self.path.endswith('.mtl'):
-            # Serve MTL material files from alfie_urdf meshes directory
-            mtl_name = self.path[8:]  # Remove '/meshes/' prefix
-            self.serve_mesh_file(mtl_name, 'text/plain')
+        """Serve files; query strings are ignored, paths may not leave their root."""
+        path = posixpath.normpath(unquote(urlsplit(self.path).path))
+        if path in ('/', '/index.html', '.'):
+            path = '/index.html'
+
+        if path.startswith('/meshes/'):
+            root = self.server.meshes_path
+            rel = path[len('/meshes/'):]
+            allowed = ('.obj', '.mtl')
         else:
+            root = self.server.web_root_path
+            rel = path.lstrip('/')
+            allowed = tuple(CONTENT_TYPES)
+
+        ext = os.path.splitext(rel)[1].lower()
+        file_path = _safe_join(root, rel) if root and ext in allowed else None
+        if file_path is None or not os.path.isfile(file_path):
             self.send_error(404, "Not found")
-    
-    def serve_foxglove_cert_page(self):
-        """Serve a page that helps accept the Foxglove Bridge certificate."""
-        # Get the hostname from the request
-        host = self.headers.get('Host', 'localhost:8443').split(':')[0]
-        foxglove_url = f"https://{host}:8765"
-        
-        html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>Accept Foxglove Certificate</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; background: #1a1a2e; color: #fff; padding: 40px; text-align: center; }}
-        .container {{ max-width: 600px; margin: 0 auto; }}
-        h1 {{ color: #4ecdc4; }}
-        .status {{ padding: 20px; margin: 20px 0; border-radius: 10px; }}
-        .pending {{ background: #f39c12; color: #000; }}
-        .success {{ background: #27ae60; }}
-        .error {{ background: #e74c3c; }}
-        button {{ background: #4ecdc4; border: none; padding: 15px 30px; font-size: 18px; border-radius: 5px; cursor: pointer; margin: 10px; }}
-        button:hover {{ background: #45b7aa; }}
-        .url {{ font-family: monospace; background: #333; padding: 10px; border-radius: 5px; }}
-        iframe {{ display: none; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🔐 Foxglove Certificate Setup</h1>
-        <p>The VR robot viewer needs to connect to Foxglove Bridge securely.</p>
-        <p class="url">{foxglove_url}</p>
-        
-        <div id="status" class="status pending">
-            Click the button below to accept the certificate
-        </div>
-        
-        <button onclick="openFoxglove()">Open Foxglove URL</button>
-        <button onclick="window.location.href='/'">Back to VR</button>
-        
-        <p style="margin-top: 30px; font-size: 14px; color: #888;">
-            A new tab will open. You may see a security warning - click "Advanced" and "Proceed" to accept the certificate.
-            Then close that tab and return here.
-        </p>
-    </div>
-    
-    <script>
-        function openFoxglove() {{
-            window.open('{foxglove_url}', '_blank');
-            document.getElementById('status').className = 'status success';
-            document.getElementById('status').innerHTML = 'Tab opened! Accept the certificate warning, then return to VR.';
-        }}
-    </script>
-</body>
-</html>"""
-        
-        self.send_response(200)
-        self.send_header('Content-Type', 'text/html')
-        self.end_headers()
-        self.wfile.write(html.encode('utf-8'))
-    
-    def serve_status(self):
-        """Serve system status as JSON."""
-        import json
-        import os
-        
-        # Check if device files exist (simple check for arm connectivity)
-        status = {
-            'left_arm_connected': os.path.exists('/dev/ttyACM0'),
-            'right_arm_connected': os.path.exists('/dev/ttyACM1'),
-            'vrConnected': True,  # If we're serving this, server is running
-        }
-        
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps(status).encode('utf-8'))
-    
-    def serve_file(self, filename, content_type):
+            return
+        self.serve_file(file_path, CONTENT_TYPES.get(ext) or mimetypes.guess_type(file_path)[0])
+
+    def serve_file(self, file_path, content_type):
         """Serve a file with the given content type."""
         try:
-            # Get the web root path from the server
-            web_root = getattr(self.server, 'web_root_path', ALFIEVR_PATH)
-            file_path = os.path.join(web_root, filename)
-            
-            if os.path.exists(file_path):
-                with open(file_path, 'rb') as f:
-                    content = f.read()
-                
-                self.send_response(200)
-                self.send_header('Content-Type', content_type)
-                # Disable caching for development - always fetch fresh files
-                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-                self.send_header('Pragma', 'no-cache')
-                self.send_header('Expires', '0')
-                self.end_headers()
-                self.wfile.write(content)
-            else:
-                self.send_error(404, f"File not found: {filename}")
+            with open(file_path, 'rb') as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', content_type or 'application/octet-stream')
+            self.send_header('Content-Length', str(len(content)))
+            # Disable caching for development - always fetch fresh files
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.end_headers()
+            self.wfile.write(content)
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
+            pass
         except Exception as e:
-            print(f"Error serving file {filename}: {e}")
-            self.send_error(500, "Internal server error")
-    
-    def serve_mesh_file(self, filename, content_type='model/obj'):
-        """Serve a mesh file from the URDF meshes directory."""
-        try:
-            # Security: only allow specific extensions and no path traversal
-            if '..' in filename or filename.startswith('/'):
-                self.send_error(403, "Forbidden")
-                return
-            
-            file_path = os.path.join(MESHES_PATH, filename)
-            
-            if os.path.exists(file_path):
-                with open(file_path, 'rb') as f:
-                    content = f.read()
-                
-                self.send_response(200)
-                self.send_header('Content-Type', content_type)
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(content)
-            else:
-                self.send_error(404, f"Mesh not found: {filename}")
-        except Exception as e:
-            print(f"Error serving mesh {filename}: {e}")
+            print(f"Error serving file {file_path}: {e}")
             self.send_error(500, "Internal server error")
 
+
 class SimpleHTTPSServer:
-    """Simplified HTTPS server for providing web interface"""
-    
-    def __init__(self, config):
+    """Threaded HTTPS server for the web interface."""
+
+    def __init__(self, config: AlfieVRConfig):
         self.config = config
         self.httpd = None
         self.server_thread = None
-        self.web_root_path = ALFIEVR_PATH
-    
+
     async def start(self):
         """Start the HTTPS server."""
-        try:
-            # Create server
-            self.httpd = http.server.HTTPServer((self.config.host_ip, self.config.https_port), SimpleAPIHandler)
-            
-            # Set web root path for file serving
-            self.httpd.web_root_path = self.web_root_path
-            
-            # Setup SSL with mobile browser compatibility
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            context.minimum_version = ssl.TLSVersion.TLSv1_2
-            context.maximum_version = ssl.TLSVersion.TLSv1_3
-            # Broad cipher support for Android Chrome and Meta Quest browser
-            context.set_ciphers(
-                "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:"
-                "ECDH+AESGCM:DH+AESGCM:ECDH+AES:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!eNULL:!MD5"
-            )
-            context.load_cert_chain('cert.pem', 'key.pem')
-            self.httpd.socket = context.wrap_socket(self.httpd.socket, server_side=True)
-            
-            # Start server in a separate thread
-            self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
-            self.server_thread.start()
-            
-            print(f"🌐 HTTPS server started on {self.config.host_ip}:{self.config.https_port}")
-            
-        except Exception as e:
-            print(f"❌ Failed to start HTTPS server: {e}")
-            raise
-    
+        self.httpd = http.server.ThreadingHTTPServer(
+            (self.config.host_ip, self.config.https_port), SimpleAPIHandler)
+        self.httpd.daemon_threads = True
+        self.httpd.web_root_path = self.config.web_root
+        self.httpd.meshes_path = _meshes_dir()
+
+        # Setup SSL with mobile browser compatibility
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.maximum_version = ssl.TLSVersion.TLSv1_3
+        # Broad cipher support for Android Chrome and Meta Quest browser
+        context.set_ciphers(
+            "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:"
+            "ECDH+AESGCM:DH+AESGCM:ECDH+AES:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!eNULL:!MD5"
+        )
+        context.load_cert_chain(self.config.certfile, self.config.keyfile)
+        self.httpd.socket = context.wrap_socket(self.httpd.socket, server_side=True)
+
+        self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.server_thread.start()
+        print(f"🌐 HTTPS server started on {self.config.host_ip}:{self.config.https_port}")
+
     async def stop(self):
         """Stop the HTTPS server."""
         if self.httpd:
@@ -298,263 +174,96 @@ class SimpleHTTPSServer:
                 self.server_thread.join(timeout=5)
             print("🌐 HTTPS server stopped")
 
+
 class VRMonitor:
-    """VR control information monitor"""
-    
+    """Runs the VR servers and holds the latest goal per device."""
+
     def __init__(self, debug_logs: bool = False):
-        self.config = None
+        self.debug_logs = debug_logs
+        self.config = AlfieVRConfig()
         self.vr_server = None
         self.https_server = None
+        self.command_queue = None
         self.is_running = False
-        self.latest_goal = None  # Store the latest goal
-        self.left_goal = None    # Store left and right controller goals separately
-        self.right_goal = None
-        self.headset_goal = None  # Add headset goal
-        self._goal_lock = threading.Lock()  # Add thread lock
-        self.debug_logs = debug_logs  # Debug logging flag
-    
-    def initialize(self):
-        """Initialize VR monitor"""
-        print("🔧 Initializing AlfieVR Monitor...")
-        
-        # Setup environment
-        setup_alfievr_environment()
-        
-        # Import modules
-        AlfieVRConfig, VRWebSocketServer, ControlGoal, ControlMode = import_alfievr_modules()
-        if AlfieVRConfig is None:
-            print("❌ Failed to import alfievr modules")
-            return False
-        
-        # Create configuration
-        self.config = AlfieVRConfig()
-        self.config.enable_vr = True
-        self.config.enable_keyboard = False
-        self.config.enable_https = True  # Enable HTTPS server, VR requires web interface
-        
-        # Create command queue
-        self.command_queue = asyncio.Queue()
-        
-        # Create VR server (print-only mode)
-        try:
-            self.vr_server = VRWebSocketServer(
-                command_queue=self.command_queue,
-                config=self.config,
-                print_only=False,  # Changed to False to send data to queue
-                debug_logs=self.debug_logs  # Pass debug logging flag
-            )
-        except Exception as e:
-            print(f"❌ Failed to create VR WebSocket server: {e}")
-            return False
-        
-        # Create HTTPS server
-        try:
-            self.https_server = SimpleHTTPSServer(self.config)
-        except Exception as e:
-            print(f"❌ Failed to create HTTPS server: {e}")
-            return False
-        
-        print("✅ AlfieVR Monitor initialized successfully")
-        
-        return True
-    
+        self._goals = {d: None for d in DEVICES}
+        self._release_count = 0  # bumped on every client release request
+        self._release_reason = None
+        self._goal_lock = threading.Lock()
+
     async def start_monitoring(self):
-        """Start monitoring VR control information"""
-        print("🚀 Starting VR Monitor...")
-        
-        if not self.initialize():
-            print("❌ Failed to initialize VR monitor")
-            return
-        
+        """Start the servers and consume goals until stopped (run in its own loop)."""
+        self.command_queue = asyncio.Queue()
+        self.vr_server = VRWebSocketServer(
+            command_queue=self.command_queue,
+            config=self.config,
+            debug_logs=self.debug_logs,
+        )
+        self.https_server = SimpleHTTPSServer(self.config)
+
         try:
-            # Capture the event loop reference for the VR server (needed for thread-safe broadcasts)
-            self.vr_server._event_loop = asyncio.get_running_loop()
-            
-            # Start HTTPS server
             await self.https_server.start()
-            
-            # Start VR server
             await self.vr_server.start()
-            
             self.is_running = True
-            print("✅ VR Monitor is now running")
-            
-            # Display connection information
+
             host_display = get_local_ip() if self.config.host_ip == "0.0.0.0" else self.config.host_ip
-            print(f"📱 Open your VR headset browser and navigate to:")
+            print("📱 Open your VR headset browser and navigate to:")
             print(f"   https://{host_display}:{self.config.https_port}")
-            print("🎯 Press Ctrl+C to stop monitoring")
-            print()
-            
-            # Monitor command queue
+
             await self.monitor_commands()
-            
-        except KeyboardInterrupt:
-            print("\n⏹️  Stopping VR monitor...")
-        except Exception as e:
-            print(f"❌ Error in VR monitor: {e}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
         finally:
             await self.stop_monitoring()
-    
+
     async def monitor_commands(self):
-        """Monitor commands from VR controllers"""
-        print("📊 Monitoring VR control commands...")
-        
-        # Rate limiting: 100Hz max (0.01 second between updates)
-        min_interval = 0.01
-        last_update_time = 0.0
-        
+        """Store the latest goal per device; apply release requests."""
         while self.is_running:
             try:
-                # Wait for command with 1-second timeout
                 goal = await asyncio.wait_for(self.command_queue.get(), timeout=1.0)
-                
-                # Always save goal regardless of rate limiting
-                # (rate limiting should only affect logging/printing, not data storage)
-                with self._goal_lock:
-                    if goal.arm == "left":
-                        self.left_goal = goal
-                    elif goal.arm == "right":
-                        self.right_goal = goal
-                    elif goal.arm == "headset":  # Add headset data processing
-                        self.headset_goal = goal
-                    
-                    # Maintain backward compatibility, save latest goal
-                    self.latest_goal = goal
-                
-                # Rate limit logging/printing to 100Hz
-                current_time = asyncio.get_event_loop().time()
-                time_since_last = current_time - last_update_time
-                
-                if time_since_last < min_interval:
-                    # Skip logging if too soon, but data is already saved above
-                    continue
-                
-                last_update_time = current_time
-                
             except asyncio.TimeoutError:
-                # Timeout, continue loop
                 continue
-            except Exception as e:
-                print(f"❌ Error processing command: {e}")
-                import traceback
-                print(f"Traceback: {traceback.format_exc()}")
-    
-    def print_control_goal(self, goal):
-        """Print control goal information"""
-        print(f"\n🎮 Control Goal Received:")
-        print(f"   Timestamp: {asyncio.get_event_loop().time():.3f}")
-        print(f"   Arm: {goal.arm}")
-        print(f"   Mode: {goal.mode}")
-        
-        if goal.target_position is not None:
-            if isinstance(goal.target_position, (list, tuple)):
-                pos = goal.target_position
-                print(f"   Target Position: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]")
-            else:
-                print(f"   Target Position: {goal.target_position}")
-        
-        if goal.wrist_roll_deg is not None:
-            print(f"   Wrist Roll: {goal.wrist_roll_deg:.1f}°")
-        
-        if goal.wrist_flex_deg is not None:
-            print(f"   Wrist Flex: {goal.wrist_flex_deg:.1f}°")
-        
-        if goal.gripper_closed is not None:
-            print(f"   Gripper: {'CLOSED' if goal.gripper_closed else 'OPEN'}")
-        
-        if goal.metadata:
-            print(f"   Metadata: {goal.metadata}")
-        
-        print("-" * 30)
-    
-    def get_latest_goal_nowait(self, arm=None):
-        """Return the latest VR control goal if available, else None.
-        
-        Args:
-            arm: If specified ("left" or "right"), return that arm's goal.
-                 If None, return a dict containing both left and right goals.
+
+            with self._goal_lock:
+                if goal.arm == 'release':
+                    for hand in goal.metadata.get('hands', ()):
+                        if hand in self._goals:
+                            self._goals[hand] = None
+                    self._release_count += 1
+                    self._release_reason = goal.metadata.get('reason')
+                elif goal.arm in self._goals:
+                    self._goals[goal.arm] = goal
+
+    def get_latest_goals(self, max_age: Optional[float] = None) -> dict:
+        """Latest goal per device ('left', 'right', 'headset').
+
+        A device whose latest goal is older than max_age seconds is returned as
+        None, so a dropped link or lost controller never replays stale input.
         """
+        now = time.monotonic()
         with self._goal_lock:
-            if arm == "left":
-                return self.left_goal
-            elif arm == "right":
-                return self.right_goal
-            elif arm == "headset":  # Add headset data retrieval
-                return self.headset_goal
-            else:
-                # Return dictionary containing both left and right controllers
-                dual_goals = {
-                    "left": self.left_goal,
-                    "right": self.right_goal,
-                    "headset": self.headset_goal,  # Add headset data
-                    "has_left": self.left_goal is not None,
-                    "has_right": self.right_goal is not None,
-                    "has_headset": self.headset_goal is not None  # Add headset status
-                }
-                
-                return dual_goals
-    
-    def get_left_goal_nowait(self):
-        """Return the latest left arm goal if available, else None."""
-        return self.get_latest_goal_nowait("left")
-    
-    def get_right_goal_nowait(self):
-        """Return the latest right arm goal if available, else None."""
-        return self.get_latest_goal_nowait("right")
-    
+            out = {}
+            for device, goal in self._goals.items():
+                if goal is not None and max_age is not None and now - goal.stamp > max_age:
+                    goal = None
+                out[device] = goal
+            return out
+
+    def get_release_state(self):
+        """(count, reason) of client release requests; count increases on each."""
+        with self._goal_lock:
+            return self._release_count, self._release_reason
+
     def set_passthrough_mode(self, active: bool):
-        """Send passthrough mode command to all connected VR clients.
-        
-        When passthrough mode is active:
-        - VR display shows 0% opacity (full passthrough)
-        - All panels and video are hidden
-        - Headset telemetry is not sent
-        
-        Args:
-            active: True to enable passthrough mode, False to disable
-        """
+        """Tell connected VR clients to enter/leave passthrough mode."""
         if self.vr_server:
             self.vr_server.broadcast_message_sync({
                 'command': 'passthrough_mode',
                 'active': active
             })
-    
+
     async def stop_monitoring(self):
-        """Stop monitoring"""
+        """Stop the servers."""
         self.is_running = False
-        
         if self.vr_server:
             await self.vr_server.stop()
-        
         if self.https_server:
             await self.https_server.stop()
-        
         print("✅ VR Monitor stopped")
-
-def main():
-    """Main function"""
-    print("🎮 AlfieVR Monitor - AlfieVR VR Control Information Monitor")
-    print("=" * 60)
-    
-    # Check AlfieVR path
-    if not os.path.exists(ALFIEVR_PATH):
-        print(f"❌ AlfieVR path does not exist: {ALFIEVR_PATH}")
-        print("Please update ALFIEVR_PATH in the script")
-        return
-    
-    # Create monitor
-    monitor = VRMonitor()
-    
-    # Run monitoring
-    try:
-        asyncio.run(monitor.start_monitoring())
-    except KeyboardInterrupt:
-        print("\n👋 AlfieVR Monitor stopped by user")
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
-
-if __name__ == "__main__":
-    main() 

@@ -1,77 +1,66 @@
 import math
-import numpy as np
-from typing import List, Union, Tuple
-from alfie_msgs.msg import RobotLowState, ServoCmd
 
+
+# Servo-order joint names for one arm (servo index offset 0 = left, 6 = right).
+ARM_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
+
+# Joint limits (radians) from alfie_urdf (alfiebot.urdf); gripper is the
+# trigger-mapped range 0 (open) .. 0.785 (closed).
+ARM_JOINT_LIMITS = {
+    "shoulder_pan":  (-0.7854, 0.7854),
+    "shoulder_lift": (-1.4835, 1.4835),
+    "elbow_flex":    (-1.5708, 1.5708),
+    "wrist_flex":    (-0.7854, 1.5708),
+    "wrist_roll":    (-1.5708, 1.5708),
+    "gripper":       (0.0, 0.7854),
+}
+
+
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
 
 
 class SimpleTeleopArm:
     """
-    A class for controlling a robot arm using VR input with delta action control.
-    
-    This class provides inverse kinematics-based arm control with proportional control
-    for smooth movement and gripper operations based on VR controller input.
-    """
-    
-    def __init__(self, joint_map, robotlowstate, kinematics, prefix="right", kp=1, debug_logs=False):
-        """
-        Initialize the SimpleTeleopArm with joint mapping and initial state.
+    VR delta-control for one arm.
 
+    While the operator holds grip, controller motion since the previous goal is
+    added to a Cartesian (reach, height) target solved with 2-link IK; controller
+    X drives shoulder pan, and controller pitch/roll drive the wrist. All targets
+    are radians in servo order and are clamped to ARM_JOINT_LIMITS.
+    """
+
+    # IK smoothing time constant (s). 0.031 s == the former alpha=0.3 at 90 Hz.
+    SMOOTHING_TAU = 0.031
+
+    def __init__(self, robotlowstate, kinematics, prefix="right", debug_logs=False):
+        """
         Args:
-            joint_map (dict): Mapping of generic joint names to specific robot joint names.
-            robotlowstate (object): RobotLowState message containing the current state of the robot.
-            kinematics (object): Kinematics model for inverse kinematics calculations.
-            prefix (str, optional): Prefix for the arm (e.g., "left" or "right"). Defaults to "right".
-            kp (float, optional): Proportional gain for the control loop. Defaults to 1.
-            debug_logs (bool, optional): Enable debug logging. Defaults to False.
+            robotlowstate: RobotLowState used to seed targets from the measured pose.
+            kinematics: AlfieArmKinematics for this arm.
+            prefix: "left" or "right".
+            debug_logs: Enable debug printing.
         """
         self.debug_logs = debug_logs
+        self.prefix = prefix
+        self.offset = 0 if prefix == 'left' else 6
+        self.kinematics = kinematics
 
         # VR position multipliers (VR controller position -> robot arm movement)
         self.vr_x_multiplier = 40  # Scale for shoulder rotate
         self.vr_y_multiplier = 40  # Scale for arm reach (Y)
         self.vr_z_multiplier = 40  # Scale for arm reach (Z->X)
-        
+
         # Wrist multipliers (VR controller rotation -> robot wrist rotation)
         self.wrist_pitch_multiplier = 4.0
         self.wrist_roll_multiplier = 4.0
 
-        self.joint_map = joint_map
-        self.prefix = prefix
-        self.kp = kp
-        self.kinematics = kinematics
-        
-        # set offset to 0 if prefix is left otherwise 7 for right
-        if prefix == 'left':
-            offset = 0
-        else:
-            offset = 6
+        # Per-goal delta limits (prevent sudden jumps from tracking glitches)
+        self.pos_scale = 0.05      # Position sensitivity scaling
+        self.delta_limit = 0.02    # Maximum reach/height delta per goal (m)
+        self.angle_limit = 0.14    # Maximum angle delta per goal (rad, ~8 degrees)
 
-        # Initial joint positions - adapted for XLerobot observation format
-        self.joint_positions = {
-            "shoulder_pan": robotlowstate.servo_state[offset + 0].current_location,
-            "shoulder_lift": robotlowstate.servo_state[offset + 1].current_location,
-            "elbow_flex": robotlowstate.servo_state[offset + 2].current_location,
-            "wrist_flex": robotlowstate.servo_state[offset + 3].current_location,
-            "wrist_roll": robotlowstate.servo_state[offset + 4].current_location,
-            "gripper": robotlowstate.servo_state[offset + 5].current_location,
-        }
-        
-        # Initialize pitch for wrist orientation
-        self.pitch = 0.0
-        
-        # Delta control state variables for VR input
-        self.last_vr_time = 0.0
-        self.vr_deadzone = 0.001  # Minimum movement threshold
-        self.max_delta_per_frame = 0.005  # Maximum position change per frame
-        
-
-        
-        # Set step size
-        self.degree_step = 2
-        self.xy_step = 0.005
-        
-        # Define zero position first
+        # Zero ("ready") position, used by the Y-button reset
         self.zero_pos = {
             'shoulder_pan':  0.0000,
             'shoulder_lift': 0.1089,
@@ -80,216 +69,149 @@ class SimpleTeleopArm:
             'wrist_roll':    0.0000,
             'gripper':       0.0000
         }
-        
-        # P control target positions, set to zero position
-        self.target_positions = self.zero_pos.copy()
-        
-        # Derive current_x and current_y from zero_pos using forward kinematics
-        self.current_x, self.current_y = self.kinematics.forward_kinematics(
-            self.zero_pos["shoulder_lift"],
-            self.zero_pos["elbow_flex"]
-        )
 
-
-    def move_to_zero_position(self, robot=None):
-        """
-        Move the arm to its defined zero position.
-
-        Resets internal state variables including current Cartesian coordinates,
-        pitch, and delta control timers. Optionally sends the zero position action to the robot.
-
-        Args:
-            robot (object, optional): The robot instance to send actions to. If None, only resets internal state.
-        """
-        print(f"[{self.prefix}] Moving to Zero Position: {self.zero_pos} ......")
-        self.target_positions = self.zero_pos.copy()
-        
-        # Derive current_x and current_y from zero_pos using forward kinematics
-        self.current_x, self.current_y = self.kinematics.forward_kinematics(
-            self.zero_pos["shoulder_lift"],
-            self.zero_pos["elbow_flex"]
-        )
-        self.pitch = self.zero_pos["wrist_flex"]
-        
-        # Reset delta control state
-        self.last_vr_time = 0.0
-        if hasattr(self, 'prev_vr_pos'):
-            delattr(self, 'prev_vr_pos')
-        if hasattr(self, 'prev_wrist_flex'):
-            delattr(self, 'prev_wrist_flex')
-        if hasattr(self, 'prev_wrist_roll'):
-            delattr(self, 'prev_wrist_roll')
-        
-        # Only send action if robot is provided
-        if robot is not None:
-            action = self.p_control_action(robot)
-            robot.send_action(action)
+        self.reseed(robotlowstate)
 
     def debug_print(self, msg: str):
         """Print debug message only if debug_logs is enabled."""
         if self.debug_logs:
             print(msg)
 
-    def handle_vr_input(self, vr_goal, gripper_state):
+    def _set_targets(self, joints):
+        """Set all targets (clamped) and derive the Cartesian/pitch state from them."""
+        self.target_positions = {
+            j: _clamp(float(joints[j]), *ARM_JOINT_LIMITS[j]) for j in ARM_JOINTS
+        }
+        t = self.target_positions
+        self.current_x, self.current_y = self.kinematics.forward_kinematics(
+            t["shoulder_lift"], t["elbow_flex"])
+        # Inverse of wrist_flex = -shoulder_lift - elbow_flex + pitch, so the
+        # first tracked frame reproduces the current wrist angle (no jump).
+        self.pitch = t["wrist_flex"] + t["shoulder_lift"] + t["elbow_flex"]
+        self.reset_tracking()
+
+    def reseed(self, robotlowstate):
+        """Set targets to the measured joint positions (no motion on next command)."""
+        servos = robotlowstate.servo_state
+        self._set_targets({
+            j: servos[self.offset + i].current_location for i, j in enumerate(ARM_JOINTS)
+        })
+
+    def move_to_zero_position(self):
+        """Set targets to the zero position (the node rate-limits the motion)."""
+        self.debug_print(f"[{self.prefix}] Moving to zero position: {self.zero_pos}")
+        self._set_targets(self.zero_pos)
+
+    def reset_tracking(self):
+        """Forget the previous VR sample so the next goal only sets a new baseline."""
+        self.prev_vr_pos = None
+        self.prev_wrist_flex = None
+        self.prev_wrist_roll = None
+        self._last_goal_stamp = None
+
+    def handle_vr_input(self, vr_goal, dt):
         """
-        Handle VR input with delta action control - incremental position updates.
-        
+        Apply one control tick while grip is held.
+
+        Deltas are taken only from goals not seen before (the client sends at
+        ~30 Hz while this runs at ~90 Hz); IK smoothing runs every tick using dt.
+
         Args:
-            vr_goal: VR controller goal data containing target position and orientations
-            gripper_state: Current gripper state (not used in current implementation)
+            vr_goal: ControlGoal for this controller.
+            dt: Seconds since the previous tick.
         """
         if vr_goal is None:
             return
-        
-        # VR goal contains: target_position [x, y, z], wrist_roll_deg, wrist_flex_deg, gripper_closed
-        if not hasattr(vr_goal, 'target_position') or vr_goal.target_position is None:
-            return
-        
-        # Check if target_position has valid length
-        try:
-            if len(vr_goal.target_position) < 3:
-                return
-        except TypeError:
-            return
-            
-        # Extract VR position data
-        # Get current VR position
-        current_vr_pos = vr_goal.target_position  # [x, y, z] in meters
-        
-        # Initialize previous VR position if not set
-        if not hasattr(self, 'prev_vr_pos'):
-            self.prev_vr_pos = current_vr_pos
-            return  # Skip first frame to establish baseline
-        
-        self.debug_print(f"{current_vr_pos}")
-        
-        # Calculate relative change (delta) from previous frame
-        # Scale factors for converting VR movement to robot workspace
-        vr_x = (current_vr_pos[0] - self.prev_vr_pos[0]) * self.vr_x_multiplier  # Scale for the shoulder rotate
-        vr_y = (current_vr_pos[1] - self.prev_vr_pos[1]) * self.vr_y_multiplier  # Scale for arm reach (Y)
-        vr_z = (current_vr_pos[2] - self.prev_vr_pos[2]) * self.vr_z_multiplier  # Scale for arm reach (Z->X)
 
-        # Update previous position for next frame
+        if vr_goal.stamp != self._last_goal_stamp:
+            self._last_goal_stamp = vr_goal.stamp
+            self._apply_goal_deltas(vr_goal)
+
+        self._solve(dt)
+
+        # Gripper follows the analog trigger: 0.0-1.0 -> open..closed
+        trigger_value = _clamp(float(vr_goal.metadata.get('trigger', 0) or 0), 0.0, 1.0)
+        self.target_positions["gripper"] = _clamp(
+            trigger_value * ARM_JOINT_LIMITS["gripper"][1], *ARM_JOINT_LIMITS["gripper"])
+
+    def _apply_goal_deltas(self, vr_goal):
+        """Accumulate controller motion since the previous goal into the targets."""
+        current_vr_pos = vr_goal.target_position
+        if current_vr_pos is None:
+            # Tracking gap: re-baseline when tracking returns instead of jumping.
+            self.reset_tracking()
+            self._last_goal_stamp = vr_goal.stamp
+            return
+
+        if self.prev_vr_pos is None:
+            # First sample after grip / gap: establish baselines only.
+            self.prev_vr_pos = current_vr_pos
+            self.prev_wrist_flex = vr_goal.wrist_flex_deg
+            self.prev_wrist_roll = vr_goal.wrist_roll_deg
+            return
+
+        dl = self.delta_limit
+        delta_x = _clamp((current_vr_pos[0] - self.prev_vr_pos[0]) * self.vr_x_multiplier * self.pos_scale, -dl, dl)
+        delta_y = _clamp((current_vr_pos[1] - self.prev_vr_pos[1]) * self.vr_y_multiplier * self.pos_scale, -dl, dl)
+        delta_z = _clamp((current_vr_pos[2] - self.prev_vr_pos[2]) * self.vr_z_multiplier * self.pos_scale, -dl, dl)
         self.prev_vr_pos = current_vr_pos
-        
-        # Delta control parameters - adjust these for sensitivity
-        pos_scale = 0.05  # Position sensitivity scaling
-        angle_scale = 0.07  # Angle sensitivity scaling (radians, ~4 degrees)
-        delta_limit = 0.02  # Maximum delta per update (meters)
-        angle_limit = 0.14  # Maximum angle delta per update (radians, ~8 degrees)
-        
-        delta_x = vr_x * pos_scale
-        delta_y = vr_y * pos_scale  
-        delta_z = vr_z * pos_scale
-        
-        # Limit delta values to prevent sudden movements
-        delta_x = max(-delta_limit, min(delta_limit, delta_x))
-        delta_y = max(-delta_limit, min(delta_limit, delta_y))
-        delta_z = max(-delta_limit, min(delta_limit, delta_z))
-        
-        # Update workspace position
+
         # VR coordinate system (WebXR): X=left(-)/right(+), Y=down(-)/up(+), Z=forward(-)/back(+)
         # Kinematics coordinate system: X=forward reach, Y=vertical (negative=down)
-        # VR forward (Z-) -> robot X (forward reach)
-        # VR up (Y+) -> robot Y (up)
         self.current_x += -delta_z  # VR Z (forward/back) -> robot X (reach)
         self.current_y += delta_y   # VR Y (up/down) -> robot Y (vertical)
-        
-        # Constrain x to be positive (arm can't reach behind shoulder)
-        self.current_x = max(0.01, self.current_x)
-        
-        # Debug: show position changes
+
         if abs(delta_y) > 0.001 or abs(delta_z) > 0.001:
             self.debug_print(f"[{self.prefix}] delta_y={delta_y:.4f}, delta_z={delta_z:.4f} -> x={self.current_x:.4f}, y={self.current_y:.4f}")
 
-        # Handle wrist angles with delta control - use relative changes (all in radians)
-        if hasattr(vr_goal, 'wrist_flex_deg') and vr_goal.wrist_flex_deg is not None:
-            # Initialize previous wrist_flex if not set
-            if not hasattr(self, 'prev_wrist_flex'):
-                self.prev_wrist_flex = vr_goal.wrist_flex_deg
-                return
-            
-            # Calculate relative change from previous frame (convert VR degrees to radians)
-            delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * angle_scale / 0.07
-            delta_pitch *= self.wrist_pitch_multiplier
-            delta_pitch = max(-angle_limit, min(angle_limit, delta_pitch))
-            self.pitch += delta_pitch
-            self.pitch = max(-math.pi/2, min(math.pi/2, self.pitch))  # Limit pitch range (±90°)
-            
-            # Update previous value for next frame
+        al = self.angle_limit
+        if vr_goal.wrist_flex_deg is not None:
+            if self.prev_wrist_flex is not None:
+                delta_pitch = math.radians(vr_goal.wrist_flex_deg - self.prev_wrist_flex) * self.wrist_pitch_multiplier
+                self.pitch = _clamp(self.pitch + _clamp(delta_pitch, -al, al), -math.pi / 2, math.pi / 2)
             self.prev_wrist_flex = vr_goal.wrist_flex_deg
-        
-        if hasattr(vr_goal, 'wrist_roll_deg') and vr_goal.wrist_roll_deg is not None:
-            # Initialize previous wrist_roll if not set
-            if not hasattr(self, 'prev_wrist_roll'):
-                self.prev_wrist_roll = vr_goal.wrist_roll_deg
-                return
-            
-            # Convert VR degrees to radians for delta
-            delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * angle_scale / 0.07
-            delta_roll *= self.wrist_roll_multiplier
-            delta_roll = max(-angle_limit, min(angle_limit, delta_roll))
-            
-            current_roll = self.target_positions.get("wrist_roll", 0.0)
-            new_roll = current_roll - delta_roll
-            new_roll = max(-math.pi/2, min(math.pi/2, new_roll))  # Limit roll range (±90°)
-            self.target_positions["wrist_roll"] = new_roll
-            
-            # Update previous value for next frame
-            self.prev_wrist_roll = vr_goal.wrist_roll_deg
-        
-        # VR X axis controls shoulder_pan joint (delta control)
-        if abs(delta_x) > 0.001:  # Only update if significant movement
-            x_scale = 3.5  # Scale factor for shoulder pan (radians)
-            delta_pan = delta_x * x_scale
-            delta_pan = max(-angle_limit, min(angle_limit, delta_pan))
-            current_pan = self.target_positions.get("shoulder_pan", 0.0)
-            new_pan = current_pan - delta_pan  # Negated to fix direction
-            new_pan = max(-math.pi/4, min(math.pi/4, new_pan))  # Limit pan range (±45°)
-            self.target_positions["shoulder_pan"] = new_pan
-        
-        try:
-            joint2_target, joint3_target = self.kinematics.inverse_kinematics(self.current_x, self.current_y)
-            # IK returns radians - use directly
-            
-            # Debug: print current position and IK results
-            self.debug_print(f"[{self.prefix}] x={self.current_x:.4f}, y={self.current_y:.4f} -> shoulder_lift={math.degrees(joint2_target):.1f}°, elbow_flex={math.degrees(joint3_target):.1f}°")
-            
-            # Smooth transition to new joint positions, Smoothing factor 0-1, higher = faster response
-            alpha = 0.3
-            self.target_positions["shoulder_lift"] = (1-alpha) * self.target_positions.get("shoulder_lift", 0.0) + alpha * joint2_target
-            self.target_positions["elbow_flex"] = (1-alpha) * self.target_positions.get("elbow_flex", 0.0) + alpha * joint3_target
-        except Exception as e:
-            self.debug_print(f"[{self.prefix}] VR IK failed: {e}")
-        
-        # Calculate wrist_flex to maintain end-effector orientation
-        self.target_positions["wrist_flex"] = (-self.target_positions["shoulder_lift"] - 
-                                               self.target_positions["elbow_flex"] + self.pitch)
-   
-        # Handle gripper state proportionally based on trigger value (in radians)
-        # Trigger value 0.0-1.0 maps to gripper 0.0-0.785 radians (~0-45 degrees)
-        trigger_value = vr_goal.metadata.get('trigger', 0)
-        trigger_value = max(0.0, min(1.0, trigger_value))  # Clamp to 0-1 range
-        self.target_positions["gripper"] = trigger_value * 0.785
 
-    def p_control_action(self, robot):
-        """
-        Generate proportional control action based on target positions.
-        
-        Args:
-            robot: Robot instance to get current observations
-            
-        Returns:
-            dict: Action dictionary with position commands for each joint
-        """
-        obs = robot.get_observation()
-        current = {j: obs[f"{self.prefix}_arm_{j}.pos"] for j in self.joint_map}
-        action = {}
-        for j in self.target_positions:
-            error = self.target_positions[j] - current[j]
-            control = self.kp * error
-            action[f"{self.joint_map[j]}.pos"] = current[j] + control
-        return action
+        if vr_goal.wrist_roll_deg is not None:
+            if self.prev_wrist_roll is not None:
+                delta_roll = math.radians(vr_goal.wrist_roll_deg - self.prev_wrist_roll) * self.wrist_roll_multiplier
+                self.target_positions["wrist_roll"] = _clamp(
+                    self.target_positions["wrist_roll"] - _clamp(delta_roll, -al, al),
+                    *ARM_JOINT_LIMITS["wrist_roll"])
+            self.prev_wrist_roll = vr_goal.wrist_roll_deg
+
+        # VR X axis controls shoulder_pan joint (delta control)
+        if abs(delta_x) > 0.001:
+            delta_pan = _clamp(delta_x * 3.5, -al, al)
+            self.target_positions["shoulder_pan"] = _clamp(
+                self.target_positions["shoulder_pan"] - delta_pan,  # Negated to fix direction
+                *ARM_JOINT_LIMITS["shoulder_pan"])
+
+    def _solve(self, dt):
+        """IK toward (current_x, current_y), smoothed, clamped, without wind-up."""
+        lift_lim = ARM_JOINT_LIMITS["shoulder_lift"]
+        elbow_lim = ARM_JOINT_LIMITS["elbow_flex"]
+
+        # Arm can't reach behind the shoulder; keep the target reachable.
+        self.current_x, self.current_y = self.kinematics.clamp_to_workspace(
+            max(0.01, self.current_x), self.current_y)
+        lift, elbow = self.kinematics.inverse_kinematics(self.current_x, self.current_y)
+        lift, elbow = _clamp(lift, *lift_lim), _clamp(elbow, *elbow_lim)
+        # Anti-windup: the target is wherever the clamped solution actually is,
+        # so pushing past a limit doesn't have to be "unwound" afterwards.
+        self.current_x, self.current_y = self.kinematics.forward_kinematics(lift, elbow)
+
+        alpha = 1.0 - math.exp(-max(dt, 0.0) / self.SMOOTHING_TAU)
+        t = self.target_positions
+        t["shoulder_lift"] = (1 - alpha) * t["shoulder_lift"] + alpha * lift
+        t["elbow_flex"] = (1 - alpha) * t["elbow_flex"] + alpha * elbow
+
+        # Wrist pitch holds end-effector orientation; clamp and back off pitch at the limit.
+        wrist = -t["shoulder_lift"] - t["elbow_flex"] + self.pitch
+        wrist_c = _clamp(wrist, *ARM_JOINT_LIMITS["wrist_flex"])
+        self.pitch += wrist_c - wrist
+        t["wrist_flex"] = wrist_c
+
+        self.debug_print(f"[{self.prefix}] x={self.current_x:.4f}, y={self.current_y:.4f} -> shoulder_lift={math.degrees(lift):.1f}°, elbow_flex={math.degrees(elbow):.1f}°")
 
 
 class AlfieArmKinematics:
@@ -330,9 +252,10 @@ class AlfieArmKinematics:
         if l2 is None:
             l2 = self.l2
         
-        # At shoulder_lift=0, L1 points down (-pi/2 from +X axis)
-        # Positive shoulder_lift rotates L1 forward (toward +X)
-        theta1 = -math.pi/2 + shoulder_lift
+        # At shoulder_lift=0, L1 points down (-pi/2 from +X axis).
+        # Servo convention: positive shoulder_lift rotates L1 backward (toward -X);
+        # this matches inverse_kinematics, which returns servo angles.
+        theta1 = -math.pi/2 - shoulder_lift
         
         # Elbow position
         x_elbow = l1 * math.cos(theta1)
@@ -363,7 +286,7 @@ class AlfieArmKinematics:
         if l1 is None:
             l1 = self.l1
         
-        theta1 = -math.pi/2 + shoulder_lift
+        theta1 = -math.pi/2 - shoulder_lift  # servo convention, see forward_kinematics
         x_elbow = l1 * math.cos(theta1)
         y_elbow = l1 * math.sin(theta1)
         
@@ -426,116 +349,21 @@ class AlfieArmKinematics:
         # on the correct side (below the line from shoulder to end effector)
         theta1 = target_angle - angle_at_shoulder
         
-        # Convert theta1 to shoulder_lift
-        # theta1 = -pi/2 + shoulder_lift, so shoulder_lift = theta1 + pi/2
+        # Convert theta1 to shoulder_lift (servo convention)
+        # theta1 = -pi/2 - shoulder_lift, so shoulder_lift = -(theta1 + pi/2)
         shoulder_lift = -(theta1 + math.pi/2)
         
         return shoulder_lift, elbow_flex
 
-    
-    def generate_sinusoidal_velocity_trajectory(
-        self,
-        start_point: Union[List[float], np.ndarray],
-        end_point: Union[List[float], np.ndarray],
-        control_freq: float = 100.0,  # Hz
-        total_time: float = 5.0,      # seconds
-        velocity_amplitude: float = 1.0,  # m/s
-        velocity_period: float = 2.0,     # seconds
-        phase_offset: float = 0.0         # radians
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Generate a straight-line trajectory with sinusoidal velocity profile.
-        
-        Parameters:
-        -----------
-        start_point : array-like
-            3D coordinates of starting point [x, y, z]
-        end_point : array-like  
-            3D coordinates of ending point [x, y, z]
-        control_freq : float
-            Control frequency in Hz
-        total_time : float
-            Total trajectory time in seconds
-        velocity_amplitude : float
-            Amplitude of velocity oscillation in m/s
-        velocity_period : float
-            Period of velocity oscillation in seconds
-        phase_offset : float
-            Phase offset in radians
-            
-        Returns:
-        --------
-        trajectory : np.ndarray
-            Array of 3D positions (n_points, 3)
-        velocities : np.ndarray
-            Array of velocity magnitudes (n_points,)
-        time_array : np.ndarray
-            Time array (n_points,)
-        """
-        
-        # Convert to numpy arrays
-        start = np.array(start_point, dtype=float)
-        end = np.array(end_point, dtype=float)
-        
-        # Calculate direction and distance
-        direction_vector = end - start
-        total_distance = np.linalg.norm(direction_vector)
-        direction_unit = direction_vector / total_distance if total_distance > 0 else np.zeros(3)
-        
-        # Generate time array
-        dt = 1.0 / control_freq
-        n_points = int(total_time * control_freq) + 1
-        time_array = np.linspace(0, total_time, n_points)
-        
-        # Calculate angular frequency
-        omega = 2 * np.pi / velocity_period
-        
-        # Generate sinusoidal velocity profile
-        base_velocity = total_distance / total_time  # Average velocity needed
-        velocities = base_velocity + velocity_amplitude * np.sin(omega * time_array + phase_offset)
-        
-        # Ensure non-negative velocities (optional - remove if negative velocities are desired)
-        velocities = np.maximum(velocities, 0.1 * base_velocity)
-        
-        # Integrate velocity to get position along the path
-        positions_1d = np.zeros(n_points)
-        for i in range(1, n_points):
-            positions_1d[i] = positions_1d[i-1] + velocities[i-1] * dt
-        
-        # Scale positions to fit exactly between start and end points
-        if positions_1d[-1] > 0:
-            positions_1d = positions_1d * (total_distance / positions_1d[-1])
-        
-        # Convert 1D positions to 3D trajectory
-        trajectory = np.zeros((n_points, 3))
-        for i in range(n_points):
-            progress = positions_1d[i] / total_distance if total_distance > 0 else 0
-            trajectory[i] = start + progress * direction_vector
-        
-        return trajectory, velocities, time_array
-    # Example usage
-    # if __name__ == "__main__":
-    #     # Define start and end points
-    #     start = [0, 0, 0]
-    #     end = [5, 3, 2]
-        
-    #     # Generate trajectory
-    #     trajectory, velocities, time_array = generate_sinusoidal_velocity_trajectory(
-    #         start_point=start,
-    #         end_point=end,
-    #         control_freq=100.0,
-    #         total_time=6.0,
-    #         velocity_amplitude=0.8,
-    #         velocity_period=1.5,
-    #         phase_offset=0
-    #     )
-        
-    #     print(f"Generated {len(trajectory)} trajectory points")
-    #     print(f"Total distance: {np.linalg.norm(np.array(end) - np.array(start)):.3f}")
-    #     print(f"Time duration: {time_array[-1]:.2f} seconds")
-    #     print(f"Average velocity: {velocities.mean():.3f} m/s")
-    #     print(f"Velocity range: {velocities.min():.3f} to {velocities.max():.3f} m/s")
-        
-    #     print("\nFirst few trajectory points:")
-    #     for i in range(0, min(10, len(trajectory)), 2):
-    #         print(f"t={time_array[i]:.2f}s: pos=[{trajectory[i,0]:.3f}, {trajectory[i,1]:.3f}, {trajectory[i,2]:.3f}], vel={velocities[i]:.3f} m/s")
+    def clamp_to_workspace(self, x, y, l1=None, l2=None):
+        """Project (x, y) onto the reachable annulus [|l1-l2|, l1+l2] (same margins as IK)."""
+        l1 = self.l1 if l1 is None else l1
+        l2 = self.l2 if l2 is None else l2
+        r = math.hypot(x, y)
+        r_max = (l1 + l2) * 0.999
+        r_min = abs(l1 - l2) * 1.001
+        if r > r_max:
+            return x * r_max / r, y * r_max / r
+        if 0 < r < r_min:
+            return x * r_min / r, y * r_min / r
+        return x, y

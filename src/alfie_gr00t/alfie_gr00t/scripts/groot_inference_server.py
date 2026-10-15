@@ -390,11 +390,19 @@ class JpegPolicyWrapper(BasePolicy):
 
         def rtc_get_action_with_features(
             backbone_features, state_features, embodiment_id, backbone_output,
+            action_input=None, options=None,
         ):
+            # N1.7 action_head.get_action() passes action_input/options as kwargs
             ctx = getattr(action_head, '_rtc_context', None)
             if ctx is None:
-                return original_fn(backbone_features, state_features,
-                                   embodiment_id, backbone_output)
+                return original_fn(
+                    backbone_features=backbone_features,
+                    state_features=state_features,
+                    embodiment_id=embodiment_id,
+                    backbone_output=backbone_output,
+                    action_input=action_input,
+                    options=options,
+                )
 
             committed = ctx['committed']  # (1, freeze_steps, action_dim) normalized tensor
             d = ctx['freeze_steps']
@@ -1065,13 +1073,13 @@ def main():
             mem_used = torch.cuda.memory_allocated() / 1024**3
             logger.info(f'GPU memory after TRT engine load: {mem_used:.2f} GB')
 
-            # Load PyTorch model WITHOUT DiT weights (skip_dit=True saves ~2GB)
-            logger.info(f'Loading Gr00tPolicy from {checkpoint} (skip_dit=True)...')
+            # N1.7 Gr00tPolicy has no skip_dit; DiT weights load here and are
+            # freed by replace_dit_with_tensorrt() below.
+            logger.info(f'Loading Gr00tPolicy from {checkpoint}...')
             policy = Gr00tPolicy(
                 embodiment_tag=embodiment_tag,
                 model_path=str(checkpoint),
                 device=args.device,
-                skip_dit=True,
                 strict=False,
             )
             gc.collect()

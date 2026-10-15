@@ -1,56 +1,79 @@
 // Controller Tracking Module
 // Handles VR controller WebSocket connection and input processing
+//
+// Client -> server protocol (JSON text frames):
+//   Tracking update (every 3rd XR frame):
+//     { timestamp, seq, leftController?, rightController?, headset? }
+//     A hand/headset key is OMITTED when it is not tracked this frame; the server
+//     treats a key that is absent for ~150ms as lost and releases that arm/head.
+//   { type: 'release_all', reason, timestamp }          - session end / page hidden
+//   { type: 'release_hand', hand: 'left'|'right', reason, timestamp } - input source removed
 
 import {
     CONFIG,
-    stereoSettings,
     connectionState,
-    xrState,
     leftController,
     rightController,
     headsetPose,
-    gripState,
-    invalidateSettingsHash,
     passthroughMode,
     centerViewState,
+    resetController,
+    resetHeadsetPose,
 } from './state.js';
+import { vrLog } from './ui_status.js';
 
-// Forward declaration for vrLog (will be set by main module)
-let vrLogFn = (msg) => console.log('[VR]', msg);
+// Per-frame tracking validity (only tracked data is ever sent)
+const tracked = {
+    left: false,
+    right: false,
+    headset: false,
+};
 
-export function setVrLogFunction(fn) {
-    vrLogFn = fn;
-}
+// Monotonic sequence number for tracking messages
+let messageSeq = 0;
+
+// Reconnect state
+let reconnectDelayMs = CONFIG.CONTROLLER_WS_BACKOFF_INITIAL_MS;
+let reconnectTimer = null;
 
 // ========================================
 // Quaternion Math
 // ========================================
 
+const RAD_TO_DEG = 180 / Math.PI;
+
 // Quaternion to Euler angles conversion (in degrees)
+// WebXR is Y-up, -Z forward. Decomposes as intrinsic Y-X-Z:
+// yaw about Y, then pitch about X, then roll about Z (R = Ry * Rx * Rz).
+// Returns { x: pitch, y: yaw, z: roll }. Yaw covers the full +/-180 range;
+// pitch is limited to +/-90 (gimbal lock at straight up/down).
 export function quaternionToEuler(q) {
-    // Roll (x-axis rotation)
-    const sinr_cosp = 2 * (q.w * q.x + q.y * q.z);
-    const cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y);
-    const roll = Math.atan2(sinr_cosp, cosr_cosp);
-    
-    // Pitch (y-axis rotation)
-    const sinp = 2 * (q.w * q.y - q.z * q.x);
-    let pitch;
-    if (Math.abs(sinp) >= 1) {
-        pitch = Math.sign(sinp) * Math.PI / 2; // Use 90 degrees if out of range
+    const { x, y, z, w } = q;
+
+    // Rotation matrix elements needed for the YXZ decomposition
+    const m13 = 2 * (x * z + w * y);
+    const m23 = 2 * (y * z - w * x);
+    const m33 = 1 - 2 * (x * x + y * y);
+    const m21 = 2 * (x * y + w * z);
+    const m22 = 1 - 2 * (x * x + z * z);
+    const m31 = 2 * (x * z - w * y);
+    const m11 = 1 - 2 * (y * y + z * z);
+
+    const pitch = Math.asin(Math.max(-1, Math.min(1, -m23)));
+    let yaw, roll;
+    if (Math.abs(m23) < 0.9999999) {
+        yaw = Math.atan2(m13, m33);
+        roll = Math.atan2(m21, m22);
     } else {
-        pitch = Math.asin(sinp);
+        // Gimbal lock: looking straight up/down, fold roll into yaw
+        yaw = Math.atan2(-m31, m11);
+        roll = 0;
     }
-    
-    // Yaw (z-axis rotation)
-    const siny_cosp = 2 * (q.w * q.z + q.x * q.y);
-    const cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
-    const yaw = Math.atan2(siny_cosp, cosy_cosp);
-    
+
     return {
-        x: roll * 180 / Math.PI,
-        y: pitch * 180 / Math.PI,
-        z: yaw * 180 / Math.PI
+        x: pitch * RAD_TO_DEG,
+        y: yaw * RAD_TO_DEG,
+        z: roll * RAD_TO_DEG
     };
 }
 
@@ -58,177 +81,229 @@ export function quaternionToEuler(q) {
 // Controller WebSocket Functions
 // ========================================
 
+function isSocketOpen() {
+    const ws = connectionState.controllerWS;
+    return !!ws && ws.readyState === WebSocket.OPEN;
+}
+
+function scheduleReconnect() {
+    if (reconnectTimer) return;
+    const delay = reconnectDelayMs;
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, CONFIG.CONTROLLER_WS_BACKOFF_MAX_MS);
+    console.log(`Controller WebSocket reconnecting in ${delay}ms`);
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        initControllerWebSocket();
+    }, delay);
+}
+
 export function initControllerWebSocket() {
     const wsUrl = `wss://${window.location.hostname}:${CONFIG.CONTROLLER_WS_PORT}`;
     console.log(`Connecting to controller WebSocket: ${wsUrl}`);
-    
+
+    let ws;
     try {
-        connectionState.controllerWS = new WebSocket(wsUrl);
-        
-        connectionState.controllerWS.onopen = () => {
-            console.log('Controller WebSocket connected');
-            connectionState.controllerWSRetryCount = 0;
-            vrLogFn('Controller WS: Connected');
-        };
-        
-        connectionState.controllerWS.onerror = (error) => {
-            console.error('Controller WebSocket error:', error);
-            vrLogFn('Controller WS: Error');
-        };
-        
-        connectionState.controllerWS.onclose = (event) => {
-            console.log(`Controller WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`);
-            connectionState.controllerWS = null;
-            vrLogFn('Controller WS: Disconnected');
-            
-            // Retry connection
-            if (connectionState.controllerWSRetryCount < CONFIG.CONTROLLER_WS_MAX_RETRIES) {
-                connectionState.controllerWSRetryCount++;
-                setTimeout(initControllerWebSocket, 3000);
-            }
-        };
-        
-        connectionState.controllerWS.onmessage = (event) => {
-            // Handle commands from the server
-            try {
-                const data = JSON.parse(event.data);
-                if (data.command === 'passthrough_mode') {
-                    passthroughMode.active = data.active;
-                    console.log(`Passthrough mode: ${data.active ? 'ON' : 'OFF'}`);
-                    vrLogFn(`Passthrough: ${data.active ? 'ON' : 'OFF'}`);
-                } else {
-                    console.log('Controller WS message:', event.data);
-                }
-            } catch (e) {
-                console.log('Controller WS message:', event.data);
-            }
-        };
+        ws = new WebSocket(wsUrl);
     } catch (error) {
         console.error('Failed to create controller WebSocket:', error);
-        if (connectionState.controllerWSRetryCount < CONFIG.CONTROLLER_WS_MAX_RETRIES) {
-            connectionState.controllerWSRetryCount++;
-            setTimeout(initControllerWebSocket, 3000);
-        }
+        scheduleReconnect();
+        return;
     }
+    connectionState.controllerWS = ws;
+
+    ws.onopen = () => {
+        console.log('Controller WebSocket connected');
+        reconnectDelayMs = CONFIG.CONTROLLER_WS_BACKOFF_INITIAL_MS;
+        vrLog('Controller WS: Connected');
+    };
+
+    ws.onerror = (error) => {
+        console.error('Controller WebSocket error:', error);
+        vrLog('Controller WS: Error');
+    };
+
+    ws.onclose = (event) => {
+        console.log(`Controller WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`);
+        if (connectionState.controllerWS === ws) {
+            connectionState.controllerWS = null;
+        }
+        vrLog('Controller WS: Disconnected');
+        scheduleReconnect();  // Retry forever with backoff
+    };
+
+    ws.onmessage = (event) => {
+        // Handle commands from the server
+        try {
+            const data = JSON.parse(event.data);
+            if (data.command === 'passthrough_mode') {
+                passthroughMode.active = data.active;
+                console.log(`Passthrough mode: ${data.active ? 'ON' : 'OFF'}`);
+                vrLog(`Passthrough: ${data.active ? 'ON' : 'OFF'}`);
+            } else {
+                console.log('Controller WS message:', event.data);
+            }
+        } catch (e) {
+            console.log('Controller WS message:', event.data);
+        }
+    };
+}
+
+function serializeController(controller) {
+    // Deep copies so later state mutation can't affect a queued message
+    return {
+        hand: controller.hand,
+        position: { ...controller.position },
+        rotation: controller.rotation ? { ...controller.rotation } : null,
+        quaternion: controller.quaternion ? { ...controller.quaternion } : null,
+        gripActive: controller.gripActive,
+        trigger: controller.trigger,
+        thumbstick: { ...controller.thumbstick },
+        buttons: { ...controller.buttons }
+    };
 }
 
 export function sendControllerData() {
-    if (!connectionState.controllerWS || connectionState.controllerWS.readyState !== WebSocket.OPEN) return;
-    
-    const hasValidLeft = leftController.position !== null;
-    const hasValidRight = rightController.position !== null;
+    if (!isSocketOpen()) return;
+    const ws = connectionState.controllerWS;
+
+    // Drop rather than queue: a backlog of stale commands is worse than a gap
+    if (ws.bufferedAmount > CONFIG.CONTROLLER_WS_MAX_BUFFERED) return;
+
+    const hasValidLeft = tracked.left && leftController.position !== null;
+    const hasValidRight = tracked.right && rightController.position !== null;
     // Suppress headset data when passthrough mode is active
-    const hasValidHeadset = !passthroughMode.active && headsetPose.position !== null;
-    
-    if (hasValidLeft || hasValidRight || hasValidHeadset) {
-        // Create deep copies to avoid race conditions with concurrent state access
-        const data = {
-            timestamp: Date.now(),
-            leftController: hasValidLeft ? {
-                hand: leftController.hand,
-                position: { ...leftController.position },
-                rotation: leftController.rotation ? { ...leftController.rotation } : null,
-                quaternion: leftController.quaternion ? { ...leftController.quaternion } : null,
-                gripActive: leftController.gripActive,
-                trigger: leftController.trigger,
-                thumbstick: { ...leftController.thumbstick },
-                buttons: { ...leftController.buttons }
-            } : null,
-            rightController: hasValidRight ? {
-                hand: rightController.hand,
-                position: { ...rightController.position },
-                rotation: rightController.rotation ? { ...rightController.rotation } : null,
-                quaternion: rightController.quaternion ? { ...rightController.quaternion } : null,
-                gripActive: rightController.gripActive,
-                trigger: rightController.trigger,
-                thumbstick: { ...rightController.thumbstick },
-                buttons: { ...rightController.buttons }
-            } : null,
-            headset: hasValidHeadset ? {
-                position: { ...headsetPose.position },
-                rotation: headsetPose.rotation ? { ...headsetPose.rotation } : null,
-                quaternion: headsetPose.quaternion ? { ...headsetPose.quaternion } : null
-            } : null
+    const hasValidHeadset = tracked.headset && !passthroughMode.active && headsetPose.position !== null;
+
+    if (!hasValidLeft && !hasValidRight && !hasValidHeadset) return;
+
+    const data = {
+        timestamp: Date.now(),
+        seq: ++messageSeq,
+    };
+    // Untracked keys are omitted entirely (never null / never stale)
+    if (hasValidLeft) data.leftController = serializeController(leftController);
+    if (hasValidRight) data.rightController = serializeController(rightController);
+    if (hasValidHeadset) {
+        data.headset = {
+            position: { ...headsetPose.position },
+            rotation: headsetPose.rotation ? { ...headsetPose.rotation } : null,
+            quaternion: headsetPose.quaternion ? { ...headsetPose.quaternion } : null
         };
-        connectionState.controllerWS.send(JSON.stringify(data));
     }
+    ws.send(JSON.stringify(data));
+}
+
+// Best-effort safety messages: sent regardless of bufferedAmount
+function sendSafetyMessage(message) {
+    if (!isSocketOpen()) return false;
+    try {
+        connectionState.controllerWS.send(JSON.stringify(message));
+        return true;
+    } catch (e) {
+        console.warn('Failed to send safety message:', e);
+        return false;
+    }
+}
+
+export function sendReleaseAll(reason) {
+    if (sendSafetyMessage({ type: 'release_all', reason: reason, timestamp: Date.now() })) {
+        console.log(`Sent release_all (${reason})`);
+    }
+}
+
+export function sendReleaseHand(hand, reason) {
+    if (sendSafetyMessage({ type: 'release_hand', hand: hand, reason: reason, timestamp: Date.now() })) {
+        console.log(`Sent release_hand ${hand} (${reason})`);
+    }
+}
+
+// Clear all tracking state (session end / page hidden)
+export function resetTracking() {
+    tracked.left = false;
+    tracked.right = false;
+    tracked.headset = false;
+    resetController(leftController);
+    resetController(rightController);
+    resetHeadsetPose();
+    centerViewState.lastButtonState = false;
 }
 
 // ========================================
 // XR Input Processing
 // ========================================
 
-// Process XR input sources to extract controller data
-export function processInputSources(frame, refSpace, session = null) {
-    const xrSession = session || xrState.session;
-    if (!xrSession || !xrSession.inputSources) return;
-    
-    for (const inputSource of xrSession.inputSources) {
-        if (inputSource.targetRayMode !== 'tracked-pointer') continue;
-        
-        const handedness = inputSource.handedness; // 'left' or 'right'
-        const controller = handedness === 'left' ? leftController : rightController;
-        
-        // Get grip pose (hand position/rotation)
-        const gripSpace = inputSource.gripSpace;
-        if (gripSpace) {
-            const gripPose = frame.getPose(gripSpace, refSpace);
-            if (gripPose) {
-                const pos = gripPose.transform.position;
-                const ori = gripPose.transform.orientation;
-                
-                controller.position = { x: pos.x, y: pos.y, z: pos.z };
-                controller.quaternion = { x: ori.x, y: ori.y, z: ori.z, w: ori.w };
-                controller.rotation = quaternionToEuler(controller.quaternion);
-            }
+function controllerForHand(hand) {
+    return hand === 'left' ? leftController : (hand === 'right' ? rightController : null);
+}
+
+function hasOtherGamepadSource(session, hand, removedSources) {
+    for (const source of session.inputSources || []) {
+        if (removedSources.includes(source)) continue;
+        if (source.handedness === hand && source.gamepad && source.targetRayMode === 'tracked-pointer') {
+            return true;
         }
-        
-        // Get gamepad data (buttons, triggers, thumbsticks)
-        const gamepad = inputSource.gamepad;
-        if (gamepad) {
+    }
+    return false;
+}
+
+// XRSession 'inputsourceschange': release a hand whose controller disappeared
+export function handleInputSourcesChange(event) {
+    const session = event.session;
+    const removed = Array.from(event.removed || []);
+    for (const source of removed) {
+        const hand = source.handedness;
+        const controller = controllerForHand(hand);
+        if (!controller) continue;
+        // Another gamepad source may already have taken over this hand
+        if (session && hasOtherGamepadSource(session, hand, removed)) continue;
+        tracked[hand] = false;
+        resetController(controller);
+        if (hand === 'left') centerViewState.lastButtonState = false;
+        sendReleaseHand(hand, 'input_source_removed');
+        vrLog(`Controller lost: ${hand}`);
+    }
+}
+
+// Process XR input sources to extract controller data
+// A hand only counts as tracked this frame if it has a gamepad AND a grip pose
+export function processInputSources(frame, refSpace, session) {
+    const seen = { left: false, right: false };
+    // Input is not delivered to blurred/hidden sessions (system menu etc.)
+    const inputAvailable = session && session.inputSources &&
+        (!session.visibilityState || session.visibilityState === 'visible');
+
+    if (inputAvailable) {
+        for (const inputSource of session.inputSources) {
+            if (inputSource.targetRayMode !== 'tracked-pointer') continue;
+
+            const handedness = inputSource.handedness; // 'left' or 'right'
+            const controller = controllerForHand(handedness);
+            const gamepad = inputSource.gamepad;
+            if (!controller || !gamepad || !inputSource.gripSpace) continue;
+
+            // Get grip pose (hand position/rotation)
+            const gripPose = frame.getPose(inputSource.gripSpace, refSpace);
+            if (!gripPose) continue;
+
+            const pos = gripPose.transform.position;
+            const ori = gripPose.transform.orientation;
+            controller.position = { x: pos.x, y: pos.y, z: pos.z };
+            controller.quaternion = { x: ori.x, y: ori.y, z: ori.z, w: ori.w };
+            controller.rotation = quaternionToEuler(controller.quaternion);
+
             // Trigger (index 0)
-            if (gamepad.buttons[0]) {
-                controller.trigger = gamepad.buttons[0].value || 0;
-            }
-            
+            controller.trigger = gamepad.buttons[0] ? (gamepad.buttons[0].value || 0) : 0;
+
             // Squeeze/Grip (index 1)
             const isGripPressed = gamepad.buttons[1]?.pressed || false;
-            
-            // Track grip state changes
-            if (handedness === 'left') {
-                if (isGripPressed && !gripState.leftGripDown) {
-                    gripState.leftGripDown = true;
-                    gripState.leftInitialQuaternion = controller.quaternion ? { ...controller.quaternion } : null;
-                } else if (!isGripPressed && gripState.leftGripDown) {
-                    gripState.leftGripDown = false;
-                    gripState.leftInitialQuaternion = null;
-                    // Send grip release message
-                    if (connectionState.controllerWS && connectionState.controllerWS.readyState === WebSocket.OPEN) {
-                        connectionState.controllerWS.send(JSON.stringify({ hand: 'left', gripReleased: true }));
-                    }
-                }
-                controller.gripActive = gripState.leftGripDown;
-            } else {
-                if (isGripPressed && !gripState.rightGripDown) {
-                    gripState.rightGripDown = true;
-                    gripState.rightInitialQuaternion = controller.quaternion ? { ...controller.quaternion } : null;
-                } else if (!isGripPressed && gripState.rightGripDown) {
-                    gripState.rightGripDown = false;
-                    gripState.rightInitialQuaternion = null;
-                    // Send grip release message
-                    if (connectionState.controllerWS && connectionState.controllerWS.readyState === WebSocket.OPEN) {
-                        connectionState.controllerWS.send(JSON.stringify({ hand: 'right', gripReleased: true }));
-                    }
-                }
-                controller.gripActive = gripState.rightGripDown;
-            }
-            
+            controller.gripActive = isGripPressed;
+
             // Thumbstick axes (axes 2, 3)
             controller.thumbstick = {
                 x: gamepad.axes[2] || 0,
                 y: gamepad.axes[3] || 0
             };
-            
+
             // Buttons
             if (handedness === 'left') {
                 const thumbstickPressed = !!gamepad.buttons[3]?.pressed;
@@ -243,7 +318,7 @@ export function processInputSources(frame, refSpace, session = null) {
                 // Toggle center view on left thumbstick button press (edge detection)
                 if (thumbstickPressed && !centerViewState.lastButtonState) {
                     centerViewState.visible = !centerViewState.visible;
-                    vrLogFn(`Center view: ${centerViewState.visible ? 'ON' : 'OFF'}`);
+                    vrLog(`Center view: ${centerViewState.visible ? 'ON' : 'OFF'}`);
                 }
                 centerViewState.lastButtonState = thumbstickPressed;
             } else {
@@ -255,50 +330,34 @@ export function processInputSources(frame, refSpace, session = null) {
                     menu: !!gamepad.buttons[6]?.pressed
                 };
             }
+
+            seen[handedness] = true;
         }
+    }
+
+    // Hands not seen this frame are cleared so their keys are omitted from the next send
+    for (const hand of ['left', 'right']) {
+        if (!seen[hand] && tracked[hand]) {
+            resetController(controllerForHand(hand));
+            if (hand === 'left') centerViewState.lastButtonState = false;
+        }
+        tracked[hand] = seen[hand];
     }
 }
 
-// Process headset pose
+// Process headset pose (null / emulatedPosition = tracking lost -> omitted)
 export function processHeadsetPose(pose) {
-    if (!pose || !pose.transform) return;
-    
+    if (!pose || !pose.transform || pose.emulatedPosition) {
+        tracked.headset = false;
+        resetHeadsetPose();
+        return;
+    }
+
     const pos = pose.transform.position;
     const ori = pose.transform.orientation;
-    
+
     headsetPose.position = { x: pos.x, y: pos.y, z: pos.z };
     headsetPose.quaternion = { x: ori.x, y: ori.y, z: ori.z, w: ori.w };
     headsetPose.rotation = quaternionToEuler(headsetPose.quaternion);
-}
-
-// Use thumbsticks to adjust stereo settings in VR
-export function processThumbstickAdjustments() {
-    // Left thumbstick Y: vertical offset - DISABLED to prevent conflict with robot control
-    /*
-    if (Math.abs(leftController.thumbstick?.y || 0) > 0.1) {
-        stereoSettings.verticalOffset += leftController.thumbstick.y * 0.005;
-        stereoSettings.verticalOffset = Math.max(-1, Math.min(1, stereoSettings.verticalOffset));
-        invalidateSettingsHash();
-    }
-    */
-    
-    // Right thumbstick X: IPD offset - DISABLED
-    /*
-    if (Math.abs(rightController.thumbstick?.x || 0) > 0.1) {
-        stereoSettings.ipdOffset += rightController.thumbstick.x * 0.0005;
-        stereoSettings.ipdOffset = Math.max(-0.05, Math.min(0.05, stereoSettings.ipdOffset));
-    }
-    */
-    
-    // Triggers: screen distance - DISABLED
-    /*
-    if ((leftController.trigger || 0) > 0.5) {
-        stereoSettings.screenDistance -= 0.02;
-        stereoSettings.screenDistance = Math.max(0.5, stereoSettings.screenDistance);
-    }
-    if ((rightController.trigger || 0) > 0.5) {
-        stereoSettings.screenDistance += 0.02;
-        stereoSettings.screenDistance = Math.max(0.5, Math.min(5, stereoSettings.screenDistance));
-    }
-    */
+    tracked.headset = true;
 }

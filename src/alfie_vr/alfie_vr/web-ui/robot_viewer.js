@@ -1,6 +1,8 @@
 // Robot Viewer Module - Lightweight Three.js URDF visualization
 // Uses URDF and TF data from robot_state.js instead of its own Foxglove connection
 
+import { buildUrdfRobot, applyLinkTransform } from './urdf_builder.js';
+
 // ========================================
 // Module State
 // ========================================
@@ -8,10 +10,8 @@ let scene = null;
 let camera = null;
 let renderer = null;
 let container = null;
-let robot = null;
+let robotModel = null;  // Result of buildUrdfRobot()
 let links = {};
-let joints = {};
-let transforms = {};
 let urdfLoaded = false;
 
 // Camera controls
@@ -25,9 +25,6 @@ let animationId = null;
 let lastFrameTime = 0;
 const targetFPS = 10;
 const frameInterval = 1000 / targetFPS;
-
-// Material definitions from URDF
-let materialDefs = {};
 
 // ========================================
 // Initialization
@@ -215,239 +212,24 @@ export function loadURDF(urdfString) {
     }
     
     try {
-        const parser = new DOMParser();
-        const urdfDoc = parser.parseFromString(urdfString, 'text/xml');
-        const robotEl = urdfDoc.querySelector('robot');
-        
-        if (!robotEl) {
-            console.error('No robot element found in URDF');
+        const built = buildUrdfRobot(urdfString, { log: (msg) => console.log(msg) });
+        if (!built) {
+            console.error('Failed to build robot from URDF');
             return;
         }
         
-        const robotName = robotEl.getAttribute('name') || 'robot';
-        console.log(`Loading URDF for robot: ${robotName}`);
-        
         // Clear existing robot
-        if (robot) {
-            scene.remove(robot);
+        if (robotModel) {
+            robotModel.dispose();
         }
         
-        robot = new THREE.Group();
-        robot.name = robotName;
-        links = {};
-        joints = {};
-        
-        // Parse material definitions from URDF root
-        materialDefs = {};
-        urdfDoc.querySelectorAll('robot > material').forEach(matEl => {
-            const matName = matEl.getAttribute('name');
-            const colorEl = matEl.querySelector('color');
-            if (matName && colorEl) {
-                const rgba = colorEl.getAttribute('rgba').split(' ').map(parseFloat);
-                materialDefs[matName] = new THREE.Color(rgba[0], rgba[1], rgba[2]);
-            }
-        });
-        
-        // Parse links
-        const linkElements = urdfDoc.querySelectorAll('link');
-        const childLinks = new Set();
-        
-        linkElements.forEach(linkEl => {
-            const linkName = linkEl.getAttribute('name');
-            const visuals = linkEl.querySelectorAll('visual');
-            
-            const linkGroup = new THREE.Group();
-            linkGroup.name = linkName;
-            
-            visuals.forEach(visual => {
-                const geometry = visual.querySelector('geometry');
-                const origin = visual.querySelector('origin');
-                const material = visual.querySelector('material');
-                
-                if (geometry) {
-                    const mesh = createGeometry(geometry, origin, material);
-                    if (mesh) {
-                        linkGroup.add(mesh);
-                    }
-                }
-            });
-            
-            links[linkName] = linkGroup;
-        });
-        
-        // Parse joints to build hierarchy
-        const jointElements = urdfDoc.querySelectorAll('joint');
-        
-        jointElements.forEach(jointEl => {
-            const jointName = jointEl.getAttribute('name');
-            const jointType = jointEl.getAttribute('type');
-            const parent = jointEl.querySelector('parent')?.getAttribute('link');
-            const child = jointEl.querySelector('child')?.getAttribute('link');
-            const origin = jointEl.querySelector('origin');
-            const axis = jointEl.querySelector('axis');
-            
-            joints[jointName] = {
-                type: jointType,
-                parent: parent,
-                child: child,
-                axis: axis ? axis.getAttribute('xyz').split(' ').map(parseFloat) : [0, 0, 1]
-            };
-            
-            if (parent && child && links[parent] && links[child]) {
-                childLinks.add(child);
-                
-                if (origin) {
-                    const xyz = origin.getAttribute('xyz');
-                    const rpy = origin.getAttribute('rpy');
-                    
-                    if (xyz) {
-                        const pos = xyz.split(' ').map(parseFloat);
-                        links[child].position.set(pos[0], pos[1], pos[2]);
-                    }
-                    if (rpy) {
-                        const rot = rpy.split(' ').map(parseFloat);
-                        links[child].rotation.order = 'ZYX';
-                        links[child].rotation.set(rot[0], rot[1], rot[2]);
-                    }
-                }
-                
-                links[parent].add(links[child]);
-            }
-        });
-        
-        // Add root links to robot
-        Object.keys(links).forEach(linkName => {
-            if (!childLinks.has(linkName)) {
-                robot.add(links[linkName]);
-            }
-        });
-        
-        // Rotate for ROS -> Three.js coordinate conversion (Z-up to Y-up)
-        robot.rotation.x = -Math.PI / 2;
-        
-        scene.add(robot);
+        robotModel = built;
+        links = built.links;
+        scene.add(built.robot);
         urdfLoaded = true;
-        
-        console.log(`URDF loaded: ${Object.keys(links).length} links, ${Object.keys(joints).length} joints`);
         
     } catch (error) {
         console.error('Error parsing URDF:', error);
-    }
-}
-
-function createGeometry(geometry, origin, material) {
-    const box = geometry.querySelector('box');
-    const cylinder = geometry.querySelector('cylinder');
-    const sphere = geometry.querySelector('sphere');
-    const meshEl = geometry.querySelector('mesh');
-    
-    let geom = null;
-    let mesh = null;
-    
-    if (box) {
-        const size = box.getAttribute('size').split(' ').map(parseFloat);
-        geom = new THREE.BoxGeometry(size[0], size[1], size[2]);
-    } else if (cylinder) {
-        const radius = parseFloat(cylinder.getAttribute('radius'));
-        const length = parseFloat(cylinder.getAttribute('length'));
-        geom = new THREE.CylinderGeometry(radius, radius, length, 16);
-    } else if (sphere) {
-        const radius = parseFloat(sphere.getAttribute('radius'));
-        geom = new THREE.SphereGeometry(radius, 16, 16);
-    } else if (meshEl) {
-        // Load OBJ mesh asynchronously
-        const filename = meshEl.getAttribute('filename');
-        const scaleAttr = meshEl.getAttribute('scale');
-        
-        if (filename && filename.startsWith('package://alfie_urdf/meshes/') && filename.endsWith('.obj')) {
-            const meshName = filename.replace('package://alfie_urdf/meshes/', '');
-            const meshUrl = `/meshes/${meshName}`;
-            
-            // Create placeholder group to add mesh to when loaded
-            const placeholder = new THREE.Group();
-            
-            if (typeof THREE.OBJLoader !== 'undefined') {
-                const loader = new THREE.OBJLoader();
-                loader.load(
-                    meshUrl,
-                    (obj) => {
-                        const matColor = getMaterialColor(material);
-                        obj.traverse((child) => {
-                            if (child.isMesh) {
-                                child.material = new THREE.MeshStandardMaterial({
-                                    color: matColor,
-                                    metalness: 0.3,
-                                    roughness: 0.7
-                                });
-                            }
-                        });
-                        
-                        if (scaleAttr) {
-                            const scaleVals = scaleAttr.split(' ').map(parseFloat);
-                            obj.scale.set(scaleVals[0], scaleVals[1], scaleVals[2]);
-                        }
-                        
-                        applyOrigin(obj, origin);
-                        placeholder.add(obj);
-                    },
-                    undefined,
-                    (error) => console.warn('Failed to load mesh:', meshUrl, error)
-                );
-            }
-            
-            return placeholder;
-        } else {
-            // Fallback placeholder for unsupported mesh formats
-            geom = new THREE.BoxGeometry(0.03, 0.03, 0.03);
-        }
-    }
-    
-    if (geom) {
-        const color = getMaterialColor(material);
-        const mat = new THREE.MeshStandardMaterial({
-            color: color,
-            metalness: 0.3,
-            roughness: 0.7
-        });
-        
-        mesh = new THREE.Mesh(geom, mat);
-        applyOrigin(mesh, origin);
-    }
-    
-    return mesh;
-}
-
-function getMaterialColor(materialEl) {
-    if (!materialEl) return 0x666666;
-    
-    const colorEl = materialEl.querySelector('color');
-    if (colorEl) {
-        const rgba = colorEl.getAttribute('rgba').split(' ').map(parseFloat);
-        return new THREE.Color(rgba[0], rgba[1], rgba[2]);
-    }
-    
-    const matName = materialEl.getAttribute('name');
-    if (matName && materialDefs[matName]) {
-        return materialDefs[matName];
-    }
-    
-    return 0x666666;
-}
-
-function applyOrigin(object, origin) {
-    if (!origin) return;
-    
-    const xyz = origin.getAttribute('xyz');
-    const rpy = origin.getAttribute('rpy');
-    
-    if (xyz) {
-        const pos = xyz.split(' ').map(parseFloat);
-        object.position.set(pos[0], pos[1], pos[2]);
-    }
-    if (rpy) {
-        const rot = rpy.split(' ').map(parseFloat);
-        object.rotation.order = 'ZYX';
-        object.rotation.set(rot[0], rot[1], rot[2]);
     }
 }
 
@@ -459,37 +241,15 @@ function applyOrigin(object, origin) {
 let tfApplyCount = 0;
 
 export function applyTransform(childFrameId, transform) {
-    if (!transform) return;
+    if (!transform || !urdfLoaded) return;
     
-    // Try exact match first, then try without leading slash
-    let link = links[childFrameId];
-    if (!link) {
-        const cleanName = childFrameId.replace(/^\//, '');
-        link = links[cleanName];
-    }
-    
-    if (!link) {
+    if (!applyLinkTransform(links, childFrameId, transform)) {
         // Log first few misses for debugging
         if (tfApplyCount < 5) {
             console.log('TF frame not found in links:', childFrameId, 'Available:', Object.keys(links).slice(0, 10));
         }
         tfApplyCount++;
         return;
-    }
-    
-    // Apply position
-    if (transform.position) {
-        link.position.set(transform.position.x, transform.position.y, transform.position.z);
-    }
-    
-    // Apply rotation (quaternion)
-    if (transform.quaternion) {
-        link.quaternion.set(
-            transform.quaternion.x,
-            transform.quaternion.y,
-            transform.quaternion.z,
-            transform.quaternion.w
-        );
     }
     
     // Log first successful update
