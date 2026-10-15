@@ -296,7 +296,8 @@ def generate_launch_description():
 
 
         # Stereo USB camera - GStreamer pipeline for dual-resolution output
-        # Produces 4 streams: left_wide, right_wide, left_center, right_center (all 640x480)
+        # Produces 4 streams: left_wide, right_wide, left_center, right_center (all output_width x output_height)
+        # Wide = whole eye center-cropped to the output aspect then scaled; center = 1:1 crop
         Node(
             package='alfie_bringup',
             namespace='alfie',
@@ -312,8 +313,8 @@ def generate_launch_description():
                 # 'framerate': 15,
                 'source_width': 1600,  # Max resolution for ELP H120
                 'source_height': 600,  # Max resolution for ELP H120
-                'output_width': 320,   # Output resolution width
-                'output_height': 240,  # Output resolution height
+                'output_width': 352,   # Output resolution width (GR00T model input)
+                'output_height': 256,  # Output resolution height
                 'framerate': 15,
                 'jpeg_quality': 70,
                 'use_hardware_accel': True,

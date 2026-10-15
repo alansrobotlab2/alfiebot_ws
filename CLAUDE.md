@@ -38,7 +38,7 @@ The server can run as either:
 
 ## Key Components
  - `nodes/groot_client.py` — ROS2 client node. Collects observations, sends to server, publishes actions at 100Hz.
- - `core/observation_bridge.py` — Subscribes to 4 camera topics + robot state, synchronizes them, resizes images to 320x240, packages as JPEG bytes for ZMQ.
+ - `core/observation_bridge.py` — Subscribes to 4 camera topics + robot state, synchronizes them, center-crops/resizes images to 352x256 (`core/image_utils.fit_image`, no-op at native size), packages as JPEG bytes for ZMQ.
  - `core/action_publisher.py` — Receives 16-step action chunks from the server, steps through them at the training rate (15 FPS), applies smoothing and safety limits, publishes servo commands at 100Hz.
  - `core/zmq_client.py` — ZMQ REQ/REP client for communicating with the server.
  - `scripts/groot_inference_server.py` — Standalone inference server. Loads the GR00T checkpoint, receives JPEG images + state via ZMQ msgpack, runs inference, returns raw unnormalized actions.
@@ -65,7 +65,9 @@ Ping: Client sends `{'ping': True}`, server returns `{'pong': True}`.
 `[0:6]` base velocity (linear xyz, angular xyz), `[6]` back height, `[7:12]` left arm (5 joints), `[12]` left gripper, `[13:18]` right arm (5 joints), `[18]` right gripper, `[19:22]` head (3 joints).
 
 ## Image Pipeline
-Camera (640x480 JPEG) -> observation_bridge resizes to 320x240 RGB -> JPEG Q95 encode -> ZMQ -> server JPEG decode -> BGR->RGB -> GR00T processor applies eval transforms (SmallestMaxSize -> CenterCrop -> SmallestMaxSize to 224x224).
+Camera (352x256 JPEG; wide = 800x600 eye center-cropped to 800x582 then scaled, center = 1:1 352x256 crop) -> observation_bridge `fit_image` (center-crop to 352:256 aspect + resize; no-op for live frames) -> RGB -> JPEG Q95 encode -> ZMQ -> server JPEG decode -> BGR->RGB -> GR00T processor applies eval transforms (SmallestMaxSize -> CenterCrop -> SmallestMaxSize to 224x224).
+
+Image size is defined once in `alfie_gr00t/core/image_utils.py` (IMAGE_WIDTH/IMAGE_HEIGHT); `scripts/rosbag_to_groot.py` keeps a standalone copy of `fit_image` that must stay in sync.
 
 Training images go through an additional H.264 yuv420p encode/decode in rosbag_to_groot.py (libx264, CRF=23) before being stored as MP4. The observation_bridge has an optional `h264_conditioning` flag to replicate this on live images.
 

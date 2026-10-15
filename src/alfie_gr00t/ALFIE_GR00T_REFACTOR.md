@@ -156,7 +156,7 @@ The refactor plan's main thesis was that `n_action_steps < 16` would make the sy
 alfie_gr00t/
   core/
     action_publisher.py     361 lines  Publishes 22D actions to /alfie/robotlowcmd
-    observation_bridge.py   409 lines  Syncs 4 cameras + state, resizes to 320x240
+    observation_bridge.py   409 lines  Syncs 4 cameras + state, crops/resizes to 352x256
     zmq_client.py           441 lines  ZMQ REQ/REP client, MsgSerializer protocol
     normalization.py                   Stats-based normalization (offline analysis)
   nodes/
@@ -181,10 +181,10 @@ launch/
 ### Data Flow
 
 ```
-Cameras (320x240 JPEG) + Robot State
+Cameras (352x256 JPEG) + Robot State
         |
   ObservationBridge
-  - Decompress, resize to 320x240, BGR->RGB
+  - Decompress, crop/resize to 352x256, BGR->RGB
   - Optional H.264 conditioning
   - Re-compress to JPEG Q95
   - Extract 22D state vector

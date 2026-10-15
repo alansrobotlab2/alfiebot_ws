@@ -23,16 +23,17 @@ export const immersive3DConfig = {
     screenScale: 0.5,          // Multiplier for screen size
     cornerRadius: 0.05,        // Normalized 0-0.5 - corner radius for rounded corners
 
-    // Camera resolution configuration
-    wideSourceWidth: 800,      // Wide camera source resolution width
-    wideSourceHeight: 600,     // Wide camera source resolution height
-    wideOutputWidth: 320,      // Wide camera output resolution width
-    wideOutputHeight: 240,     // Wide camera output resolution height
+    // Camera resolution configuration (must match gstreamer_camera_node)
+    // Wide = 800x600 eye center-cropped to the 352x256 aspect (800x582), then scaled
+    wideSourceWidth: 800,      // Wide view source region width (per eye)
+    wideSourceHeight: 582,     // Wide view source region height (per eye, after aspect crop)
+    wideOutputWidth: 352,      // Wide camera output resolution width
+    wideOutputHeight: 256,     // Wide camera output resolution height
 
-    centerCropWidth: 320,      // Center crop width from source
-    centerCropHeight: 200,     // Center crop height from source
-    centerOutputWidth: 320,    // Center camera output resolution width
-    centerOutputHeight: 240,   // Center camera output resolution height
+    centerCropWidth: 352,      // Center crop width from source (1:1 pixels)
+    centerCropHeight: 256,     // Center crop height from source (1:1 pixels)
+    centerOutputWidth: 352,    // Center camera output resolution width
+    centerOutputHeight: 256,   // Center camera output resolution height
 };
 
 // Legacy alias for backward compatibility with overlay panels

@@ -250,6 +250,26 @@ class GStreamerCameraNode(Node):
         self.get_logger().info('✅ Hardware acceleration elements available')
         return True
     
+    def _wide_crop(self, eye_width, eye_height):
+        """Centered crop of one eye matching the output aspect ratio.
+
+        Wide streams scale the whole eye down to the output size; when the
+        eye and output aspect ratios differ (e.g. 800x600 eye -> 352x256),
+        trim the eye first so the image isn't stretched. Must match
+        alfie_gr00t.core.image_utils.center_crop_to_aspect.
+
+        Returns:
+            (x_offset, y_offset, crop_width, crop_height) within the eye
+        """
+        out_w, out_h = self.output_width, self.output_height
+        if eye_width * out_h > eye_height * out_w:
+            crop_w = round(eye_height * out_w / out_h)
+            return (eye_width - crop_w) // 2, 0, crop_w, eye_height
+        if eye_width * out_h < eye_height * out_w:
+            crop_h = round(eye_width * out_h / out_w)
+            return 0, (eye_height - crop_h) // 2, eye_width, crop_h
+        return 0, 0, eye_width, eye_height
+
     def _create_pipeline(self):
         """Create GStreamer pipeline for low-latency MJPEG capture"""
         
@@ -311,6 +331,12 @@ class GStreamerCameraNode(Node):
         center_y_start = v_offset
         center_y_end = v_offset + center_crop_height
 
+        # Wide crop: whole eye trimmed to the output aspect ratio
+        wide_x, wide_y, wide_w, wide_h = self._wide_crop(half_width, self.source_height)
+        wide_y_end = wide_y + wide_h
+        left_wide_x_start = half_width + wide_x
+        right_wide_x_start = wide_x
+
         # Note: Camera left/right are swapped in the raw image
         # Left eye is in right half of image, right eye is in left half
 
@@ -320,16 +346,16 @@ class GStreamerCameraNode(Node):
             f'nvv4l2decoder mjpeg=1 ! '
             f'tee name=t '
 
-            # Branch 1: Left Wide - crop right half and scale to output size
+            # Branch 1: Left Wide - crop right half (to output aspect) and scale to output size
             f't. ! queue max-size-buffers=1 leaky=downstream ! '
-            f'nvvidconv left={half_width} right={self.source_width} top=0 bottom={self.source_height} flip-method={flip_method} ! '
+            f'nvvidconv left={left_wide_x_start} right={left_wide_x_start + wide_w} top={wide_y} bottom={wide_y_end} flip-method={flip_method} ! '
             f'video/x-raw(memory:NVMM),format=I420,width={self.output_width},height={self.output_height} ! '
             f'nvjpegenc quality={self.jpeg_quality} ! '
             f'appsink name=left_wide_sink emit-signals=true max-buffers=1 drop=true sync=false '
 
-            # Branch 2: Right Wide - crop left half and scale to output size
+            # Branch 2: Right Wide - crop left half (to output aspect) and scale to output size
             f't. ! queue max-size-buffers=1 leaky=downstream ! '
-            f'nvvidconv left=0 right={half_width} top=0 bottom={self.source_height} flip-method={flip_method} ! '
+            f'nvvidconv left={right_wide_x_start} right={right_wide_x_start + wide_w} top={wide_y} bottom={wide_y_end} flip-method={flip_method} ! '
             f'video/x-raw(memory:NVMM),format=I420,width={self.output_width},height={self.output_height} ! '
             f'nvjpegenc quality={self.jpeg_quality} ! '
             f'appsink name=right_wide_sink emit-signals=true max-buffers=1 drop=true sync=false '
@@ -352,6 +378,7 @@ class GStreamerCameraNode(Node):
         flip_str = "Flip→" if self.flip_vertical else ""
         self.get_logger().info(f'🚀 Hardware Pipeline: {self.source_width}x{self.source_height}@{self.framerate}fps → 4 streams (2×wide + 2×center) all {self.output_width}x{self.output_height}')
         self.get_logger().info(f'   Full GPU: Decode→Tee→{flip_str}Crop/Scale→Encode')
+        self.get_logger().info(f'   Wide crop per eye: {wide_w}x{wide_h} at ({wide_x},{wide_y})')
         self.get_logger().info(f'   Center crop coordinates: Left[{left_center_x_start}:{left_center_x_end}, {center_y_start}:{center_y_end}], Right[{right_center_x_start}:{right_center_x_end}, {center_y_start}:{center_y_end}]')
         self.get_logger().debug(f'Pipeline: {pipeline_str}')
 
@@ -408,9 +435,12 @@ class GStreamerCameraNode(Node):
             left_half = img[:, half_width:]   # Left eye is in right half
             right_half = img[:, :half_width]  # Right eye is in left half
 
-            # Wide angle: downsample full halves to output size
-            left_wide = cv2.resize(left_half, (self.output_width, self.output_height), interpolation=cv2.INTER_AREA)
-            right_wide = cv2.resize(right_half, (self.output_width, self.output_height), interpolation=cv2.INTER_AREA)
+            # Wide angle: trim halves to output aspect, then downsample to output size
+            wide_x, wide_y, wide_w, wide_h = self._wide_crop(half_width, img.shape[0])
+            left_wide = cv2.resize(left_half[wide_y:wide_y+wide_h, wide_x:wide_x+wide_w],
+                                   (self.output_width, self.output_height), interpolation=cv2.INTER_AREA)
+            right_wide = cv2.resize(right_half[wide_y:wide_y+wide_h, wide_x:wide_x+wide_w],
+                                    (self.output_width, self.output_height), interpolation=cv2.INTER_AREA)
 
             # Center crop: extract center region from each half (dynamically calculated)
             # Center horizontally within each half: (half_width - output_width) / 2

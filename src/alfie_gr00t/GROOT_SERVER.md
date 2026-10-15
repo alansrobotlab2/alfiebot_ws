@@ -14,7 +14,7 @@ The server uses ZeroMQ REP/REQ pattern to receive observations and return action
 │  │              GR00T Inference Server Node                  │ │
 │  │                                                           │ │
 │  │  1. Receives observation via ZeroMQ REP                   │ │
-│  │     - 4 JPEG images (320x280)                            │ │
+│  │     - 4 JPEG images (352x256)                            │ │
 │  │     - 22D normalized state vector                        │ │
 │  │     - Language task description                          │ │
 │  │                                                           │ │
@@ -80,7 +80,7 @@ The server receives msgpack-encoded observations:
     "timestamp": 1704307200.123,           # Unix timestamp
     "frame_id": 42,                        # Monotonic frame counter
     "images": {
-        "left_wide": b"...",               # JPEG bytes, 320x280
+        "left_wide": b"...",               # JPEG bytes, 352x256
         "right_wide": b"...",
         "left_center": b"...",
         "right_center": b"...",

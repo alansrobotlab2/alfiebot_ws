@@ -57,6 +57,27 @@ import pyarrow.parquet as pq
 import av
 
 
+def fit_image(img: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Center-crop to the width:height aspect ratio, then resize.
+
+    Standalone copy of alfie_gr00t.core.image_utils.fit_image (this script
+    runs outside the installed package) -- keep the two in sync. Must match
+    the live observation_bridge geometry exactly.
+    """
+    h, w = img.shape[:2]
+    if w == width and h == height:
+        return img
+    if w * height > h * width:
+        new_w = round(h * width / height)
+        x0 = (w - new_w) // 2
+        img = img[:, x0:x0 + new_w]
+    elif w * height < h * width:
+        new_h = round(w * height / width)
+        y0 = (h - new_h) // 2
+        img = img[y0:y0 + new_h, :]
+    return cv2.resize(img, (width, height), interpolation=cv2.INTER_LINEAR)
+
+
 @dataclass
 class EpisodeData:
     """Container for a single episode's data."""
@@ -82,9 +103,9 @@ class RosbagToGrootConverter:
         '/alfie/stereo_camera/right_center/image_raw/compressed': 'right_center',
     }
 
-    # Target video dimensions
-    VIDEO_WIDTH = 320
-    VIDEO_HEIGHT = 240
+    # Target video dimensions (must match alfie_gr00t.core.image_utils)
+    VIDEO_WIDTH = 352
+    VIDEO_HEIGHT = 256
 
     def __init__(
         self,
@@ -292,8 +313,8 @@ class RosbagToGrootConverter:
                 np_arr = np.frombuffer(msg.data, np.uint8)
                 img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 if img is not None:
-                    # Resize to target dimensions
-                    img = cv2.resize(img, (self.VIDEO_WIDTH, self.VIDEO_HEIGHT))
+                    # Crop to target aspect + resize to target dimensions
+                    img = fit_image(img, self.VIDEO_WIDTH, self.VIDEO_HEIGHT)
                     # Convert BGR to RGB
                     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                     image_msgs[cam_key].append((timestamp_ns, img))
@@ -913,6 +934,14 @@ class RosbagToGrootConverter:
         info['total_frames'] = total_frames
         info['total_chunks'] = (num_episodes + self.chunk_size - 1) // self.chunk_size
         info['total_videos'] = num_episodes * 4  # 4 cameras per episode
+
+        # Update image feature shapes to match the encoded videos
+        for key, feat in info.get('features', {}).items():
+            if key.startswith('observation.images.'):
+                feat['shape'] = [self.VIDEO_HEIGHT, self.VIDEO_WIDTH, 3]
+                if 'info' in feat:
+                    feat['info']['video.height'] = self.VIDEO_HEIGHT
+                    feat['info']['video.width'] = self.VIDEO_WIDTH
 
         # Update splits
         info['splits'] = {

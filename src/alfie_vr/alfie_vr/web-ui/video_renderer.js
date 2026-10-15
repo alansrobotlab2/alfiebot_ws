@@ -152,7 +152,6 @@ const OUTLINE_UNIFORMS = {
 const OUTLINE_CORNER_RADIUS = 0.08;  // Larger rounded corners
 const OUTLINE_LINE_WIDTH = 0.008;    // Line width in normalized space
 const OUTLINE_PADDING = 0.01;        // Extra padding to prevent edge clipping
-const CENTER_HEIGHT_SCALE = 1.2;     // Center overlay vertical height increased by 20%
 
 // ========================================
 // Module State (all bound to the current GL context)
@@ -291,10 +290,10 @@ function updatePositionBuffersIfNeeded() {
         writeRectPositions(scratchPositions, -width / 2, -height / 2 + yOffset, width, height), gl.STATIC_DRAW);
 
     // Center overlay size based on crop dimensions
-    const coverageX = cfg.centerCropWidth / cfg.wideSourceWidth;   // 320/800 = 0.4
-    const coverageY = cfg.centerCropHeight / cfg.wideSourceHeight; // 200/600 = 0.333
+    const coverageX = cfg.centerCropWidth / cfg.wideSourceWidth;   // 352/800 = 0.44
+    const coverageY = cfg.centerCropHeight / cfg.wideSourceHeight; // 256/582 = 0.44
     const overlayWidth = width * coverageX;
-    const overlayHeight = height * coverageY * CENTER_HEIGHT_SCALE;
+    const overlayHeight = height * coverageY;
 
     gl.bindBuffer(gl.ARRAY_BUFFER, centerPosBuffer);
     gl.bufferData(gl.ARRAY_BUFFER,

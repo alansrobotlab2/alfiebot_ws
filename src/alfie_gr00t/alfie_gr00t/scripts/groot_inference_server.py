@@ -1171,7 +1171,7 @@ def main():
     if not args.dataset_path:
         import time
         logger.info('Running warmup inference (triggers torch.compile if enabled)...')
-        black_img = np.zeros((240, 320, 3), dtype=np.uint8)
+        black_img = np.zeros((256, 352, 3), dtype=np.uint8)  # IMAGE_HEIGHT x IMAGE_WIDTH
         _, jpeg_bytes = cv2.imencode('.jpg', black_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
         jpeg_bytes = jpeg_bytes.tobytes()
         warmup_obs = {

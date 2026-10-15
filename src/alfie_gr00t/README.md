@@ -226,7 +226,7 @@ GR00T (Generalist Robot 00 Technology) n1.6 is NVIDIA's foundation model for hum
     - [ ] Subscribe to 4 camera streams (`/alfie/stereo_camera/*/image_raw/compressed`)
     - [ ] Subscribe to robot state (`/alfie/robotlowstate`)
     - [ ] Decompress JPEG images from compressed topics
-    - [ ] Resize camera images (320x240 → model input size, e.g., 224x224)
+    - [ ] Resize camera images (352x256 → model input size, e.g., 224x224)
     - [ ] Normalize pixel values (0-255 → model range)
     - [ ] Parse robotlowstate into GR00T observation format
     - [ ] Synchronize multi-modal inputs (cameras + state) with timestamps

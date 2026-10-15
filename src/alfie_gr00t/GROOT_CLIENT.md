@@ -72,7 +72,7 @@ Collects and synchronizes sensor data from ROS2 topics:
 
 **Processing:**
 - Uses `ApproximateTimeSynchronizer` with 50ms slop
-- Decompresses JPEG images, resizes to 320x280
+- Decompresses JPEG images, resizes to 352x256
 - Extracts 22D state vector from RobotLowState
 
 ### 2. State Vector (22 dimensions)
@@ -114,7 +114,7 @@ Handles communication with the inference server using ZeroMQ REQ/REP pattern.
     "timestamp": 1704307200.123,           # Unix timestamp
     "frame_id": 42,                        # Monotonic frame counter
     "images": {
-        "left_wide": b"...",               # JPEG bytes, 320x280
+        "left_wide": b"...",               # JPEG bytes, 352x256
         "right_wide": b"...",
         "left_center": b"...",
         "right_center": b"...",

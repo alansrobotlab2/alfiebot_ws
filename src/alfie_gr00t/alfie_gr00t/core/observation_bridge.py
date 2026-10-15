@@ -17,6 +17,8 @@ from sensor_msgs.msg import CompressedImage
 
 from alfie_msgs.msg import RobotLowState
 
+from .image_utils import IMAGE_HEIGHT, IMAGE_WIDTH, fit_image
+
 
 @dataclass
 class Observation:
@@ -55,9 +57,9 @@ class ObservationBridge:
     # Camera topic names (in order matching modality config)
     CAMERA_NAMES = ['left_wide', 'right_wide', 'left_center', 'right_center']
 
-    # Target image size for inference (must match training data MP4s: 320x240)
-    IMAGE_WIDTH = 320
-    IMAGE_HEIGHT = 240
+    # Target image size for inference (must match training data MP4s)
+    IMAGE_WIDTH = IMAGE_WIDTH
+    IMAGE_HEIGHT = IMAGE_HEIGHT
 
     # State vector dimension
     STATE_DIM = 22
@@ -240,7 +242,7 @@ class ObservationBridge:
             self._observation_callback(obs)
 
     def _decompress_and_resize(self, msg: CompressedImage) -> Optional[np.ndarray]:
-        """Decompress JPEG and resize to target size.
+        """Decompress JPEG and crop/resize to target size.
 
         Args:
             msg: CompressedImage message.
@@ -256,13 +258,8 @@ class ObservationBridge:
             if img is None:
                 return None
 
-            # Resize if needed
-            if img.shape[1] != self.IMAGE_WIDTH or img.shape[0] != self.IMAGE_HEIGHT:
-                img = cv2.resize(
-                    img,
-                    (self.IMAGE_WIDTH, self.IMAGE_HEIGHT),
-                    interpolation=cv2.INTER_LINEAR,
-                )
+            # Crop to target aspect + resize if needed (no-op at native size)
+            img = fit_image(img, self.IMAGE_WIDTH, self.IMAGE_HEIGHT)
 
             # Convert BGR to RGB
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)

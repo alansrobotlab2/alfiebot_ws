@@ -37,8 +37,11 @@ try:
 except ImportError:
     HAS_ZSTD = False
 
-VIDEO_WIDTH = 320
-VIDEO_HEIGHT = 240
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from alfie_gr00t.core.image_utils import IMAGE_HEIGHT as VIDEO_HEIGHT  # noqa: E402
+from alfie_gr00t.core.image_utils import IMAGE_WIDTH as VIDEO_WIDTH  # noqa: E402
+from alfie_gr00t.core.image_utils import fit_image  # noqa: E402
+
 LEFT_WIDE_TOPIC = '/alfie/stereo_camera/left_wide/image_raw/compressed'
 OUTPUT_DIR = '/tmp/groot_image_comparison'
 
@@ -46,10 +49,10 @@ OUTPUT_DIR = '/tmp/groot_image_comparison'
 def extract_rosbag_image(mcap_path: str) -> np.ndarray:
     """Extract first left_wide image from rosbag, same processing as rosbag_to_groot.py.
 
-    Pipeline: CompressedImage -> imdecode(BGR) -> resize(320,240) -> cvtColor(BGR2RGB)
+    Pipeline: CompressedImage -> imdecode(BGR) -> fit_image(352x256) -> cvtColor(BGR2RGB)
     This is what the image looks like BEFORE H.264 encoding.
 
-    Returns: numpy array shape (240, 320, 3) dtype uint8, RGB format
+    Returns: numpy array shape (256, 352, 3) dtype uint8, RGB format
     """
     mcap_path = Path(mcap_path)
 
@@ -81,7 +84,7 @@ def extract_rosbag_image(mcap_path: str) -> np.ndarray:
             np_arr = np.frombuffer(msg.data, np.uint8)
             img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if img is not None:
-                img = cv2.resize(img, (VIDEO_WIDTH, VIDEO_HEIGHT))
+                img = fit_image(img, VIDEO_WIDTH, VIDEO_HEIGHT)
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 print(f'Extracted rosbag image: {img.shape}, dtype={img.dtype}, ts={timestamp_ns}')
                 return img
@@ -95,7 +98,7 @@ def extract_training_frame(video_path: str) -> np.ndarray:
     The video was encoded with: libx264, crf=23, yuv420p pixel format.
     PyAV decodes back to RGB24, which is what the GR00T data loader does.
 
-    Returns: numpy array shape (240, 320, 3) dtype uint8, RGB format
+    Returns: numpy array shape (256, 352, 3) dtype uint8, RGB format
     """
     container = av.open(str(video_path))
     stream = container.streams.video[0]
@@ -173,7 +176,7 @@ def save_visualizations(img_a: np.ndarray, img_b: np.ndarray, output_dir: str):
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     axes[0].imshow(img_a)
-    axes[0].set_title('Source A: Rosbag Raw\n(JPEG decode -> resize -> RGB)', fontsize=10)
+    axes[0].set_title('Source A: Rosbag Raw\n(JPEG decode -> crop/resize -> RGB)', fontsize=10)
     axes[0].axis('off')
 
     axes[1].imshow(img_b)

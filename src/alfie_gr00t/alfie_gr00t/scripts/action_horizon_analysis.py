@@ -45,6 +45,7 @@ except ImportError:
 
 # Import ZMQ client (no ROS2 dependency)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from alfie_gr00t.core.image_utils import IMAGE_HEIGHT, IMAGE_WIDTH  # noqa: F401
 from alfie_gr00t.core.zmq_client import ZMQClient, build_server_address
 
 logger = logging.getLogger(__name__)
@@ -74,8 +75,6 @@ BODY_PART_GROUPS = [
     ('head',      19, 22),
 ]
 
-IMAGE_WIDTH = 320
-IMAGE_HEIGHT = 240
 JPEG_QUALITY = 80
 ACTION_STEP_MS = 67  # 15 FPS → 67ms per step
 

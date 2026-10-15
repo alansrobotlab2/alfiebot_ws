@@ -25,6 +25,8 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from ..core.image_utils import IMAGE_HEIGHT, IMAGE_WIDTH
+
 try:
     import gradio as gr
     import plotly.graph_objects as go
@@ -159,7 +161,7 @@ def _empty_action_plot() -> go.Figure:
 
 def _placeholder_image() -> np.ndarray:
     """Return a dark placeholder image."""
-    img = np.zeros((240, 320, 3), dtype=np.uint8)
+    img = np.zeros((IMAGE_HEIGHT, IMAGE_WIDTH, 3), dtype=np.uint8)
     return img
 
 
@@ -235,7 +237,7 @@ class GrootVisualizer:
                 for name in CAMERA_NAMES:
                     cam_components[name] = gr.Image(
                         label=name,
-                        height=240,
+                        height=IMAGE_HEIGHT,
                     )
 
             # Task description

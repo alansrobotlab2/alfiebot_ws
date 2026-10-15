@@ -38,11 +38,10 @@ except ImportError:
     HAS_ZSTD = False
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from alfie_gr00t.core.image_utils import IMAGE_HEIGHT, IMAGE_WIDTH, fit_image
 from alfie_gr00t.core.zmq_client import ZMQClient, build_server_address
 
 CAMERA_NAMES = ['left_wide', 'right_wide', 'left_center', 'right_center']
-IMAGE_WIDTH = 320
-IMAGE_HEIGHT = 240  # Must match training data MP4s (320x240)
 JPEG_QUALITY = 95  # Match live pipeline
 
 # Rosbag topic to camera name mapping (from rosbag_to_groot.py)
@@ -93,7 +92,7 @@ def load_rosbag_images(mcap_path: str) -> dict[str, bytes]:
     """Extract first frame for all 4 cameras from a rosbag (pre-H.264).
 
     Applies the same processing as rosbag_to_groot.py:
-      imdecode(BGR) -> resize(320,240) -> cvtColor(RGB)
+      imdecode(BGR) -> fit_image(352x256) -> cvtColor(RGB)
     Then JPEG-compresses at quality 95 (matching live pipeline).
 
     This gives us images that went through the same JPEG decode path as live,
@@ -135,7 +134,7 @@ def load_rosbag_images(mcap_path: str) -> dict[str, bytes]:
             np_arr = np.frombuffer(msg.data, np.uint8)
             img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)  # BGR
             if img is not None:
-                img = cv2.resize(img, (IMAGE_WIDTH, IMAGE_HEIGHT))
+                img = fit_image(img, IMAGE_WIDTH, IMAGE_HEIGHT)
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 # JPEG compress matching live pipeline (quality 95)
                 img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
