@@ -19,7 +19,14 @@ image encoder runs on TensorRT (~130 ms/call on Orin). With it unset a pure
 PyTorch encoder is used (slower; ~500 ms) — see the package README for the engine
 build (and the TensorRT-on-Jetson setup it needs).
 """
+import os
 import time
+
+# OWL-ViT loads by repo id (google/owlvit-base-patch32); without this the HF
+# client probes huggingface.co first and can stall offline. The model is in
+# ~/.cache/huggingface. Must be set before transformers is imported. Export
+# HF_HUB_OFFLINE=0 to allow a one-time download on a fresh machine.
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
 
 import numpy as np
 

@@ -36,6 +36,12 @@ os.environ.setdefault(
     "garbage_collection_threshold:0.6",
 )
 
+# The backbone (nvidia/Cosmos-Reason2-2B) loads by repo id, so without this the
+# HF client probes huggingface.co first and can stall on a network with no
+# internet. Everything it needs is in ~/.cache/huggingface. Export
+# HF_HUB_OFFLINE=0 to allow a one-time download on a fresh machine.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
 import cv2
 import numpy as np
 import torch
