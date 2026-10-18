@@ -1,4 +1,4 @@
-"""Pluggable 100 Hz interpolation between 15 FPS action waypoints.
+"""Pluggable 100 Hz interpolation between training-rate (10 FPS) action waypoints.
 
 Replaces the inline linear lerp in groot_client.py with configurable
 interpolation strategies. Maintains a rolling window of recent waypoints
@@ -17,7 +17,7 @@ from scipy.interpolate import CubicSpline
 
 
 class ActionInterpolator:
-    """Interpolates between 15 FPS action waypoints for 100 Hz output.
+    """Interpolates between training-rate (10 FPS) action waypoints for 100 Hz output.
 
     Maintains a rolling window of recent waypoints and evaluates the
     interpolating function at arbitrary sub-frame times.
@@ -63,7 +63,7 @@ class ActionInterpolator:
         self._spline_valid_range: tuple[int, int] = (0, 0)
 
     def update_waypoint(self, frame_idx: int, action: np.ndarray):
-        """Add or update a 15 FPS waypoint.
+        """Add or update a training-rate waypoint.
 
         Parameters
         ----------
@@ -130,7 +130,7 @@ class ActionInterpolator:
         Parameters
         ----------
         waypoints : np.ndarray
-            (N, 22) action waypoints at 15 FPS.
+            (N, 22) action waypoints at the training rate.
         frame_indices : np.ndarray
             (N,) frame indices corresponding to each waypoint.
         eval_times : np.ndarray

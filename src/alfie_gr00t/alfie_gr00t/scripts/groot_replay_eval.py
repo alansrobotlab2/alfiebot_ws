@@ -84,7 +84,7 @@ Key Output Metrics (in summary.json):
             >1x = noisier. The key number for comparing configs: if config A
             gives 3.5x and config B gives 1.8x, B produces smoother output.
         hf_power_ratio
-            Fraction of FFT power above 3 Hz (Nyquist at 15 FPS = 7.5 Hz).
+            Fraction of FFT power above 3 Hz (Nyquist at 10 FPS = 5 Hz).
             Captures high-frequency jitter. GT demonstrations are ~0%.
             Model noise shows up here even if overall MSE is low.
         delta_rms
@@ -137,9 +137,9 @@ from alfie_gr00t.scripts.groot_open_loop_eval import (
 logger = logging.getLogger(__name__)
 
 # Training data rate
-ACTION_STEP_PERIOD = 1.0 / 15.0  # ~66.7ms per action step
-# 100Hz control ticks per 15 FPS frame (100/15 ≈ 6.67, use 7)
-TICKS_PER_FRAME = 7
+ACTION_STEP_PERIOD = 1.0 / 10.0  # 100ms per action step
+# 100Hz control ticks per 10 FPS frame
+TICKS_PER_FRAME = 10
 TICK_DT = 0.01  # 10ms per 100Hz tick
 
 # Subplot height multiplier for all output plots. Taller subplots make
@@ -555,7 +555,7 @@ class ClientPipelineSimulator:
     # ------------------------------------------------------------------
 
     def step_frame(self) -> tuple[np.ndarray, np.ndarray, dict]:
-        """Advance one GT frame (15 FPS). Run 100Hz sub-loop internally.
+        """Advance one GT frame (10 FPS). Run 100Hz sub-loop internally.
 
         Returns:
             (raw_action, processed_action, info_dict)
@@ -599,7 +599,7 @@ class ClientPipelineSimulator:
         # Post-ensembling filter (savgol / butterworth)
         action = self._action_smoother.smooth(action)
 
-        # ActionInterpolator (15 FPS → sub-frame)
+        # ActionInterpolator (10 FPS → sub-frame)
         if self._cont_interpolator is not None:
             self._cont_interpolator.update_waypoint(frame, action)
             # Also feed next frame for interpolation lookahead
@@ -831,7 +831,7 @@ def compute_smoothness(
     gt_actions: np.ndarray,
     raw_actions: np.ndarray,
     processed_actions: np.ndarray,
-    fps: float = 15.0,
+    fps: float = 10.0,
 ) -> dict:
     """Compute trajectory smoothness/noise metrics.
 

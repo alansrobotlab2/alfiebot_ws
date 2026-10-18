@@ -111,7 +111,7 @@ class RosbagToGrootConverter:
         self,
         demos_dir: str,
         output_dir: str,
-        fps: int = 15,
+        fps: int = 10,
         chunk_size: int = 1000,
         num_threads: int = 1,
         use_gpu: bool = False,
@@ -934,6 +934,7 @@ class RosbagToGrootConverter:
         info['total_frames'] = total_frames
         info['total_chunks'] = (num_episodes + self.chunk_size - 1) // self.chunk_size
         info['total_videos'] = num_episodes * 4  # 4 cameras per episode
+        info['fps'] = self.fps
 
         # Update image feature shapes to match the encoded videos
         for key, feat in info.get('features', {}).items():
@@ -942,6 +943,7 @@ class RosbagToGrootConverter:
                 if 'info' in feat:
                     feat['info']['video.height'] = self.VIDEO_HEIGHT
                     feat['info']['video.width'] = self.VIDEO_WIDTH
+                    feat['info']['video.fps'] = self.fps
 
         # Update splits
         info['splits'] = {
@@ -972,8 +974,8 @@ Arguments:
                         (default: /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge)
   --task-index N        Task index for labeling (0=pick up can, 1=put can down)
                         (default: 0)
-  --fps N               Target frames per second for resampling
-                        (default: 15)
+  --fps N               Target frames per second for resampling; must match
+                        training_fps in groot_client.yaml (default: 10)
   --start-episode N     Starting episode index, use to append to existing dataset
                         (default: 0)
   --num-threads N       Parallel threads for conversion
@@ -1038,7 +1040,7 @@ examples:
     parser.add_argument(
         '--fps',
         type=int,
-        default=15,
+        default=10,
         help='Target frames per second (default: %(default)s)'
     )
     parser.add_argument(

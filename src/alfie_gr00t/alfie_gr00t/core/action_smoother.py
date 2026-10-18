@@ -1,4 +1,4 @@
-"""Causal post-processing filters for 15 FPS ensembled actions.
+"""Causal post-processing filters for training-rate (10 FPS) ensembled actions.
 
 Applies Savitzky-Golay or Butterworth low-pass filtering to the ensembled
 action stream before 100 Hz interpolation. Maintains internal ring buffer
@@ -17,7 +17,7 @@ from scipy.signal import savgol_coeffs, sosfilt, butter
 
 
 class ActionSmoother:
-    """Causal post-processing filter for 15 FPS action waypoints.
+    """Causal post-processing filter for training-rate action waypoints.
 
     Sits between ChunkBuffer output and the interpolation stage.
     Supports per-body-part configuration via body_part_ranges.
@@ -33,9 +33,9 @@ class ActionSmoother:
     butter_order : int
         Order for Butterworth low-pass filter.
     butter_cutoff_hz : float
-        Cutoff frequency for Butterworth filter (Hz). Nyquist at 15 FPS = 7.5 Hz.
+        Cutoff frequency for Butterworth filter (Hz). Nyquist at 10 FPS = 5 Hz.
     sample_rate : float
-        Input sample rate in Hz (default 15.0 for 15 FPS actions).
+        Input sample rate in Hz (default 10.0 for 10 FPS actions).
     action_dim : int
         Dimensionality of the action vector (default 22).
     """
@@ -47,7 +47,7 @@ class ActionSmoother:
         savgol_polyorder: int = 2,
         butter_order: int = 2,
         butter_cutoff_hz: float = 5.0,
-        sample_rate: float = 15.0,
+        sample_rate: float = 10.0,
         action_dim: int = 22,
     ):
         self.method = method
@@ -101,7 +101,7 @@ class ActionSmoother:
         self._bw_initialized = False
 
     def smooth(self, action: np.ndarray) -> np.ndarray:
-        """Process one 15 FPS action through the filter.
+        """Process one training-rate action through the filter.
 
         Parameters
         ----------

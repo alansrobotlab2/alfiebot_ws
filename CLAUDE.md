@@ -40,7 +40,7 @@ The server can run as either:
 ## Key Components
  - `nodes/groot_client.py` — ROS2 client node. Collects observations, sends to server, publishes actions at 100Hz.
  - `core/observation_bridge.py` — Subscribes to 4 camera topics + robot state, synchronizes them, center-crops/resizes images to 352x256 (`core/image_utils.fit_image`, no-op at native size), packages as JPEG bytes for ZMQ.
- - `core/action_publisher.py` — Receives 16-step action chunks from the server, steps through them at the training rate (15 FPS), applies smoothing and safety limits, publishes servo commands at 100Hz.
+ - `core/action_publisher.py` — Receives 16-step action chunks from the server, steps through them at the training rate (`training_fps`, 10 FPS), applies smoothing and safety limits, publishes servo commands at 100Hz.
  - `core/zmq_client.py` — ZMQ REQ/REP client for communicating with the server.
  - `scripts/groot_inference_server.py` — Standalone inference server. Loads the GR00T checkpoint, receives JPEG images + state via ZMQ msgpack, runs inference, returns raw unnormalized actions.
  - `scripts/hybrid_image_test.py` — Diagnostic tool that sends saved images through ZMQ to isolate visual domain gap issues.
@@ -77,15 +77,15 @@ Training images go through an additional H.264 yuv420p encode/decode in rosbag_t
 ## CSV Diagnostic Files
 The client logs two CSV files when `csv_log_path` is set (default: `/tmp/groot_client_debug.csv`):
  - `/tmp/groot_client_debug.csv` — 100Hz full-fidelity log. Columns: `timestamp, step, chunk_id, action_idx, action_<joint>, smoothed_<joint>, state_<joint>` for all 22 DOF. Use this for hold-and-wait analysis, trajectory shape, tracking error, and smoothing behavior.
- - `/tmp/groot_client_debug_actions.csv` — One row per action step (15 FPS). Columns: `timestamp, chunk_id, action_idx, effective_skip, action_<joint>, state_<joint>`. Use this for chunk timing, effective_skip validation, and action-level trajectory analysis.
+ - `/tmp/groot_client_debug_actions.csv` — One row per action step (10 FPS). Columns: `timestamp, chunk_id, action_idx, effective_skip, action_<joint>, state_<joint>`. Use this for chunk timing, effective_skip validation, and action-level trajectory analysis.
 
 ## Key Metrics to Check After a Run
-1. **effective_skip** (actions CSV): Should be constant 4. If inflated (7-9+), the overshoot bug has returned.
-2. **Hold-and-wait %**: Count rows with action_idx==15 (last action) in the debug CSV. Should be <10%. If >50%, execution window is too narrow or inference is too slow.
+1. **effective_skip** (actions CSV): Should be constant 3 (= latency_skip). If inflated (6-8+), the overshoot bug has returned.
+2. **Hold-and-wait %**: Count rows with action_idx==15 (last action) in the debug CSV. Should be near 0% (overflow [11:16] covers the RTT). If >50%, execution window is too narrow or inference is too slow.
 3. **Base velocity (lx, az)**: Forward velocity should reach 0.02-0.06 m/s during approach. If <0.005, robot isn't moving.
-4. **action_idx distribution**: Should be roughly uniform across 4-15. If >40% at idx 15, chunks are exhausting and stalling.
+4. **action_idx distribution**: Should be roughly uniform across 3-10, with a short tail into 11-15 while waiting for inference. If >40% at idx 15, chunks are exhausting and stalling.
 5. **Head yaw consistency**: Spread <0.05 rad confirms PyTorch backend. Spread >0.1 rad means TRT bf16 — switch to PyTorch immediately.
-6. **Chunk cycle time**: Time between consecutive chunk_id transitions. Should be ~1.15s (804ms exec + 350ms inference).
+6. **Chunk cycle time**: Time between consecutive chunk_id transitions. Should be ~1.15s (800ms exec + ~350ms inference, bridged by overflow actions [11:16]).
 7. **Arm tracking error**: `|action_right_shoulder_pitch - state_right_shoulder_pitch|` should be <0.1 rad. Persistent >0.2 rad means servos can't track.
 8. **Gripper**: Right gripper should show full range (0→close) during pick attempts. If stuck near 0, model isn't commanding a grasp.
 
@@ -116,16 +116,17 @@ Set `debug_save_images: true` in `config/groot_client.yaml` to save observation 
  - `scripts/groot_open_loop_eval.py` — Replays training episodes through the server (uses torchcodec + raw RGB ZMQ path) to verify model accuracy independent of live robot.
 
 ## Current Execution Parameters (groot_client.yaml)
- - `action_chunk_size=16, n_action_steps=12, latency_skip=4, inference_trigger_step=12`
- - Execution window: actions[4:16] = 12 steps = 804ms per chunk
- - Overflow: actions[12:16] bridges 268ms of ~350ms inference RTT
- - Hold-and-wait gap: ~82ms (acceptable)
+ - `training_fps=10` (100ms per action step; must match `rosbag_to_groot.py --fps` and camera framerate)
+ - `action_chunk_size=16, n_action_steps=8, latency_skip=3, inference_trigger_step=8`
+ - Execution window: actions[3:11] = 8 steps = 800ms per chunk
+ - Overflow: actions[11:16] bridges 500ms, covering the ~350ms inference RTT
+ - Hold-and-wait gap: none expected
  - Re-planning rate: ~0.87 Hz
  - Rate-limited interpolator: enabled (G1-style velocity-capped joints)
  - Base velocity limits: lx=0.15 m/s, ly=0.15 m/s, az=0.8 rad/s
 
 ## Known Pitfalls
- - **Never add inference RTT as extra latency skip.** `latency_skip=4` already compensates for observation-to-action delay. Adding overshoot causes a death spiral of shrinking execution windows (see 2026-02-17 incident).
+ - **Never add inference RTT as extra latency skip.** `latency_skip=3` already compensates for observation-to-action delay. Adding overshoot causes a death spiral of shrinking execution windows (see 2026-02-17 incident).
  - **Never fire inference mid-chunk.** The model must see the RESULT of its full trajectory. Mid-chunk triggers cause arm pogoing at chunk boundaries.
  - **Always use PyTorch backend** (not TRT bf16). TRT bf16 causes catastrophic noise in flow matching denoising. Run Test 7 consistency check before any live debugging session.
  - **Config lives in the checkpoint**, not `alfiebot_config.py`. Always check `processor_config.json` in the checkpoint directory to know actual action representations and normalization stats.

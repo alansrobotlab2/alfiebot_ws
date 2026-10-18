@@ -535,7 +535,7 @@ def print_comms_summary(latencies: list[float], message_sizes: list[tuple[int, i
     effective_fps = 1.0 / mean_latency_s if mean_latency_s > 0 else 0
     print(f'  EFFECTIVE INFERENCE RATE')
     print(f'    Mean:    {effective_fps:8.1f} FPS')
-    print(f'    (at 15 FPS client rate, overhead = {np.mean(latencies_arr):.1f}ms per frame)')
+    print(f'    (at 10 FPS client rate, overhead = {np.mean(latencies_arr):.1f}ms per frame)')
     print()
 
     # Message sizes
@@ -560,11 +560,11 @@ def print_comms_summary(latencies: list[float], message_sizes: list[tuple[int, i
     print(f'    Total:     {(total_send_kb+total_recv_kb)/total_time_s:8.1f} KB/s')
     print()
 
-    # At 15 FPS projection
-    print(f'  PROJECTED AT 15 FPS CLIENT RATE')
-    print(f'    Upload:    {np.mean(send_sizes)*15/1024:8.1f} KB/s')
-    print(f'    Download:  {np.mean(recv_sizes)*15/1024:8.1f} KB/s')
-    print(f'    Total:     {(np.mean(send_sizes)+np.mean(recv_sizes))*15/1024:8.1f} KB/s')
+    # At 10 FPS projection
+    print(f'  PROJECTED AT 10 FPS CLIENT RATE')
+    print(f'    Upload:    {np.mean(send_sizes)*10/1024:8.1f} KB/s')
+    print(f'    Download:  {np.mean(recv_sizes)*10/1024:8.1f} KB/s')
+    print(f'    Total:     {(np.mean(send_sizes)+np.mean(recv_sizes))*10/1024:8.1f} KB/s')
     print('=' * 70)
     print()
 

@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────
 
+DATA_FPS = 10.0  # dataset rate (rosbag_to_groot --fps)
+
 FOCUS_JOINTS = [
     (0,  'cmd_vel_lx',           'Base Forward Vel'),
     (14, 'right_shoulder_pitch', 'R Shoulder Pitch'),
@@ -91,7 +93,7 @@ def get_time_axis(df: pd.DataFrame) -> np.ndarray:
     if 'timestamp' in df.columns:
         t = df['timestamp'].values
         return t - t[0]
-    return np.arange(len(df)) * (1.0 / 15)
+    return np.arange(len(df)) * (1.0 / DATA_FPS)
 
 
 def get_chunk_boundaries(df: pd.DataFrame) -> list[int]:
@@ -234,7 +236,7 @@ def plot_trajectory_overlay(
         # GT reference
         if gt_actions is not None:
             n_gt = len(gt_actions)
-            t_gt = np.arange(n_gt) * (1.0 / 15)
+            t_gt = np.arange(n_gt) * (1.0 / DATA_FPS)
             ax.plot(t_gt, gt_actions[:, jidx], color='black', alpha=0.3,
                     linewidth=1.5, label='GT', zorder=1)
 
@@ -310,7 +312,7 @@ def plot_zoomed_overlay(
         sl = slice(zoom_start, zoom_end)
 
         if gt_actions is not None:
-            t_gt = np.arange(len(gt_actions)) * (1.0 / 15)
+            t_gt = np.arange(len(gt_actions)) * (1.0 / DATA_FPS)
             ax.plot(t_gt[sl], gt_actions[sl, jidx], color='black',
                     alpha=0.4, linewidth=2, label='GT')
 
@@ -321,8 +323,8 @@ def plot_zoomed_overlay(
                 continue
 
             # Slice to zoom window (approximate by time alignment)
-            t_start = zoom_start / 15.0
-            t_end = zoom_end / 15.0
+            t_start = zoom_start / DATA_FPS
+            t_end = zoom_end / DATA_FPS
             mask = (t >= t_start) & (t <= t_end) & ~np.isnan(actions[:, jidx])
             color = COLORS[ci % len(COLORS)]
             ax.plot(t[mask], actions[mask, jidx],

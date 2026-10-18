@@ -56,8 +56,8 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────
 
-TRAINING_FPS = 15
-ACTION_STEP_PERIOD = 1.0 / TRAINING_FPS  # ~0.0667s
+TRAINING_FPS = 10
+ACTION_STEP_PERIOD = 1.0 / TRAINING_FPS  # 0.1s
 
 # Key joints for plots
 PLOT_JOINTS = [
@@ -252,7 +252,7 @@ def run_strategy(
 ) -> np.ndarray:
     """Run a smoothing strategy over all frames.
 
-    When output_rate_hz == 0 (default), returns (num_frames, 22) at 15 FPS.
+    When output_rate_hz == 0 (default), returns (num_frames, 22) at 10 FPS.
     When output_rate_hz > 0, returns (num_output_samples, 22) at that rate,
     using the configured interpolator for sub-frame sampling.
 
@@ -274,7 +274,7 @@ def run_strategy(
     if smoother_config:
         smoother = ActionSmoother(**smoother_config)
 
-    # Get 15 FPS ensembled actions first
+    # Get 10 FPS ensembled actions first
     raw_actions = np.full((num_frames, 22), np.nan)
 
     sorted_chunks = sorted(chunks, key=lambda c: c.arrival_frame)
@@ -296,7 +296,7 @@ def run_strategy(
     else:
         smoothed_actions = raw_actions
 
-    # If no upsampling requested, return 15 FPS result
+    # If no upsampling requested, return 10 FPS result
     if output_rate_hz <= 0:
         return smoothed_actions
 
@@ -340,7 +340,7 @@ def compute_metrics(
     """Compute all metrics for a strategy's output vs GT.
 
     When output_rate_hz > 0, strategy_actions is at that rate and gt_actions
-    is at 15 FPS. MAE is computed by resampling GT to match.
+    is at 10 FPS. MAE is computed by resampling GT to match.
     """
     valid = ~np.isnan(strategy_actions[:, 0])
     n_valid = valid.sum()
@@ -437,7 +437,7 @@ def compute_metrics(
         metrics['action_delta_rms'] = 0.0
 
     # Velocity continuity (100 Hz specific): RMS of velocity discontinuities
-    # at 15 FPS waypoint boundaries
+    # at 10 FPS waypoint boundaries
     if output_rate_hz > 0 and len(diffs) > 2:
         # Second derivative = acceleration; its discontinuities reveal
         # interpolation quality
@@ -448,7 +448,7 @@ def compute_metrics(
 
 
 def _resample_gt(gt_actions: np.ndarray, num_samples: int, output_rate_hz: float) -> np.ndarray:
-    """Resample 15 FPS GT actions to match high-rate output for MAE comparison.
+    """Resample 10 FPS GT actions to match high-rate output for MAE comparison.
 
     Uses linear interpolation of GT to the output timestamps.
     """
@@ -902,7 +902,7 @@ def main():
     parser.add_argument('--output-dir', default='/tmp/smoothing_results/',
                         help='Output directory')
     parser.add_argument('--output-rate', type=float, default=0.0,
-                        help='Output sample rate in Hz (0 = 15 FPS native, '
+                        help='Output sample rate in Hz (0 = 10 FPS native, '
                              '100 = 100 Hz upsampled). Use 100 to benchmark '
                              'interpolation methods (spline vs linear).')
     parser.add_argument('--save-csv', action='store_true',
@@ -948,7 +948,7 @@ def main():
     print(f'  Strategies:      {strategy_names}')
     print(f'  Latency:         {args.latency_ms}ms ({latency_frames} frames)')
     print(f'  Latency skip:    {args.latency_skip}')
-    print(f'  Output rate:     {"15 FPS (native)" if args.output_rate <= 0 else f"{args.output_rate:.0f} Hz"}')
+    print(f'  Output rate:     {"10 FPS (native)" if args.output_rate <= 0 else f"{args.output_rate:.0f} Hz"}')
     print(f'  Output:          {output_dir}')
     print('=' * 70)
     print()

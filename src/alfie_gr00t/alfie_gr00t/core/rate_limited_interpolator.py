@@ -131,7 +131,7 @@ class RateLimitedInterpolator:
 
         Position joints (6:22) are EMA-smoothed to dampen high-frequency
         model noise (oscillation during hold-still phases). Since set_target
-        is called at 100 Hz but the raw target changes at ~15 FPS, the EMA
+        is called at 100 Hz but the raw target changes at the training rate (~10 FPS), the EMA
         converges within one action step (~7 ticks) and effectively filters
         at the action step rate. Base velocity passes through unsmoothed.
 

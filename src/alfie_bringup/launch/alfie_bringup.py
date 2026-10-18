@@ -351,7 +351,8 @@ def generate_launch_description():
                 'source_height': 600,  # Max resolution for ELP H120
                 'output_width': 352,   # Output resolution width (GR00T model input)
                 'output_height': 256,  # Output resolution height
-                'framerate': 15,
+                # 10 fps = training_fps; capture_training.py sets the same rate for recording
+                'framerate': 10,
                 'jpeg_quality': 70,
                 'use_hardware_accel': True,
 

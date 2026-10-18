@@ -76,7 +76,7 @@ BODY_PART_GROUPS = [
 ]
 
 JPEG_QUALITY = 80
-ACTION_STEP_MS = 67  # 15 FPS → 67ms per step
+ACTION_STEP_MS = 100  # 10 FPS → 100ms per step
 
 
 # ── Data loading (from groot_open_loop_eval.py) ───────────────────────

@@ -8,7 +8,7 @@ records all raw 16-step action horizons, and outputs per-joint CSV files:
   - Ensemble-averaged trajectories for each weighting strategy
 
 Each inference fires only after the previous completes, advancing by
-the number of action frames (at 15 FPS) that elapsed during the RTT.
+the number of action frames (at 10 FPS) that elapsed during the RTT.
 This shows the actual overlap depth you'd get in production (~5-6 deep).
 
 No ROS2 dependency — runs standalone against the ZMQ inference server.
@@ -46,7 +46,7 @@ from alfie_gr00t.scripts.groot_open_loop_eval import (
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 16
-TRAINING_FPS = 15
+TRAINING_FPS = 10
 ENSEMBLE_STRATEGIES = ['uniform', 'recency', 'exp_decay', 'triangle']
 
 
@@ -55,7 +55,7 @@ ENSEMBLE_STRATEGIES = ['uniform', 'recency', 'exp_decay', 'triangle']
 # Return type: list of (obs_frame, horizon_array, latency_ms)
 HorizonEntry = tuple[int, np.ndarray, float]
 
-ACTION_PERIOD_MS = 1000.0 / TRAINING_FPS  # 66.7ms per action step
+ACTION_PERIOD_MS = 1000.0 / TRAINING_FPS  # 100ms per action step
 
 
 def collect_horizons(

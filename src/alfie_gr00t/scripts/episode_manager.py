@@ -34,6 +34,12 @@ def load_episodes():
     return episodes
 
 
+def load_fps():
+    """Dataset frame rate from info.json."""
+    with open(META_DIR / "info.json") as f:
+        return json.load(f).get("fps", "?")
+
+
 def load_tasks():
     tasks = {}
     with open(META_DIR / "tasks.jsonl") as f:
@@ -92,7 +98,7 @@ def get_episode_details(ep_idx, episodes, tasks):
 | **Task Index** | {ep['task_index']} |
 | **Frames** | {ep['length']} |
 | **Duration** | {mins}m {secs:.1f}s ({duration:.2f}s) |
-| **FPS** | 15 |
+| **FPS** | {load_fps()} |
 | **Source** | {ep['source']} |
 | **Recorded** | {format_source_date(ep['source'])} |
 

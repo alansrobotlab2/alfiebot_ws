@@ -8,12 +8,12 @@ to control the robot.
 Key timing (exhaust mode, n_exec=12, trigger@12, skip=4):
 - Server returns a 16-step action horizon
 - Universal latency skip: execution window is actions[skip : skip + n_exec]
-- Inference fires at chunk exhaust (804ms), observation captures trajectory result
-- Overflow actions [12:16] bridge ~268ms of ~350ms inference RTT
-- Fixed latency_skip=4 on every promotion (no overshoot compensation)
-- ~0.87 Hz re-planning rate, <10% hold-and-wait per cycle
+- Inference fires at chunk exhaust (800ms), observation captures trajectory result
+- Overflow actions [11:16] bridge 500ms, covering the ~350ms inference RTT
+- Fixed latency_skip=3 on every promotion (no overshoot compensation)
+- ~0.87 Hz re-planning rate (800ms exec + ~350ms inference), <10% hold-and-wait per cycle
 - Command publishing runs at exactly 100 Hz on the ROS2 executor
-- Rate-limited interpolation smooths 15 FPS actions to 100 Hz output
+- Rate-limited interpolation smooths training-rate (10 FPS) actions to 100 Hz output
 
 Threading model:
 - Inference runs on a dedicated background thread (blocking ZMQ ~280ms RTT)
@@ -52,8 +52,6 @@ from ..utils.safety import SafetyMonitor
 COMMAND_RATE_HZ = 100
 
 # Training data collection rate (Hz) - action horizon step period
-TRAINING_FPS = 15
-ACTION_STEP_PERIOD = 1.0 / TRAINING_FPS  # ~67ms per action step
 
 
 class ClientState(Enum):
@@ -73,7 +71,7 @@ class GrootClientNode(Node):
     - Observation collection from cameras and robot state
     - ZeroMQ communication with inference server (background thread)
     - Overlapped inference: fires mid-chunk for near-zero dead time
-    - Action chunk execution at training rate (15 FPS)
+    - Action chunk execution at training rate (training_fps, 10 FPS)
     - Action publishing to robot (100 Hz on ROS2 executor)
     - Safety monitoring and state management
 
@@ -82,8 +80,8 @@ class GrootClientNode(Node):
     - latency_skip accounts for observation staleness: exec starts at action[skip]
     - n_action_steps controls how many actions are EXECUTED per chunk
     - inference_trigger_step fires inference mid-chunk (overlapped) or at exhaust
-    - n_action_steps=8, skip=4: execution window is actions[4:12] over 536ms
-    - trigger_step=4: inference fires at 268ms, result arrives as pending ~548ms
+    - n_action_steps=8, skip=3: execution window is actions[3:11] over 800ms
+    - trigger_step=8: inference fires at exhaust, overflow actions[11:16] cover the RTT
     - After n_action_steps consumed, promote pending or zero base + hold joints
     """
 
@@ -104,6 +102,8 @@ class GrootClientNode(Node):
         self.base_smoothing_alpha = self.get_parameter('base_smoothing_alpha').value
         self.joint_smoothing_alpha = self.get_parameter('joint_smoothing_alpha').value
         self.action_chunk_size = self.get_parameter('action_chunk_size').value
+        self.training_fps = float(self.get_parameter('training_fps').value)
+        self.action_step_period = 1.0 / self.training_fps
         self.n_action_steps = self.get_parameter('n_action_steps').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
 
@@ -194,6 +194,7 @@ class GrootClientNode(Node):
                     savgol_polyorder=self.get_parameter('savgol_polyorder').value,
                     butter_order=self.get_parameter('butterworth_order').value,
                     butter_cutoff_hz=self.get_parameter('butterworth_cutoff_hz').value,
+                    sample_rate=self.training_fps,
                 )
                 self.get_logger().info(
                     f'Action smoother: {self._smoothing_method}'
@@ -263,7 +264,7 @@ class GrootClientNode(Node):
 
         # Initialize safety monitor
         # Watchdog timeout must exceed the chunk execution time plus inference latency
-        execution_time = self.n_action_steps * ACTION_STEP_PERIOD
+        execution_time = self.n_action_steps * self.action_step_period
         self.safety = SafetyMonitor(
             watchdog_timeout=execution_time + 1.0,
             max_consecutive_failures=5,
@@ -397,13 +398,13 @@ class GrootClientNode(Node):
 
     def _log_parameters(self):
         """Log all parameter values on startup."""
-        exec_ms = self.n_action_steps * ACTION_STEP_PERIOD * 1000
-        trigger_ms = self.inference_trigger_step * ACTION_STEP_PERIOD * 1000
+        exec_ms = self.n_action_steps * self.action_step_period * 1000
+        trigger_ms = self.inference_trigger_step * self.action_step_period * 1000
         skip_start = self.latency_skip
         skip_end = self.latency_skip + self.n_action_steps - 1
         overlapped = self.inference_trigger_step < self.n_action_steps
         mode = 'overlapped' if overlapped else 'sequential'
-        replan_hz = 1.0 / (self.n_action_steps * ACTION_STEP_PERIOD) if self.n_action_steps > 0 else 0
+        replan_hz = 1.0 / (self.n_action_steps * self.action_step_period) if self.n_action_steps > 0 else 0
 
         self.get_logger().info('=' * 60)
         self.get_logger().info('GR00T Client Parameters:')
@@ -429,7 +430,7 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Re-planning Rate:     {replan_hz:.2f} Hz')
 
         self.get_logger().info(f'  Chunk Blend Steps:    {self.chunk_blend_steps}')
-        self.get_logger().info(f'  Action Step Period:   {ACTION_STEP_PERIOD * 1000:.1f} ms ({TRAINING_FPS} FPS)')
+        self.get_logger().info(f'  Action Step Period:   {self.action_step_period * 1000:.1f} ms ({self.training_fps} FPS)')
         if self.continuous_inference:
             self.get_logger().info(f'  --- Continuous Inference (ACTIVE) ---')
             self.get_logger().info(f'  Smoothing Strategy:   {self.smoothing_strategy}')
@@ -593,22 +594,24 @@ class GrootClientNode(Node):
         self.declare_parameter('joint_smoothing_alpha', 0.95)
         self.declare_parameter('action_chunk_size', 16)
 
+        # Rate the training data was resampled to (rosbag_to_groot --fps).
+        # Sets the action step period and the smoother's sample rate.
+        self.declare_parameter('training_fps', 10.0)
+
         # n_action_steps: how many actions to execute per chunk.
-        # 8 = overlapped (536ms, ~1.87 Hz re-planning, near-zero dead time)
-        # 16 = sequential (1.07s, 0.75 Hz, 270ms dead time)
+        # 8 = 800ms at 10 FPS, window actions[3:11] with skip=3
         self.declare_parameter('n_action_steps', 8)
 
         self.declare_parameter('csv_log_path', '')
 
 
         # Universal latency skip: all body parts read from action[skip + idx]
-        # to compensate for observation-to-action delay (~280ms = 4 steps).
-        # Phase 0 validated r>0.91 for all body parts at k=4.
-        self.declare_parameter('latency_skip', 4)
+        # to compensate for observation-to-action delay (~280ms = 3 steps at 10 FPS).
+        self.declare_parameter('latency_skip', 3)
 
         # Fire inference at this step within the execution window (overlapped).
         # Set equal to n_action_steps for sequential mode.
-        self.declare_parameter('inference_trigger_step', 4)
+        self.declare_parameter('inference_trigger_step', 8)
 
         # Blend joints (not base) over N steps at chunk transitions.
         self.declare_parameter('chunk_blend_steps', 2)
@@ -840,7 +843,7 @@ class GrootClientNode(Node):
           t=536ms  chunk exhausts → promote pending → start next chunk
           t=548ms  inference result arrives (buffered or installed)
         """
-        trigger_time = self.inference_trigger_step * ACTION_STEP_PERIOD
+        trigger_time = self.inference_trigger_step * self.action_step_period
 
         while self._running:
             if not self._active or self._state != ClientState.ACTIVE:
@@ -962,7 +965,7 @@ class GrootClientNode(Node):
         - _pending_chunk / promote pattern handles chunk transitions
         - chunk_blend_steps blends at transitions
         """
-        trigger_time = self.inference_trigger_step * ACTION_STEP_PERIOD
+        trigger_time = self.inference_trigger_step * self.action_step_period
         awaiting_result = False  # True after push, until result received
 
         while self._running:
@@ -1217,7 +1220,7 @@ class GrootClientNode(Node):
         now = time.monotonic()
         current_frame = self._time_to_frame(now)
 
-        # Get ensembled action from ChunkBuffer (15 FPS)
+        # Get ensembled action from ChunkBuffer (training_fps)
         action = self._chunk_buffer.get_action(current_frame)
         if action is None:
             return
@@ -1234,7 +1237,7 @@ class GrootClientNode(Node):
                 next_smoothed = self._action_smoother.smooth(next_raw)
                 self._action_interpolator.update_waypoint(current_frame + 1, next_smoothed)
 
-            frac_time = (now - self._activation_time) / ACTION_STEP_PERIOD
+            frac_time = (now - self._activation_time) / self.action_step_period
             interp = self._action_interpolator.evaluate(frac_time)
             if interp is not None:
                 action = interp
@@ -1265,7 +1268,7 @@ class GrootClientNode(Node):
         """Convert monotonic time to frame index since activation."""
         if self._activation_time is None:
             return 0
-        return int((mono_time - self._activation_time) / ACTION_STEP_PERIOD)
+        return int((mono_time - self._activation_time) / self.action_step_period)
 
     def _init_action_csv(self, base_path: str):
         """Initialize per-action CSV log (one row per action step)."""
@@ -1320,11 +1323,11 @@ class GrootClientNode(Node):
     def _classic_command_callback(self):
         """Classic overlapped command callback (original behavior).
 
-        Steps through the action chunk at the training data rate (67ms per
-        action step). All body parts share the same chunk and timeline.
+        Steps through the action chunk at the training data rate (100ms per
+        action step at 10 FPS). All body parts share the same chunk and timeline.
 
         When n_action_steps are consumed and a pending chunk is available,
-        promotes with a one-step blend (67ms lerp from old last action to
+        promotes with a one-step blend (one action step lerp from old last action to
         new chunk's first action). If no pending, continues executing up
         to all 16 actions. Fatal exit if all 16 exhaust with no pending.
 
@@ -1346,12 +1349,12 @@ class GrootClientNode(Node):
 
         # Compute current position in chunk
         elapsed = now - timestamp
-        t_frac = elapsed / ACTION_STEP_PERIOD
+        t_frac = elapsed / self.action_step_period
         exec_idx = int(t_frac)
         abs_idx = self._effective_skip + exec_idx
 
         # Promote pending chunk when execution window consumed
-        if pending is not None and elapsed >= self.n_action_steps * ACTION_STEP_PERIOD:
+        if pending is not None and elapsed >= self.n_action_steps * self.action_step_period:
             # Save current action for blend transition (only if blending enabled)
             if self.chunk_blend_steps > 0:
                 blend_idx = min(abs_idx, len(chunk) - 1)
@@ -1360,12 +1363,12 @@ class GrootClientNode(Node):
             with self._action_lock:
                 # Fixed latency skip on every promotion. No overshoot
                 # compensation: latency_skip already accounts for the
-                # observation-to-action delay (~280ms = 4 steps at 15 FPS).
+                # observation-to-action delay (~280ms = 3 steps at 10 FPS).
                 # In exhaust mode (trigger_step == n_action_steps), the
                 # observation is captured fresh at chunk exhaust — adding
                 # inference RTT as extra skip double-compensates and causes
                 # a death spiral of shrinking execution windows.
-                # +1 when blending to use 67ms for old→new lerp.
+                # +1 when blending to use one step for old→new lerp.
                 self._effective_skip = self.latency_skip + (1 if self.chunk_blend_steps > 0 else 0)
                 self._action_chunk = pending
                 self._pending_chunk = None
@@ -1419,10 +1422,10 @@ class GrootClientNode(Node):
 
         # Action selection with chunk transition blend.
         # On promotion, the first step blends from old chunk's last action
-        # to the new chunk's first executed action over ~67ms.
+        # to the new chunk's first executed action over one action step.
         if self._blend_from is not None:
             if exec_idx == 0:
-                alpha = t_frac  # 0→1 over one step (~67ms)
+                alpha = t_frac  # 0→1 over one action step
                 target = (1.0 - alpha) * self._blend_from + alpha * target
             else:
                 self._blend_from = None  # blend complete

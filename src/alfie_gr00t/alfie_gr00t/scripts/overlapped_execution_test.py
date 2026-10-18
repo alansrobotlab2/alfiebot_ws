@@ -79,7 +79,7 @@ BODY_PART_GROUPS = [
 ]
 
 JPEG_QUALITY = 80
-ACTION_STEP_MS = 67  # 15 FPS
+ACTION_STEP_MS = 100  # 10 FPS
 
 # Key joints for trajectory plots
 KEY_JOINTS = [
