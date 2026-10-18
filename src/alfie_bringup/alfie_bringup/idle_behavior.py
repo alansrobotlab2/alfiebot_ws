@@ -5,7 +5,8 @@ Publishes gentle idle motion to the command_mux at the lowest motion priority
 (`cmd/eyes/idle`, `cmd/head/idle`). Any real commander (VR, GR00T, agent gaze)
 outranks it, so this only shows through when nothing else owns the head/eyes.
 
-    cmd/eyes/idle  (EyeCmd)  — constant dim glow
+    cmd/eyes/idle  (EyeCmd)  — constant dim glow; blinks off for `eye_ack_sec`
+                               to acknowledge a wake word or an interrupt
     cmd/head/idle  (HeadCmd) — head behavior, chosen by `head_mode`:
 
       wander  — small open-loop sinusoidal look-around.
@@ -22,7 +23,9 @@ outranks it, so this only shows through when nothing else owns the head/eyes.
                 re-converges it, so after each turn the pre-turn reading is
                 ignored until it changes (else it gets added a second time).
                 While someone is talking the head rolls a little to the left
-                (a listening tilt), then levels out. Face polling
+                (a listening tilt), then levels out. While Alfie speaks, the
+                head nods on stressed syllables, driven by the TTS loudness
+                envelope (`tts/level`). Face polling
                 pauses while a higher-priority head source is active or the
                 LLM is generating, so it doesn't steal GPU.
 """
@@ -33,7 +36,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Empty, Float32, String
 from alfie_msgs.msg import Doa, EyeCmd, HeadCmd, HeadState, ServoCmd, Speaking
 from alfie_msgs.srv import Detect
 
@@ -58,6 +61,7 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('eyes_enabled', True)
         self.declare_parameter('eye_idle_pwm', 1)
+        self.declare_parameter('eye_ack_sec', 0.333)  # eyes-off blink on wake / barge-in
         self.declare_parameter('head_enabled', True)
         self.declare_parameter('head_mode', 'attend')  # 'attend' | 'wander'
         # wander
@@ -70,7 +74,7 @@ class IdleBehaviorNode(Node):
         # Servo-side trapezoidal ramp (STS accel register, ~0.15 rad/s^2 steps);
         # 0 = instant, which looks mechanical. Applies to accel and decel.
         self.declare_parameter('attend_accel', 4.0)          # rad/s^2
-        self.declare_parameter('yaw_limits', [-3.14, 3.14])  # rad; firmware enforces the real limit
+        self.declare_parameter('yaw_limits', [-3.14, 3.14])  # rad; firmware enforces the real one
         # Servo frame (+ = down). Up is left wide open: the head firmware enforces
         # the real mechanical limit, and _settled() copes with a target past it.
         self.declare_parameter('pitch_limits', [-1.6, 0.4])  # rad
@@ -107,6 +111,13 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('listen_roll_hold_sec', 1.0)  # keep the tilt after speech ends
         self.declare_parameter('roll_speed', 0.5)          # rad/s, gentler than yaw/pitch
         self.declare_parameter('roll_accel', 1.5)          # rad/s^2
+        # attend: speech nods, beat-triggered from the TTS loudness envelope
+        self.declare_parameter('nod_enabled', True)
+        self.declare_parameter('nod_amp_rad', 0.06)        # peak dip (down) per beat
+        self.declare_parameter('nod_peak_sec', 0.15)       # time to the bottom of the dip
+        self.declare_parameter('nod_refractory_sec', 0.35)  # min time between beats
+        self.declare_parameter('nod_onset_ratio', 0.5)     # beat when env > ratio * recent peak
+        self.declare_parameter('nod_min_level', 0.01)      # RMS floor (ignore near-silence)
         self.declare_parameter('higher_head_sources', ['tool', 'vr', 'groot', 'agent'])
         self.declare_parameter('higher_source_timeout', 0.5)
 
@@ -114,6 +125,7 @@ class IdleBehaviorNode(Node):
         self.rate = float(g('rate_hz').value)
         self.eyes_enabled = bool(g('eyes_enabled').value)
         self.eye_idle_pwm = max(0, min(4095, int(g('eye_idle_pwm').value)))
+        self.eye_ack_sec = float(g('eye_ack_sec').value)
         self.head_enabled = bool(g('head_enabled').value)
         self.head_mode = str(g('head_mode').value)
         self.head_yaw_amp = float(g('head_yaw_amp_rad').value)
@@ -155,9 +167,24 @@ class IdleBehaviorNode(Node):
         self.roll_speed = float(g('roll_speed').value)
         self.roll_accel = float(g('roll_accel').value)
         self.higher_timeout = float(g('higher_source_timeout').value)
+        self.nod_enabled = bool(g('nod_enabled').value)
+        self.nod_amp = float(g('nod_amp_rad').value)
+        self.nod_peak = max(0.02, float(g('nod_peak_sec').value))
+        self.nod_refractory = float(g('nod_refractory_sec').value)
+        self.nod_onset_ratio = float(g('nod_onset_ratio').value)
+        self.nod_min_level = float(g('nod_min_level').value)
 
         # ---- Publishers -----------------------------------------------------
         self.eyes_pub = self.create_publisher(EyeCmd, 'cmd/eyes/idle', qos)
+        self.eye_ack_until = 0.0
+        self.eye_ack_timer = None
+        if self.eyes_enabled and self.eye_ack_sec > 0.0:
+            # wakeword/detection carries wake, cancel ("stop") and energy barge-in;
+            # barge_in[/soft] also catches interrupts raised by other nodes.
+            self.create_subscription(
+                String, 'wakeword/detection', lambda _m: self._eye_ack(), 10)
+            self.create_subscription(Empty, 'barge_in', lambda _m: self._eye_ack(), qos)
+            self.create_subscription(Empty, 'barge_in/soft', lambda _m: self._eye_ack(), qos)
         self.head_pub = self.create_publisher(HeadCmd, 'cmd/head/idle', qos)
 
         # ---- Attend state ---------------------------------------------------
@@ -175,6 +202,11 @@ class IdleBehaviorNode(Node):
         self.asr_speech_since = None  # vad/speech onset time while speech is on
         self.asr_speech_ended = 0.0   # last vad/speech falling edge
         self.listening = False
+        self.tts_env = 0.0          # TTS loudness envelope (RMS, attack/release)
+        self.tts_peak = 0.0         # slowly decaying recent envelope peak
+        self.tts_level_t = None
+        self.nod_armed = True       # re-armed once the envelope dips between beats
+        self.nod_t = None           # time of the last beat
         self.generating = False
         self.higher_seen = 0.0
         self.face_pending_since = None
@@ -185,6 +217,8 @@ class IdleBehaviorNode(Node):
             self.create_subscription(Doa, 'respeaker/doa', self._on_doa, qos)
             self.create_subscription(Speaking, 'speaking', self._on_speaking, qos)
             self.create_subscription(Bool, 'vad/speech', self._on_vad, qos)
+            if self.nod_enabled:
+                self.create_subscription(Float32, 'tts/level', self._on_tts_level, qos)
             self.create_subscription(Bool, 'generating', self._on_generating, qos)
             for src in g('higher_head_sources').value:
                 self.create_subscription(
@@ -233,6 +267,32 @@ class IdleBehaviorNode(Node):
             return msg.speech_detected
         return (self.asr_speech_since is not None
                 and now - self.asr_speech_since > self.doa_onset_delay)
+
+    def _on_tts_level(self, msg: Float32) -> None:
+        # ~42 Hz: one RMS value per 512-sample window, published just before play.
+        now = self._now()
+        dt = 0.024 if self.tts_level_t is None else min(0.2, now - self.tts_level_t)
+        self.tts_level_t = now
+        level = float(msg.data)
+        tau = 0.03 if level > self.tts_env else 0.12  # fast attack, slower release
+        self.tts_env += (level - self.tts_env) * (1.0 - math.exp(-dt / tau))
+        self.tts_peak = max(self.tts_env, self.tts_peak * math.exp(-dt / 2.0))
+        thresh = max(self.nod_min_level, self.nod_onset_ratio * self.tts_peak)
+        if self.tts_env < 0.6 * thresh:
+            self.nod_armed = True
+        elif (self.nod_armed and self.tts_env > thresh
+                and (self.nod_t is None or now - self.nod_t > self.nod_refractory)):
+            self.nod_armed = False
+            self.nod_t = now
+
+    def _nod_offset(self, now: float) -> float:
+        """Pitch offset toward 'down' for the current beat (alpha-function dip)."""
+        if self.nod_t is None:
+            return 0.0
+        x = (now - self.nod_t) / self.nod_peak
+        if x > 5.0:
+            return 0.0
+        return self.nod_amp * x * math.exp(1.0 - x)
 
     def _on_generating(self, msg: Bool) -> None:
         self.generating = bool(msg.data)
@@ -348,9 +408,7 @@ class IdleBehaviorNode(Node):
         t = self._elapsed()
 
         if self.eyes_enabled:
-            eyes = EyeCmd()
-            eyes.eye_pwm = [self.eye_idle_pwm, self.eye_idle_pwm]
-            self.eyes_pub.publish(eyes)
+            self._publish_eyes()
 
         if not self.head_enabled:
             return
@@ -375,7 +433,13 @@ class IdleBehaviorNode(Node):
             self.target = list(self.cur)
             self.target_changed = now
             return
-        if self.face_enabled:
+        speaking = now < self.speaking_until
+        if speaking:
+            # Hold the face/attention timers (and skip face polling: mid-nod frames
+            # would jitter the pitch) until Alfie finishes talking.
+            self.last_face = max(self.last_face, now - self.face_lost + 1.0)
+            self.last_attention = now
+        elif self.face_enabled:
             self._maybe_request_face(now)
         if now - self.last_face > self.face_lost:
             self._set_target(self.target[0], self.neutral_pitch, now)
@@ -388,10 +452,37 @@ class IdleBehaviorNode(Node):
             self.listening = listening
             self.get_logger().info('listening: tilt' if listening else 'listening: level')
         roll = self.listen_roll if listening else 0.0
+        pitch = self.target[1]
+        if self.nod_enabled and speaking:
+            pitch = _clamp(pitch - self.pitch_sign * self._nod_offset(now), *self.pitch_lim)
         self._publish_head(
             self._servo(self.target[0], self.attend_speed, self.attend_accel),
-            self._servo(self.target[1], self.attend_speed, self.attend_accel),
+            self._servo(pitch, self.attend_speed, self.attend_accel),
             self._servo(roll, self.roll_speed, self.roll_accel))
+
+    def _eye_ack(self) -> None:
+        now = self._now()
+        if now < self.eye_ack_until:
+            return  # one blink per event burst (wake + barge_in arrive together)
+        self.eye_ack_until = now + self.eye_ack_sec
+        self._publish_eyes()  # off now, not on the next tick
+        if self.eye_ack_timer is not None:
+            self.eye_ack_timer.cancel()
+            self.destroy_timer(self.eye_ack_timer)
+        self.eye_ack_timer = self.create_timer(self.eye_ack_sec, self._eye_ack_done)
+
+    def _eye_ack_done(self) -> None:
+        self.eye_ack_timer.cancel()
+        self.destroy_timer(self.eye_ack_timer)
+        self.eye_ack_timer = None
+        self.eye_ack_until = 0.0
+        self._publish_eyes()  # back on exactly at the end of the blink
+
+    def _publish_eyes(self) -> None:
+        pwm = 0 if self._now() < self.eye_ack_until else self.eye_idle_pwm
+        eyes = EyeCmd()
+        eyes.eye_pwm = [pwm, pwm]
+        self.eyes_pub.publish(eyes)
 
     def _publish_head(self, yaw: ServoCmd, pitch: ServoCmd, roll: ServoCmd) -> None:
         head = HeadCmd()
