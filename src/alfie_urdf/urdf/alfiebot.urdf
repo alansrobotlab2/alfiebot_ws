@@ -60,7 +60,7 @@
     <origin xyz="-0.01875 -0. 0.053 " rpy="1.5707964 0.0 1.5707964"/>
     <parent link="neck2_link"/>
     <child link="neck3_link"/>
-    <axis xyz="0. 0. -1."/>
+    <axis xyz="0. 0. 1."/>
     <limit lower="-1.0471976" upper="1.0471976" effort="10000000." velocity="0."/>
   </joint>
   <joint name="head_roll_joint" type="continuous">
@@ -73,7 +73,7 @@
     <origin xyz="-0.0011403 0.0054173 0.8706568" rpy="0.0 0.0 0.0"/>
     <parent link="base_link"/>
     <child link="neck2_link"/>
-    <axis xyz="0. 0. 1."/>
+    <axis xyz="0. 0. -1."/>
     <limit lower="-3.1415927" upper="3.1415927" effort="10000000." velocity="0."/>
   </joint>
   <joint name="left_elbow_pitch_joint" type="revolute">
