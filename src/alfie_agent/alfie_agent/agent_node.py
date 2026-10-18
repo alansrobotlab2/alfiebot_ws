@@ -59,6 +59,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Bool, Empty, String
 from alfie_msgs.msg import ASRResult, SpeechRequest, Speaking
 from alfie_msgs.srv import Detect
+from std_srvs.srv import Trigger
 
 from alfie_agent import conversation as convo
 from alfie_agent import harness, memory, prompt_builder, tools
@@ -110,6 +111,11 @@ class AgentNode(Node):
         # prompt and may warm the model, so keep it generous).
         self._nanoowl_timeout = float(
             self.declare_parameter('nanoowl_timeout', 10.0).value)
+        # clear_estop refuses until the latch has been held this long, so Alfie
+        # can't clear it on hearing its own "E-stop engaged" announcement, and
+        # someone has had a moment to look at the robot first.
+        self._estop_min_hold = float(
+            self.declare_parameter('estop_reset_min_hold_sec', 5.0).value)
         self.max_tool_iters = int(self.declare_parameter('max_tool_iters', 4).value)
         # Kept declared for launch-file compatibility; superseded by the
         # token-budget trim below (active depth is now bounded by tokens, not a
@@ -156,10 +162,21 @@ class AgentNode(Node):
         # before tools.configure so the `look` tool can be wired to it.
         self.nanoowl_cli = self.create_client(Detect, nanoowl_service)
 
+        # E-stop: track the command_mux latch (latched topic) and a reset client
+        # for the `clear_estop` tool.
+        self._estopped = None          # None until the first estop_state arrives
+        self._estop_since = 0.0        # monotonic time the latch last engaged
+        self.create_subscription(
+            Bool, 'estop_state', self._on_estop_state,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.estop_reset_cli = self.create_client(Trigger, 'estop_reset')
+
         # --- brain: tools, system prompt, LLM client ---
         tools.configure(self.vault_root, qmd_url=qmd_url,
                         qmd_skip_rerank=qmd_skip_rerank, room_url=room_url,
-                        see_detect=self._nanoowl_detect)
+                        see_detect=self._nanoowl_detect,
+                        estop_reset=self._estop_reset)
         # Warm the QMD daemon off the init path: the first vault search is ~1.2 s
         # (cold embedding-model load) vs ~75 ms warm, so pay that now on a
         # background thread instead of on the user's first turn.
@@ -765,6 +782,41 @@ class AgentNode(Node):
                 for det in d.detections
             ],
         }
+
+    def _on_estop_state(self, msg):
+        engaged = bool(msg.data)
+        if engaged and not self._estopped:
+            self._estop_since = time.monotonic()
+        self._estopped = engaged
+
+    def _estop_reset(self):
+        """Clear the command_mux e-stop for tools/estop.py; returns a result dict.
+
+        Runs on a tool worker thread (see _nanoowl_detect): call_async + wait,
+        never spin from here.
+        """
+        if self._estopped is None:
+            return {"error": "I don't know the e-stop state yet."}
+        if not self._estopped:
+            return {"ok": True, "result": "The e-stop isn't engaged; nothing to clear."}
+        held = time.monotonic() - self._estop_since
+        if held < self._estop_min_hold:
+            return {"error": (
+                f"The e-stop only just engaged; wait {self._estop_min_hold - held:.0f} "
+                "more seconds and check the robot is clear, then ask again.")}
+        if not self.estop_reset_cli.wait_for_service(timeout_sec=0.5):
+            return {"error": "the e-stop reset service isn't running."}
+
+        done = threading.Event()
+        future = self.estop_reset_cli.call_async(Trigger.Request())
+        future.add_done_callback(lambda _f: done.set())
+        if not done.wait(timeout=3.0):
+            return {"error": "the e-stop reset timed out."}
+        resp = future.result()
+        if resp is None or not resp.success:
+            return {"error": f"the e-stop reset failed: {resp.message if resp else 'no reply'}"}
+        self.get_logger().warn('E-stop cleared by voice request (clear_estop tool)')
+        return {"ok": True, "result": "E-stop cleared; the robot can move again."}
 
     # --- idle compaction: episode -> memory subsystem ---
 
