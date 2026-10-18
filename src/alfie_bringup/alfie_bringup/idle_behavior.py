@@ -16,7 +16,9 @@ outranks it, so this only shows through when nothing else owns the head/eyes.
                   speech flag fires on room noise — ignored while Alfie speaks.
                 * pitch (and a yaw refinement) centers the nearest face, found by
                   polling NanoOWL's on-demand `nanoowl/detect` with "a face" at
-                  `face_rate_hz` and taking the largest box.
+                  `face_rate_hz` and taking the largest box. The image offset is
+                  applied to the head pose at the frame's capture time (from a
+                  short pose history), so it tracks while the head is moving.
                 The reSpeaker sits on head_link, so DOA is head-relative: the yaw
                 target is current yaw + DOA offset, sampled only while the head is
                 settled. The XVF3800 holds its last DOA estimate until new speech
@@ -30,6 +32,8 @@ outranks it, so this only shows through when nothing else owns the head/eyes.
                 LLM is generating, so it doesn't steal GPU.
 """
 
+import bisect
+import collections
 import math
 
 import rclpy
@@ -100,7 +104,7 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('face_service', 'nanoowl/detect')
         self.declare_parameter('face_prompt', 'a face')
         self.declare_parameter('face_threshold', 0.15)
-        self.declare_parameter('face_rate_hz', 1.0)
+        self.declare_parameter('face_rate_hz', 4.0)        # ~150 ms TRT per call
         self.declare_parameter('face_refine_yaw', True)
         self.declare_parameter('face_deadband', 0.06)    # normalized image units
         self.declare_parameter('camera_hfov_deg', 90.0)  # left_wide; conservative = undershoot
@@ -189,6 +193,7 @@ class IdleBehaviorNode(Node):
 
         # ---- Attend state ---------------------------------------------------
         self.cur = None             # [yaw, pitch] from low/headstate
+        self.pose_hist = collections.deque(maxlen=200)  # (t, yaw, pitch), ~2-4 s
         self.still_ref = None       # pose the head was last seen still at
         self.last_motion = 0.0      # last time the head moved > 0.01 rad
         self.target = None          # [yaw, pitch] we command
@@ -241,6 +246,7 @@ class IdleBehaviorNode(Node):
     def _on_head_state(self, msg: HeadState) -> None:
         self.cur = [msg.servos[YAW].current_location, msg.servos[PITCH].current_location]
         now = self._now()
+        self.pose_hist.append((now, self.cur[0], self.cur[1]))
         if self.target is None:
             self.target = list(self.cur)  # start from wherever the head is
         if (self.still_ref is None or abs(self.cur[0] - self.still_ref[0]) > 0.01
@@ -355,13 +361,25 @@ class IdleBehaviorNode(Node):
         self._set_target(yaw, self.target[1], now)
 
     # ---- faces (NanoOWL) ----------------------------------------------------
+    def _pose_at(self, t: float):
+        """[yaw, pitch] at wall time t, interpolated from the pose history."""
+        h = self.pose_hist
+        if not h or t >= h[-1][0]:
+            return list(self.cur)
+        if t <= h[0][0]:
+            return [h[0][1], h[0][2]]
+        i = bisect.bisect_left(h, (t,))
+        (t0, y0, p0), (t1, y1, p1) = h[i - 1], h[i]
+        a = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+        return [y0 + a * (y1 - y0), p0 + a * (p1 - p0)]
+
     def _maybe_request_face(self, now: float) -> None:
         if self.face_pending_since is not None:
             if now - self.face_pending_since < 5.0:
                 return
             self.face_pending_since = None  # lost response; try again
         if (now - self.last_face_call < self.face_period or self.generating
-                or not self._settled(now) or not self.face_cli.service_is_ready()):
+                or not self.face_cli.service_is_ready()):
             return
         req = Detect.Request()
         req.prompt = self.face_prompt
@@ -381,6 +399,8 @@ class IdleBehaviorNode(Node):
         if not res.ok or self._outranked(now) or self.cur is None:
             return
         dets = res.detections
+        stamp = dets.header.stamp.sec + dets.header.stamp.nanosec * 1e-9
+        pose = self._pose_at(stamp) if stamp > 0.0 else list(self.cur)
         faces = [d for d in dets.detections if d.score >= self.face_threshold]
         if not faces:
             return
@@ -394,11 +414,11 @@ class IdleBehaviorNode(Node):
         self.last_attention = now
         yaw, pitch = self.target
         if abs(dy) > self.face_deadband:
-            pitch = self.cur[1] - self.pitch_sign * math.atan(2.0 * dy * self.tan_half_v)
+            pitch = pose[1] - self.pitch_sign * math.atan(2.0 * dy * self.tan_half_v)
         if self.face_refine_yaw and abs(dx) > self.face_deadband:
-            yaw = self.cur[0] - self.yaw_sign * math.atan(2.0 * dx * self.tan_half_h)
+            yaw = pose[0] - self.yaw_sign * math.atan(2.0 * dx * self.tan_half_h)
         if [yaw, pitch] != self.target:
-            self.get_logger().info(
+            self.get_logger().debug(
                 f'face {f.score:.2f} at ({dx:+.2f}, {dy:+.2f}) -> '
                 f'yaw {yaw:+.2f} pitch {pitch:+.2f}')
         self._set_target(yaw, pitch, now)
