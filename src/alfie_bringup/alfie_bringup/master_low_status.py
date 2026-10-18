@@ -2,11 +2,11 @@ from typing import Dict, List, Optional
 import rclpy
 from rclpy.node import Node
 from alfie_msgs.msg import RobotLowState, ArmState, HeadState, BackState, JetsonState
-from alfie_msgs.msg import ServoState
+from alfie_msgs.msg import ServoState, SpeechRequest
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Empty
+from std_msgs.msg import Bool, Empty
 from rclpy.qos import (QoSProfile, ReliabilityPolicy, DurabilityPolicy,
                        HistoryPolicy)
 from .watchdog_checks import (create_health_checks, HealthCheck,
@@ -23,6 +23,10 @@ AUTO_ESTOP_CRITICAL_TEMP_C = 65.0
 # temperature trigger arms, and 3 strikes is ~60 ms of a persistent status bit.
 AUTO_ESTOP_MIN_TEMP_SAMPLES = 10
 AUTO_ESTOP_STATUS_STRIKES = 3
+# Overload must hold this long (s) before tripping. A shoulder lifting under VR
+# can flag overload for a moment alongside a supply sag (2026-10-18: R shoulder
+# pitch at 10.6 V); a genuine stall or jam persists well past this.
+AUTO_ESTOP_OVERLOAD_SEC = 0.5
 
 
 # ============================================================================
@@ -72,6 +76,22 @@ HEAD_JOINT_NAMES = [
     'head_pitch_joint',  # 1 (tilt, bus 2)
     'head_roll_joint',   # 2 (bus 3)
 ]
+
+MODULE_JOINT_NAMES = {
+    'left_arm': LEFT_ARM_JOINT_NAMES,
+    'right_arm': RIGHT_ARM_JOINT_NAMES,
+    'head': HEAD_JOINT_NAMES,
+}
+
+
+def _spoken_joint(module: str, index: int) -> str:
+    """'right_shoulder_pitch_joint' -> 'right shoulder pitch' for TTS."""
+    names = MODULE_JOINT_NAMES.get(module, [])
+    if index >= len(names):
+        return f'{module.replace("_", " ")} servo {index}'
+    name = names[index].removesuffix('_joint').replace('_active', '')
+    return name.replace('_', ' ')
+
 
 # Full servo-joint list in RobotLowState.servo_state order
 SERVO_JOINT_NAMES = LEFT_ARM_JOINT_NAMES + RIGHT_ARM_JOINT_NAMES + HEAD_JOINT_NAMES
@@ -123,18 +143,33 @@ class MasterLowStatusNode(Node):
         # the mux latch persists until a deliberate estop_reset.
         self.declare_parameter('auto_estop_enabled', True)
         self.declare_parameter('auto_estop_critical_temp_c', AUTO_ESTOP_CRITICAL_TEMP_C)
+        self.declare_parameter('auto_estop_overload_sec', AUTO_ESTOP_OVERLOAD_SEC)
         self.auto_estop_enabled = self.get_parameter('auto_estop_enabled').value
         self.auto_estop_critical_temp = self.get_parameter('auto_estop_critical_temp_c').value
+        self.auto_estop_overload_sec = float(self.get_parameter('auto_estop_overload_sec').value)
         self._servo_fault_active = False       # aggregate rising-edge latch
         self._module_faults = {'left_arm': False, 'right_arm': False, 'head': False}
         # Per-module {servo_index: consecutive messages with a fault status bit}
         self._status_strikes: Dict[str, Dict[int, int]] = {
+            'left_arm': {}, 'right_arm': {}, 'head': {}}
+        # Per-module {servo_index: time the overload bit was first seen (s)}
+        self._overload_since: Dict[str, Dict[int, float]] = {
             'left_arm': {}, 'right_arm': {}, 'head': {}}
         qos_latched = QoSProfile(
             depth=1, reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST)
         self.estop_pub = self.create_publisher(Empty, 'estop', qos_latched)
+
+        # ---- E-stop announcements -------------------------------------------
+        # Speak every engage/clear edge of the mux latch (manual or automatic),
+        # with the fault reason when this node is the one that tripped it.
+        self._estopped: Optional[bool] = None  # None until the first state arrives
+        self._estop_reason: Optional[str] = None
+        self.speech_pub = self.create_publisher(
+            SpeechRequest, 'speechrequest',
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
+        self.create_subscription(Bool, 'estop_state', self.estop_state_callback, qos_latched)
 
         # ---- Subscriptions --------------------------------------------------
         self.left_arm_sub = self.create_subscription(
@@ -178,6 +213,25 @@ class MasterLowStatusNode(Node):
     # ========================================================================
     # Callback Methods
     # ========================================================================
+
+    def estop_state_callback(self, msg: Bool) -> None:
+        engaged = bool(msg.data)
+        first = self._estopped is None
+        changed = engaged != self._estopped
+        self._estopped = engaged
+        if first or not changed:
+            return  # don't announce the latched state we start up into
+        if engaged:
+            reason = self._estop_reason
+            self._say(f'E-stop engaged. {reason}.' if reason else 'E-stop engaged.')
+        else:
+            self._say('E-stop cleared.')
+        self._estop_reason = None
+
+    def _say(self, text: str) -> None:
+        msg = SpeechRequest()
+        msg.text = text
+        self.speech_pub.publish(msg)
 
     def left_arm_callback(self, msg: ArmState) -> None:
         self.left_arm_state = msg
@@ -395,7 +449,8 @@ class MasterLowStatusNode(Node):
         servo bus is a noisy half-duplex line and a corrupted payload byte
         looks exactly like a real fault for one message: temperature uses the
         ServoMonitor's trimmed mean over its rolling window, and the status
-        bits must persist for AUTO_ESTOP_STATUS_STRIKES consecutive messages.
+        overtemp bit must persist for AUTO_ESTOP_STATUS_STRIKES consecutive
+        messages, and the overload bit for auto_estop_overload_sec.
         Servo thermal mass means a genuine overtemp lasts many seconds, so the
         sub-second delay this adds costs nothing protective.
         """
@@ -404,24 +459,37 @@ class MasterLowStatusNode(Node):
 
         monitor = self.health_checks.get(f'{module}_servos')
         strikes = self._status_strikes[module]
+        overload_since = self._overload_since[module]
+        now = self.get_clock().now().nanoseconds / 1e9
 
         faults = []
+        spoken = []
         for i, servo in enumerate(servos):
             status = int(servo.servo_status)
             bits = []
+            overloaded = False
             if status & SERVO_STATUS_OVERLOAD:
-                bits.append('overload')
-            if status & SERVO_STATUS_TEMPERATURE:
+                since = overload_since.setdefault(i, now)
+                if now - since >= self.auto_estop_overload_sec:
+                    bits.append(f'overload ({now - since:.2f}s)')
+                    overloaded = True
+            else:
+                overload_since.pop(i, None)
+
+            overtemp = bool(status & SERVO_STATUS_TEMPERATURE)
+            strikes[i] = strikes.get(i, 0) + 1 if overtemp else 0
+            if overtemp and strikes[i] >= AUTO_ESTOP_STATUS_STRIKES:
                 bits.append('firmware-overtemp')
 
-            strikes[i] = strikes.get(i, 0) + 1 if bits else 0
-            if bits and strikes[i] >= AUTO_ESTOP_STATUS_STRIKES:
+            if bits:
                 faults.append(f'{module}[{i}] {"+".join(bits)}')
+                spoken.append(f'{_spoken_joint(module, i)} {"overload" if overloaded else "overheating"}')
 
             temp = (monitor.filtered_temp(i, AUTO_ESTOP_MIN_TEMP_SAMPLES)
                     if monitor is not None else None)
             if temp is not None and temp >= self.auto_estop_critical_temp:
                 faults.append(f'{module}[{i}] temp={temp:.0f}C')
+                spoken.append(f'{_spoken_joint(module, i)} at {temp:.0f} degrees')
 
         # Track this module's fault state; edge-detect on the aggregate across all
         # modules so a healthy module's callback doesn't clear another's fault
@@ -431,6 +499,8 @@ class MasterLowStatusNode(Node):
 
         if any_fault and not self._servo_fault_active:
             self._servo_fault_active = True
+            if not self._estopped:  # reason is spoken on the engage edge
+                self._estop_reason = ', '.join(dict.fromkeys(spoken))
             self.estop_pub.publish(Empty())
             self.get_logger().error(
                 f'AUTO E-STOP: servo fault(s) -> {", ".join(faults)}')
