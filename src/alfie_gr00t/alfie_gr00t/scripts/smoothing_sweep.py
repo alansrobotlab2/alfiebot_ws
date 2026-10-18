@@ -5,9 +5,9 @@ Runs groot_replay_eval.py with varying configurations, captures metrics,
 and outputs a summary table for SMOOTHIT.md.
 
 Usage:
-    python3 smoothing_sweep.py --server-host 192.168.50.201
-    python3 smoothing_sweep.py --server-host 192.168.50.201 --phases A,B
-    python3 smoothing_sweep.py --server-host 192.168.50.201 --episodes 0,1,2
+    python3 smoothing_sweep.py --server-host 127.0.0.1
+    python3 smoothing_sweep.py --server-host 127.0.0.1 --phases A,B
+    python3 smoothing_sweep.py --server-host 127.0.0.1 --episodes 0,1,2
 """
 
 import argparse
@@ -525,7 +525,7 @@ def find_best_config(results: list[dict], metric: str = 'jerk_ratio_overall') ->
 
 def main():
     parser = argparse.ArgumentParser(description='Smoothing parameter sweep')
-    parser.add_argument('--server-host', type=str, default='192.168.50.201')
+    parser.add_argument('--server-host', type=str, default='127.0.0.1')
     parser.add_argument('--server-port', type=int, default=5555)
     parser.add_argument('--episodes', type=str, default='0,1,2',
                         help='Comma-separated episode indices')

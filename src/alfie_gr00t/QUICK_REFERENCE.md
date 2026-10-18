@@ -78,7 +78,7 @@ communication diagnostics. No ROS2 required.
 python ./src/alfie_gr00t/alfie_gr00t/scripts/groot_open_loop_eval.py \
     --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
     --episode-index 0 \
-    --host 192.168.50.201 --port 5555 \
+    --host 127.0.0.1 --port 5555 \
     --save-plot /tmp/groot_eval/episode_000.png \
     --task "find the can and pick it up" \
     --closed-loop
@@ -90,7 +90,7 @@ python ./src/alfie_gr00t/alfie_gr00t/scripts/groot_open_loop_eval.py \
 |--------|---------|-------------|
 | `--dataset-path` | *(required)* | Path to LeRobot-format dataset |
 | `--episode-index` | `0` | Episode index to evaluate |
-| `--host` | `192.168.50.108` | Inference server host |
+| `--host` | `127.0.0.1` | Inference server host |
 | `--port` | `5555` | Inference server port |
 | `--transport` | `tcp` | ZMQ transport (`tcp` or `ipc`) |
 | `--timeout-ms` | `5000` | Inference timeout (ms) |

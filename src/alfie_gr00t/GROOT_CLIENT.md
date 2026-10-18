@@ -496,7 +496,7 @@ python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server
 ```bash
 ros2 run alfie_gr00t groot_client --ros-args \
     -p transport:=tcp \
-    -p server_host:=192.168.50.108 \
+    -p server_host:=127.0.0.1 \
     -p server_port:=5555
 ```
 

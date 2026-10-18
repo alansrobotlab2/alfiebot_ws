@@ -16,7 +16,7 @@ WorkingDirectory=/home/alfie/alfiebot_ws
 ExecStartPre=/bin/sleep 10
 
 # Source ROS2 and workspace, then launch
-ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /home/alfie/alfiebot_ws/install/setup.bash && ros2 launch alfie_bringup alfie_bringup.py'
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/alfie/alfiebot_ws/install/setup.bash && ros2 launch alfie_bringup alfie_bringup.py'
 
 # Restart policy
 Restart=on-failure

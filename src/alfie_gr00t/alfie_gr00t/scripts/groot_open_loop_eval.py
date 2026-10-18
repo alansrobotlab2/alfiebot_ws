@@ -12,13 +12,13 @@ Usage:
     python groot_open_loop_eval.py \
         --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
         --episode-index 3 \
-        --host 192.168.50.108 --port 5555
+        --host 127.0.0.1 --port 5555
 
     # With custom stats and save path
     python groot_open_loop_eval.py \
         --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
         --episode-index 0 \
-        --host 192.168.50.108 --port 5555 \
+        --host 127.0.0.1 --port 5555 \
         --save-plot /tmp/eval_episode_0.png \
         --task "find the can and pick it up"
 """
@@ -794,11 +794,11 @@ def parse_args():
 examples:
   # Eval episode 0 against remote server
   %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
-           --episode-index 0 --host 192.168.50.108 --port 5555
+           --episode-index 0 --host 127.0.0.1 --port 5555
 
   # Eval with custom save path
   %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
-           --episode-index 3 --host 192.168.50.108 --port 5555 \\
+           --episode-index 3 --host 127.0.0.1 --port 5555 \\
            --save-plot /tmp/eval_ep3.png
 """,
     )
@@ -816,8 +816,8 @@ examples:
         help='ZMQ transport type (default: tcp)',
     )
     parser.add_argument(
-        '--host', default='192.168.50.108',
-        help='Server host for TCP (default: 192.168.50.108)',
+        '--host', default='127.0.0.1',
+        help='Server host for TCP (default: 127.0.0.1)',
     )
     parser.add_argument(
         '--port', '-p', type=int, default=5555,

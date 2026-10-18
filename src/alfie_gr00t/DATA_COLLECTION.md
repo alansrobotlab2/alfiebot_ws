@@ -168,8 +168,8 @@ ros2 bag info ~/alfiebot_ws/data/demonstrations/demo_20250129_143022
 ### Extract images for visualization
 
 ```bash
-# Install tool if needed
-sudo apt install ros-humble-rosbag2-tools
+# Install tool if needed (rosbag2 metapackage: ros2 bag CLI + storage plugins)
+sudo apt install ros-jazzy-rosbag2
 
 # Extract images from a specific topic
 ros2 bag play demo_20250129_143022 --topics /oak/rgb/image_raw

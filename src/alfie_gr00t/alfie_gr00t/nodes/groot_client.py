@@ -576,7 +576,7 @@ class GrootClientNode(Node):
         """Declare all ROS2 parameters."""
         # Transport configuration
         self.declare_parameter('transport', 'tcp')
-        self.declare_parameter('server_host', '192.168.50.108')
+        self.declare_parameter('server_host', '127.0.0.1')
         self.declare_parameter('server_port', 5555)
         self.declare_parameter('ipc_path', DEFAULT_IPC_PATH)
 

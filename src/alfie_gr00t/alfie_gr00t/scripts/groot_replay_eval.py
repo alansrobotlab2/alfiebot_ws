@@ -24,7 +24,7 @@ Usage:
         --config src/alfie_gr00t/config/groot_client.yaml \
         --dataset-path data/alfiebot.CanDoChallenge \
         --episode-index 0 \
-        --host 192.168.50.201
+        --host 127.0.0.1
 
     # Compare rate limiting on vs off
     python groot_replay_eval.py --config config/groot_client.yaml \\
@@ -154,7 +154,7 @@ SUBPLOT_Y_SCALE = 3
 # Default values matching groot_client.py _declare_parameters()
 PARAM_DEFAULTS = {
     'transport': 'tcp',
-    'server_host': '192.168.50.108',
+    'server_host': '127.0.0.1',
     'server_port': 5555,
     'ipc_path': '/tmp/groot_inference.sock',
     'use_async_zmq': False,
@@ -1704,7 +1704,7 @@ Examples:
   python groot_replay_eval.py \\
       --config config/groot_client.yaml \\
       --dataset-path data/alfiebot.CanDoChallenge \\
-      --episode-index 0 --host 192.168.50.201
+      --episode-index 0 --host 127.0.0.1
 
   # Compare rate limiting on vs off
   python groot_replay_eval.py ... --output-dir /tmp/eval_rl_on/

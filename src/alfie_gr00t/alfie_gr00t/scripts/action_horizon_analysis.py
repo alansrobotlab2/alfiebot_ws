@@ -15,7 +15,7 @@ Usage:
     python action_horizon_analysis.py \
         --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
         --episode-index 3 \
-        --host 192.168.50.201 --port 5555 \
+        --host 127.0.0.1 --port 5555 \
         --save-dir /tmp/horizon_analysis/
 """
 
@@ -714,15 +714,15 @@ def parse_args():
 examples:
   # Single episode
   %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
-           --episode-index 3 --host 192.168.50.201
+           --episode-index 3 --host 127.0.0.1
 
   # Multiple episodes for statistical robustness
   %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
-           --episode-indices 0,3,5,10 --host 192.168.50.201
+           --episode-indices 0,3,5,10 --host 127.0.0.1
 
   # Every 2nd frame (faster, still good coverage)
   %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
-           --episode-index 3 --step-interval 2 --host 192.168.50.201
+           --episode-index 3 --step-interval 2 --host 127.0.0.1
 """,
     )
     parser.add_argument('--dataset-path', required=True, help='Path to LeRobot-format dataset')
@@ -731,7 +731,7 @@ examples:
     parser.add_argument('--episode-indices', type=str, default=None,
                         help='Comma-separated episode indices (e.g., 0,3,5,10)')
     parser.add_argument('--transport', choices=['tcp', 'ipc'], default='tcp')
-    parser.add_argument('--host', default='192.168.50.201')
+    parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', '-p', type=int, default=5555)
     parser.add_argument('--timeout-ms', type=int, default=5000)
     parser.add_argument('--task', default='find the can and pick it up')

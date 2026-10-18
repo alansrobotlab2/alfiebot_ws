@@ -120,7 +120,7 @@ See: [systemd/README.md](systemd/README.md)
 
 ## Requirements
 
-- ROS2 Humble
+- ROS2 Jazzy
 - Built workspace with all Alfie packages
 - User account with access to required hardware groups
 - Network connectivity (for remote features)

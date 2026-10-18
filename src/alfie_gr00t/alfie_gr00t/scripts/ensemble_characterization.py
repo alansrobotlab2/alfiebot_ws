@@ -17,7 +17,7 @@ Usage:
     python ensemble_characterization.py \
         --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
         --episode-index 3 \
-        --host 192.168.50.201 --port 5555 \
+        --host 127.0.0.1 --port 5555 \
         --duration-sec 4
 """
 
@@ -452,7 +452,7 @@ def parse_args():
                         help='Path to LeRobot-format dataset')
     parser.add_argument('--episode-index', type=int, default=0)
     parser.add_argument('--transport', choices=['tcp', 'ipc'], default='tcp')
-    parser.add_argument('--host', default='192.168.50.201')
+    parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', '-p', type=int, default=5555)
     parser.add_argument('--timeout-ms', type=int, default=5000)
     parser.add_argument('--duration-sec', type=float, default=4.0,

@@ -2,9 +2,9 @@
 
 <div align="center">
 
-**A ROS2 Humble workspace for an intelligent, interactive humanoid robot**
+**A ROS2 Jazzy workspace for an intelligent, interactive humanoid robot**
 
-[![ROS2](https://img.shields.io/badge/ROS2-Humble-blue.svg)](https://docs.ros.org/en/humble/)
+[![ROS2](https://img.shields.io/badge/ROS2-Jazzy-blue.svg)](https://docs.ros.org/en/jazzy/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-brightgreen.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Jetson-76B900.svg)](https://developer.nvidia.com/embedded/jetson)
 
@@ -14,7 +14,7 @@
 
 ## 📋 Overview
 
-Alfiebot is a conversational humanoid robot built on ROS2 Humble, featuring voice interaction, LLM-powered intelligence, and expressive servo-controlled movements. The platform integrates automatic speech recognition (ASR), large language model (LLM) processing, text-to-speech (TTS), and sophisticated motor control through micro-ROS firmware.
+Alfiebot is a conversational humanoid robot built on ROS2 Jazzy, featuring voice interaction, LLM-powered intelligence, and expressive servo-controlled movements. The platform integrates automatic speech recognition (ASR), large language model (LLM) processing, text-to-speech (TTS), and sophisticated motor control through micro-ROS firmware.
 
 ### Key Features
 
@@ -52,8 +52,8 @@ alfiebot_ws/
 ### Prerequisites
 
 - NVIDIA Jetson device (tested on Jetson Orin series)
-- ROS2 Humble
-- Ubuntu 20.04/22.04
+- ROS2 Jazzy
+- Ubuntu 24.04 (JetPack 7)
 
 ### Setup
 

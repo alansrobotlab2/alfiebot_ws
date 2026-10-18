@@ -10,9 +10,10 @@ This is Alfie, a humanoid robot with:
  - amplified speaker
 
 The alfiebot platform runs on:
- - Jetson Orin NX 16gb developer kit
- - Ubuntu 22.04
- - Jetpack 6.2.2
+ - Jetson AGX Orin 64gb developer kit (Gen2; Gen1 was an Orin NX 16gb)
+ - Ubuntu 24.04
+ - Jetpack 7.2.1 (L4T r39.2.1)
+ - ROS 2 Jazzy (micro-ROS agent on the jazzy branch; Pico firmware builds with board_microros_distro = jazzy)
 
 
 We are actively working on an nvidia gr00t n1.6 solution to run on alfie to complete a challenge to identify, localize, pick up, then set down a soda can
@@ -22,18 +23,18 @@ We currently have 200 episodes with 2 tasks, about 100 episodes per task.
 
 The episodes were recorded in varying environments and lighting conditions, with the soda can placed anywhere within 1 to 3 feed anywhere around the robot.
 
-As of right now groot server runs on an rtx 3090 PC workstation and groot client runs on the orin nx on the robot over tcp and wifi.
+Both the groot server and the groot client run locally on the AGX Orin; there is no separate GPU workstation. The client talks to the server over localhost TCP.
 
 
 # GR00T N1.6 Architecture ---
 
 ## Client-Server Split
-The GR00T inference system is split across two machines:
- - **Server** (GPU workstation, e.g. 192.168.50.108): Runs the GR00T N1.6 model. Receives observations over ZMQ, returns 16-step action horizons.
- - **Client** (Jetson Orin): ROS2 node that collects camera images + robot state, sends them to the server via ZMQ, and publishes actions to the robot.
+The GR00T inference system is split into two processes, both on the Orin:
+ - **Server** (`127.0.0.1`, REQ/REP 5555, async PUSH/PULL 5556/5557): Runs the GR00T model. Receives observations over ZMQ, returns 16-step action horizons. Run it per `src/alfie_gr00t/ORIN_AGX_SERVER.md`.
+ - **Client**: ROS2 node that collects camera images + robot state, sends them to the server via ZMQ, and publishes actions to the robot.
 
 The server can run as either:
- - A standalone Python script: `scripts/groot_inference_server.py` (typical for remote GPU)
+ - A standalone Python script: `scripts/groot_inference_server.py` (typical; runs in the Isaac-GR00T environment, TCP only)
  - A ROS2 node via the launch file (for on-device inference)
 
 ## Key Components
@@ -52,13 +53,13 @@ Ping: Client sends `{'ping': True}`, server returns `{'pong': True}`.
 ## Config Files
  - `config/groot_client.yaml` — Client ROS2 parameters: transport, server address, inference FPS, action chunking, smoothing, safety limits, task description, debug settings.
  - `config/groot_server.yaml` — Server ROS2 parameters: transport, bind address, model checkpoint path, TensorRT toggle, mock mode, replay mode.
- - `launch/groot_inference.launch.py` — Launches both server + client with configurable launch args. Set `launch_server:=false` for remote GPU setups.
+ - `launch/groot_inference.launch.py` — Launches the client only. All parameters come from `groot_client.yaml`; a launch arg overrides the yaml only when passed.
 
 ## Training Pipeline
  - Training config: `alfiebot_config.py` — Defines modality config (4 cameras, 22D state/action, all ABSOLUTE action representation).
  - Data conversion: `scripts/rosbag_to_groot.py` — Converts ROS2 rosbags to LeRobot format (MP4 videos + parquet state/action data).
  - Dataset: `data/alfiebot.CanDoChallenge/` — 200 episodes, 2 tasks, LeRobot format with `meta/modality.json`.
- - Fine-tuning: Runs on the GPU workstation using `Isaac-GR00T/gr00t/experiment/launch_finetune.py`.
+ - Fine-tuning: uses `Isaac-GR00T/gr00t/experiment/launch_finetune.py`.
  - Checkpoints saved to `Isaac-GR00T/alfie-gr00t/` with `processor_config.json` containing normalization stats and action config. The server loads config from the checkpoint, NOT from `alfiebot_config.py`.
 
 ## 22D State/Action Vector
@@ -93,7 +94,7 @@ The client logs two CSV files when `csv_log_path` is set (default: `/tmp/groot_c
 # Check TRT vs PyTorch backend (run BEFORE debugging live robot)
 # Uses hybrid_image_test.py Test 7: 5x identical inputs, check HEAD_YAW SPREAD
 # Spread <0.05 = PyTorch (good), >0.1 = TRT bf16 (bad)
-python3 scripts/hybrid_image_test.py --test 7 --server-host 192.168.50.201
+python3 scripts/hybrid_image_test.py --test 7 --host 127.0.0.1
 
 # Analyze a run CSV with python
 python3 -c "

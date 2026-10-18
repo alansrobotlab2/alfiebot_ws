@@ -19,7 +19,7 @@ Usage:
     python overlapped_execution_test.py \
         --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
         --episode-index 3 \
-        --host 192.168.50.201 --port 5555 \
+        --host 127.0.0.1 --port 5555 \
         --save-dir /tmp/overlapped_test/
 """
 
@@ -1053,11 +1053,11 @@ def parse_args():
 examples:
   # Single episode
   %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
-           --episode-index 320 --host 192.168.50.201
+           --episode-index 320 --host 127.0.0.1
 
   # Multiple episodes for statistical robustness
   %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
-           --episode-indices 317,318,319,320,321,322 --host 192.168.50.201
+           --episode-indices 317,318,319,320,321,322 --host 127.0.0.1
 
   # Reuse cached horizons from previous run
   %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
@@ -1070,7 +1070,7 @@ examples:
     parser.add_argument('--episode-indices', type=str, default=None,
                         help='Comma-separated episode indices')
     parser.add_argument('--transport', choices=['tcp', 'ipc'], default='tcp')
-    parser.add_argument('--host', default='192.168.50.201')
+    parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', '-p', type=int, default=5555)
     parser.add_argument('--timeout-ms', type=int, default=5000)
     parser.add_argument('--task', default='find the can and pick it up')

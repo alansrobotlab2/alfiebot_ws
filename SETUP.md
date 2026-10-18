@@ -5,9 +5,9 @@
 **Complete installation and configuration guide for Alfiebot on NVIDIA Jetson**
 
 [![Jetson](https://img.shields.io/badge/Platform-Jetson%20Orin-76B900.svg)](https://developer.nvidia.com/embedded/jetson-orin)
-[![JetPack](https://img.shields.io/badge/JetPack-6.2-76B900.svg)](https://developer.nvidia.com/embedded/jetpack)
-[![ROS2](https://img.shields.io/badge/ROS2-Humble-blue.svg)](https://docs.ros.org/en/humble/)
-[![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04-orange.svg)](https://ubuntu.com/)
+[![JetPack](https://img.shields.io/badge/JetPack-7.2-76B900.svg)](https://developer.nvidia.com/embedded/jetpack)
+[![ROS2](https://img.shields.io/badge/ROS2-Jazzy-blue.svg)](https://docs.ros.org/en/jazzy/)
+[![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04-orange.svg)](https://ubuntu.com/)
 
 </div>
 
@@ -30,7 +30,7 @@
 ## 🎯 Prerequisites
 
 - **Hardware**: NVIDIA Jetson Orin device ([Seeed Studio reComputer](https://wiki.seeedstudio.com/recomputer_jetson_mini_getting_started) recommended)
-- **OS**: Ubuntu 22.04 (pre-installed on Jetson)
+- **OS**: Ubuntu 24.04 via JetPack 7.2 (pre-installed on Jetson)
 - **Network**: Internet connection for downloads
 - **Storage**: At least 64GB free space (128GB+ recommended)
 
@@ -165,6 +165,10 @@ source ~/.zshrc
 
 ## 🚀 JetPack Upgrade
 
+> **JetPack 6 only.** JetPack 7.2 (L4T r39, Ubuntu 24.04) already ships the CUDA / cuDNN /
+> TensorRT stack, so current units skip this. These steps upgraded a JetPack 6 (r36.4)
+> install and are kept for Gen1 (Orin NX) units still on JetPack 6.
+
 Upgrade to JetPack 6.2 for latest CUDA and compute capabilities ([Docs](https://docs.nvidia.com/jetson/jetpack/install-setup/index.html#upgradable-compute-stack)):
 
 ```bash
@@ -207,7 +211,7 @@ sudo reboot
 
 ## 🤖 ROS2 Installation
 
-Install ROS2 Humble ([Official Docs](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html)):
+Install ROS2 Jazzy ([Official Docs](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html)):
 
 ### 1. Configure Locale
 
@@ -236,14 +240,14 @@ curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-a
 sudo dpkg -i /tmp/ros2-apt-source.deb
 ```
 
-### 3. Install ROS2 Humble
+### 3. Install ROS2 Jazzy
 
 ```bash
 sudo apt update
 sudo apt upgrade -y
 
 # Install ROS2 Desktop (includes RViz, demos, tutorials)
-sudo apt install ros-humble-desktop
+sudo apt install ros-jazzy-desktop
 
 # Install development tools
 sudo apt install ros-dev-tools
@@ -271,8 +275,8 @@ git clone https://github.com/alansrobotlab2/alfiebot_ws.git
 
 # Add ROS2 and workspace sourcing to shell
 echo '' >> ~/.zshrc
-echo '# Sourcing for ROS2 Humble and Alfiebot workspace' >> ~/.zshrc
-echo 'source /opt/ros/humble/setup.zsh' >> ~/.zshrc
+echo '# Sourcing for ROS2 Jazzy and Alfiebot workspace' >> ~/.zshrc
+echo 'source /opt/ros/jazzy/setup.zsh' >> ~/.zshrc
 echo 'source ~/alfiebot_ws/install/setup.zsh' >> ~/.zshrc
 
 source ~/.zshrc
@@ -290,8 +294,8 @@ sudo apt-get install -y \
   python3-venv \
   python3-alsaaudio \
   hostapd \
-  ros-humble-foxglove-bridge \
-  ros-humble-depthai-ros \
+  ros-jazzy-foxglove-bridge \
+  ros-jazzy-depthai-ros \
   tmux \
   gcc-arm-none-eabi
 
@@ -397,6 +401,9 @@ cp ~/alfiebot_ws/src/alfie_llm/scripts/convert.sh ~/jetson-containers/data/
 jetson-containers run dustynv/mlc:0.20.0-r36.4.0
 ```
 
+> `r36.4` is a JetPack 6 image. On JetPack 7.2 `alfie_llm` serves from a custom mlc-llm build
+> in `~/mlc-llm`.
+
 Inside the container:
 
 ```bash
@@ -408,6 +415,10 @@ cd /data
 ### Parakeet ASR Setup
 
 Install ONNX Runtime with TensorRT support for speech recognition:
+
+> **JetPack 7.2 / Python 3.12:** the alfiebot unit runs `onnxruntime-gpu` 1.24.0 (user site,
+> `TensorrtExecutionProvider` + `CUDAExecutionProvider`). The 1.18.0 `cp310` wheel below is
+> for JetPack 6 / Python 3.10 and will not install on JetPack 7.
 
 ```bash
 # Downgrade NumPy for compatibility
@@ -531,7 +542,7 @@ colcon build
 - **Solution**: Ensure all ROS2 tools are installed: `sudo apt install ros-dev-tools`
 
 **Issue**: ONNX Runtime not finding TensorRT
-- **Solution**: Verify JetPack 6.2 installation and reboot
+- **Solution**: Verify the JetPack CUDA/TensorRT installation and reboot
 
 **Issue**: USB devices not accessible
 - **Solution**: Check udev rules and ensure user is in correct groups (dialout, audio)
@@ -540,7 +551,7 @@ colcon build
 
 ## 📚 Additional Resources
 
-- [ROS2 Humble Documentation](https://docs.ros.org/en/humble/)
+- [ROS2 Jazzy Documentation](https://docs.ros.org/en/jazzy/)
 - [NVIDIA Jetson Documentation](https://developer.nvidia.com/embedded/learn/get-started-jetson-orin-nano-devkit)
 - [micro-ROS Documentation](https://micro.ros.org/)
 - [Dusty-NV Jetson Containers](https://github.com/dusty-nv/jetson-containers)
@@ -620,7 +631,7 @@ echo 'eval "$(register-python-argcomplete3 colcon)"' >> ~/.zshrc
 ```
 
 
-#### Upgrade Jetpack compute to 6.2
+#### Upgrade Jetpack compute to 6.2 (JetPack 6 / Gen1 only — not needed on JetPack 7.2)
 https://docs.nvidia.com/jetson/jetpack/install-setup/index.html#upgradable-compute-stack
 
 ```
@@ -657,8 +668,8 @@ cat /etc/apt/sources.list.d/nvidia-l4t-apt-source.list
 ```
 
 
-#### ROS2 Humble (22.04)
-https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
+#### ROS2 Jazzy (24.04)
+https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
 ```
 locale  # check for UTF-8
 
@@ -681,7 +692,7 @@ sudo apt update
 
 sudo apt upgrade
 
-sudo apt install ros-humble-desktop
+sudo apt install ros-jazzy-desktop
 
 sudo apt install ros-dev-tools
 ```
@@ -702,8 +713,8 @@ cd ~
 git clone https://github.com/alansrobotlab2/alfiebot_ws.git
 
 echo '' >> ~/.zshrc
-echo '# sourcing for ros2 humble and alfiebot_ws packages' >> ~/.zshrc
-echo 'source /opt/ros/humble/setup.zsh' >> ~/.zshrc
+echo '# sourcing for ros2 jazzy and alfiebot_ws packages' >> ~/.zshrc
+echo 'source /opt/ros/jazzy/setup.zsh' >> ~/.zshrc
 echo 'source ~/alfiebot_ws/install/setup.zsh' >> ~/.zshrc
 
 source ~/.zshrc
@@ -713,7 +724,7 @@ colcon build
 source ~/.zshrc
 
 # some more installs
-sudo apt-get install portaudio19-dev python3-pyaudio python3-venv hostapd ros-humble-foxglove-bridge ros-humble-depthai-ros tmux gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
+sudo apt-get install portaudio19-dev python3-pyaudio python3-venv hostapd ros-jazzy-foxglove-bridge ros-jazzy-depthai-ros tmux gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
  
 pip3 install pyusb spidev piper-tts pyalsaaudio onnx onnx-asr silero-vad pyqtdarktheme pyserial esptool
 
@@ -759,6 +770,7 @@ cp ~/alfiebot_ws/src/alfie_llm/scripts/convert.sh ~/jetson-containers/data/
 jetson-containers run \
   dustynv/mlc:0.20.0-r36.4.0
 ```
+(`r36.4` is a JetPack 6 image. On JetPack 7.2 `alfie_llm` serves from a custom mlc-llm build in `~/mlc-llm`.)
 then...
 ```
 cd /data
@@ -766,6 +778,9 @@ cd /data
 ```
 
 #### set up for parakeet asr
+> **JetPack 7.2 / Python 3.12:** the alfiebot unit runs `onnxruntime-gpu` 1.24.0 (user site,
+> `TensorrtExecutionProvider` + `CUDAExecutionProvider`). The 1.18.0 `cp310` wheel below is
+> for JetPack 6 / Python 3.10 and will not install on JetPack 7.
 ```
 # Downgrade to NumPy 1.x (compatible with the pre-built wheel) 
 pip3 install "numpy<2" huggingface_hub

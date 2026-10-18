@@ -93,7 +93,7 @@ GR00T (Generalist Robot 00 Technology) n1.6 is NVIDIA's foundation model for hum
   - **JetPack 6.2.1** (L4T 36.4)
   - TensorRT 10.x for INT8 inference
   - 10-25W power envelope
-  - ROS2 Humble native support
+  - ROS2 Jazzy native support
 
 ### Sensors (Alfie Platform)
 - [ ] RGB cameras (stereo or mono)
@@ -111,7 +111,7 @@ GR00T (Generalist Robot 00 Technology) n1.6 is NVIDIA's foundation model for hum
 ### Core Dependencies
 - [ ] Ubuntu 22.04 LTS (training workstation)
 - [ ] Ubuntu 22.04 LTS (Jetson Orin NX via JetPack 6.2.1)
-- [ ] ROS2 Humble
+- [ ] ROS2 Jazzy
 - [ ] Python 3.10+
 - [ ] PyTorch 2.0+
 - [ ] CUDA Toolkit 12.x
@@ -145,7 +145,7 @@ GR00T (Generalist Robot 00 Technology) n1.6 is NVIDIA's foundation model for hum
 
 **Alfie Robot (Jetson Orin NX):**
 - [ ] Verify JetPack 6.2.1 installation
-- [ ] Configure ROS2 Humble workspace with alfie_gr00t package
+- [ ] Configure ROS2 Jazzy workspace with alfie_gr00t package
 - [ ] Install TensorRT 10.x runtime
 - [ ] Set up camera calibration
 - [ ] Verify all sensor topics publishing correctly

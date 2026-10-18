@@ -186,7 +186,7 @@ preamble.
 ## Requirements
 
 ### Python / ROS (the node itself)
-- ROS 2 Humble, `rclpy`, `std_msgs`, `alfie_msgs`
+- ROS 2 Jazzy, `rclpy`, `std_msgs`, `alfie_msgs`
 - `requests` (only extra Python dep; used for the LLM stream and QMD client)
 - The **MLC-LLM server** must be up (`alfie_llm/mlc_llm_serve_node`); the node
   gates on its latched `llm/ready`.

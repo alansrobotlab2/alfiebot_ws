@@ -11,7 +11,7 @@ If predictions are garbage → images alone are the problem
 If predictions are reasonable → something else in the live client pipeline is wrong
 
 Usage:
-    python hybrid_image_test.py --host 192.168.50.108 --port 5555
+    python hybrid_image_test.py --host 127.0.0.1 --port 5555
 """
 
 import argparse
@@ -246,7 +246,7 @@ def format_action(a: np.ndarray, label: str):
 
 def main():
     parser = argparse.ArgumentParser(description='Hybrid image test')
-    parser.add_argument('--host', default='192.168.50.108')
+    parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=5555)
     parser.add_argument('--dataset-path', default='/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge')
     parser.add_argument('--debug-dir', default='/tmp/groot_debug_images')

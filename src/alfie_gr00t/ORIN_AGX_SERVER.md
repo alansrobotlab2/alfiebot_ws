@@ -2,6 +2,12 @@
 
 ## Current Environment setup
 
+The inference server and the ROS2 client both run on the Orin; there is no
+separate GPU workstation. The client reaches the server over localhost TCP
+(REQ/REP on 5555, async PUSH/PULL on 5556/5557). `--host 127.0.0.1` keeps the
+server off the robot's network; use `--host 0.0.0.0` only if you need to reach
+it from another machine.
+
 ```bash
 cd ~/
 
@@ -21,13 +27,11 @@ cd ..
 
 ```bash
 python ./alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
-  --transport tcp \
+  --host 127.0.0.1 \
   --embodiment NEW_EMBODIMENT \
   --checkpoint ./Isaac-GR00T/alfie-gr00t/checkpoint-2000 \
   --trt-engine-path ./Isaac-GR00T/groot_n1d6_onnx/dit_model_fp16_orin.trt \
-  --action-horizon 16 \
   --denoising-steps 4 \
-  --enable-viz \
   --verbose
 ```
 
@@ -41,5 +45,5 @@ communication diagnostics. No ROS2 required.
 python ./alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_open_loop_eval.py \
     --dataset-path ./alfiebot_ws/data/alfiebot.CanDoChallenge \
     --episode-index 0 \
-    --host 192.168.50.201 --port 5555
+    --host 127.0.0.1 --port 5555
 ```

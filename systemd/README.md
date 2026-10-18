@@ -7,7 +7,7 @@ This directory contains the systemd service configuration for automatically star
 The `alfiebot.service` systemd unit will:
 - Wait for network connectivity to be established
 - Wait an additional 10 seconds after boot for system stabilization
-- Source the ROS2 Humble environment
+- Source the ROS2 Jazzy environment
 - Source the Alfie workspace
 - Launch the `alfie_bringup.py` launch file
 - Automatically restart the service if it crashes
