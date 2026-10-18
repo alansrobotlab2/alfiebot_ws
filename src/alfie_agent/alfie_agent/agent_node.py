@@ -585,11 +585,15 @@ class AgentNode(Node):
                     'The listener interrupted your previous reply before hearing any '
                     'of it. Answer what they just said; do not answer the earlier '
                     'request unless asked.')
-            with self._lock:
-                self._episode_turns.append({"role": "user", "content": text})
-                self._episode_turns.append(
-                    {"role": "assistant",
-                     "content": (heard + ' [interrupted]') if heard else '[interrupted]'})
+            # Record only what was actually spoken. No "[interrupted]" marker:
+            # the model imitates its own past turns and starts *saying* the
+            # marker; the interrupt note above already explains the cut-off.
+            # Nothing heard -> no pair (turns must stay user/assistant pairs).
+            if heard:
+                with self._lock:
+                    self._episode_turns.append({"role": "user", "content": text})
+                    self._episode_turns.append(
+                        {"role": "assistant", "content": heard + '—'})
         self.get_logger().info(f'Turn {turn_id} cancelled ({why}); heard: {heard!r}')
         self._active_turn = 0
         self._turn_running = False
