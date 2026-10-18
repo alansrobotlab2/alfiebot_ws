@@ -206,7 +206,11 @@ class AgentNode(Node):
         self._llm_ready = False
 
         self._lock = threading.Lock()
-        self._turn = 0
+        # Seeded from wall-clock seconds so turn ids keep increasing across agent
+        # restarts: TTS drops every request at or below the last turn it
+        # interrupted, so a counter restarting at 0 would be silenced until it
+        # caught up. (uint32 on the wire: good until 2106.)
+        self._turn = int(time.time())
         # Active context for the *live* episode only (reset on idle compaction).
         self._episode_turns = []    # list of {"role", "content"}
         # System prompt for the live episode: the base prompt, or (on a fresh
