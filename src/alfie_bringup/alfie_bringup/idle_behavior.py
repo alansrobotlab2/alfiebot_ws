@@ -67,8 +67,13 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('head_speed', 0.3)
         # attend: joint conventions + limits
         self.declare_parameter('attend_speed', 1.5)          # rad/s servo speed
-        self.declare_parameter('yaw_limits', [-1.3, 1.3])    # rad
-        self.declare_parameter('pitch_limits', [-0.5, 0.4])  # rad (servo frame: + = down)
+        # Servo-side trapezoidal ramp (STS accel register, ~0.15 rad/s^2 steps);
+        # 0 = instant, which looks mechanical. Applies to accel and decel.
+        self.declare_parameter('attend_accel', 4.0)          # rad/s^2
+        self.declare_parameter('yaw_limits', [-3.14, 3.14])  # rad; firmware enforces the real limit
+        # Servo frame (+ = down). Up is left wide open: the head firmware enforces
+        # the real mechanical limit, and _settled() copes with a target past it.
+        self.declare_parameter('pitch_limits', [-1.6, 0.4])  # rad
         self.declare_parameter('neutral_pitch', 0.0)
         # Measured live 2026-10-18: servo +yaw turns right, +pitch looks down.
         self.declare_parameter('yaw_sign', -1.0)    # +1: positive yaw turns left (CCW)
@@ -101,6 +106,7 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('listen_roll_rad', 0.15)    # servo frame; sign = "to the left"
         self.declare_parameter('listen_roll_hold_sec', 1.0)  # keep the tilt after speech ends
         self.declare_parameter('roll_speed', 0.5)          # rad/s, gentler than yaw/pitch
+        self.declare_parameter('roll_accel', 1.5)          # rad/s^2
         self.declare_parameter('higher_head_sources', ['tool', 'vr', 'groot', 'agent'])
         self.declare_parameter('higher_source_timeout', 0.5)
 
@@ -116,6 +122,7 @@ class IdleBehaviorNode(Node):
         self.head_speed = float(g('head_speed').value)
 
         self.attend_speed = float(g('attend_speed').value)
+        self.attend_accel = float(g('attend_accel').value)
         self.yaw_lim = [float(v) for v in g('yaw_limits').value]
         self.pitch_lim = [float(v) for v in g('pitch_limits').value]
         self.neutral_pitch = float(g('neutral_pitch').value)
@@ -146,6 +153,7 @@ class IdleBehaviorNode(Node):
         self.listen_roll = float(g('listen_roll_rad').value)
         self.listen_roll_hold = float(g('listen_roll_hold_sec').value)
         self.roll_speed = float(g('roll_speed').value)
+        self.roll_accel = float(g('roll_accel').value)
         self.higher_timeout = float(g('higher_source_timeout').value)
 
         # ---- Publishers -----------------------------------------------------
@@ -154,6 +162,8 @@ class IdleBehaviorNode(Node):
 
         # ---- Attend state ---------------------------------------------------
         self.cur = None             # [yaw, pitch] from low/headstate
+        self.still_ref = None       # pose the head was last seen still at
+        self.last_motion = 0.0      # last time the head moved > 0.01 rad
         self.target = None          # [yaw, pitch] we command
         self.target_changed = 0.0   # time the target last moved
         self.last_attention = 0.0   # last accepted DOA or face fix
@@ -196,8 +206,13 @@ class IdleBehaviorNode(Node):
     # ---- attend inputs ------------------------------------------------------
     def _on_head_state(self, msg: HeadState) -> None:
         self.cur = [msg.servos[YAW].current_location, msg.servos[PITCH].current_location]
+        now = self._now()
         if self.target is None:
             self.target = list(self.cur)  # start from wherever the head is
+        if (self.still_ref is None or abs(self.cur[0] - self.still_ref[0]) > 0.01
+                or abs(self.cur[1] - self.still_ref[1]) > 0.01):
+            self.still_ref = list(self.cur)
+            self.last_motion = now
 
     def _on_speaking(self, msg: Speaking) -> None:
         if msg.is_speaking:
@@ -229,10 +244,14 @@ class IdleBehaviorNode(Node):
         return now - self.higher_seen < self.higher_timeout
 
     def _settled(self, now: float) -> bool:
-        return (self.cur is not None and self.target is not None
-                and abs(self.cur[0] - self.target[0]) < self.settle_tol
-                and abs(self.cur[1] - self.target[1]) < self.settle_tol
-                and now - self.target_changed > self.settle_sec)
+        if self.cur is None or self.target is None:
+            return False
+        if now - self.target_changed <= self.settle_sec:
+            return False
+        reached = (abs(self.cur[0] - self.target[0]) < self.settle_tol
+                   and abs(self.cur[1] - self.target[1]) < self.settle_tol)
+        # A target past a firmware joint limit is never reached; stopped counts too.
+        return reached or now - self.last_motion > 0.3
 
     def _set_target(self, yaw: float, pitch: float, now: float) -> None:
         yaw = _clamp(yaw, *self.yaw_lim)
@@ -342,7 +361,9 @@ class IdleBehaviorNode(Node):
         yaw = self.head_yaw_amp * math.sin(2.0 * math.pi * t / self.head_period)
         pitch = self.head_pitch_amp * math.sin(
             2.0 * math.pi * t / (self.head_period * 0.7) + 1.0)
-        self._publish_head(yaw, pitch, self.head_speed)
+        self._publish_head(self._servo(yaw, self.head_speed),
+                           self._servo(pitch, self.head_speed),
+                           self._servo(0.0, self.head_speed))
 
     def _tick_attend(self) -> None:
         if self.target is None:
@@ -367,26 +388,23 @@ class IdleBehaviorNode(Node):
             self.listening = listening
             self.get_logger().info('listening: tilt' if listening else 'listening: level')
         roll = self.listen_roll if listening else 0.0
-        self._publish_head(self.target[0], self.target[1], self.attend_speed,
-                           roll, self.roll_speed)
+        self._publish_head(
+            self._servo(self.target[0], self.attend_speed, self.attend_accel),
+            self._servo(self.target[1], self.attend_speed, self.attend_accel),
+            self._servo(roll, self.roll_speed, self.roll_accel))
 
-    def _publish_head(self, yaw: float, pitch: float, speed: float,
-                      roll: float = 0.0, roll_speed: float = None) -> None:
+    def _publish_head(self, yaw: ServoCmd, pitch: ServoCmd, roll: ServoCmd) -> None:
         head = HeadCmd()
-        head.servos = [
-            self._servo(yaw, speed),    # 0 pan/yaw
-            self._servo(pitch, speed),  # 1 tilt/pitch
-            self._servo(roll, speed if roll_speed is None else roll_speed),  # 2 roll
-        ]
+        head.servos = [yaw, pitch, roll]  # 0 pan/yaw, 1 tilt/pitch, 2 roll
         head.eye_pwm = [0, 0]  # eyes travel on the eyes channel
         self.head_pub.publish(head)
 
-    def _servo(self, location: float, speed: float) -> ServoCmd:
+    def _servo(self, location: float, speed: float, accel: float = 0.0) -> ServoCmd:
         s = ServoCmd()
         s.enabled = True
         s.target_location = float(location)
         s.target_speed = speed
-        s.target_acceleration = 0.0
+        s.target_acceleration = accel
         s.target_torque = 0.0
         return s
 
