@@ -110,8 +110,6 @@ class AlfieTTS(Node):
         self._pause_time = 0.0
         self._requests = queue.Queue()
         self._audio = queue.Queue()
-        self._stream = None
-        self._stream_lock = threading.Lock()
         self._volume = None
 
         # Resolve and select the reSpeaker sink as the default PulseAudio sink.
@@ -274,13 +272,11 @@ class AlfieTTS(Node):
                 pass
         if self.speaking:
             self.get_logger().info("Stop received; interrupting speech.")
-        # Abort the stream directly to flush buffered audio immediately.
-        with self._stream_lock:
-            if self._stream is not None:
-                try:
-                    self._stream.abort()
-                except Exception:
-                    pass
+        # Don't touch the stream here: abort() from this thread while the play
+        # thread is blocked in write() wedges that write forever on PipeWire's
+        # ALSA plugin (no audio, `speaking` stuck high). The play thread sees the
+        # new generation within one LEVEL_WINDOW_SAMPLES write (~24 ms) and
+        # aborts the stream itself.
 
     def pause_callback(self, msg):
         if bool(msg.data) != self._paused:
@@ -325,13 +321,9 @@ class AlfieTTS(Node):
             samplerate=self.out_rate, channels=1, dtype='int16',
             latency=self.latency, device=self.output_device)
         stream.start()
-        with self._stream_lock:
-            self._stream = stream
         return stream
 
     def _close_stream(self, stream, drain):
-        with self._stream_lock:
-            self._stream = None
         try:
             if drain:
                 stream.write(np.zeros(int(self.out_rate * TAIL_SILENCE_S), np.int16).tobytes())
