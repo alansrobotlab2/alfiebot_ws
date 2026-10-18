@@ -174,16 +174,18 @@ def generate_launch_description():
             respawn=True
         ),
 
-        # Idle "life" behavior: lowest-priority (prio 10) dim eye glow (and,
-        # when enabled, gentle head look-around) into the mux. Any real commander
-        # outranks it. Head motion is off by default so raw bring-up / data
-        # collection is not disturbed; set head_enabled:=true for full "life".
+        # Idle "life" behavior: lowest-priority (prio 10) dim eye glow and the
+        # head "attend" behavior (turn toward voices via reSpeaker DOA, center
+        # the nearest face via NanoOWL, listening tilt) into the mux. Any real
+        # commander (VR, GR00T, agent, servotool) outranks it, and it pauses its
+        # NanoOWL polling while outranked. Set head_enabled:=false to keep the
+        # head still, e.g. for data collection without VR driving the head.
         Node(
             package='alfie_bringup',
             namespace='alfie',
             executable='idle_behavior',
             name='idle_behavior_node',
-            parameters=[{'head_enabled': False}],
+            parameters=[{'head_enabled': True}],
             output='screen',
             emulate_tty=True,
             sigterm_timeout='5',
