@@ -14,9 +14,13 @@ outranks it, so this only shows through when nothing else owns the head/eyes.
                 * yaw turns toward the reSpeaker direction-of-arrival while the
                   ASR's VAD (`vad/speech`) reports speech — the XVF3800's own
                   speech flag fires on room noise — ignored while Alfie speaks.
-                * pitch (and a yaw refinement) centers the nearest face, found by
-                  polling NanoOWL's on-demand `nanoowl/detect` with "a face" at
-                  `face_rate_hz` and taking the largest box. The image offset is
+                * pitch (and a yaw refinement) centers the nearest face (largest
+                  box) at `face_rate_hz`. `face_backend: yunet` runs OpenCV's
+                  YuNet on the CPU over the left_wide camera (~10 ms, no GPU);
+                  `nanoowl` polls the on-demand `nanoowl/detect` service with
+                  "a face" (GPU — paused for a conversation turn so it doesn't
+                  slow ASR / the LLM). YuNet falls back to NanoOWL if its model
+                  can't load. The image offset is
                   applied to the head pose at the frame's capture time (from a
                   short pose history), so it tracks while the head is moving.
                 The reSpeaker sits on head_link, so DOA is head-relative: the yaw
@@ -41,6 +45,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from std_msgs.msg import Bool, Empty, Float32, String
+from sensor_msgs.msg import CompressedImage
 from alfie_msgs.msg import Doa, EyeCmd, HeadCmd, HeadState, ServoCmd, Speaking
 from alfie_msgs.srv import Detect
 
@@ -99,15 +104,26 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('doa_max_spread_deg', 25.0)
         self.declare_parameter('doa_deadband_deg', 15.0)
         self.declare_parameter('speaking_holdoff_sec', 0.7)  # ignore DOA after own TTS
-        # attend: faces (NanoOWL)
+        # attend: faces
         self.declare_parameter('face_enabled', True)
+        self.declare_parameter('face_backend', 'yunet')  # 'yunet' (CPU) | 'nanoowl' (GPU)
+        self.declare_parameter(
+            'yunet_model', '/home/alfie/face_models/face_detection_yunet_2022mar.onnx')
+        self.declare_parameter('yunet_score', 0.6)
+        self.declare_parameter(
+            'face_image_topic', 'stereo_camera/left_wide/image_raw/compressed')
+        self.declare_parameter('face_turn_pause_sec', 6.0)  # nanoowl: max pause after speech
         self.declare_parameter('face_service', 'nanoowl/detect')
         self.declare_parameter('face_prompt', 'a face')
         self.declare_parameter('face_threshold', 0.15)
-        self.declare_parameter('face_rate_hz', 4.0)        # ~150 ms TRT per call
+        self.declare_parameter('face_rate_hz', 4.0)
         self.declare_parameter('face_refine_yaw', True)
         self.declare_parameter('face_deadband', 0.06)    # normalized image units
         self.declare_parameter('camera_hfov_deg', 90.0)  # left_wide; conservative = undershoot
+        # After a DOA turn, only a face near the speaker's direction is tracked
+        # (else the face being looked at drags the head back mid-turn).
+        self.declare_parameter('speaker_lock_sec', 4.0)    # extended while they talk
+        self.declare_parameter('speaker_match_deg', 26.0)  # face must be this close
         self.declare_parameter('face_lost_sec', 8.0)     # then pitch returns to neutral
         self.declare_parameter('attend_timeout_sec', 45.0)  # then yaw returns to center
         # attend: listening tilt (roll) while vad/speech is on
@@ -157,6 +173,8 @@ class IdleBehaviorNode(Node):
         self.doa_onset_delay = float(g('doa_onset_delay_sec').value)
         self.face_enabled = bool(g('face_enabled').value)
         self.face_prompt = str(g('face_prompt').value)
+        self.face_backend = str(g('face_backend').value)
+        self.face_turn_pause = float(g('face_turn_pause_sec').value)
         self.face_threshold = float(g('face_threshold').value)
         self.face_period = 1.0 / max(0.05, float(g('face_rate_hz').value))
         self.face_refine_yaw = bool(g('face_refine_yaw').value)
@@ -165,6 +183,10 @@ class IdleBehaviorNode(Node):
         self.tan_half_h = math.tan(hfov / 2.0)
         self.tan_half_v = self.tan_half_h * 256.0 / 352.0  # refined from detection dims
         self.face_lost = float(g('face_lost_sec').value)
+        self.speaker_lock = float(g('speaker_lock_sec').value)
+        self.speaker_match = math.radians(float(g('speaker_match_deg').value))
+        self.speaker_yaw = None   # yaw target of the current DOA speaker
+        self.speaker_until = 0.0
         self.attend_timeout = float(g('attend_timeout_sec').value)
         self.listen_roll = float(g('listen_roll_rad').value)
         self.listen_roll_hold = float(g('listen_roll_hold_sec').value)
@@ -203,9 +225,11 @@ class IdleBehaviorNode(Node):
         self.doa_buf = []           # recent head-relative DOA (rad, CCW+)
         self.last_doa_angle = None  # latest raw DOA reading (deg)
         self.doa_stale_angle = None  # raw reading held from before the last turn
+        self.doa_onset_angle = None  # raw reading held at the last speech onset
         self.speaking_until = 0.0
         self.asr_speech_since = None  # vad/speech onset time while speech is on
         self.asr_speech_ended = 0.0   # last vad/speech falling edge
+        self.turn_until = 0.0         # nanoowl paused until then (speech -> reply)
         self.listening = False
         self.tts_env = 0.0          # TTS loudness envelope (RMS, attack/release)
         self.tts_peak = 0.0         # slowly decaying recent envelope peak
@@ -229,6 +253,11 @@ class IdleBehaviorNode(Node):
                 self.create_subscription(
                     HeadCmd, f'cmd/head/{src}', self._on_higher_source, qos)
             self.face_cli = self.create_client(Detect, str(g('face_service').value))
+            self.yunet = None
+            self.face_img = None
+            if self.face_enabled and self.face_backend == 'yunet':
+                self._init_yunet(str(g('yunet_model').value), float(g('yunet_score').value),
+                                 str(g('face_image_topic').value), qos)
 
         self.start_ns = self.get_clock().now().nanoseconds
         self.create_timer(1.0 / self.rate, self._tick)
@@ -254,8 +283,25 @@ class IdleBehaviorNode(Node):
             self.still_ref = list(self.cur)
             self.last_motion = now
 
+    def _init_yunet(self, model: str, score: float, topic: str, qos) -> None:
+        try:
+            import cv2
+            import numpy as np
+            self._cv2, self._np = cv2, np
+            cv2.setNumThreads(2)
+            self.yunet = cv2.FaceDetectorYN.create(model, '', (352, 256), score, 0.3, 20)
+            self.yunet_size = (352, 256)
+        except Exception as e:
+            self.get_logger().warn(f'YuNet unavailable ({e}); falling back to NanoOWL')
+            self.face_backend = 'nanoowl'
+            return
+        self.create_subscription(
+            CompressedImage, topic, lambda m: setattr(self, 'face_img', m), qos)
+        self.get_logger().info(f'face tracking: YuNet on {topic}')
+
     def _on_speaking(self, msg: Speaking) -> None:
         if msg.is_speaking:
+            self.turn_until = 0.0  # reply has started: the turn's GPU rush is over
             self.speaking_until = float('inf')
         elif self.speaking_until == float('inf'):
             self.speaking_until = self._now() + self.speaking_holdoff
@@ -265,8 +311,15 @@ class IdleBehaviorNode(Node):
             if self.asr_speech_since is not None:
                 self.asr_speech_ended = self._now()
             self.asr_speech_since = None
+            if self.turn_until == float('inf'):
+                self.turn_until = self._now() + self.face_turn_pause
         elif self.asr_speech_since is None:
             self.asr_speech_since = self._now()
+            # The chip holds its last estimate until speech re-converges it; a
+            # reading identical to the one at onset is that held value, not the
+            # new speaker (live tracking moves at least a degree sample to sample).
+            self.doa_onset_angle = self.last_doa_angle
+            self.turn_until = float('inf')  # ASR + LLM are about to want the GPU
 
     def _speech(self, msg: Doa, now: float) -> bool:
         if self.speech_gate == 'array':
@@ -324,11 +377,20 @@ class IdleBehaviorNode(Node):
         pitch = _clamp(pitch, *self.pitch_lim)
         if abs(yaw - self.target[0]) > 1e-3 or abs(pitch - self.target[1]) > 1e-3:
             if abs(yaw - self.target[0]) > 0.1:
-                # The array turns with the head; its held estimate is now wrong.
+                # The array turns with the head: its held estimate (and any samples
+                # collected so far) are wrong after a real turn. Small face nudges
+                # don't count, or face tracking would starve DOA entirely.
                 self.doa_stale_angle = self.last_doa_angle
+                self.doa_buf.clear()
             self.target = [yaw, pitch]
             self.target_changed = now
-            self.doa_buf.clear()  # samples taken mid-turn are stale
+
+    def _yaw_still(self, now: float, window: float = 0.5, tol: float = 0.05) -> bool:
+        """Head yaw stayed within `tol` over the last `window` s (array not turning)."""
+        if self.cur is None or not self.pose_hist or now - self.pose_hist[0][0] < window:
+            return False
+        recent = [y for t, y, _ in self.pose_hist if t >= now - window]
+        return bool(recent) and max(recent) - min(recent) < tol
 
     def _on_doa(self, msg: Doa) -> None:
         now = self._now()
@@ -338,8 +400,13 @@ class IdleBehaviorNode(Node):
                 self.doa_buf.clear()
                 return  # still the estimate from before the turn
             self.doa_stale_angle = None
+        if self.doa_onset_angle is not None:
+            if msg.angle == self.doa_onset_angle:
+                self.doa_buf.clear()
+                return  # unchanged since speech began: still the held estimate
+            self.doa_onset_angle = None
         if (not self._speech(msg, now) or now < self.speaking_until
-                or self._outranked(now) or not self._settled(now)):
+                or self._outranked(now) or not self._yaw_still(now)):
             self.doa_buf.clear()
             return
         rel = _wrap(self.doa_sign * (math.radians(msg.angle) - self.doa_offset))
@@ -358,6 +425,8 @@ class IdleBehaviorNode(Node):
         self.get_logger().info(
             f'DOA {msg.angle} deg ({math.degrees(mean):+.0f} deg) at yaw '
             f'{self.cur[0]:+.2f} -> yaw {yaw:+.2f}')
+        self.speaker_yaw = _clamp(yaw, *self.yaw_lim)
+        self.speaker_until = now + self.speaker_lock
         self._set_target(yaw, self.target[1], now)
 
     # ---- faces (NanoOWL) ----------------------------------------------------
@@ -374,12 +443,15 @@ class IdleBehaviorNode(Node):
         return [y0 + a * (y1 - y0), p0 + a * (p1 - p0)]
 
     def _maybe_request_face(self, now: float) -> None:
+        if self.face_backend == 'yunet':
+            self._detect_yunet(now)
+            return
         if self.face_pending_since is not None:
             if now - self.face_pending_since < 5.0:
                 return
             self.face_pending_since = None  # lost response; try again
         if (now - self.last_face_call < self.face_period or self.generating
-                or not self.face_cli.service_is_ready()):
+                or now < self.turn_until or not self.face_cli.service_is_ready()):
             return
         req = Detect.Request()
         req.prompt = self.face_prompt
@@ -390,26 +462,65 @@ class IdleBehaviorNode(Node):
 
     def _on_face(self, future) -> None:
         self.face_pending_since = None
-        now = self._now()
         try:
             res = future.result()
         except Exception as e:
             self.get_logger().warn(f'face detect failed: {e}', throttle_duration_sec=30.0)
             return
-        if not res.ok or self._outranked(now) or self.cur is None:
+        if not res.ok:
             return
         dets = res.detections
-        stamp = dets.header.stamp.sec + dets.header.stamp.nanosec * 1e-9
-        pose = self._pose_at(stamp) if stamp > 0.0 else list(self.cur)
-        faces = [d for d in dets.detections if d.score >= self.face_threshold]
-        if not faces:
+        boxes = [(d.score, d.x0, d.y0, d.x1, d.y1)
+                 for d in dets.detections if d.score >= self.face_threshold]
+        self._apply_face(boxes, dets.header.stamp, dets.image_width, dets.image_height)
+
+    def _detect_yunet(self, now: float) -> None:
+        msg = self.face_img
+        if msg is None or now - self.last_face_call < self.face_period:
             return
-        # Largest box ~ nearest face.
-        f = max(faces, key=lambda d: (d.x1 - d.x0) * (d.y1 - d.y0))
-        if dets.image_width > 0:
-            self.tan_half_v = self.tan_half_h * dets.image_height / dets.image_width
-        dx = (f.x0 + f.x1) / 2.0 - 0.5  # + = right of center
-        dy = (f.y0 + f.y1) / 2.0 - 0.5  # + = below center
+        self.last_face_call = now
+        self.face_img = None  # never run twice on the same frame
+        img = self._cv2.imdecode(self._np.frombuffer(bytes(msg.data), self._np.uint8),
+                                 self._cv2.IMREAD_COLOR)
+        if img is None:
+            return
+        h, w = img.shape[:2]
+        if (w, h) != self.yunet_size:
+            self.yunet.setInputSize((w, h))
+            self.yunet_size = (w, h)
+        _, faces = self.yunet.detect(img)
+        boxes = [] if faces is None else [
+            (float(f[14]), f[0] / w, f[1] / h, (f[0] + f[2]) / w, (f[1] + f[3]) / h)
+            for f in faces]
+        self._apply_face(boxes, msg.header.stamp, w, h)
+
+    def _apply_face(self, boxes, stamp_msg, width: int, height: int) -> None:
+        """Center the largest (~nearest) of `boxes` = [(score, x0, y0, x1, y1)], normalized."""
+        now = self._now()
+        if not boxes or self._outranked(now) or self.cur is None:
+            return
+        stamp = stamp_msg.sec + stamp_msg.nanosec * 1e-9
+        pose = self._pose_at(stamp) if stamp > 0.0 else list(self.cur)
+        if width > 0:
+            self.tan_half_v = self.tan_half_h * height / width
+
+        def face_yaw(b):  # head yaw that would center this box
+            return pose[0] - self.yaw_sign * math.atan(
+                2.0 * ((b[1] + b[3]) / 2.0 - 0.5) * self.tan_half_h)
+
+        if self.asr_speech_since is not None and now < self.speaker_until:
+            self.speaker_until = now + self.speaker_lock  # they're still talking
+        if self.speaker_yaw is not None and now < self.speaker_until:
+            near = [b for b in boxes if abs(face_yaw(b) - self.speaker_yaw) < self.speaker_match]
+            if not near:
+                return  # keep turning toward the speaker; ignore other faces
+            best = min(near, key=lambda b: abs(face_yaw(b) - self.speaker_yaw))
+            self.speaker_yaw = face_yaw(best)  # follow them as they move
+        else:
+            best = max(boxes, key=lambda b: (b[3] - b[1]) * (b[4] - b[2]))  # ~nearest
+        score, x0, y0, x1, y1 = best
+        dx = (x0 + x1) / 2.0 - 0.5  # + = right of center
+        dy = (y0 + y1) / 2.0 - 0.5  # + = below center
         self.last_face = now
         self.last_attention = now
         yaw, pitch = self.target
@@ -419,7 +530,7 @@ class IdleBehaviorNode(Node):
             yaw = pose[0] - self.yaw_sign * math.atan(2.0 * dx * self.tan_half_h)
         if [yaw, pitch] != self.target:
             self.get_logger().debug(
-                f'face {f.score:.2f} at ({dx:+.2f}, {dy:+.2f}) -> '
+                f'face {score:.2f} at ({dx:+.2f}, {dy:+.2f}) -> '
                 f'yaw {yaw:+.2f} pitch {pitch:+.2f}')
         self._set_target(yaw, pitch, now)
 
