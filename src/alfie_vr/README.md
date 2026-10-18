@@ -5,6 +5,7 @@ This package provides VR-based teleoperation for the Alfie robot using a VR head
 ## Running
 
 ```bash
+# Started automatically by alfie_bringup. To run it standalone instead:
 ros2 launch alfie_vr alfie_teleop_vr.py   # or: ros2 run alfie_vr alfie_teleop_vr
 ```
 

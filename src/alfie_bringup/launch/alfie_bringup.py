@@ -1,7 +1,10 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 from launch_ros.parameter_descriptions import ParameterValue
 from launch.substitutions import Command
 import os
@@ -49,6 +52,14 @@ def generate_launch_description():
             sigterm_timeout='5', sigkill_timeout='10', respawn=True)
 
     return LaunchDescription([
+
+        # GR00T client is opt-in: it calibrates the back and moves it to
+        # back_init_height on startup, and needs the inference server (run
+        # separately in the Isaac-GR00T container, see alfie_gr00t/ORIN_AGX_SERVER.md)
+        # plus a fine-tuned checkpoint. Enable with launch_groot:=true.
+        DeclareLaunchArgument(
+            'launch_groot', default_value='false',
+            description='Start the GR00T inference client (alfie_gr00t)'),
 
         # Robot State Publisher - publishes URDF to /robot_description and TF transforms
         Node(
@@ -178,6 +189,31 @@ def generate_launch_description():
             sigterm_timeout='5',
             sigkill_timeout='10',
             respawn=True
+        ),
+
+        # VR teleop: serves the WebXR UI (HTTPS 8443, WebSocket 8442) and feeds
+        # cmd/<subsystem>/vr into the mux. Passive until a headset/controller
+        # connects; it claims a subsystem only while that subsystem is driven.
+        Node(
+            package='alfie_vr',
+            namespace='alfie',
+            executable='alfie_teleop_vr',
+            name='alfie_teleop_vr_node',
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True
+        ),
+
+        # GR00T inference client (off by default, see launch_groot above).
+        # All parameters come from alfie_gr00t/config/groot_client.yaml.
+        IncludeLaunchDescription(
+            # FindPackageShare resolves only if the include runs, so bringup
+            # still works when alfie_gr00t isn't built and launch_groot is false.
+            PythonLaunchDescriptionSource(PathJoinSubstitution([
+                FindPackageShare('alfie_gr00t'), 'launch', 'groot_inference.launch.py'])),
+            condition=IfCondition(LaunchConfiguration('launch_groot')),
         ),
 
         Node(

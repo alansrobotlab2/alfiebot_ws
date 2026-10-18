@@ -76,6 +76,8 @@ TAIL_SILENCE_S = 0.25
 MORE_FOLLOWS_TIMEOUT_S = 30.0
 # A pause the agent never resolves (it died mid-decision) resumes on its own.
 MAX_PAUSE_S = 15.0
+# How often to look for the reSpeaker sink while it is missing.
+SINK_RETRY_S = 2.0
 
 
 class AlfieTTS(Node):
@@ -114,17 +116,14 @@ class AlfieTTS(Node):
 
         # Resolve and select the reSpeaker sink as the default PulseAudio sink.
         # (PulseAudio resamples our 22.05 kHz synthesis to the reSpeaker's 16 kHz.)
-        self.output_sink = self._resolve_respeaker_sink()
-        if self.output_sink:
-            try:
-                subprocess.run(["pactl", "set-default-sink", self.output_sink], check=True)
-                self.get_logger().info(f"Set default sink to {self.output_sink}")
-            except Exception as e:
-                self.get_logger().warn(f"Failed to set default sink: {e}")
-        else:
+        # The sink can be missing at startup (PipeWire hasn't registered it yet,
+        # or the board is mid re-enumeration), so keep retrying until it shows up.
+        self.output_sink = None
+        if not self._select_respeaker_sink():
             self.get_logger().error(
                 "reSpeaker PulseAudio sink not found; TTS has no output device. "
-                "Check the reSpeaker connection.")
+                f"Retrying every {SINK_RETRY_S:g}s; check the reSpeaker connection.")
+        self._sink_timer = self.create_timer(SINK_RETRY_S, self._retry_sink)
 
         # Which PortAudio device to hand to sounddevice (see
         # OUTPUT_DEVICE_PREFERENCE). Resolved once; the index is stable for the
@@ -170,6 +169,29 @@ class AlfieTTS(Node):
 
         # Publish initial state (not speaking)
         self.publish_speaking(False)
+
+    def _select_respeaker_sink(self):
+        """Find the reSpeaker sink and make it the default. Returns True if found."""
+        sink = self._resolve_respeaker_sink()
+        if not sink:
+            return False
+        self.output_sink = sink
+        self._volume = None   # force the next set_volume to reach the new sink
+        try:
+            subprocess.run(["pactl", "set-default-sink", sink], check=True)
+            self.get_logger().info(f"Set default sink to {sink}")
+        except Exception as e:
+            self.get_logger().warn(f"Failed to set default sink: {e}")
+        return True
+
+    def _retry_sink(self):
+        if self.output_sink:
+            # Found; WirePlumber restores the configured default after a replug.
+            self._sink_timer.cancel()
+            return
+        if self._select_respeaker_sink():
+            self.get_logger().info("reSpeaker sink found; TTS output restored.")
+            self._sink_timer.cancel()
 
     def _resolve_respeaker_sink(self):
         """Return the PulseAudio sink name for the reSpeaker, or None."""
