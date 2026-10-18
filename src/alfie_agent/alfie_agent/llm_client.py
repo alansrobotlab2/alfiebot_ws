@@ -11,8 +11,17 @@ into the text and parsed downstream (see harness.py). Cleaning of <think>/
 The stream is cancellable: a caller passes an ``is_current`` predicate that is
 checked on every chunk, so a barge-in or a newer turn aborts the request without
 publishing anything (returns ``None``).
+
+Requests are serialized: at most one is in flight per client. The server keeps a
+pinned system-prompt parent resident in one of its two sequence slots
+(max_num_sequence=2, see mlc_llm_serve_node), and two concurrent requests that
+both fork from that parent deadlock the engine — neither ever returns, and every
+later request queues behind them. A cancelled request only closes on its next
+chunk, so without the lock a barge-in during prefill would overlap the next
+turn's request with it.
 """
 import json
+import threading
 
 import requests
 
@@ -26,6 +35,7 @@ class LLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self._model_id = None
+        self._request_lock = threading.Lock()
 
     def resolve_model_id(self):
         """
@@ -69,8 +79,9 @@ class LLMClient:
         if debug_config is not None:
             payload["debug_config"] = debug_config
         parts = []
-        with requests.post(f"{self.base_url}/chat/completions", json=payload,
-                           stream=True, timeout=self.timeout) as r:
+        with self._request_lock, requests.post(
+                f"{self.base_url}/chat/completions", json=payload,
+                stream=True, timeout=self.timeout) as r:
             r.raise_for_status()
             for line in r.iter_lines(decode_unicode=True):
                 if not is_current():
