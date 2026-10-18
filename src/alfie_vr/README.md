@@ -24,7 +24,7 @@ The node publishes to the per-subsystem command_mux inputs `/alfie/cmd/<subsyste
 | Left / right arm | first grip on that arm, or Y reset | held at last target (`hold_timeout`) |
 | Back | first A/B press, or setting `back_height` | held at last target (`hold_timeout`) |
 
-- A device counts as lost when no data has arrived for `link_timeout` (0.15 s). The browser also sends an explicit release when the XR session ends, the page is hidden, or a controller disconnects. Closing the websocket releases immediately.
+- A device counts as lost when no data has arrived for `link_timeout` (0.3 s). The browser also sends an explicit release when the XR session ends, the page is hidden, or a controller disconnects. Closing the websocket releases immediately.
 - On claim, targets are seeded from the measured pose (`/alfie/robotlowstate`), so nothing moves until you move.
 - Published arm and head joint targets are rate-limited to `max_joint_speed` (4 rad/s). Joint targets are clamped to the URDF limits; head targets to `head_*_limit`.
 - **E-stop** (`/alfie/estop_state`): VR input is ignored and every claimed subsystem holds the measured pose, so after reset VR resumes from where the robot actually is.
@@ -79,12 +79,13 @@ This lets you reposition your hand in VR space without moving the robot arm.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `link_timeout` | 0.15 | Seconds without data before a VR device counts as lost |
+| `link_timeout` | 0.3 | Seconds without data before a VR device counts as lost |
 | `hold_timeout` | -1.0 | Seconds to hold arms/back after link loss before releasing (< 0 = hold) |
 | `base_stop_sec` | 0.3 | Seconds of explicit zero velocity after link loss |
 | `max_joint_speed` | 4.0 | Rate limit on published arm/head targets (rad/s) |
 | `head_yaw_limit` / `head_pitch_limit` / `head_roll_limit` | 1.571 / 1.047 / 0.35 | Head command limits (rad) |
 | `head_*_multiplier` | 2.0 | Headset → head gain |
+| `head_yaw_sign` / `head_pitch_sign` / `head_roll_sign` | -1.0 | Headset → servo direction (servo +yaw turns right, +pitch looks down) |
 | `max_linear_vel` / `max_angular_vel` | 0.15 / 0.5 | Joystick velocity scaling (accel limits are in command_mux) |
 | `back_height` | — | Set at runtime to command a back height (0.0–0.390 m) |
 

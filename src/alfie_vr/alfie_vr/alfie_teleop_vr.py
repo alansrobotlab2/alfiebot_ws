@@ -71,7 +71,7 @@ class AlfieTeleopVRNode(Node):
             return self.get_parameter(name).value
 
         self.link_timeout = param(
-            'link_timeout', 0.15, 'Seconds without data before a VR device counts as lost')
+            'link_timeout', 0.3, 'Seconds without data before a VR device counts as lost')
         self.hold_timeout = param(
             'hold_timeout', -1.0,
             'Seconds to keep holding arms/back after link loss before releasing them '
@@ -87,6 +87,11 @@ class AlfieTeleopVRNode(Node):
         self.head_yaw_multiplier = param('head_yaw_multiplier', 2.0, 'Headset yaw gain')
         self.head_pitch_multiplier = param('head_pitch_multiplier', 2.0, 'Headset pitch gain')
         self.head_roll_multiplier = param('head_roll_multiplier', 2.0, 'Headset roll gain')
+        # WebXR is +yaw left, +pitch up, +roll left ear down. Measured live
+        # 2026-10-18: servo +yaw turns right, +pitch looks down, roll also mirrored.
+        self.head_yaw_sign = param('head_yaw_sign', -1.0, '+1: headset yaw passes through unchanged')
+        self.head_pitch_sign = param('head_pitch_sign', -1.0, '+1: headset pitch passes through unchanged')
+        self.head_roll_sign = param('head_roll_sign', -1.0, '+1: headset roll passes through unchanged')
         # Joystick velocity scaling (acceleration limiting is done by command_mux)
         self.max_linear_vel = param('max_linear_vel', 0.15, 'Max joystick linear speed (m/s)')
         self.max_angular_vel = param('max_angular_vel', 0.5, 'Max joystick rotation speed (rad/s)')
@@ -94,6 +99,7 @@ class AlfieTeleopVRNode(Node):
             'link_timeout', 'hold_timeout', 'base_stop_sec', 'max_joint_speed',
             'head_yaw_limit', 'head_pitch_limit', 'head_roll_limit',
             'head_yaw_multiplier', 'head_pitch_multiplier', 'head_roll_multiplier',
+            'head_yaw_sign', 'head_pitch_sign', 'head_roll_sign',
             'max_linear_vel', 'max_angular_vel'}
         self.declare_parameter(
             'back_height', 0.390,
@@ -419,7 +425,7 @@ class AlfieTeleopVRNode(Node):
             meta = left.metadata or {}
             stick = meta.get('thumbstick') or {}
             lx = -float(stick.get('y', 0.0)) * self.max_linear_vel  # forward/back (negated)
-            ly = float(stick.get('x', 0.0)) * self.max_linear_vel   # strafe
+            ly = -float(stick.get('x', 0.0)) * self.max_linear_vel  # strafe (ROS +y = left)
             buttons = meta.get('buttons') or {}
 
             button_x = _button(buttons, 'x')
@@ -441,7 +447,7 @@ class AlfieTeleopVRNode(Node):
         if right is not None:
             meta = right.metadata or {}
             stick = meta.get('thumbstick') or {}
-            az = float(stick.get('x', 0.0)) * self.max_angular_vel
+            az = -float(stick.get('x', 0.0)) * self.max_angular_vel  # ROS +z = CCW (left)
             buttons = meta.get('buttons') or {}
 
             # B raises, A lowers the back
@@ -479,11 +485,11 @@ class AlfieTeleopVRNode(Node):
 
         if abs(math.degrees(yaw)) < HEAD_YAW_WRAP_GUARD_DEG:
             self.desired[HEAD_YAW] = _clamp(
-                yaw * self.head_yaw_multiplier, -self.head_yaw_limit, self.head_yaw_limit)
+                yaw * self.head_yaw_sign * self.head_yaw_multiplier, -self.head_yaw_limit, self.head_yaw_limit)
         self.desired[HEAD_PITCH] = _clamp(
-            pitch * self.head_pitch_multiplier, -self.head_pitch_limit, self.head_pitch_limit)
+            pitch * self.head_pitch_sign * self.head_pitch_multiplier, -self.head_pitch_limit, self.head_pitch_limit)
         self.desired[HEAD_ROLL] = _clamp(
-            roll * self.head_roll_multiplier, -self.head_roll_limit, self.head_roll_limit)
+            roll * self.head_roll_sign * self.head_roll_multiplier, -self.head_roll_limit, self.head_roll_limit)
 
     def _update_arm(self, side, goal, state, dt):
         """Grip-held delta tracking for one arm."""
