@@ -117,9 +117,16 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('face_service', 'nanoowl/detect')
         self.declare_parameter('face_prompt', 'a face')
         self.declare_parameter('face_threshold', 0.15)
-        self.declare_parameter('face_rate_hz', 4.0)
+        self.declare_parameter('face_rate_hz', 10.0)     # yunet: every frame at the 10 fps camera
         self.declare_parameter('face_refine_yaw', True)
-        self.declare_parameter('face_deadband', 0.06)    # normalized image units
+        self.declare_parameter('face_deadband', 0.06)    # normalized image units, to start moving
+        # Once following a face, a smaller deadband so the head tracks smoothly
+        # instead of waiting for the face to drift `face_deadband` off center.
+        self.declare_parameter('face_track_deadband', 0.025)
+        self.declare_parameter('face_track_hold_sec', 1.0)  # small deadband this long after a move
+        # Capture -> publish delay not covered by the image stamp (the camera node
+        # stamps at appsink: exposure + USB + JPEG decode/resize/encode).
+        self.declare_parameter('camera_latency_sec', 0.1)
         self.declare_parameter('camera_hfov_deg', 90.0)  # left_wide; conservative = undershoot
         # After a DOA turn, only a face near the speaker's direction is tracked
         # (else the face being looked at drags the head back mid-turn).
@@ -181,6 +188,10 @@ class IdleBehaviorNode(Node):
         self.face_period = 1.0 / max(0.05, float(g('face_rate_hz').value))
         self.face_refine_yaw = bool(g('face_refine_yaw').value)
         self.face_deadband = float(g('face_deadband').value)
+        self.face_track_deadband = float(g('face_track_deadband').value)
+        self.face_track_hold = float(g('face_track_hold_sec').value)
+        self.face_moved = 0.0  # last time a face fix moved the target
+        self.camera_latency = float(g('camera_latency_sec').value)
         hfov = math.radians(float(g('camera_hfov_deg').value))
         self.tan_half_h = math.tan(hfov / 2.0)
         self.tan_half_v = self.tan_half_h * 256.0 / 352.0  # refined from detection dims
@@ -298,9 +309,16 @@ class IdleBehaviorNode(Node):
             self.get_logger().warn(f'YuNet unavailable ({e}); falling back to NanoOWL')
             self.face_backend = 'nanoowl'
             return
-        self.create_subscription(
-            CompressedImage, topic, lambda m: setattr(self, 'face_img', m), qos)
+        self.create_subscription(CompressedImage, topic, self._on_face_img, qos)
         self.get_logger().info(f'face tracking: YuNet on {topic}')
+
+    def _on_face_img(self, msg: CompressedImage) -> None:
+        # Detect as frames arrive rather than on the next tick (saves up to a tick).
+        self.face_img = msg
+        now = self._now()
+        if (self.target is not None and now >= self.speaking_until
+                and not self._outranked(now)):
+            self._detect_yunet(now)
 
     def _on_speaking(self, msg: Speaking) -> None:
         if msg.is_speaking:
@@ -452,8 +470,7 @@ class IdleBehaviorNode(Node):
 
     def _maybe_request_face(self, now: float) -> None:
         if self.face_backend == 'yunet':
-            self._detect_yunet(now)
-            return
+            return  # runs from _on_face_img
         if self.face_pending_since is not None:
             if now - self.face_pending_since < 5.0:
                 return
@@ -484,7 +501,8 @@ class IdleBehaviorNode(Node):
 
     def _detect_yunet(self, now: float) -> None:
         msg = self.face_img
-        if msg is None or now - self.last_face_call < self.face_period:
+        # 0.8: frames jitter around the camera period; don't skip every other one.
+        if msg is None or now - self.last_face_call < 0.8 * self.face_period:
             return
         self.last_face_call = now
         self.face_img = None  # never run twice on the same frame
@@ -508,7 +526,7 @@ class IdleBehaviorNode(Node):
         if not boxes or self._outranked(now) or self.cur is None:
             return
         stamp = stamp_msg.sec + stamp_msg.nanosec * 1e-9
-        pose = self._pose_at(stamp) if stamp > 0.0 else list(self.cur)
+        pose = self._pose_at(stamp - self.camera_latency) if stamp > 0.0 else list(self.cur)
         if width > 0:
             self.tan_half_v = self.tan_half_h * height / width
 
@@ -536,11 +554,14 @@ class IdleBehaviorNode(Node):
         self.last_face = now
         self.last_attention = now
         yaw, pitch = self.target
-        if abs(dy) > self.face_deadband:
+        tracking = now - self.face_moved < self.face_track_hold
+        deadband = self.face_track_deadband if tracking else self.face_deadband
+        if abs(dy) > deadband:
             pitch = pose[1] - self.pitch_sign * math.atan(2.0 * dy * self.tan_half_v)
-        if self.face_refine_yaw and abs(dx) > self.face_deadband:
+        if self.face_refine_yaw and abs(dx) > deadband:
             yaw = pose[0] - self.yaw_sign * math.atan(2.0 * dx * self.tan_half_h)
         if [yaw, pitch] != self.target:
+            self.face_moved = now
             self.get_logger().debug(
                 f'face {score:.2f} at ({dx:+.2f}, {dy:+.2f}) -> '
                 f'yaw {yaw:+.2f} pitch {pitch:+.2f}')
