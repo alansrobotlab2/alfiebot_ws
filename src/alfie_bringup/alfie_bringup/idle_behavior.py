@@ -85,9 +85,9 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('attend_accel', 4.0)          # rad/s^2
         self.declare_parameter('smooth_hz', 2.0)  # yaw/pitch setpoint low-pass (see _smooth); 0 = off
         self.declare_parameter('yaw_limits', [-3.14, 3.14])  # rad; firmware enforces the real one
-        # Servo frame (+ = down). Up is left wide open: the head firmware enforces
-        # the real mechanical limit, and _settled() copes with a target past it.
-        self.declare_parameter('pitch_limits', [-1.6, 0.4])  # rad
+        # Servo frame (+ = down). Up matches the head firmware's stop (~-0.72);
+        # faces further up than that (+ face_max_above) are rejected as ceiling.
+        self.declare_parameter('pitch_limits', [-0.7, 0.4])  # rad
         self.declare_parameter('neutral_pitch', 0.0)
         # Measured live 2026-10-18: servo +yaw turns right, +pitch looks down.
         self.declare_parameter('yaw_sign', -1.0)    # +1: positive yaw turns left (CCW)
@@ -111,7 +111,8 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('face_backend', 'yunet')  # 'yunet' (CPU) | 'nanoowl' (GPU)
         self.declare_parameter(
             'yunet_model', '/home/alfie/face_models/face_detection_yunet_2022mar.onnx')
-        self.declare_parameter('yunet_score', 0.6)
+        self.declare_parameter('yunet_score', 0.6)          # keep following down to this
+        self.declare_parameter('face_acquire_score', 0.85)  # yunet: to turn to a new face
         self.declare_parameter(
             'face_image_topic', 'stereo_camera/left_wide/image_raw/compressed')
         self.declare_parameter('face_turn_pause_sec', 6.0)  # nanoowl: max pause after speech
@@ -132,7 +133,10 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('face_predict_sec', 0.3)  # max extrapolation past the last fix
         self.declare_parameter('face_track_hold_sec', 1.0)
         self.declare_parameter('face_confirm_rad', 0.1)  # same face in consecutive detections
-        self.declare_parameter('face_max_width', 0.35)   # normalized; wider boxes are rejected
+        # Normalized; wider is rejected. 0.2 = ~70 px = a face ~30 cm from the lens
+        # (one at 0.5 m is ~40 px); a ceiling fan scored 0.9+ at ~100 px.
+        self.declare_parameter('face_max_width', 0.2)
+        self.declare_parameter('face_max_above', 0.15)  # rad past the pitch up-limit
         # Capture -> publish delay not covered by the image stamp (the camera node
         # stamps at appsink: exposure + USB + JPEG decode/resize/encode).
         self.declare_parameter('camera_latency_sec', 0.1)
@@ -204,6 +208,8 @@ class IdleBehaviorNode(Node):
         self.face_retarget = float(g('face_retarget_rad').value)
         self.face_confirm = float(g('face_confirm_rad').value)
         self.face_max_width = float(g('face_max_width').value)
+        self.face_max_above = float(g('face_max_above').value)
+        self.face_acquire_score = float(g('face_acquire_score').value)
         self.face_prev = (0.0, [])  # (time, aims) of the previous detection
         self.face_alpha = float(g('face_alpha').value)
         self.face_beta = float(g('face_beta').value)
@@ -574,8 +580,11 @@ class IdleBehaviorNode(Node):
         # Only act on a face also seen (at about the same head-frame direction) in
         # the previous detection: YuNet throws single-frame false positives that
         # would otherwise yank the head and snap it back.
-        # A box this wide is a hand / body up against the lens, not a face.
-        boxes = [b for b in boxes if b[3] - b[1] < self.face_max_width]
+        # Too wide: a hand / body against the lens, or a ceiling fan. Too high
+        # to look at: ceiling, not a person.
+        up_lim = self.pitch_lim[0] if self.pitch_sign < 0 else self.pitch_lim[1]
+        boxes = [b for b in boxes if b[3] - b[1] < self.face_max_width
+                 and (aim(b)[1] - up_lim) * self.pitch_sign <= self.face_max_above]
         aims = [aim(b) for b in boxes]
         prev_t, prev = self.face_prev
         self.face_prev = (now, aims)
@@ -602,6 +611,13 @@ class IdleBehaviorNode(Node):
             best = min(boxes, key=lambda b: math.hypot(
                 face_yaw(b) - self.target[0], aim(b)[1] - self.target[1]))
         else:
+            # New face: only one turned toward us. YuNet catches profiles at
+            # 0.6-0.8, intermittently and with a jumpy box, so a person side-on
+            # at a desk had the head glancing about; frontal faces score ~0.95+.
+            if self.face_backend == 'yunet':
+                boxes = [b for b in boxes if b[0] >= self.face_acquire_score]
+                if not boxes:
+                    return
             best = max(boxes, key=lambda b: (b[3] - b[1]) * (b[4] - b[2]))  # ~nearest
         score, x0, y0, x1, y1 = best
         dx = (x0 + x1) / 2.0 - 0.5  # + = right of center
