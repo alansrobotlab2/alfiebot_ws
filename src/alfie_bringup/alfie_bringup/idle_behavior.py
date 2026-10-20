@@ -67,7 +67,7 @@ class IdleBehaviorNode(Node):
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
         # ---- Parameters -----------------------------------------------------
-        self.declare_parameter('rate_hz', 20.0)
+        self.declare_parameter('rate_hz', 50.0)  # = head firmware servo loop (attend ramp)
         self.declare_parameter('eyes_enabled', True)
         self.declare_parameter('eye_idle_pwm', 1)
         self.declare_parameter('eye_ack_sec', 0.333)  # eyes-off blink on wake / barge-in
@@ -80,9 +80,10 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('head_speed', 0.3)
         # attend: joint conventions + limits
         self.declare_parameter('attend_speed', 1.5)          # rad/s servo speed
-        # Servo-side trapezoidal ramp (STS accel register, ~0.15 rad/s^2 steps);
-        # 0 = instant, which looks mechanical. Applies to accel and decel.
+        # Trapezoidal ramp, run host-side (see _profile); 0 = instant, which looks
+        # mechanical. Applies to accel and decel.
         self.declare_parameter('attend_accel', 4.0)          # rad/s^2
+        self.declare_parameter('smooth_hz', 2.0)  # yaw/pitch setpoint low-pass (see _smooth); 0 = off
         self.declare_parameter('yaw_limits', [-3.14, 3.14])  # rad; firmware enforces the real one
         # Servo frame (+ = down). Up is left wide open: the head firmware enforces
         # the real mechanical limit, and _settled() copes with a target past it.
@@ -120,14 +121,23 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('face_rate_hz', 10.0)     # yunet: every frame at the 10 fps camera
         self.declare_parameter('face_refine_yaw', True)
         self.declare_parameter('face_deadband', 0.06)    # normalized image units, to start moving
-        # Once following a face, a smaller deadband so the head tracks smoothly
-        # instead of waiting for the face to drift `face_deadband` off center.
-        self.declare_parameter('face_track_deadband', 0.025)
-        self.declare_parameter('face_track_hold_sec', 1.0)  # small deadband this long after a move
+        # Once the face is off center by `face_deadband`, follow it continuously
+        # (alpha-beta filtered direction + velocity) until it has been still —
+        # under `face_vel_min` and within `face_retarget_rad` of the target — for
+        # `face_track_hold_sec`.
+        self.declare_parameter('face_alpha', 0.5)        # position gain per fix
+        self.declare_parameter('face_beta', 0.15)        # velocity gain per fix
+        self.declare_parameter('face_vel_min', 0.05)     # rad/s; slower counts as still
+        self.declare_parameter('face_retarget_rad', 0.025)
+        self.declare_parameter('face_predict_sec', 0.3)  # max extrapolation past the last fix
+        self.declare_parameter('face_track_hold_sec', 1.0)
+        self.declare_parameter('face_confirm_rad', 0.1)  # same face in consecutive detections
+        self.declare_parameter('face_max_width', 0.35)   # normalized; wider boxes are rejected
         # Capture -> publish delay not covered by the image stamp (the camera node
         # stamps at appsink: exposure + USB + JPEG decode/resize/encode).
         self.declare_parameter('camera_latency_sec', 0.1)
-        self.declare_parameter('camera_hfov_deg', 90.0)  # left_wide; conservative = undershoot
+        # left_wide; measured 2026-10-19 from image shift vs head yaw (~136 px/rad)
+        self.declare_parameter('camera_hfov_deg', 104.0)
         # After a DOA turn, only a face near the speaker's direction is tracked
         # (else the face being looked at drags the head back mid-turn).
         self.declare_parameter('speaker_lock_sec', 4.0)    # extended while they talk
@@ -163,6 +173,9 @@ class IdleBehaviorNode(Node):
 
         self.attend_speed = float(g('attend_speed').value)
         self.attend_accel = float(g('attend_accel').value)
+        smooth_hz = float(g('smooth_hz').value)
+        self.smooth_w = 2.0 * math.pi * smooth_hz
+        self.smooth_lag = 1.0 / (math.pi * smooth_hz) if smooth_hz > 0.0 else 0.0
         self.yaw_lim = [float(v) for v in g('yaw_limits').value]
         self.pitch_lim = [float(v) for v in g('pitch_limits').value]
         self.neutral_pitch = float(g('neutral_pitch').value)
@@ -188,9 +201,19 @@ class IdleBehaviorNode(Node):
         self.face_period = 1.0 / max(0.05, float(g('face_rate_hz').value))
         self.face_refine_yaw = bool(g('face_refine_yaw').value)
         self.face_deadband = float(g('face_deadband').value)
-        self.face_track_deadband = float(g('face_track_deadband').value)
+        self.face_retarget = float(g('face_retarget_rad').value)
+        self.face_confirm = float(g('face_confirm_rad').value)
+        self.face_max_width = float(g('face_max_width').value)
+        self.face_prev = (0.0, [])  # (time, aims) of the previous detection
+        self.face_alpha = float(g('face_alpha').value)
+        self.face_beta = float(g('face_beta').value)
+        self.face_vel_min = float(g('face_vel_min').value)
+        self.face_predict = float(g('face_predict_sec').value)
+        self.fa = [0.0, 0.0]        # followed face direction [yaw, pitch] (filtered)
+        self.fv = [0.0, 0.0]        # ...and its angular velocity
+        self.fa_t = 0.0             # capture time of the last fix
         self.face_track_hold = float(g('face_track_hold_sec').value)
-        self.face_moved = 0.0  # last time a face fix moved the target
+        self.follow_until = 0.0     # following a face (continuous target) until then
         self.camera_latency = float(g('camera_latency_sec').value)
         hfov = math.radians(float(g('camera_hfov_deg').value))
         self.tan_half_h = math.tan(hfov / 2.0)
@@ -228,6 +251,11 @@ class IdleBehaviorNode(Node):
 
         # ---- Attend state ---------------------------------------------------
         self.cur = None             # [yaw, pitch] from low/headstate
+        self.cur_roll = 0.0
+        self.sp = None              # commanded [yaw, pitch, roll] setpoint (host-side ramp)
+        self.sv = [0.0, 0.0, 0.0]   # its velocity
+        self.sp_t = 0.0
+        self.sm, self.smv = [0.0, 0.0], [0.0, 0.0]  # smoothed yaw/pitch and velocity
         self.pose_hist = collections.deque(maxlen=200)  # (t, yaw, pitch), ~2-4 s
         self.still_ref = None       # pose the head was last seen still at
         self.last_motion = 0.0      # last time the head moved > 0.01 rad
@@ -288,6 +316,7 @@ class IdleBehaviorNode(Node):
     # ---- attend inputs ------------------------------------------------------
     def _on_head_state(self, msg: HeadState) -> None:
         self.cur = [msg.servos[YAW].current_location, msg.servos[PITCH].current_location]
+        self.cur_roll = msg.servos[ROLL].current_location
         now = self._now()
         self.pose_hist.append((now, self.cur[0], self.cur[1]))
         if self.target is None:
@@ -418,7 +447,9 @@ class IdleBehaviorNode(Node):
 
     def _on_doa(self, msg: Doa) -> None:
         now = self._now()
-        if msg.angle != self.last_doa_angle:
+        # The first reading after startup is whatever the chip was holding: leave
+        # doa_changed_t at 0 so it counts as held, not freshly changed.
+        if self.last_doa_angle is not None and msg.angle != self.last_doa_angle:
             self.doa_changed_t = now
         self.last_doa_angle = msg.angle
         if self.doa_stale_angle is not None:
@@ -453,6 +484,7 @@ class IdleBehaviorNode(Node):
             f'{self.cur[0]:+.2f} -> yaw {yaw:+.2f}')
         self.speaker_yaw = _clamp(yaw, *self.yaw_lim)
         self.speaker_until = now + self.speaker_lock
+        self.follow_until = 0.0  # stop following the old face; speaker lock picks up
         self._set_target(yaw, self.target[1], now)
 
     # ---- faces (NanoOWL) ----------------------------------------------------
@@ -530,9 +562,31 @@ class IdleBehaviorNode(Node):
         if width > 0:
             self.tan_half_v = self.tan_half_h * height / width
 
-        def face_yaw(b):  # head yaw that would center this box
-            return pose[0] - self.yaw_sign * math.atan(
-                2.0 * ((b[1] + b[3]) / 2.0 - 0.5) * self.tan_half_h)
+        def aim(b):  # head [yaw, pitch] that would center this box
+            return (pose[0] - self.yaw_sign * math.atan(
+                        2.0 * ((b[1] + b[3]) / 2.0 - 0.5) * self.tan_half_h),
+                    pose[1] - self.pitch_sign * math.atan(
+                        2.0 * ((b[2] + b[4]) / 2.0 - 0.5) * self.tan_half_v))
+
+        def face_yaw(b):
+            return aim(b)[0]
+
+        # Only act on a face also seen (at about the same head-frame direction) in
+        # the previous detection: YuNet throws single-frame false positives that
+        # would otherwise yank the head and snap it back.
+        # A box this wide is a hand / body up against the lens, not a face.
+        boxes = [b for b in boxes if b[3] - b[1] < self.face_max_width]
+        aims = [aim(b) for b in boxes]
+        prev_t, prev = self.face_prev
+        self.face_prev = (now, aims)
+        if now - prev_t < 2.5 * self.face_period:
+            boxes = [b for b, a in zip(boxes, aims)
+                     if any(math.hypot(a[0] - p[0], a[1] - p[1]) < self.face_confirm
+                            for p in prev)]
+        else:
+            boxes = []
+        if not boxes:
+            return
 
         if self.asr_speech_since is not None and now < self.speaker_until:
             self.speaker_until = now + self.speaker_lock  # they're still talking
@@ -545,7 +599,8 @@ class IdleBehaviorNode(Node):
         elif now - self.last_face < 1.5:
             # Sticky: keep the face we're on (closest to where the head is aimed);
             # switching people is DOA's job, else two people in view ping-pong.
-            best = min(boxes, key=lambda b: abs(face_yaw(b) - self.target[0]))
+            best = min(boxes, key=lambda b: math.hypot(
+                face_yaw(b) - self.target[0], aim(b)[1] - self.target[1]))
         else:
             best = max(boxes, key=lambda b: (b[3] - b[1]) * (b[4] - b[2]))  # ~nearest
         score, x0, y0, x1, y1 = best
@@ -553,19 +608,40 @@ class IdleBehaviorNode(Node):
         dy = (y0 + y1) / 2.0 - 0.5  # + = below center
         self.last_face = now
         self.last_attention = now
-        yaw, pitch = self.target
-        tracking = now - self.face_moved < self.face_track_hold
-        deadband = self.face_track_deadband if tracking else self.face_deadband
-        if abs(dy) > deadband:
-            pitch = pose[1] - self.pitch_sign * math.atan(2.0 * dy * self.tan_half_v)
-        if self.face_refine_yaw and abs(dx) > deadband:
-            yaw = pose[0] - self.yaw_sign * math.atan(2.0 * dx * self.tan_half_h)
-        if [yaw, pitch] != self.target:
-            self.face_moved = now
+        z = aim(best)
+        tm = stamp - self.camera_latency if stamp > 0.0 else now  # capture time
+        if now < self.follow_until:
+            # Following: alpha-beta filter on the face direction. _tick_attend
+            # moves the target continuously along it (position + velocity), so
+            # the head glides with a walking person instead of stepping to each
+            # 10 Hz fix and stopping (which kicks the yaw servo back).
+            dt = max(0.02, tm - self.fa_t)
+            for i in (YAW, PITCH):
+                pred = self.fa[i] + self.fv[i] * dt
+                r = z[i] - pred
+                self.fa[i] = pred + self.face_alpha * r
+                self.fv[i] = _clamp(self.fv[i] + self.face_beta * r / dt,
+                                    -self.attend_speed, self.attend_speed)
+            self.fa_t = tm
+            if (max(abs(v) for v in self.fv) > self.face_vel_min
+                    or abs(self.fa[YAW] - self.target[0]) > self.face_retarget
+                    or abs(self.fa[PITCH] - self.target[1]) > self.face_retarget):
+                self.follow_until = now + self.face_track_hold
+        elif abs(dy) > self.face_deadband or (self.face_refine_yaw
+                                              and abs(dx) > self.face_deadband):
+            self.fa, self.fv, self.fa_t = list(z), [0.0, 0.0], tm
+            self.follow_until = now + self.face_track_hold
             self.get_logger().debug(
                 f'face {score:.2f} at ({dx:+.2f}, {dy:+.2f}) -> '
-                f'yaw {yaw:+.2f} pitch {pitch:+.2f}')
-        self._set_target(yaw, pitch, now)
+                f'yaw {z[0]:+.2f} pitch {z[1]:+.2f}')
+            self._follow_target(now)
+
+    def _follow_target(self, now: float) -> None:
+        """Aim at the followed face, extrapolated to now (bounded if fixes stop)."""
+        # Lead by the smoothing filter's lag too, so following doesn't trail.
+        h = _clamp(now - self.fa_t, 0.0, self.face_predict) + self.smooth_lag
+        yaw = self.fa[YAW] + self.fv[YAW] * h if self.face_refine_yaw else self.target[0]
+        self._set_target(yaw, self.fa[PITCH] + self.fv[PITCH] * h, now)
 
     # ---- main loop ----------------------------------------------------------
     def _tick(self) -> None:
@@ -596,7 +672,14 @@ class IdleBehaviorNode(Node):
             # instead of snapping back to our old target.
             self.target = list(self.cur)
             self.target_changed = now
+            self.sp = [self.cur[0], self.cur[1], self.cur_roll]
+            self.sv = [0.0, 0.0, 0.0]
+            self.sm, self.smv = list(self.cur), [0.0, 0.0]
             return
+        if self.sp is None:
+            self.sp = [self.cur[0], self.cur[1], self.cur_roll]
+            self.sm, self.smv = list(self.cur), [0.0, 0.0]
+            self.sp_t = now
         speaking = now < self.speaking_until
         if speaking:
             # Hold the face/attention timers (and skip face polling: mid-nod frames
@@ -605,6 +688,8 @@ class IdleBehaviorNode(Node):
             self.last_attention = now
         elif self.face_enabled:
             self._maybe_request_face(now)
+            if now < self.follow_until:
+                self._follow_target(now)
         if now - self.last_face > self.face_lost:
             self._set_target(self.target[0], self.neutral_pitch, now)
         if now - self.last_attention > self.attend_timeout:
@@ -616,13 +701,59 @@ class IdleBehaviorNode(Node):
             self.listening = listening
             self.get_logger().info('listening: tilt' if listening else 'listening: level')
         roll = self.listen_roll if listening else 0.0
-        pitch = self.target[1]
+        dt = _clamp(now - self.sp_t, 0.0, 0.1)
+        self.sp_t = now
+        yaw = self._smooth(YAW, self._profile(
+            YAW, self.target[0], self.attend_speed, self.attend_accel, dt), dt)
+        pitch = self._smooth(PITCH, self._profile(
+            PITCH, self.target[1], self.attend_speed, self.attend_accel, dt), dt)
+        roll = self._profile(ROLL, roll, self.roll_speed, self.roll_accel, dt)
         if self.nod_enabled and speaking:
             pitch = _clamp(pitch - self.pitch_sign * self._nod_offset(now), *self.pitch_lim)
-        self._publish_head(
-            self._servo(self.target[0], self.attend_speed, self.attend_accel),
-            self._servo(pitch, self.attend_speed, self.attend_accel),
-            self._servo(roll, self.roll_speed, self.roll_accel))
+        # Constant servo speed above the ramp's: the setpoint sets the pace, and
+        # rewriting the speed register every tick is one more thing to perturb it.
+        self._publish_head(self._servo(yaw, 2.0 * self.attend_speed),
+                           self._servo(pitch, 2.0 * self.attend_speed),
+                           self._servo(roll, 2.0 * self.roll_speed))
+
+    def _smooth(self, i: int, u: float, dt: float) -> float:
+        """Critically damped 2nd-order low-pass on the yaw/pitch setpoint.
+
+        The head + servo position loop rings at ~5-6 Hz; the small kinks a
+        10 Hz face fix puts in the setpoint excite it (measured 2026-10-19:
+        actual jitter ~2.5x the command's). Rolling off above `smooth_hz`
+        keeps that out, for ~1/(pi*smooth_hz) s of lag (led away in follow).
+        """
+        if self.smooth_w <= 0.0:
+            return u
+        w = self.smooth_w
+        n = max(1, math.ceil(dt / 0.02))  # keep w*h small: explicit steps go unstable
+        h = dt / n
+        for _ in range(n):
+            self.smv[i] += (w * w * (u - self.sm[i]) - 2.0 * w * self.smv[i]) * h
+            self.sm[i] += self.smv[i] * h
+        return self.sm[i]
+
+    def _profile(self, i: int, goal: float, vmax: float, amax: float, dt: float) -> float:
+        """Advance setpoint i one tick along a trapezoidal profile toward `goal`.
+
+        The STS servo's own accel profile restarts from rest whenever the goal
+        changes mid-move, so a face-followed target (new goal every frame) made
+        the head stop and twitch back each time. Instead the ramp runs here and
+        the servo gets a smoothly moving goal with its accel off (as VR does).
+        """
+        p, v = self.sp[i], self.sv[i]
+        err = goal - p
+        if amax <= 0.0:
+            v = _clamp(err / dt, -vmax, vmax) if dt > 0.0 else 0.0
+        else:
+            vd = math.copysign(min(vmax, math.sqrt(2.0 * amax * abs(err))), err)
+            v += _clamp(vd - v, -amax * dt, amax * dt)
+        p += v * dt
+        if (goal - p) * err <= 0.0:  # reached or crossed the goal
+            p, v = goal, 0.0
+        self.sp[i], self.sv[i] = p, v
+        return p
 
     def _eye_ack(self) -> None:
         now = self._now()
