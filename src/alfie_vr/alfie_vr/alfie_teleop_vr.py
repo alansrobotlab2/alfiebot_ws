@@ -80,7 +80,7 @@ class AlfieTeleopVRNode(Node):
             'base_stop_sec', 0.3, 'Seconds of explicit zero velocity sent after link loss')
         self.max_joint_speed = param(
             'max_joint_speed', 4.0, 'Rate limit on published arm/head joint targets (rad/s)')
-        self.head_yaw_limit = param('head_yaw_limit', 1.5708, 'Head yaw command limit (rad)')
+        self.head_yaw_limit = param('head_yaw_limit', math.pi, 'Head yaw command limit (rad)')
         self.head_pitch_limit = param('head_pitch_limit', 1.0472, 'Head pitch command limit (rad)')
         self.head_roll_limit = param('head_roll_limit', 0.35, 'Head roll command limit (rad)')
         # Head tracking multipliers (headset rotation -> robot head rotation)

@@ -83,7 +83,7 @@ This lets you reposition your hand in VR space without moving the robot arm.
 | `hold_timeout` | -1.0 | Seconds to hold arms/back after link loss before releasing (< 0 = hold) |
 | `base_stop_sec` | 0.3 | Seconds of explicit zero velocity after link loss |
 | `max_joint_speed` | 4.0 | Rate limit on published arm/head targets (rad/s) |
-| `head_yaw_limit` / `head_pitch_limit` / `head_roll_limit` | 1.571 / 1.047 / 0.35 | Head command limits (rad) |
+| `head_yaw_limit` / `head_pitch_limit` / `head_roll_limit` | 3.142 / 1.047 / 0.35 | Head command limits (rad; yaw is the full ±180° the neck supports) |
 | `head_*_multiplier` | 2.0 | Headset → head gain |
 | `head_yaw_sign` / `head_pitch_sign` / `head_roll_sign` | -1.0 | Headset → servo direction (servo +yaw turns right, +pitch looks down) |
 | `max_linear_vel` / `max_angular_vel` | 0.15 / 0.5 | Joystick velocity scaling (accel limits are in command_mux) |

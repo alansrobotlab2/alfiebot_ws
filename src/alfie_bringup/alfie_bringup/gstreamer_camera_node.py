@@ -8,13 +8,37 @@ Much lower latency than usb_cam
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage, CameraInfo
+from std_msgs.msg import Int32
 import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
 import numpy as np
 import threading
+import time
+from collections import deque
+import ctypes
+import fcntl
+import os
 
 import cv2
+
+
+# V4L2 control ioctls (linux/videodev2.h). Controls can be read/written while
+# another handle is streaming, so the node keeps its own fd for them.
+class _V4L2Control(ctypes.Structure):
+    _fields_ = [('id', ctypes.c_uint32), ('value', ctypes.c_int32)]
+
+
+def _iowr(nr, size):
+    return (3 << 30) | (size << 16) | (ord('V') << 8) | nr
+
+
+VIDIOC_G_CTRL = _iowr(27, ctypes.sizeof(_V4L2Control))
+VIDIOC_S_CTRL = _iowr(28, ctypes.sizeof(_V4L2Control))
+V4L2_CID_BRIGHTNESS = 0x980900
+V4L2_CID_GAIN = 0x980913
+V4L2_CID_EXPOSURE_AUTO = 0x9a0901
+V4L2_EXPOSURE_APERTURE_PRIORITY = 3  # camera-side auto exposure time
 
 
 class GStreamerCameraNode(Node):
@@ -33,6 +57,21 @@ class GStreamerCameraNode(Node):
         self.declare_parameter('jpeg_quality', 70)  # JPEG quality (0-100, lower = smaller files, faster)
         self.declare_parameter('camera_frame_id', 'stereo_camera_link')
 
+        # Auto gain: the camera's onboard AE only varies exposure time, which
+        # caps at the frame period (100ms @ 10fps), and leaves gain fixed. In
+        # dim rooms that saturates, so this loop raises gain to hold a target
+        # center-weighted median luma, updating once per left_wide frame.
+        # gain_min is the setting the training set was recorded at (120), so
+        # scenes the onboard AE can handle alone look unchanged.
+        self.declare_parameter('auto_gain', True)
+        self.declare_parameter('auto_gain_target', 90)       # median luma 0-255
+        self.declare_parameter('auto_gain_deadband', 12)     # start correcting beyond this; stop within 1/3 of it
+        self.declare_parameter('auto_gain_min', 120)
+        self.declare_parameter('auto_gain_max', 255)
+        self.declare_parameter('auto_gain_max_step', 0.04)   # max fractional gain change per frame
+        self.declare_parameter('auto_gain_smoothing', 0.3)   # EMA weight of the newest frame's luma
+        self.declare_parameter('brightness', 0)             # V4L2 offset; >0 washes out blacks
+
         # Get parameters
         self.device = self.get_parameter('device').get_parameter_value().string_value
         self.source_width = self.get_parameter('source_width').get_parameter_value().integer_value
@@ -44,7 +83,16 @@ class GStreamerCameraNode(Node):
         self.frame_id = self.get_parameter('camera_frame_id').get_parameter_value().string_value
         self.use_hardware_accel = self.get_parameter('use_hardware_accel').get_parameter_value().bool_value
         self.jpeg_quality = self.get_parameter('jpeg_quality').get_parameter_value().integer_value
-        
+        self.auto_gain = self.get_parameter('auto_gain').value
+        self.auto_gain_target = self.get_parameter('auto_gain_target').value
+        self.auto_gain_deadband = self.get_parameter('auto_gain_deadband').value
+        self.auto_gain_min = self.get_parameter('auto_gain_min').value
+        self.auto_gain_max = self.get_parameter('auto_gain_max').value
+        self.auto_gain_max_step = self.get_parameter('auto_gain_max_step').value
+        self.auto_gain_smoothing = self.get_parameter('auto_gain_smoothing').value
+        brightness = self.get_parameter('brightness').value
+        self._gain_f = None  # auto gain stays idle until controls are set up below; frames arrive first
+
         # Publishers - dual resolution: wide angle and center crop for each eye
         # All topics published under stereo_camera namespace for clear organization
         # Wide angle publishers (full FOV downsampled to output)
@@ -140,9 +188,109 @@ class GStreamerCameraNode(Node):
         self._right_center_camera_info_template = self._create_camera_info_template(
             'right_center_camera_link', self.output_width, self.output_height, focal_length_factor=1.0)
 
+        # Camera controls + auto gain
+        self.gain_pub = self.create_publisher(Int32, 'stereo_camera/gain', 1)
+        self._ctrl_fd = None
+        self._gain = None
+        try:
+            self._ctrl_fd = os.open(self.device, os.O_RDWR)
+            self._set_ctrl(V4L2_CID_BRIGHTNESS, brightness)
+            if self.auto_gain:
+                self._set_ctrl(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_APERTURE_PRIORITY)
+            self._gain = self._get_ctrl(V4L2_CID_GAIN)
+            self.get_logger().info(f'Camera controls: brightness={brightness}, gain={self._gain}, '
+                                   f'auto_gain={self.auto_gain} (target={self.auto_gain_target}, '
+                                   f'range={self.auto_gain_min}-{self.auto_gain_max})')
+        except OSError as e:
+            self.get_logger().warning(f'V4L2 controls unavailable on {self.device}: {e}; auto gain disabled')
+            self.auto_gain = False
+        self._reset_auto_gain()
+
         # Add parameter callback to handle runtime changes
         self.add_on_set_parameters_callback(self._parameter_callback)
-    
+
+    def _get_ctrl(self, cid):
+        ctrl = _V4L2Control(cid, 0)
+        fcntl.ioctl(self._ctrl_fd, VIDIOC_G_CTRL, ctrl)
+        return ctrl.value
+
+    def _set_ctrl(self, cid, value):
+        fcntl.ioctl(self._ctrl_fd, VIDIOC_S_CTRL, _V4L2Control(cid, int(value)))
+
+    # The onboard AE can't be queried (G_CTRL returns the stale manual value),
+    # so infer when it still has exposure headroom: it then cancels gain
+    # increases by shortening exposure. If gain rose this much over the
+    # window while luma barely moved, back gain off toward the floor instead
+    # of winding it up to max (same brightness, more noise).
+    _WINDUP_WINDOW = 10           # frames (1s @ 10fps)
+    _WINDUP_GAIN_RISE = 1.15
+    _WINDUP_LUMA_RISE = 1.03
+    _WINDUP_HOLD_SEC = 3.0
+    _WINDUP_LEAK = 0.01           # fractional gain decay per frame while held off
+    _GAIN_LOOP_K = 0.15           # fraction of the log luma error corrected per frame
+
+    def _reset_auto_gain(self):
+        self._luma_f = None
+        self._gain_f = float(self._gain) if self._gain is not None else None
+        self._correcting = False
+        self._history = deque(maxlen=self._WINDUP_WINDOW)
+        self._windup_until = 0.0
+
+    def _auto_gain_update(self, jpeg):
+        """Per-frame gain loop: called from the GStreamer thread after publishing left_wide."""
+        if not self.auto_gain or self._gain_f is None:
+            return
+        gray = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_4)
+        if gray is None:
+            return
+        # Meter the central 60% so bright windows/monitors at the edges don't
+        # pull the scene dark (the onboard AE averages the whole frame).
+        h, w = gray.shape
+        luma = max(float(np.median(gray[h // 5:h - h // 5, w // 5:w - w // 5])), 1.0)
+        if self._luma_f is None:
+            self._luma_f = luma
+        self._luma_f += self.auto_gain_smoothing * (luma - self._luma_f)
+
+        # Hysteresis: start correcting outside the deadband, keep going until
+        # well inside it, so gain doesn't dither at the band edge.
+        error = self.auto_gain_target - self._luma_f
+        if abs(error) > self.auto_gain_deadband:
+            self._correcting = True
+        elif abs(error) < self.auto_gain_deadband / 3:
+            self._correcting = False
+
+        now = time.monotonic()
+        self._history.append((self._gain_f, self._luma_f))
+        if len(self._history) == self._WINDUP_WINDOW:
+            gain0, luma0 = self._history[0]
+            if (self._gain_f > gain0 * self._WINDUP_GAIN_RISE
+                    and self._luma_f < luma0 * self._WINDUP_LUMA_RISE):
+                if now >= self._windup_until:
+                    self.get_logger().info(
+                        f'auto gain: onboard AE absorbing gain ({gain0:.0f}->{self._gain_f:.0f}, '
+                        f'luma {luma0:.0f}->{self._luma_f:.0f}); backing off')
+                self._windup_until = now + self._WINDUP_HOLD_SEC
+                self._history.clear()
+
+        if now < self._windup_until:
+            self._gain_f *= 1.0 - self._WINDUP_LEAK
+        elif self._correcting:
+            # Luma is roughly proportional to gain, so correct in log space,
+            # a fraction per frame to ride out the 1-2 frame actuation lag.
+            factor = (self.auto_gain_target / self._luma_f) ** self._GAIN_LOOP_K
+            self._gain_f *= float(np.clip(factor, 1.0 - self.auto_gain_max_step,
+                                          1.0 + self.auto_gain_max_step))
+        self._gain_f = float(np.clip(self._gain_f, self.auto_gain_min, self.auto_gain_max))
+
+        new_gain = int(round(self._gain_f))
+        if new_gain != self._gain:
+            try:
+                self._set_ctrl(V4L2_CID_GAIN, new_gain)
+                self._gain = new_gain
+            except OSError as e:
+                self.get_logger().warning(f'Failed to set gain: {e}', throttle_duration_sec=10.0)
+        self.gain_pub.publish(Int32(data=self._gain))
+
     def _parameter_callback(self, params):
         """Handle parameter changes at runtime"""
         from rcl_interfaces.msg import SetParametersResult
@@ -163,6 +311,15 @@ class GStreamerCameraNode(Node):
                     self.jpeg_quality = new_quality
                     self._jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
                     needs_restart = True
+            elif param.name in ('auto_gain', 'auto_gain_target', 'auto_gain_deadband',
+                                'auto_gain_min', 'auto_gain_max', 'auto_gain_max_step',
+                                'auto_gain_smoothing'):
+                if param.name == 'auto_gain' and param.value:
+                    if self._ctrl_fd is None:
+                        return SetParametersResult(successful=False, reason='V4L2 controls unavailable')
+                    self._reset_auto_gain()
+                setattr(self, param.name, param.value)
+                self.get_logger().info(f'{param.name} -> {param.value}')
 
         if needs_restart:
             self.get_logger().info('Restarting pipeline with new parameters...')
@@ -485,6 +642,8 @@ class GStreamerCameraNode(Node):
         msg.format = 'jpeg'
         msg.data = buf.tobytes()
         publisher.publish(msg)
+        if publisher is self.left_wide_image_pub:
+            self._auto_gain_update(msg.data)
     
     def _on_new_sample_hardware_left_wide(self, sink):
         """Callback for hardware pipeline LEFT WIDE image - full FOV downsampled"""
@@ -508,6 +667,7 @@ class GStreamerCameraNode(Node):
             msg.format = 'jpeg'
             msg.data = bytes(map_info.data)
             self.left_wide_image_pub.publish(msg)
+            self._auto_gain_update(msg.data)
 
             self._publish_camera_info(self.left_wide_info_pub, self._left_wide_camera_info_template, stamp)
         finally:
@@ -660,7 +820,11 @@ class GStreamerCameraNode(Node):
         # Stop pipeline
         if hasattr(self, 'pipeline') and self.pipeline:
             self.pipeline.set_state(Gst.State.NULL)
-        
+
+        if self._ctrl_fd is not None:
+            os.close(self._ctrl_fd)
+            self._ctrl_fd = None
+
         super().destroy_node()
 
 

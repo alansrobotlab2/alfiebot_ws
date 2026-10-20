@@ -360,6 +360,14 @@ def generate_launch_description():
 
                 'flip_vertical': True,
                 'camera_frame_id': 'stereo_camera_link',
+
+                # Auto gain on top of the camera's AE (exposure caps at the
+                # 100ms frame period). Gain floor 120 = training-set setting.
+                'auto_gain': True,
+                'auto_gain_target': 90,
+                'auto_gain_min': 120,
+                'auto_gain_max': 255,
+                'brightness': 0,
             }],
             output='screen',
             emulate_tty=True,

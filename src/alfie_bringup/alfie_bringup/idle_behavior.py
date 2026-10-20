@@ -98,6 +98,7 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('doa_sign', -1.0)         # +1: DOA angle increases CCW
         self.declare_parameter('doa_offset_deg', 180.0)  # DOA reading when speaker is dead ahead
         self.declare_parameter('doa_fresh_deg', 3.0)     # post-turn: reading must move this much
+        self.declare_parameter('doa_held_sec', 8.0)  # unchanged this long before speech: stale
         self.declare_parameter('speech_gate', 'asr')     # 'asr' (vad/speech) | 'array' (XVF VAD)
         self.declare_parameter('doa_onset_delay_sec', 0.4)  # DOA lags a new speaker
         self.declare_parameter('doa_min_samples', 3)     # consecutive speech samples (10 Hz)
@@ -169,6 +170,7 @@ class IdleBehaviorNode(Node):
         self.doa_deadband = math.radians(float(g('doa_deadband_deg').value))
         self.speaking_holdoff = float(g('speaking_holdoff_sec').value)
         self.doa_fresh = math.radians(float(g('doa_fresh_deg').value))
+        self.doa_held_sec = float(g('doa_held_sec').value)
         self.speech_gate = str(g('speech_gate').value)
         self.doa_onset_delay = float(g('doa_onset_delay_sec').value)
         self.face_enabled = bool(g('face_enabled').value)
@@ -225,7 +227,8 @@ class IdleBehaviorNode(Node):
         self.doa_buf = []           # recent head-relative DOA (rad, CCW+)
         self.last_doa_angle = None  # latest raw DOA reading (deg)
         self.doa_stale_angle = None  # raw reading held from before the last turn
-        self.doa_onset_angle = None  # raw reading held at the last speech onset
+        self.doa_onset_angle = None  # long-held raw reading at the last speech onset
+        self.doa_changed_t = 0.0     # last time the raw reading changed
         self.speaking_until = 0.0
         self.asr_speech_since = None  # vad/speech onset time while speech is on
         self.asr_speech_ended = 0.0   # last vad/speech falling edge
@@ -315,10 +318,13 @@ class IdleBehaviorNode(Node):
                 self.turn_until = self._now() + self.face_turn_pause
         elif self.asr_speech_since is None:
             self.asr_speech_since = self._now()
-            # The chip holds its last estimate until speech re-converges it; a
-            # reading identical to the one at onset is that held value, not the
-            # new speaker (live tracking moves at least a degree sample to sample).
-            self.doa_onset_angle = self.last_doa_angle
+            # The chip holds its last estimate until speech re-converges it. A new
+            # speaker moves the reading within moments of speaking (often just
+            # *before* the ASR VAD fires); one unchanged for long before onset is
+            # an old held value (e.g. from before this node started).
+            if (self.last_doa_angle is not None
+                    and self._now() - self.doa_changed_t > self.doa_held_sec):
+                self.doa_onset_angle = self.last_doa_angle
             self.turn_until = float('inf')  # ASR + LLM are about to want the GPU
 
     def _speech(self, msg: Doa, now: float) -> bool:
@@ -394,6 +400,8 @@ class IdleBehaviorNode(Node):
 
     def _on_doa(self, msg: Doa) -> None:
         now = self._now()
+        if msg.angle != self.last_doa_angle:
+            self.doa_changed_t = now
         self.last_doa_angle = msg.angle
         if self.doa_stale_angle is not None:
             if abs(_wrap(math.radians(msg.angle - self.doa_stale_angle))) <= self.doa_fresh:
@@ -516,6 +524,10 @@ class IdleBehaviorNode(Node):
                 return  # keep turning toward the speaker; ignore other faces
             best = min(near, key=lambda b: abs(face_yaw(b) - self.speaker_yaw))
             self.speaker_yaw = face_yaw(best)  # follow them as they move
+        elif now - self.last_face < 1.5:
+            # Sticky: keep the face we're on (closest to where the head is aimed);
+            # switching people is DOA's job, else two people in view ping-pong.
+            best = min(boxes, key=lambda b: abs(face_yaw(b) - self.target[0]))
         else:
             best = max(boxes, key=lambda b: (b[3] - b[1]) * (b[4] - b[2]))  # ~nearest
         score, x0, y0, x1, y1 = best
