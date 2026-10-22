@@ -20,22 +20,38 @@ from . import see
 from . import estop
 from . import memory_tools
 from . import facts
+from . import robot
+from . import weather
+from . import web
+from . import lloyd
 
 # One entry per tool module. Order is stable so the system prompt (and the
 # LLM's prefix cache) stays consistent across turns.
-_MODULES = [vault, qmd_search, clock, calc, room, see, estop, memory_tools, facts]
+_MODULES = [vault, qmd_search, clock, calc, room, see, estop, memory_tools, facts,
+            robot, weather, web, lloyd]
+
+# Tools that move the robot, and tools whose results are untrusted outside
+# content. The harness refuses the first for the rest of a turn after the second.
+MOTION_TOOLS = robot.MOTION_TOOLS
+TAINTING_TOOLS = web.TAINTING_TOOLS | lloyd.TAINTING_TOOLS
 
 # Built lazily on first list_tools(): tool name -> owning module.
 _dispatch = {}
 
 
 def configure(vault_root, qmd_url=None, qmd_skip_rerank=False, room_url=None,
-              see_detect=None, estop_reset=None, memory_max_bytes=1500):
+              see_detect=None, estop_reset=None, memory_max_bytes=1500,
+              body=None, weather_location="", weather_units="fahrenheit",
+              lloyd_url="", lloyd_timeout=90.0):
     """Configure the underlying tool modules (vault root, QMD + room service URLs,
-    the on-demand vision `detect` callback for the `look` tool, the
-    `estop_reset` callback for `clear_estop`, and the MEMORY.md byte cap)."""
+    the on-demand vision `detect` callback for `look`/`turn_head`, the
+    `estop_reset` callback for `clear_estop`, the MEMORY.md byte cap, the
+    ROS-side `body` for the robot tools, weather defaults and lloyd's URL)."""
     vault.configure(vault_root)
     memory_tools.configure(memory_max_bytes)
+    robot.configure(body=body, detect=see_detect)
+    weather.configure(home=weather_location, units=weather_units)
+    lloyd.configure(url=lloyd_url, timeout=lloyd_timeout)
     qmd_search.configure(qmd_url, skip_rerank=qmd_skip_rerank)
     room.configure(room_url)
     see.configure(detect=see_detect)

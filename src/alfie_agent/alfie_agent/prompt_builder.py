@@ -88,7 +88,8 @@ def _render_tools(tools):
         "Most questions need NO tool — just answer directly. But when a listed tool "
         "fits the request, USE it rather than guessing or working it out yourself; "
         "each tool's description says when it applies. Never tell the user you lack "
-        "a capability that a listed tool provides.",
+        "a capability that a listed tool provides, and never assume a tool will "
+        "fail because it failed earlier — call it and see.",
         "",
         "To call a tool, emit exactly one tool call on its own and then stop:",
         '<tool_call>{"name": "<tool_name>", "arguments": {<json args>}}</tool_call>',

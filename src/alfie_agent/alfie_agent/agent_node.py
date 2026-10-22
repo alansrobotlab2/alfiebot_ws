@@ -63,9 +63,11 @@ from std_srvs.srv import Trigger
 
 from alfie_agent import conversation as convo
 from alfie_agent import harness, memory, prompt_builder, tools
+from alfie_agent.body import Body
 from alfie_agent.prefetch import Prefetcher
 from alfie_agent.llm_client import LLMClient
 from alfie_agent.speakable import ClauseStream
+from alfie_agent.tools import lloyd as lloyd_tool
 from alfie_agent.timeline import TurnTimeline
 
 SPEAK_VOLUME = 100
@@ -158,6 +160,16 @@ class AgentNode(Node):
             self.declare_parameter('recent_max_items', 5).value)
         self.compaction_enabled = bool(
             self.declare_parameter('compaction_enabled', True).value)
+        # Body tools (body.py / tools/robot.py): agent head motion on the mux's
+        # `agent` head source, and the GR00T task run cap.
+        head_enabled = bool(self.declare_parameter('head_enabled', True).value)
+        task_max_s = float(self.declare_parameter('task_max_s', 120.0).value)
+        # Outside services: weather (Open-Meteo) and lloyd's agent API (over the
+        # tailnet; '' disables ask_lloyd).
+        weather_location = self.declare_parameter('weather_location', '').value
+        weather_units = self.declare_parameter('weather_units', 'fahrenheit').value
+        lloyd_url = self.declare_parameter('lloyd_url', '').value
+        lloyd_timeout = float(self.declare_parameter('lloyd_timeout', 90.0).value)
         # Curated memory (alfie/MEMORY.md): byte cap, injected per episode.
         memory_max_bytes = int(
             self.declare_parameter('memory_max_bytes', 1500).value)
@@ -187,12 +199,23 @@ class AgentNode(Node):
                        durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.estop_reset_cli = self.create_client(Trigger, 'estop_reset')
 
+        # Robot-facing ROS I/O for the body tools; announcements (timers, task
+        # timeouts) are spoken from _on_tick once Alfie is idle.
+        self._announcements = []
+        self.body = Body(self, announce=self._announce,
+                         estopped=lambda: self._estopped,
+                         task_max_s=task_max_s, head_enabled=head_enabled)
+
         # --- brain: tools, system prompt, LLM client ---
         tools.configure(self.vault_root, qmd_url=qmd_url,
                         qmd_skip_rerank=qmd_skip_rerank, room_url=room_url,
                         see_detect=self._nanoowl_detect,
                         estop_reset=self._estop_reset,
-                        memory_max_bytes=memory_max_bytes)
+                        memory_max_bytes=memory_max_bytes,
+                        body=self.body,
+                        weather_location=weather_location,
+                        weather_units=weather_units,
+                        lloyd_url=lloyd_url, lloyd_timeout=lloyd_timeout)
         # Warm the QMD daemon off the init path: the first vault search is ~1.2 s
         # (cold embedding-model load) vs ~75 ms warm, so pay that now on a
         # background thread instead of on the user's first turn.
@@ -339,6 +362,7 @@ class AgentNode(Node):
                 self._episode_turns = []
                 self._episode_system_prompt = episode_prompt
             self.prefetcher.reset()
+            lloyd_tool.reset_session()
             loaded = [n for n, v in (('memory', profile), ('recent', preamble)) if v]
             self.get_logger().info(
                 f"{why}: new conversation, listening"
@@ -400,6 +424,9 @@ class AgentNode(Node):
         # what was heard for the next one.
         self._paused = False
         self._cancel_active('barge-in')
+        stopped = self.body.stop_all()
+        if stopped:
+            self.get_logger().warn(f'Barge-in stopped motion: {", ".join(stopped)}')
 
     def on_asrresult(self, msg):
         text = (msg.asrresult or '').strip()
@@ -409,6 +436,18 @@ class AgentNode(Node):
             tl.note(f'asr {msg.asr_seconds * 1000:.0f}ms/{msg.duration:.1f}s '
                     f'({msg.reason}, p={msg.turn_prob:.2f})')
         now = time.monotonic()
+
+        # 0. Hard-wired stop: while the body is moving (a GR00T task, a head
+        # motion), a stop word halts it at once — no wake word, no LLM.
+        if convo.is_motion_stop(text) and \
+                (self.body.task_running() or self.body.head_moving()):
+            stopped = self.body.stop_all()
+            self.get_logger().warn(f'Motion stop ({", ".join(stopped)}): {text!r}')
+            self.tts_stop_pub.publish(Empty())
+            self._paused = False
+            self._cancel_active('motion stop')
+            self._announce('Stopped.')
+            return
 
         # 1. A paused reply is waiting on exactly this decision.
         if self._paused:
@@ -568,6 +607,10 @@ class AgentNode(Node):
                 self._resume('no words')
             elif now - self._pause_time >= self.max_pause_s:
                 self._resume('pause cap')
+        # Announcements (timers, task timeouts) wait for Alfie to be idle.
+        if self._announcements and not (self._turn_running or self._speaking
+                                        or self._paused):
+            self._speak_announcement(self._announcements.pop(0))
         # Fillers: cover silence, never an answer.
         if self._turn_running and not self._paused:
             started = self._timeline.marks.get('turn_start') if self._timeline else None
@@ -659,6 +702,27 @@ class AgentNode(Node):
             self._fillers += 1
         self._reply_said.append(clause)
 
+    def _announce(self, text):
+        """Queue something to say unprompted (any thread); spoken from _on_tick."""
+        self._announcements.append(text)
+
+    def _speak_announcement(self, text):
+        with self._lock:
+            self._turn += 1
+            turn_id = self._turn
+        self.get_logger().info(f'Announce: {text}')
+        out = SpeechRequest()
+        out.text = text
+        out.volume = SPEAK_VOLUME
+        out.turn_id = turn_id
+        out.more_follows = True
+        self.speech_pub.publish(out)
+        self._end_reply(turn_id)
+        self._last_reply = text
+        # Leave a follow-up window open, as after a reply.
+        self._listen_until = max(self._listen_until,
+                                 time.monotonic() + self.followup_window_s)
+
     def _end_reply(self, turn_id):
         out = SpeechRequest()
         out.text = ''
@@ -724,6 +788,8 @@ class AgentNode(Node):
                 on_text=on_text,
                 on_tool=on_tool,
                 on_first_delta=lambda: tl.mark('first_delta'),
+                taint_tools=tools.TAINTING_TOOLS,
+                motion_tools=tools.MOTION_TOOLS,
             )
             if reply is not None:
                 say_all(clauses.flush())
@@ -809,6 +875,7 @@ class AgentNode(Node):
         d = resp.detections
         return {
             "prompt": d.prompt,
+            "source_topic": d.source_topic,
             "width": d.image_width,
             "height": d.image_height,
             "detections": [

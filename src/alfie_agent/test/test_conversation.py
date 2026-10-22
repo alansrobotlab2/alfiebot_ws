@@ -76,3 +76,12 @@ def test_question_detection():
     assert c.ends_with_question("Want me to grab it?")
     assert c.ends_with_question('He said "really?"')
     assert not c.ends_with_question("I grabbed it.")
+
+
+def test_is_motion_stop_is_looser_than_stopper():
+    from alfie_agent import conversation as convo
+    for text in ("stop", "Alfie stop that", "whoa, stop stop!", "freeze",
+                 "let go of it", "abort"):
+        assert convo.is_motion_stop(text), text
+    for text in ("pick up the can", "what's the weather", "go on"):
+        assert not convo.is_motion_stop(text), text

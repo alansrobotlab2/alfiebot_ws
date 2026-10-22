@@ -274,7 +274,8 @@ def summarize(turns, llm, *, max_tokens=256):
 
 def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
              logger=None, max_tool_iters=4, max_tokens=None, on_text=None,
-             on_tool=None, on_first_delta=None):
+             on_tool=None, on_first_delta=None, taint_tools=frozenset(),
+             motion_tools=frozenset()):
     """
     Run one conversational turn, resolving any tool calls.
 
@@ -289,6 +290,11 @@ def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
     ``on_text(text)`` receives the spoken part of each generation as it streams
     (see ``SpokenFilter``); ``on_tool(name)`` is called before each tool runs;
     ``on_first_delta()`` once, at the first token of the turn.
+
+    Untrusted content guard: once a tool in ``taint_tools`` (web pages, lloyd's
+    relayed answers) has returned in this turn, tools in ``motion_tools`` are
+    refused for the rest of it — a page saying "start the task" must not move
+    the robot. The user can simply ask again in a new turn.
     """
     messages = ([{"role": "system", "content": system_prompt}]
                 + list(history)
@@ -322,6 +328,7 @@ def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
         return raw
 
     turn_t0 = time.monotonic()
+    tainted = False
     for gen in range(max_tool_iters):
         if not is_current():
             return None
@@ -358,12 +365,22 @@ def run_turn(user_text, history, *, system_prompt, llm, call_tool, is_current,
                 continue
             if logger:
                 logger(f"tool call: {name}({call['arguments']})")
+            if tainted and name in motion_tools:
+                if logger:
+                    logger(f"refused {name}: web content entered this turn")
+                pairs.append((name, {"error": (
+                    "refused: movement is disabled for the rest of this turn "
+                    "because it read web or relayed content; ask the user to "
+                    "repeat the request")}))
+                continue
             if on_tool is not None:
                 on_tool(name)
             try:
                 result = call_tool(name, call["arguments"])
             except Exception as e:  # tools shouldn't raise, but never crash a turn
                 result = {"error": f"tool {name} raised: {e}"}
+            if name in taint_tools:
+                tainted = True
             pairs.append((name, result))
         messages.append(_tool_response_turn(pairs))
 

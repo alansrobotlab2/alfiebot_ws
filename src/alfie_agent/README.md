@@ -49,6 +49,12 @@ asrresult ─▶ agent_node ─▶ prefetch.py ─(<context> on the user msg)─
   - `facts.py` — lloyd-format fact files and the read-only `fact_get`.
   - `clock.py`, `calc.py`, `room.py`, `see.py`, `estop.py` — `current_datetime`,
     `calculate`, `identify_room`/`learn_room`, `look`, `clear_estop`.
+  - `robot.py` — `robot_status`, `turn_head`, `gesture`, `timer`, `task`, backed
+    by **`body.py`** (see [Body tools](#body-tools)).
+  - `weather.py` — `weather` via Open-Meteo (no key).
+  - `web.py` — `web_search` (DuckDuckGo via `ddgs`) and `web_fetch`
+    (trafilatura), voice-sized (see [Web and lloyd](#web-and-lloyd)).
+  - `lloyd.py` — `ask_lloyd`: relay a request to lloyd's agent API.
 
 ### ROS interface
 
@@ -66,6 +72,13 @@ asrresult ─▶ agent_node ─▶ prefetch.py ─(<context> on the user msg)─
 | out | `tts/pause` | `std_msgs/Bool` — true pauses, false resumes |
 | out | `tts/stop` | `std_msgs/Empty` — stop and drop queued clauses |
 | out | `generating` | `std_msgs/Bool` |
+| in | `low/headstate` | `alfie_msgs/HeadState` — head pose for `turn_head` / `gesture` |
+| in | `robotlowstate` | `alfie_msgs/RobotLowState` — servos and back, for `robot_status` |
+| in | `low/jetsonstate` | `alfie_msgs/JetsonState` — temperatures, power, wifi |
+| out | `cmd/head/agent` | `alfie_msgs/HeadCmd` — the mux's `agent` head source (priority 30), 20 Hz while a motion plays |
+| out | `groot_client/task_description` | `std_msgs/String` — task for the GR00T policy |
+| out | `groot_client/activate` | `std_msgs/Bool` — start / stop the policy |
+| in | `groot_client/status` | `std_msgs/String` — GR00T client state (1 Hz) |
 
 ### ROS parameters (declared with defaults)
 
@@ -86,6 +99,12 @@ asrresult ─▶ agent_node ─▶ prefetch.py ─(<context> on the user msg)─
 | `prefetch_enabled` | `true` | per-turn `<context>` prefetch (`prefetch.py`) |
 | `prefetch_budget_ms` | `150` | hard wall for the prefetch legs; late legs are abandoned (a late vault hit rides the next turn) |
 | `prefetch_max_chars` | `1200` | cap on the injected `<context>` block (prefill latency) |
+| `head_enabled` | `true` | allow `turn_head` / `gesture` to move the head |
+| `task_max_s` | `120.0` | a GR00T task started by the agent is stopped after this long |
+| `weather_location` | `''` | default place for `weather` (e.g. `Portland, Oregon`) |
+| `weather_units` | `fahrenheit` | or `celsius` |
+| `lloyd_url` | `''` | lloyd's API over the tailnet, e.g. `http://<lloyd-host>:8080`; `''` disables `ask_lloyd` |
+| `lloyd_timeout` | `90.0` | seconds to wait for lloyd's answer |
 | `primary_user` | `''` | entity whose facts a first-person question ("what's *my*...") loads; Alfie can't tell who is speaking. e.g. `Alan` |
 | `max_tokens` / `temperature` | `200` / `0.7` | generation |
 | `followup_window_s` | `6.0` | listening window after a wake / after each reply |
@@ -181,6 +200,58 @@ vault, real MLC server, 2026-10-22):
 The prefetch arm is the fastest as well as the most accurate: an injected fact
 replaces a `fact_get` / `vault_search` round trip (~0.5–1 s each).
 
+## Body tools
+
+`body.py` owns the robot-facing ROS I/O; `tools/robot.py` is the model-facing
+half. Safety checks live in `Body`, next to the state they read.
+
+- **`turn_head(target)` / `gesture(name)`** — keyframe plans from `head_motion.py`
+  (pure, unit-tested) published on `cmd/head/agent` at 20 Hz while they last;
+  then the agent goes quiet and the idle behavior takes the head back. A target
+  is a direction (`left`, `right`, `up`, `down`, `forward`, `behind`) or an
+  object: the detector finds it and the box centre becomes a bearing, using
+  idle_behavior's pinhole geometry (`left_wide` 104°, `left_center` ~59°).
+  Gestures: `nod`, `shake`, `tilt`, `look_around`. Refused while e-stopped, while a
+  task owns the head, or when the head isn't reporting.
+- **`robot_status()`** — e-stop, hottest servo and lowest servo voltage, back
+  calibration and height, Jetson temperatures, RAM, power and wifi, task state.
+- **`timer(action, minutes?, seconds?, label?)`** — `set` / `list` / `cancel`.
+  When one ends Alfie says so (announcements wait until he is idle, then open a
+  follow-up window).
+- **`task(action, description?)`** — drives the GR00T client's existing control
+  topics: `task_description`, then `activate`. `start` needs the client running
+  and idle and the e-stop clear; a run is stopped after `task_max_s`, or when the
+  e-stop engages. `status` / `stop` as named.
+- **Hard-wired stop.** While a task or head motion runs, any transcript with a
+  stop word (`stop`, `halt`, `freeze`, `abort`, `let go`, or any stopper) stops
+  both at once: no wake word, no LLM call (`conversation.is_motion_stop`). A
+  hard `barge_in` stops them too.
+
+## Web and lloyd
+
+- **`web_search(query)`** — top 3 DuckDuckGo results (title, URL, 300-char
+  snippet); about 2–3 s.
+- **`web_fetch(url, question?)`** — trafilatura text of the page, cut to the
+  ~1500-character window covering the most question words; under 1 s for a
+  typical page. Only `http(s)`, and **every redirect hop must resolve to a
+  public address** — loopback, private, link-local and reserved addresses are
+  refused, so a page can't make Alfie call his own services (LLM on 8000, qmd on
+  8181) or anything on the LAN. 2 MB download cap.
+- **`ask_lloyd(request)`** — `POST <lloyd_url>/api/message/stream`; the final
+  `done` event's `response` is stripped of markdown and spoken. lloyd's session
+  id is kept for the episode, so follow-ups continue the same lloyd conversation.
+  lloyd only serves `/api` to its trusted networks (Tailscale `100.64.0.0/10` by
+  default), so the Orin reaches it over the tailnet.
+- **Untrusted-content guard.** Once `web_search`, `web_fetch` or `ask_lloyd` has
+  returned in a turn, the harness refuses `turn_head`, `gesture` and `task` for
+  the rest of that turn (`harness.run_turn(taint_tools=, motion_tools=)`). A page
+  that says "start the task" can't move the robot; the user just asks again.
+
+**Tool choice** (`eval/tool_choice_eval.py`: 22 fresh one-turn requests, real
+model, faked tools, 2026-10-22): 21/22. The miss is "look at the red cup", which
+picks `look` rather than `turn_head` (a fair reading). The 22 tools add ~330
+tokens to the pinned base prompt (~1350 total).
+
 ## Prefix caching — fast first turns (`_pin_base_prefix`)
 
 Every request carries the same ~800-token system prompt. Without help, the
@@ -237,6 +308,12 @@ preamble.
 ### Python / ROS (the node itself)
 - ROS 2 Jazzy, `rclpy`, `std_msgs`, `alfie_msgs`
 - `requests` (LLM stream and QMD client) and `yaml` (fact-file frontmatter)
+- `ddgs` and `trafilatura` for the web tools, user-installed and pinned to the
+  system's existing lxml / urllib3 / dateutil so nothing ROS uses is shadowed:
+  ```bash
+  python3 -c "import importlib.metadata as m; [print(f'{p}=={m.version(p)}') for p in ('lxml','urllib3','python-dateutil','requests','pytz','babel')]" > /tmp/pins.txt
+  python3 -m pip install --user --break-system-packages -c /tmp/pins.txt ddgs trafilatura
+  ```
 - The **MLC-LLM server** must be up (`alfie_llm/mlc_llm_serve_node`); the node
   gates on its latched `llm/ready`.
 
@@ -319,8 +396,9 @@ anticipation of future vault tooling.
 ```bash
 colcon build --packages-select alfie_agent
 colcon test --packages-select alfie_agent          # parser, vault, qmd_search, memory, facts, prefetch units
-# memory A/B against the live MLC server (sequential requests; not mid-conversation)
-PYTHONPATH=src/alfie_agent python3 src/alfie_agent/eval/memory_eval.py
+# against the live MLC server (sequential requests; not mid-conversation)
+PYTHONPATH=src/alfie_agent python3 src/alfie_agent/eval/memory_eval.py       # memory A/B
+PYTHONPATH=src/alfie_agent python3 src/alfie_agent/eval/tool_choice_eval.py  # tool selection
 ```
 The unit tests are pure Python (no ROS/LLM/QMD needed); the harness/LLM/QMD are
 verified live against the running servers.
@@ -331,5 +409,7 @@ fact pipeline (entity resolution, contradiction handling, typed graph edges) and
 read access to lloyd's `kg.sqlite` — that needs the vault shared between the two
 machines (it is not today: `~/obsidian` here is Alfie's own), and a WAL-mode
 SQLite file should arrive as a backup-API snapshot, not a file-sync copy; plus
-skills, autonomy/workers, discord/email, and inner voice. The tool-module
+skills, autonomy/workers, and inner voice (email, calendar and Discord go
+through `ask_lloyd`). Body: base motion (needs an `agent` source on the base in
+the mux), stereo distance for `look`, and a scene-describing vision model. The tool-module
 interface is kept MCP-shaped so these can be added incrementally.

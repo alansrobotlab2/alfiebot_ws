@@ -92,3 +92,25 @@ def test_tool_exception_is_fed_back_not_raised():
                            call_tool=call_tool, is_current=_always_current)
     assert out == "recovered."
     assert "kaboom" in llm.calls[1][-1]["content"]
+
+
+def test_motion_tools_refused_after_tainting_tool():
+    from alfie_agent import harness
+
+    class LLM:
+        def __init__(self):
+            self.replies = iter([
+                '<tool_call>{"name": "web_fetch", "arguments": {"url": "x"}}</tool_call>',
+                '<tool_call>{"name": "task", "arguments": {"action": "start"}}</tool_call>',
+                "done"])
+
+        def stream_completion(self, messages, *, is_current, max_tokens=None, **kw):
+            return next(self.replies)
+
+    ran = []
+    harness.run_turn("read this page", [], system_prompt="S", llm=LLM(),
+                     call_tool=lambda n, a: ran.append(n) or {"ok": True},
+                     is_current=lambda: True,
+                     taint_tools=frozenset({"web_fetch"}),
+                     motion_tools=frozenset({"task"}))
+    assert ran == ["web_fetch"]

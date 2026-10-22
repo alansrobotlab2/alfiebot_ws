@@ -100,7 +100,7 @@ _TOOLS = [
     {
         "name": "look",
         "description": (
-            "Look through the cameras and report what you actually see right now — "
+            "Report what your cameras see right now (does not move your head) — "
             "use for any 'what/who do you see?', 'is there a ...?', 'what am I "
             "holding?' question; never guess. Open-vocabulary: pass look_for to "
             "search for specific things by name (e.g. 'a red mug, a laptop'). "

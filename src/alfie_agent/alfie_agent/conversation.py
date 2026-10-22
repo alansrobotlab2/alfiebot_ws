@@ -165,6 +165,16 @@ def is_closer(text: str) -> bool:
     return bool(core) and core != n and core in CLOSERS
 
 
+_MOTION_STOP_RE = re.compile(r"\b(stop|halt|freeze|abort|let go)\b", re.I)
+
+
+def is_motion_stop(text: str) -> bool:
+    """A transcript that should halt robot motion: any stopper, or "stop" /
+    "halt" / "freeze" / "abort" / "let go" anywhere in it. Deliberately looser
+    than ``is_stopper`` — a missed stop moves the arms, a false one only pauses."""
+    return is_stopper(text) or bool(_MOTION_STOP_RE.search(text or ""))
+
+
 def is_stopper(text: str) -> bool:
     n = " ".join(_canon_name(words(text)))
     if n.startswith(NAME + " ") and n[len(NAME) + 1:] in STOPPERS:
