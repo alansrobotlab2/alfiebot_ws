@@ -8,6 +8,7 @@ Every mark is a wall-clock time (``time.time()``), so the ASR node's
   speech_end   the speaker stopped (from ASRResult)
   asr_done     the transcript arrived at the agent
   turn_start   the agent started the turn (after gating)
+  prefetch     the per-turn memory prefetch finished (prefetch.py)
   first_delta  the model's first token of spoken text
   first_clause the first clause was published to TTS
   first_audio  TTS started playing this turn's audio
@@ -22,7 +23,7 @@ from __future__ import annotations
 
 import time
 
-STAGES = ("speech_end", "asr_done", "turn_start", "first_delta",
+STAGES = ("speech_end", "asr_done", "turn_start", "prefetch", "first_delta",
           "first_clause", "first_audio", "done")
 
 

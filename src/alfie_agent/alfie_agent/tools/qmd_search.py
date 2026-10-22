@@ -1,17 +1,25 @@
 """
 qmd_search — semantic + keyword vault search via the QMD daemon.
 
-Ported from lloyd's QMD client (agent_mcp/vault.py::_qmd_post). QMD (tobi/qmd,
-npm @tobilu/qmd) is a local search daemon over the obsidian vault providing hybrid
-BM25 (FTS5) + vector (embeddinggemma) search with an optional cross-encoder
-reranker. It speaks a plain ``POST /query`` REST endpoint; we send a lexical +
-vector search pair and read back ``results[].{file,title,snippet,score}``.
+Ported from lloyd's QMD client (agent_mcp/vault.py::_qmd_post). QMD is a local
+search daemon over the obsidian vault providing hybrid BM25 (FTS5) + vector
+(embeddinggemma) search with an optional cross-encoder reranker. We run lloyd's
+fork (github.com/alansrobotlab2/qmd, branch ``lloyd``) rather than upstream
+tobi/qmd: its in-memory vector index, honoured rerank switch, ``lexMode:"or"``
+and per-phase ``meta`` timings all matter on the Orin's CPU (see qmd/README.md).
+It speaks a plain ``POST /query`` REST endpoint; we send a lexical + vector search
+pair and read back ``results[].{file,title,snippet,score}``.
+
+``query()`` is the one low-level entry point, shared by the ``vault_search`` tool
+and the per-turn prefetch (prefetch.py), which passes its own tight timeout.
 
 Configured via ``configure(qmd_url)`` (the ROS node passes its ``qmd_url`` param).
 If the daemon is down the tool returns a clear error dict rather than raising, so
 the agent can tell the user search is unavailable instead of crashing the turn.
 """
 import logging
+import re
+from urllib.parse import unquote
 
 import requests
 
@@ -67,31 +75,33 @@ def warmup():
         pass
 
 
-def _vault_search(params):
+def query(searches, *, limit=5, collections=None, rerank=None, lex_or=True,
+          timeout=None):
+    """
+    POST one structured search to the QMD daemon.
+
+    ``searches`` is a list of ``{"type": "lex"|"vec", "query": str}`` legs.
+    Returns ``{"results": [...], "meta": {...}}`` with vault-relative ``file``
+    paths and cleaned snippets, or an ``{"error": ...}`` dict. Never raises.
+    """
     if not _QMD_URL:
         return _err("vault search not configured (no qmd_url)")
-    query = (params.get("query") or "").strip()
-    if not query:
-        return _err("query is required")
-    limit = int(params.get("max_results") or 5)
-    collections = params.get("collections") or ["obsidian"]
-
+    collections = collections or ["obsidian"]
     payload = {
-        "searches": [
-            {"type": "lex", "query": query},   # BM25 / FTS5
-            {"type": "vec", "query": query},   # embedding similarity
-        ],
-        "limit": limit,
+        "searches": searches,
+        "limit": int(limit),
         "collections": collections,
-        # qmd's REST /query reads the boolean `rerank` field (NOT `skipRerank`,
-        # which it silently ignores). The reranker is a 0.6B cross-encoder run per
-        # query — ~18 s on CPU — so leaving it on tanks latency. Off by default
-        # (unneeded in agent use); this is the single biggest latency lever.
-        "rerank": not _SKIP_RERANK,
+        # qmd's REST /query reads the boolean `rerank` field. The reranker is a
+        # 0.6B cross-encoder run per query — ~18 s on CPU — so leaving it on
+        # tanks latency. Off by default (unneeded in agent use).
+        "rerank": (not _SKIP_RERANK) if rerank is None else bool(rerank),
     }
-
+    if lex_or:
+        # Fork-only: OR the BM25 terms. Spoken queries are loose natural
+        # language, and upstream's AND semantics drop most of them.
+        payload["lexMode"] = "or"
     try:
-        r = requests.post(_QMD_URL, json=payload, timeout=_TIMEOUT)
+        r = requests.post(_QMD_URL, json=payload, timeout=timeout or _TIMEOUT)
         r.raise_for_status()
         data = r.json()
     except requests.exceptions.ConnectionError:
@@ -105,22 +115,62 @@ def _vault_search(params):
         {
             "file": _strip_collection(row.get("file", ""), collections),
             "title": row.get("title", ""),
-            "snippet": row.get("snippet", ""),
+            "snippet": clean_snippet(row.get("snippet", "")),
             "score": row.get("score", 0),
         }
         for row in data.get("results", [])
     ]
-    return {"query": query, "results": results}
+    return {"results": results, "meta": data.get("meta") or {}}
+
+
+def _vault_search(params):
+    q = (params.get("query") or "").strip()
+    if not q:
+        return _err("query is required")
+    res = query(
+        [{"type": "lex", "query": q},    # BM25 / FTS5
+         {"type": "vec", "query": q}],   # embedding similarity
+        limit=int(params.get("max_results") or 5),
+        collections=params.get("collections") or ["obsidian"],
+    )
+    if "error" in res:
+        return res
+    return {"query": q, "results": res["results"]}
+
+
+# qmd snippets are line-numbered hunks: "1: @@ -1,3 @@ (0 before, 6 after)\n2: ..."
+_HUNK_RE = re.compile(r"^@@ .*?@@.*$")
+_LINENO_RE = re.compile(r"^\d+: ?")
+
+
+def clean_snippet(snippet):
+    """Strip qmd's hunk header, ``NN:`` line prefixes and frontmatter fences."""
+    lines = []
+    in_front = False
+    for raw in (snippet or "").splitlines():
+        line = _LINENO_RE.sub("", raw)
+        if _HUNK_RE.match(line):
+            continue
+        if line.strip() == "---":
+            in_front = not in_front
+            continue
+        if in_front or not line.strip():
+            continue
+        lines.append(line.strip())
+    return " ".join(lines)
 
 
 def _strip_collection(file, collections):
     """
     Drop qmd's leading ``<collection>/`` prefix so the path is vault-relative.
 
-    qmd namespaces results by collection (e.g. ``obsidian/notes/x.md``), but
-    vault_read expects paths relative to the vault root (``notes/x.md``). Strip
-    the collection segment so the search -> read chain lines up.
+    qmd namespaces results by collection (e.g. ``qmd://obsidian/notes/x.md``;
+    older builds omit the scheme), but vault_read expects paths relative to the
+    vault root (``notes/x.md``). Strip the scheme and collection segment so the
+    search -> read chain lines up.
     """
+    if file.startswith("qmd://"):
+        file = unquote(file[len("qmd://"):])
     for coll in collections:
         prefix = coll + "/"
         if file.startswith(prefix):

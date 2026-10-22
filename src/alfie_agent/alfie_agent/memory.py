@@ -1,26 +1,34 @@
 """
-memory — the actively-managed memory subsystem (Phase 1).
+memory — the actively-managed memory subsystem.
 
 Backs Alfie's cross-episode memory with plain files under the obsidian vault, so
-the existing QMD watcher indexes them for free. Two tiers ship in Phase 1:
+the existing QMD watcher indexes them for free. Four tiers:
 
   * **Working / recent** — ``memory/recent.jsonl``: one line per interaction
     (``{ts, summary, facts}``). A time+size-windowed view of this is injected
     verbatim at the start of every episode (see ``recent_preamble``).
   * **Episodic** — ``memory/episodes/<ts>.md``: a permanent, human-readable note
     per interaction, reachable later via the ``vault_search`` tool.
+  * **Curated** — ``alfie/MEMORY.md``: a small, byte-capped list the model edits
+    itself with the ``memory_*`` tools (tools/memory_tools.py); injected whole at
+    the start of every episode (see ``profile_text``).
+  * **Facts** — ``memory/facts/<Entity>/<Entity>-<category>.md``: the durable
+    facts compaction extracts, filed in lloyd's fact-file format
+    (tools/facts.py), surfaced per turn by the prefetch and by ``fact_get``.
 
 All writes go through the audited, path-guarded ``vault_write`` tool (so
 ``memory/audit/writes.jsonl`` still records them). Reads go through ``vault_read``.
 The module therefore relies on ``tools.configure(vault_root)`` having been called
 by the node — no separate configuration step of its own.
 
-(Phase 2 — a curated ``facts.md`` profile, recent-buffer pruning/consolidation,
-and daily digests — is intentionally deferred.)
+(Still deferred: recent-buffer consolidation, daily digests, and lloyd's
+heavier fact pipeline — entity resolution, contradiction handling, graph edges.)
 """
 import json
 from datetime import datetime, timezone
 
+from alfie_agent.tools import facts as fact_store
+from alfie_agent.tools import memory_tools
 from alfie_agent.tools import vault
 
 _RECENT_PATH = "memory/recent.jsonl"
@@ -32,14 +40,31 @@ _RECENT_KEEP = 200
 
 # --- pure helpers (unit-tested without a vault) -------------------------------
 
+def fact_line(fact):
+    """One fact (``{"entity", "fact"}`` dict, or a legacy string) as text."""
+    if isinstance(fact, dict):
+        entity = fact.get("entity") or "User"
+        return f"{entity}: {fact.get('fact', '')}"
+    return str(fact)
+
+
 def format_episode_note(ts, summary, facts):
     """Render a permanent, QMD-indexable episode note."""
     human = ts.strftime("%Y-%m-%d %H:%M")
     lines = ["---", f"ts: {ts.isoformat()}", "kind: episode", "---",
              f"# {human}", summary.strip() or "(no summary)"]
     for fact in facts:
-        lines.append(f"Durable: {fact}")
+        lines.append(f"Durable: {fact_line(fact)}")
     return "\n".join(lines) + "\n"
+
+
+def render_profile(entries):
+    """Render curated MEMORY.md entries as a system-prompt section (or None)."""
+    if not entries:
+        return None
+    return "\n".join(
+        ["Things you have chosen to remember (edit with the memory_ tools):"]
+        + [f"- {e}" for e in entries])
 
 
 def select_recent(entries, now, window_min, max_items):
@@ -105,6 +130,11 @@ def _append_recent(entry):
     vault.call_tool("vault_write", {"path": _RECENT_PATH, "content": text})
 
 
+def profile_text():
+    """The curated-memory section to inject at episode start (or None)."""
+    return render_profile(memory_tools.read_entries())
+
+
 def recent_preamble(now=None, window_min=30, max_items=5):
     """Build the recent-memory preamble to inject at episode start (or None)."""
     now = now or datetime.now(timezone.utc)
@@ -129,9 +159,17 @@ def record_episode(turns, summarize_fn, now=None):
     if not summary:
         return None
     stamp = now.strftime("%Y-%m-%d-%H%M%S")
+    note = f"{_EPISODES_DIR}/{stamp}.md"
     vault.call_tool("vault_write", {
-        "path": f"{_EPISODES_DIR}/{stamp}.md",
+        "path": note,
         "content": format_episode_note(now, summary, facts),
     })
-    _append_recent({"ts": now.isoformat(), "summary": summary, "facts": facts})
-    return {"summary": summary, "facts": facts}
+    _append_recent({"ts": now.isoformat(), "summary": summary,
+                    "facts": [fact_line(f) for f in facts]})
+    filed = 0
+    for fact in facts:
+        if isinstance(fact, dict) and fact.get("fact"):
+            filed += fact_store.add_facts(
+                fact.get("entity") or "User", fact.get("category"),
+                [fact["fact"]], source_doc=note)
+    return {"summary": summary, "facts": facts, "filed": filed}

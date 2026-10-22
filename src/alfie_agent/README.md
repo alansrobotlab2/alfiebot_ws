@@ -12,11 +12,13 @@ the voice behaviour follows lloyd's `architecture/voice.md` (see
 ## Architecture
 
 ```
-asrresult ─▶ agent_node ─▶ harness.run_turn ──▶ MLC-LLM (localhost:8000)  ← streams <tool_call> blocks
-                │  ▲                │
-                │  │(recent memory) └─▶ tools/  ── vault_read / vault_write (file I/O)
-                │  │                            └── vault_search ──▶ QMD daemon (localhost:8181/query)
-                │  └─ memory.py ◀── idle: summarize episode ▶ memory/episodes/*.md + recent.jsonl
+asrresult ─▶ agent_node ─▶ prefetch.py ─(<context> on the user msg)─▶ harness.run_turn ──▶ MLC-LLM (localhost:8000)
+                │  ▲          └─ facts / qmd lex / earlier episodes (150 ms budget)     │
+                │  │(MEMORY.md + recent memory)                                     └─▶ tools/ ── vault_read / vault_write
+                │  │                                                                          ├── vault_search ──▶ QMD fork (localhost:8181)
+                │  │                                                                          ├── memory_add / _replace / _remove
+                │  │                                                                          └── fact_get
+                │  └─ memory.py ◀── idle: summarize ▶ memory/episodes/*.md + recent.jsonl + memory/facts/
                 └─▶ speechrequest (TTS),  generating (thinking LED)
 ```
 
@@ -36,10 +38,17 @@ asrresult ─▶ agent_node ─▶ harness.run_turn ──▶ MLC-LLM (localhost
   (`<vault_root>/alfie/SOUL.md`) if present, else the bundled
   `prompts/SOUL.default.md`.
 - **`memory.py`** — the memory subsystem (context management; see below).
+- **`prefetch.py`** — per-turn automatic context injection (lloyd's
+  "subliminal", slimmed down; see below).
 - **`tools/`** — in-process tool modules behind lloyd's `list_tools()` /
   `call_tool()` interface (so they can be lifted behind an MCP server later):
   - `vault.py` — `vault_read`, `vault_write` (path-escape-guarded, audited).
   - `qmd_search.py` — `vault_search` via the QMD daemon (below).
+  - `memory_tools.py` — `memory_add`, `memory_replace`, `memory_remove` over the
+    curated `alfie/MEMORY.md` (byte-capped, injection-screened).
+  - `facts.py` — lloyd-format fact files and the read-only `fact_get`.
+  - `clock.py`, `calc.py`, `room.py`, `see.py`, `estop.py` — `current_datetime`,
+    `calculate`, `identify_room`/`learn_room`, `look`, `clear_estop`.
 
 ### ROS interface
 
@@ -73,6 +82,11 @@ asrresult ─▶ agent_node ─▶ harness.run_turn ──▶ MLC-LLM (localhost
 | `recent_window_min` | `30` | how far back the injected recent-memory window reaches (minutes) |
 | `recent_max_items` | `5` | max recent-interaction summaries injected at episode start |
 | `compaction_enabled` | `true` | write episode summaries into memory on idle |
+| `memory_max_bytes` | `1500` | byte cap on `alfie/MEMORY.md` (injected every episode); adds past it are refused |
+| `prefetch_enabled` | `true` | per-turn `<context>` prefetch (`prefetch.py`) |
+| `prefetch_budget_ms` | `150` | hard wall for the prefetch legs; late legs are abandoned (a late vault hit rides the next turn) |
+| `prefetch_max_chars` | `1200` | cap on the injected `<context>` block (prefill latency) |
+| `primary_user` | `''` | entity whose facts a first-person question ("what's *my*...") loads; Alfie can't tell who is speaking. e.g. `Alan` |
 | `max_tokens` / `temperature` | `200` / `0.7` | generation |
 | `followup_window_s` | `6.0` | listening window after a wake / after each reply |
 | `question_window_s` | `20.0` | window after a reply that ended with a question |
@@ -117,20 +131,55 @@ Alfie has no "new chat" button, so context is managed automatically as
 - **Idle compaction (hard reset + memory).** When the follow-up window lapses with
   un-compacted turns, an idle timer hands the episode to a background thread that
   summarizes it (one LLM call, run while the GPU is otherwise free) and then
-  clears active context. The summary + any durable facts are written to:
-  - `<vault>/memory/episodes/<ts>.md` — a permanent, **QMD-indexed** note
-    (reachable later via `vault_search`);
-  - `<vault>/memory/recent.jsonl` — the rolling working-memory log.
-- **Recent-memory injection.** A fresh wake reads a time+size-windowed view of
-  `recent.jsonl` (`recent_window_min` / `recent_max_items`) and injects it as a
-  **second `system` message**, *after* the static system prompt — so the prefix
-  cache for the (volatile-free) system prompt is never invalidated.
-- **Deeper recall stays on-demand** via the existing `vault_search` tool.
+  clears active context. The summary and the extracted facts
+  (`{entity, category, fact}`) are written to:
+  - `<vault>/memory/episodes/<ts>.md` — a permanent, **QMD-indexed** note;
+  - `<vault>/memory/recent.jsonl` — the rolling working-memory log;
+  - `<vault>/memory/facts/<Entity>/<Entity>-<category>.md` — one file per entity
+    and category in **lloyd's fact-file format** (same frontmatter, category
+    vocabulary, `<prefix>-NNN` ids and bitemporal `expired_at`/`invalid_at`
+    fields; `provenance: ALFIE_VOICE`). Exact duplicates are refused. Entity
+    resolution, contradiction handling and graph edges are lloyd's nightly job
+    and are not done on the Orin.
+- **Curated memory — `alfie/MEMORY.md`.** A short list the model edits itself with
+  `memory_add` / `memory_replace` / `memory_remove` (lloyd's memory tools). Capped
+  at `memory_max_bytes`; writes matching lloyd's prompt-injection shapes ("ignore
+  previous instructions", "you are now a", ...) are refused — anyone in the room
+  can talk to Alfie.
+- **Episode-start injection.** A fresh wake folds `MEMORY.md` (`# Memory`) and a
+  time+size-windowed view of `recent.jsonl` (`# Recent context`,
+  `recent_window_min` / `recent_max_items`) into the system prompt as trailing
+  sections, after the pinned base prompt (MLC only accepts a system message at
+  position 0), so the pinned prefix is never invalidated.
+- **Per-turn prefetch (`prefetch.py`).** Before each turn, three CPU-only legs run
+  in parallel under `prefetch_budget_ms`, and what finishes is rendered into a
+  `<context>` block (≤ `prefetch_max_chars`) prepended to the *model's copy* of
+  the user message (history keeps what was said):
+  - **facts** — entities named in the message (`Alfie` for "you/your";
+    `primary_user` + `User` for "I/my") → up to 2 entities × 3 facts;
+  - **vault** — one OR-mode BM25 qmd query over the message's content words plus
+    the episode's decaying focus keywords; a hit is kept only if it shares ≥ 2 of
+    the message's own (stemmed) keywords — qmd's fused score is rank-relative and
+    the vector leg matches *something* on a small vault, so it cannot gate;
+  - **earlier** — only on explicit past-conversation cues ("yesterday", "what did
+    we", "last time"): episode summaries older than the recent window.
 
-Net effect: per-prefill active depth stays flat (~static prompt + ≤1 KB recent
-window + budgeted episode turns) instead of growing unbounded, and every past
-interaction is recalled either from the injected window or by semantic search.
-Writes go through the audited `vault_write` path (`memory/audit/writes.jsonl`).
+  Messages under 10 characters skip it. Measured on the Orin: 10–20 ms per turn.
+  No LLM call — lloyd's every-5-turns topic extraction would compete for the one
+  MLC slot.
+- **Deeper recall stays on-demand** via `vault_search` and `fact_get`.
+
+**Eval** (`eval/memory_eval.py`, 15 recall questions over a seeded throwaway
+vault, real MLC server, 2026-10-22):
+
+| arm | accuracy | mean turn | tool calls / q |
+|---|---|---|---|
+| tools only | 6/15 | 0.86 s | 0.60 |
+| + MEMORY.md & recent window | 11/15 | 1.14 s | 0.67 |
+| + per-turn prefetch | **15/15** | **0.70 s** | 0.20 |
+
+The prefetch arm is the fastest as well as the most accurate: an injected fact
+replaces a `fact_get` / `vault_search` round trip (~0.5–1 s each).
 
 ## Prefix caching — fast first turns (`_pin_base_prefix`)
 
@@ -187,95 +236,73 @@ preamble.
 
 ### Python / ROS (the node itself)
 - ROS 2 Jazzy, `rclpy`, `std_msgs`, `alfie_msgs`
-- `requests` (only extra Python dep; used for the LLM stream and QMD client)
+- `requests` (LLM stream and QMD client) and `yaml` (fact-file frontmatter)
 - The **MLC-LLM server** must be up (`alfie_llm/mlc_llm_serve_node`); the node
   gates on its latched `llm/ready`.
 
 ### QMD — vault search daemon (external service)
 
-`vault_search` talks to **QMD** ([tobi/qmd](https://github.com/tobi/qmd), npm
-`@tobilu/qmd`) — a local hybrid **BM25 (SQLite FTS5) + vector (embeddinggemma)**
-search engine over the vault, with an optional Qwen3 reranker. It runs under
-**Bun + Node 24** with **node-llama-cpp** (llama.cpp GGUF models). It is a
-separate process; if it's down, `vault_search` returns a clean error and the rest
-of the agent still works.
+`vault_search` and the prefetch's vault leg talk to **QMD**, a local hybrid
+**BM25 (SQLite FTS5) + vector (embeddinggemma-300M)** search engine over the
+vault. We run **lloyd's fork** —
+[alansrobotlab2/qmd](https://github.com/alansrobotlab2/qmd), branch `lloyd`
+(upstream tobi/qmd 2.8.3 plus lloyd's patches) — built from source in `~/qmd`
+under Node 24 with node-llama-cpp's prebuilt linux-arm64 **CPU** binary. It is a
+separate process; if it's down, `vault_search` returns a clean error, the
+prefetch's vault leg is skipped, and the rest of the agent still works.
 
-Contract the agent speaks: `POST http://localhost:8181/query`
+What the fork buys on the Orin (CPU-only, because MLC owns the GPU):
+- **In-memory vector index** (`src/vecindex.ts`) instead of a sqlite-vec scan per
+  query: warm hybrid query **~35 ms**, lex-only **~5 ms** (upstream 2.5.3 here
+  measured ~121 ms).
+- **`lexMode: "or"`** — OR the BM25 terms; upstream ANDs them, which drops most
+  loose spoken queries. `qmd_search.py` always sends it.
+- **`rerank: false` honoured**, and a `meta` block with per-phase timings
+  (`fts`/`embed`/`vec`) on every response.
+- The rerank cache survives a re-index; global fusion / `collectionFloor` for
+  when the vault is split into several collections.
+
+Contract: `POST http://127.0.0.1:8181/query`
 ```json
 {"searches":[{"type":"lex","query":"..."},{"type":"vec","query":"..."}],
- "limit":5,"collections":["obsidian"]}
+ "limit":5,"collections":["obsidian"],"rerank":false,"lexMode":"or"}
 ```
-→ `{"results":[{"file","title","snippet","score"}, ...]}`
-(qmd namespaces `file` as `obsidian/<path>`; `qmd_search.py` strips the collection
-prefix so the path lines up with `vault_read`.)
+→ `{"results":[{"file","title","snippet","score"}, ...], "meta":{...}}`
+(`file` is `qmd://obsidian/<path>`; `qmd_search.py` strips the scheme and
+collection so the path lines up with `vault_read`, and strips the snippet's hunk
+header and line numbers.)
 
-#### Installed toolchain (on the Orin AGX, `alfiebrain`)
-| Component | Version / location | Notes |
-|---|---|---|
-| Bun | 1.3.14 — `~/.bun/bin/bun` | JS runtime / installer |
-| Node.js | 24.18.0 — `~/.local/node/bin` | **must be Node 24** — `better-sqlite3`'s prebuilt is ABI 137 (Node 24); Node 20 fails to load it |
-| qmd | `@tobilu/qmd` 2.5.3 — `~/.bun/bin/qmd` | `bun install -g @tobilu/qmd` |
-| node-llama-cpp | 3.18.1 (a CUDA build of llama.cpp b8390 was compiled for sm_87 but is unused — see below) | runs CPU-only |
-| models | `~/.cache/qmd/models/` (~2.3 GB) | embeddinggemma-300M-Q8_0, qwen3-reranker-0.6b-q8_0, qmd-query-expansion-1.7B — **all pre-cached (offline)** |
-| build tools | cmake 3.22, gcc/g++, CUDA 12.6 | present; used for the (now-unused) CUDA compile |
-| inotify-tools | 3.22 (apt) | for the reindex watcher |
-
-#### Performance: CPU, rerank OFF (the load-bearing knob)
-qmd runs **entirely on CPU** (`QMD_LLAMA_GPU=false`, `QMD_FORCE_CPU=1`) and hits
-**~121 ms** per novel query (embeddinggemma-300M, lex+vec, warm; ~2 s cold model
-load once per daemon start). Quality is strong — the correct note ranks #1 on
-semantic queries with no lexical overlap.
-
-- **The reranker must be disabled, and via the right field.** qmd's REST
-  `/query` reads a boolean **`rerank`** — it *silently ignores* `skipRerank`.
-  With rerank on, a 0.6B cross-encoder runs on every query → **~18 s on CPU**.
-  `tools/qmd_search.py` sends `"rerank": false`; the `qmd_skip_rerank` ROS param
-  (default `true`) controls it. This one field is the entire difference between
-  18 s and 121 ms — it is not the embedding model or the GPU.
-- **GPU was explored and rejected.** It's blocked by the resident 35B: ggml-cuda's
-  VMM pool reserves 32 GB of GPU *virtual address space* which `cuMemAddressReserve`
-  can't satisfy while MLC holds the GPU. Even patched to use the legacy pool
-  (`ggml-cuda.cu new_pool_for_device`, done in the local build), qmd then crashes
-  intermittently in cuBLAS `mul_mat` under memory contention with MLC. Moot: CPU
-  already beats the latency target, so GPU is unused. (The patched CUDA build is
-  inert while `QMD_FORCE_CPU=1`.)
-- A smaller embedder (bge-small-en-v1.5, 33M) was also tried: same ~30 ms once
-  rerank is off, but weaker ranking (qmd feeds it embeddinggemma's task-prefix),
-  so embeddinggemma-300M is kept.
-
-#### Offline
-All three models are cached under `~/.cache/qmd/models`; the daemon downloads
-nothing on start/restart (verified). Keep that cache to stay offline.
+- **Keep the reranker off.** The 0.6B cross-encoder takes ~18 s per query on CPU.
+  `qmd_skip_rerank` (default `true`) controls it.
+- **Separate indexes need `INDEX_PATH`.** `QMD_CONFIG_DIR` moves only the config:
+  a `qmd update` with another config still rewrites `~/.cache/qmd/index.sqlite`.
+  `eval/memory_eval.py` sets both.
 
 #### Services (boot-persistent)
-Unit + env files live in [`qmd/`](qmd/) and are installed to
-`/etc/systemd/system/` (`User=alfie`, `enabled`):
-- `alfie-qmd-daemon.service` → `qmd mcp --http --port 8181` (CPU)
-- `alfie-qmd-watcher.service` → `qmd/qmd-watcher.sh` (inotify → `qmd update && qmd embed`, CPU)
-- `qmd/qmd.env` — shared `EnvironmentFile` (PATH, CPU/offline flags)
+Unit + env files live in [`qmd/`](qmd/):
+- `alfie-qmd-daemon.service` → `node ~/qmd/bin/qmd mcp --http --port 8181` (CPU, loopback)
+- `alfie-qmd-watcher.service` → `qmd/qmd-watcher.sh` (`qmd update && qmd embed` on
+  vault changes: inotify when `inotify-tools` is installed, else a 10 s poll)
+- `qmd/qmd.env` — shared `EnvironmentFile`; `qmd/index.yml` — tracked copy of
+  `~/.config/qmd/index.yml`
 
-Ops:
+#### Install from scratch
 ```bash
-sudo systemctl status alfie-qmd-daemon alfie-qmd-watcher
-sudo systemctl restart alfie-qmd-daemon
-qmd status && qmd collection list           # index health
-QMD_FORCE_CPU=1 qmd update && QMD_FORCE_CPU=1 qmd embed   # manual reindex (CPU)
-```
-
-#### Reproduce QMD from scratch
-```bash
-curl -fsSL https://bun.sh/install | bash                       # Bun
-#  install Node 24 (arm64) to ~/.local/node   (ABI must match better-sqlite3)
-export PATH="$HOME/.local/node/bin:$HOME/.bun/bin:$PATH"
-bun install -g @tobilu/qmd                                      # qmd (Blocks postinstalls)
-node ~/.bun/install/global/node_modules/node-llama-cpp/dist/cli/cli.js postinstall
-# node-llama-cpp builds a CPU llama.cpp from source on first model use.
-qmd collection add obsidian ~/obsidian --mask '**/*.md'
-QMD_FORCE_CPU=1 qmd update && QMD_FORCE_CPU=1 qmd embed \
-    && QMD_FORCE_CPU=1 qmd query "warm the models"              # downloads + caches all 3 models
-sudo apt-get install -y inotify-tools
-sudo cp qmd/alfie-qmd-*.service /etc/systemd/system/ && sudo systemctl daemon-reload
-sudo systemctl enable --now alfie-qmd-daemon alfie-qmd-watcher
+# Node 24 (arm64) into ~/.local/node
+V=v24.22.1; curl -sO https://nodejs.org/dist/$V/node-$V-linux-arm64.tar.xz
+tar xf node-$V-linux-arm64.tar.xz -C ~/.local && mv ~/.local/node-$V-linux-arm64 ~/.local/node
+export PATH=$HOME/.local/node/bin:$PATH
+# lloyd's qmd fork
+git clone -b lloyd https://github.com/alansrobotlab2/qmd ~/qmd && cd ~/qmd
+npm install                                   # builds dist/
+npm install-scripts approve node-llama-cpp esbuild && npm rebuild node-llama-cpp esbuild
+# index the vault (CPU; first embed downloads embeddinggemma to ~/.cache/qmd/models)
+mkdir -p ~/.config/qmd && cp ~/alfiebot_ws/src/alfie_agent/qmd/index.yml ~/.config/qmd/
+QMD_FORCE_CPU=1 node ~/qmd/bin/qmd update && QMD_FORCE_CPU=1 node ~/qmd/bin/qmd embed
+# services (needs sudo)
+sudo apt-get install -y inotify-tools        # optional; the watcher polls without it
+sudo cp ~/alfiebot_ws/src/alfie_agent/qmd/alfie-qmd-*.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now alfie-qmd-daemon alfie-qmd-watcher
 ```
 
 ### obsidian-cli (installed, unconfigured)
@@ -291,16 +318,18 @@ anticipation of future vault tooling.
 ## Build & test
 ```bash
 colcon build --packages-select alfie_agent
-colcon test --packages-select alfie_agent          # parser, vault, qmd_search, harness units
+colcon test --packages-select alfie_agent          # parser, vault, qmd_search, memory, facts, prefetch units
+# memory A/B against the live MLC server (sequential requests; not mid-conversation)
+PYTHONPATH=src/alfie_agent python3 src/alfie_agent/eval/memory_eval.py
 ```
 The unit tests are pure Python (no ROS/LLM/QMD needed); the harness/LLM/QMD are
 verified live against the running servers.
 
 ## Deferred (not in this iteration)
-Session persistence + compaction landed as Phase 1 (see *Context management &
-memory* above). Still deferred: the **Phase 2** memory work — a curated
-`facts.md` profile injected each session, recent-buffer pruning/consolidation,
-daily digests, an optional `memory_recall` tool, and first-utterance auto-retrieval
-— plus a knowledge-graph / `vault_recall` (graph-expanded search), skills,
-autonomy/workers, discord/email, and inner voice. The tool-module interface is
-kept MCP-shaped so these can be added incrementally.
+Still deferred: recent-buffer consolidation and daily digests; lloyd's heavier
+fact pipeline (entity resolution, contradiction handling, typed graph edges) and
+read access to lloyd's `kg.sqlite` — that needs the vault shared between the two
+machines (it is not today: `~/obsidian` here is Alfie's own), and a WAL-mode
+SQLite file should arrive as a backup-API snapshot, not a file-sync copy; plus
+skills, autonomy/workers, discord/email, and inner voice. The tool-module
+interface is kept MCP-shaped so these can be added incrementally.

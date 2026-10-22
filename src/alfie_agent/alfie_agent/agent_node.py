@@ -63,6 +63,7 @@ from std_srvs.srv import Trigger
 
 from alfie_agent import conversation as convo
 from alfie_agent import harness, memory, prompt_builder, tools
+from alfie_agent.prefetch import Prefetcher
 from alfie_agent.llm_client import LLMClient
 from alfie_agent.speakable import ClauseStream
 from alfie_agent.timeline import TurnTimeline
@@ -157,6 +158,20 @@ class AgentNode(Node):
             self.declare_parameter('recent_max_items', 5).value)
         self.compaction_enabled = bool(
             self.declare_parameter('compaction_enabled', True).value)
+        # Curated memory (alfie/MEMORY.md): byte cap, injected per episode.
+        memory_max_bytes = int(
+            self.declare_parameter('memory_max_bytes', 1500).value)
+        # Per-turn context prefetch (prefetch.py): a small <context> block
+        # retrieved under a hard budget and prepended to the user message.
+        self.prefetch_enabled = bool(
+            self.declare_parameter('prefetch_enabled', True).value)
+        self.prefetcher = Prefetcher(
+            budget_ms=int(self.declare_parameter('prefetch_budget_ms', 150).value),
+            max_chars=int(self.declare_parameter('prefetch_max_chars', 1200).value),
+            recent_window_min=self.recent_window_min,
+            # Whose facts a first-person question ("what's my favorite...")
+            # loads; '' = only the generic `User` entity.
+            primary_user=self.declare_parameter('primary_user', '').value)
 
         # On-demand vision: a service client for the nanoowl detector. Created
         # before tools.configure so the `look` tool can be wired to it.
@@ -176,7 +191,8 @@ class AgentNode(Node):
         tools.configure(self.vault_root, qmd_url=qmd_url,
                         qmd_skip_rerank=qmd_skip_rerank, room_url=room_url,
                         see_detect=self._nanoowl_detect,
-                        estop_reset=self._estop_reset)
+                        estop_reset=self._estop_reset,
+                        memory_max_bytes=memory_max_bytes)
         # Warm the QMD daemon off the init path: the first vault search is ~1.2 s
         # (cold embedding-model load) vs ~75 ms warm, so pay that now on a
         # background thread instead of on the user's first turn.
@@ -308,21 +324,25 @@ class AgentNode(Node):
         self._wake_fresh = fresh
         self._closed = False
         if fresh:
-            preamble = None
+            preamble = profile = None
             try:
                 preamble = memory.recent_preamble(
                     window_min=self.recent_window_min,
                     max_items=self.recent_max_items)
+                profile = memory.profile_text()
             except Exception as e:  # memory is best-effort; never block a wake
                 self.get_logger().warn(f'recent memory unavailable: {e}')
             episode_prompt = prompt_builder.build_system_prompt(
-                self._soul, self._tool_specs, recent_memory=preamble)
+                self._soul, self._tool_specs, recent_memory=preamble,
+                profile=profile)
             with self._lock:
                 self._episode_turns = []
                 self._episode_system_prompt = episode_prompt
+            self.prefetcher.reset()
+            loaded = [n for n, v in (('memory', profile), ('recent', preamble)) if v]
             self.get_logger().info(
                 f"{why}: new conversation, listening"
-                f"{' (recent memory loaded)' if preamble else ''}.")
+                f"{' (' + ' + '.join(loaded) + ' loaded)' if loaded else ''}.")
         else:
             self.get_logger().info(f'{why}: window extended.')
         return fresh
@@ -652,10 +672,25 @@ class AgentNode(Node):
         with self._lock:
             history = list(self._episode_turns)
             system_prompt = self._episode_system_prompt
-        # The interruption note rides in the model's copy of the user message
-        # only (the prompt's tail, so the cached prefix is untouched); history
-        # keeps exactly what was said.
+        # The interruption note and the prefetched <context> block ride in the
+        # model's copy of the user message only (the prompt's tail, so the
+        # cached prefix is untouched); history keeps exactly what was said.
+        context = ''
+        if self.prefetch_enabled:
+            try:
+                context, st = self.prefetcher.build(text)
+                if not st.get('skipped'):
+                    late = f", late={','.join(st['late'])}" if st['late'] else ''
+                    self.get_logger().info(
+                        f"prefetch {st['ms']}ms: facts={st['facts']} "
+                        f"vault={st['vault']} earlier={st['earlier']} "
+                        f"carried={st['carried']}{late} -> {st['chars']} chars")
+            except Exception as e:  # prefetch is best-effort; never block a turn
+                self.get_logger().warn(f'prefetch failed: {e}')
+        tl.mark('prefetch')
         model_text = f'({note})\n\n{text}' if note else text
+        if context:
+            model_text = f'{context}\n\n{model_text}'
         clauses = ClauseStream()
         spoken = []
 

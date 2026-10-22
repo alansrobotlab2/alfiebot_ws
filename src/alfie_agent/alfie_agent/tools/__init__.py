@@ -1,7 +1,7 @@
 """
 tools — in-process tool registry.
 
-Aggregates the tool modules (currently just ``vault``) behind lloyd's
+Aggregates the tool modules behind lloyd's
 ``list_tools()`` / ``call_tool(name, arguments)`` interface. Each module exposes
 the same two functions, so adding a capability is a one-line append to
 ``_MODULES`` and lifting the whole registry behind an MCP server later is a
@@ -18,21 +18,24 @@ from . import calc
 from . import room
 from . import see
 from . import estop
+from . import memory_tools
+from . import facts
 
 # One entry per tool module. Order is stable so the system prompt (and the
 # LLM's prefix cache) stays consistent across turns.
-_MODULES = [vault, qmd_search, clock, calc, room, see, estop]
+_MODULES = [vault, qmd_search, clock, calc, room, see, estop, memory_tools, facts]
 
 # Built lazily on first list_tools(): tool name -> owning module.
 _dispatch = {}
 
 
 def configure(vault_root, qmd_url=None, qmd_skip_rerank=False, room_url=None,
-              see_detect=None, estop_reset=None):
+              see_detect=None, estop_reset=None, memory_max_bytes=1500):
     """Configure the underlying tool modules (vault root, QMD + room service URLs,
-    the on-demand vision `detect` callback for the `look` tool, and the
-    `estop_reset` callback for `clear_estop`)."""
+    the on-demand vision `detect` callback for the `look` tool, the
+    `estop_reset` callback for `clear_estop`, and the MEMORY.md byte cap)."""
     vault.configure(vault_root)
+    memory_tools.configure(memory_max_bytes)
     qmd_search.configure(qmd_url, skip_rerank=qmd_skip_rerank)
     room.configure(room_url)
     see.configure(detect=see_detect)

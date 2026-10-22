@@ -208,13 +208,36 @@ _SUMMARIZER_SYS = (
     '{"summary": a one to three sentence third-person summary of what happened '
     'and what the user wanted, "facts": a JSON array of durable facts worth '
     "remembering about the user or their world (names, preferences, ongoing "
-    "tasks) — use [] if there are none}. Do not include any other text. /no_think"
+    'tasks), each {"entity": who or what the fact is about (a person\'s name if '
+    "known, else User), \"category\": one of preference, relationship, goal, "
+    'event, state, skill, general, "fact": one short self-contained sentence} '
+    "— use [] if there are none. Small talk is not a fact}. Do not include any "
+    "other text. /no_think"
 )
 _SUMMARIZER_INSTR = "Summarize the conversation above as the JSON object described."
 
 
+def _parse_fact(item):
+    """One summarizer fact -> ``{"entity", "category", "fact"}`` or None.
+
+    Tolerates the older plain-string shape (filed under ``User``/``general``).
+    """
+    if isinstance(item, dict):
+        fact = str(item.get("fact") or "").strip()
+        if not fact:
+            return None
+        return {"entity": str(item.get("entity") or "User").strip() or "User",
+                "category": str(item.get("category") or "general").strip(),
+                "fact": fact}
+    fact = str(item or "").strip()
+    return {"entity": "User", "category": "general", "fact": fact} if fact else None
+
+
 def parse_summary(raw):
-    """Parse the summarizer's reply into ``{"summary", "facts"}`` (tolerant)."""
+    """Parse the summarizer's reply into ``{"summary", "facts"}`` (tolerant).
+
+    ``facts`` is a list of ``{"entity", "category", "fact"}`` dicts.
+    """
     text = strip_markup(raw or "")
     obj = _loads_tolerant(text)
     if isinstance(obj, dict) and "summary" in obj:
@@ -222,7 +245,7 @@ def parse_summary(raw):
         if not isinstance(facts, list):
             facts = []
         return {"summary": str(obj.get("summary") or "").strip(),
-                "facts": [str(f).strip() for f in facts if str(f).strip()]}
+                "facts": [f for f in map(_parse_fact, facts) if f]}
     # Fallback: no parseable JSON — keep the plain text as the summary.
     return {"summary": text.strip()[:400], "facts": []}
 

@@ -64,7 +64,8 @@ def test_record_episode_writes_note_and_recent_log(tmp_path):
         [{"role": "user", "content": "hi"},
          {"role": "assistant", "content": "hello"}],
         summarize_fn=fake_summarize, now=_dt(14, 32))
-    assert res == {"summary": "greeted each other", "facts": ["fact one"]}
+    assert res == {"summary": "greeted each other", "facts": ["fact one"],
+                   "filed": 0}
 
     note = tmp_path / "memory" / "episodes" / "2026-07-12-143200.md"
     assert note.is_file()
@@ -114,3 +115,29 @@ def test_append_recent_trims_to_size_guard(tmp_path, monkeypatch):
     lines = (tmp_path / "memory" / "recent.jsonl").read_text().strip().splitlines()
     assert len(lines) == 3
     assert [json.loads(ln)["summary"] for ln in lines] == ["s2", "s3", "s4"]
+
+
+def test_record_episode_files_structured_facts(tmp_path):
+    vault.configure(tmp_path)
+    fact = {"entity": "Alan", "category": "preference",
+            "fact": "Alan likes Diet Coke."}
+    res = memory.record_episode(
+        [{"role": "user", "content": "I like diet coke"}],
+        summarize_fn=lambda t: {"summary": "talked soda", "facts": [fact]},
+        now=_dt(14, 32))
+    assert res["filed"] == 1
+    note = (tmp_path / "memory/episodes/2026-07-12-143200.md").read_text()
+    assert "Durable: Alan: Alan likes Diet Coke." in note
+    fact_file = tmp_path / "memory/facts/Alan/Alan-preference.md"
+    assert fact_file.is_file()
+    entry = json.loads((tmp_path / "memory/recent.jsonl").read_text())
+    assert entry["facts"] == ["Alan: Alan likes Diet Coke."]
+
+
+def test_profile_text_renders_memory_entries(tmp_path):
+    from alfie_agent.tools import memory_tools
+    vault.configure(tmp_path)
+    assert memory.profile_text() is None
+    memory_tools.call_tool("memory_add", {"entry": "Alan is Alfie's builder."})
+    out = memory.profile_text()
+    assert "- Alan is Alfie's builder. (" in out

@@ -34,9 +34,14 @@ def test_budget_trim_drops_oldest_first_in_pairs():
 
 
 def test_parse_summary_extracts_json():
-    raw = '<think>hmm</think>{"summary": "did a thing", "facts": ["f1", "f2"]}'
+    raw = ('<think>hmm</think>{"summary": "did a thing", "facts": ['
+           '{"entity": "Alan", "category": "preference", "fact": "Alan likes tea."}, '
+           '"a legacy string fact"]}')
     out = harness.parse_summary(raw)
-    assert out == {"summary": "did a thing", "facts": ["f1", "f2"]}
+    assert out == {"summary": "did a thing", "facts": [
+        {"entity": "Alan", "category": "preference", "fact": "Alan likes tea."},
+        {"entity": "User", "category": "general", "fact": "a legacy string fact"},
+    ]}
 
 
 def test_parse_summary_tolerates_non_list_facts():
@@ -62,29 +67,23 @@ def test_summarize_uses_llm_and_parses():
     llm = FakeLLM()
     out = harness.summarize([{"role": "user", "content": "hi"},
                              {"role": "assistant", "content": "hello"}], llm)
-    assert out == {"summary": "greeted", "facts": ["likes tea"]}
+    assert out == {"summary": "greeted", "facts": [
+        {"entity": "User", "category": "general", "fact": "likes tea"}]}
     # The conversation is rendered into the summarizer's user turn.
     assert "User: hi" in llm.seen[-1]["content"]
     assert "Alfie: hello" in llm.seen[-1]["content"]
 
 
-def test_recent_memory_injected_as_second_system_message():
-    class FakeLLM:
-        def __init__(self):
-            self.calls = []
-
-        def stream_completion(self, messages, *, is_current, max_tokens=None):
-            self.calls.append([dict(m) for m in messages])
-            return "ok"
-
-    llm = FakeLLM()
-    harness.run_turn("hello", [], system_prompt="SYS", llm=llm,
-                     call_tool=lambda n, a: {}, is_current=lambda: True,
-                     recent_memory="RECENT")
-    msgs = llm.calls[0]
-    assert msgs[0] == {"role": "system", "content": "SYS"}
-    assert msgs[1] == {"role": "system", "content": "RECENT"}  # after cached prefix
-    assert msgs[2]["role"] == "user"
+def test_memory_sections_trail_the_cacheable_system_prompt():
+    # MLC only accepts a system message at position 0, so recent memory and the
+    # curated profile are folded into the system prompt *after* the static
+    # sections — the pinned base prompt stays a byte-identical prefix.
+    from alfie_agent import prompt_builder
+    base = prompt_builder.build_system_prompt("SOUL")
+    full = prompt_builder.build_system_prompt("SOUL", recent_memory="RECENT",
+                                              profile="PROFILE")
+    assert full.startswith(base)
+    assert full.index("# Memory") < full.index("# Recent context")
 
 
 def test_no_recent_memory_leaves_single_system_message():

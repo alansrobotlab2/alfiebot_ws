@@ -1,0 +1,11 @@
+# qmd collection definitions — TRACKED REFERENCE COPY.
+# The daemon reads ~/.config/qmd/index.yml; install with:
+#   cp src/alfie_agent/qmd/index.yml ~/.config/qmd/index.yml
+# One collection over the whole vault: qmd_search.py strips the `obsidian/`
+# prefix so result paths line up with vault_read.
+collections:
+  obsidian:
+    path: /home/alfie/obsidian
+    pattern: "**/*.md"
+    ignore:
+      - memory/audit/**

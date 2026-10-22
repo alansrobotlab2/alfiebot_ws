@@ -9,9 +9,9 @@ Ported (minimal slice) from lloyd's prompt_builder.py. Assembles, in order:
 
 Kept prefix-cache friendly like lloyd's: no per-turn timestamps or other volatile
 content, so the served model can reuse the KV cache for the whole system prompt
-across turns. The optional recent-memory window is appended *last*, so the static
-sections ahead of it stay byte-identical and cached; the window itself only
-changes when a new conversation (episode) starts. SOUL is loaded from
+across turns. The optional curated-memory profile and recent-memory window are
+appended *last*, so the static sections ahead of them stay byte-identical and
+cached; they only change when a new conversation (episode) starts. SOUL is loaded from
 ``<vault_root>/alfie/SOUL.md`` if present, else the bundled
 ``prompts/SOUL.default.md`` — so the agent runs even against an empty placeholder
 vault.
@@ -112,18 +112,26 @@ def _render_memory(recent_memory):
     return "# Recent context\n\n" + recent_memory.strip()
 
 
-def build_system_prompt(soul_text, tools=None, recent_memory=None):
+def _render_profile(profile):
+    """Render the curated MEMORY.md entries (``memory.profile_text``)."""
+    return "# Memory\n\n" + profile.strip()
+
+
+def build_system_prompt(soul_text, tools=None, recent_memory=None, profile=None):
     """
     Assemble the full system prompt from the SOUL text and tool specs.
 
-    ``recent_memory``, if given, is appended as a trailing section so the static
-    sections ahead of it keep a cacheable prefix (see module docstring).
+    ``profile`` (curated memory) and ``recent_memory``, if given, are appended as
+    trailing sections so the static sections ahead of them keep a cacheable
+    prefix (see module docstring). The profile goes first: it changes less often.
     """
     sections = [_ANTI_COMPLIANCE, soul_text.strip()]
     tool_block = _render_tools(tools or [])
     if tool_block:
         sections.append(tool_block)
     sections.append(_SPOKEN_RULES)
+    if profile and profile.strip():
+        sections.append(_render_profile(profile))
     if recent_memory and recent_memory.strip():
         sections.append(_render_memory(recent_memory))
     return "\n\n".join(s for s in sections if s)

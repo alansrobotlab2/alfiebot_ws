@@ -126,3 +126,25 @@ def test_warmup_swallows_daemon_errors():
 
 def test_list_tools_shape():
     assert {t["name"] for t in qmd_search.list_tools()} == {"vault_search"}
+
+
+def test_fork_scheme_prefix_stripped_and_snippet_cleaned():
+    qmd_search.configure("http://localhost:8181/query")
+    payload = {"results": [
+        {"file": "qmd://obsidian/notes/my%20note.md", "title": "a", "score": 1,
+         "snippet": "1: @@ -1,3 @@ (0 before, 6 after)\n2: ---\n3: kind: x\n"
+                    "4: ---\n5: # Title\n6: body text"},
+    ]}
+    with mock.patch.object(qmd_search.requests, "post",
+                           return_value=_fake_response(payload)):
+        out = qmd_search.call_tool("vault_search", {"query": "q"})
+    assert out["results"][0]["file"] == "notes/my note.md"
+    assert out["results"][0]["snippet"] == "# Title body text"
+
+
+def test_lex_or_mode_sent():
+    qmd_search.configure("http://localhost:8181/query", skip_rerank=True)
+    with mock.patch.object(qmd_search.requests, "post",
+                           return_value=_fake_response({"results": []})) as post:
+        qmd_search.call_tool("vault_search", {"query": "q"})
+    assert post.call_args.kwargs["json"]["lexMode"] == "or"
