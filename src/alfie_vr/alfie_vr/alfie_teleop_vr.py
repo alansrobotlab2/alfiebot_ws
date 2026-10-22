@@ -31,7 +31,6 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from alfie_msgs.msg import RobotLowState, ServoCmd, BackCmd, ArmCmd, HeadCmd
-from alfie_msgs.srv import BackRequestCalibration
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool
 from scipy.spatial.transform import Rotation as R
@@ -244,7 +243,7 @@ class AlfieTeleopVRNode(Node):
                 prefix=side, debug_logs=self.debug_logs)
         self._seed_from_state(robot_state, range(NUM_SERVOS))
 
-        self._calibrate_back_if_needed(robot_state)
+        self._check_back_calibrated(robot_state)
 
         if self.enable_debug_viz and PYGAME_AVAILABLE:
             self.debug_visualizer = ArmDebugVisualizer(
@@ -260,24 +259,13 @@ class AlfieTeleopVRNode(Node):
         self.get_logger().info('Arm and head controllers initialized')
         return True
 
-    def _calibrate_back_if_needed(self, robot_state):
-        if robot_state.back_state.is_calibrated:
-            self.get_logger().info('Back already calibrated, skipping calibration')
-            return
-        self.get_logger().info('Back not calibrated, calling calibration service...')
-        client = self.create_client(BackRequestCalibration, '/alfie/low/calibrate_back')
-        if not client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().warn('Back calibration service not available')
-            return
-        future = client.call_async(BackRequestCalibration.Request())
-        rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
-        result = future.result()
-        if result is None:
-            self.get_logger().warn('Back calibration service call failed')
-        elif result.success:
-            self.get_logger().info('Back calibration successful')
-        else:
-            self.get_logger().warn('Back calibration returned failure')
+    def _check_back_calibrated(self, robot_state):
+        # Never calibrate from here: homing drives the back onto its limit switch,
+        # only safe with the arms tucked. robot_init does that at bringup.
+        if not robot_state.back_state.is_calibrated:
+            self.get_logger().warn(
+                'Back not calibrated (robot_init homes it at bringup); back commands '
+                'will be ignored by the firmware until it is')
 
     # ------------------------------------------------------------------
     # Claims / seeding (call with cmd_lock held)
@@ -617,7 +605,6 @@ def main():
     while rclpy.ok() and node.get_robot_state() is None:
         rclpy.spin_once(node, timeout_sec=0.1)
 
-    # Before adding the node to the executor: back calibration spins the node itself.
     ok = rclpy.ok() and node.initialize_controllers()
 
     executor = MultiThreadedExecutor(num_threads=3)

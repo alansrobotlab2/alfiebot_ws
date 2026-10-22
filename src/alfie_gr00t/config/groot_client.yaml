@@ -228,7 +228,7 @@
     # Back Initialization
     # ==========================================================================
     # Height (meters) to move the back to on startup (0.0 to 0.390).
-    # Will calibrate the back first if not already calibrated.
+    # Waits for robot_init (bringup) to calibrate the back first; never calibrates itself.
     # Set to -1.0 to disable back initialization entirely.
     back_init_height: 0.1
 

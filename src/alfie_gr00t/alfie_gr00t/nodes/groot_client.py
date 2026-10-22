@@ -35,7 +35,6 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
 
 from alfie_msgs.msg import BackCmd, RobotLowState
-from alfie_msgs.srv import BackRequestCalibration
 
 from ..core.action_publisher import ActionPublisher
 from ..core.action_smoother import ActionSmoother
@@ -376,7 +375,7 @@ class GrootClientNode(Node):
         # Test server connection
         self._test_server_connection()
 
-        # Initialize back (calibrate if needed, move to target height)
+        # Initialize back (wait for robot_init's calibration, move to target height)
         if self.back_init_height >= 0.0:
             self._initialize_back()
 
@@ -477,7 +476,7 @@ class GrootClientNode(Node):
             )
 
     def _initialize_back(self):
-        """Calibrate the back if needed and move it to back_init_height."""
+        """Once robot_init has calibrated the back, move it to back_init_height."""
         POSITION_TOLERANCE = 0.005  # 5mm
         MOVE_TIMEOUT = 15.0
 
@@ -494,46 +493,21 @@ class GrootClientNode(Node):
 
         sub = self.create_subscription(RobotLowState, '/alfie/robotlowstate', _state_cb, qos)
 
-        # Wait for first RobotLowState message
-        self.get_logger().info('Waiting for robot state to check back calibration...')
-        deadline = time.monotonic() + 10.0
-        while latest_state[0] is None and time.monotonic() < deadline:
+        # Never calibrate here: homing drives the back onto its limit switch, which
+        # is only safe with the arms tucked. robot_init does that at bringup; wait
+        # for it rather than homing blind.
+        self.get_logger().info('Waiting for back calibration (done by robot_init)...')
+        deadline = time.monotonic() + 120.0
+        while time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.1)
+            if latest_state[0] is not None and latest_state[0].back_state.is_calibrated:
+                break
 
-        if latest_state[0] is None:
-            self.get_logger().warn('Timed out waiting for robot state — skipping back init')
+        if latest_state[0] is None or not latest_state[0].back_state.is_calibrated:
+            self.get_logger().warn(
+                'Back not calibrated (is robot_init running?) — skipping back init')
             self.destroy_subscription(sub)
             return
-
-        robot_state = latest_state[0]
-
-        # Calibrate if needed
-        if not robot_state.back_state.is_calibrated:
-            self.get_logger().info('Back not calibrated, calling calibration service...')
-            calibrate_client = self.create_client(
-                BackRequestCalibration, '/alfie/low/calibrate_back'
-            )
-            if calibrate_client.wait_for_service(timeout_sec=5.0):
-                request = BackRequestCalibration.Request()
-                future = calibrate_client.call_async(request)
-                rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
-                if future.result() is not None:
-                    if future.result().success:
-                        self.get_logger().info('Back calibration successful')
-                    else:
-                        self.get_logger().warn('Back calibration returned failure')
-                        self.destroy_subscription(sub)
-                        return
-                else:
-                    self.get_logger().warn('Back calibration service call failed')
-                    self.destroy_subscription(sub)
-                    return
-            else:
-                self.get_logger().warn('Back calibration service not available')
-                self.destroy_subscription(sub)
-                return
-        else:
-            self.get_logger().info('Back already calibrated')
 
         # Move to target height
         target = self.back_init_height
