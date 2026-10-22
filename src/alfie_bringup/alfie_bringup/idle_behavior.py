@@ -84,7 +84,9 @@ class IdleBehaviorNode(Node):
         # mechanical. Applies to accel and decel.
         self.declare_parameter('attend_accel', 4.0)          # rad/s^2
         self.declare_parameter('smooth_hz', 2.0)  # yaw/pitch setpoint low-pass (see _smooth); 0 = off
-        self.declare_parameter('yaw_limits', [-3.14, 3.14])  # rad; firmware enforces the real one
+        self.declare_parameter('yaw_limits', [-3.14, 3.14])  # rad; yaw servo travel is +/-pi
+        # A DOA target past a yaw limit by more than this goes round the other way.
+        self.declare_parameter('yaw_unwind_margin', 0.35)  # rad (~20 deg)
         # Servo frame (+ = down). Up matches the head firmware's stop (~-0.72);
         # faces further up than that (+ face_max_above) are rejected as ceiling.
         self.declare_parameter('pitch_limits', [-0.7, 0.4])  # rad
@@ -181,6 +183,7 @@ class IdleBehaviorNode(Node):
         self.smooth_w = 2.0 * math.pi * smooth_hz
         self.smooth_lag = 1.0 / (math.pi * smooth_hz) if smooth_hz > 0.0 else 0.0
         self.yaw_lim = [float(v) for v in g('yaw_limits').value]
+        self.yaw_unwind_margin = float(g('yaw_unwind_margin').value)
         self.pitch_lim = [float(v) for v in g('pitch_limits').value]
         self.neutral_pitch = float(g('neutral_pitch').value)
         self.yaw_sign = float(g('yaw_sign').value)
@@ -451,6 +454,20 @@ class IdleBehaviorNode(Node):
         recent = [y for t, y, _ in self.pose_hist if t >= now - window]
         return bool(recent) and max(recent) - min(recent) < tol
 
+    def _unwind(self, yaw: float) -> float:
+        """Bring a yaw past a limit round the other way (same direction, -/+ 2 pi).
+
+        The yaw servo can't pass through +/-pi, so facing backwards with the
+        speaker on the far side the head must swing back round through the
+        front. Only just past the limit, clamping is close enough.
+        """
+        lo, hi = self.yaw_lim
+        over = max(lo - yaw, yaw - hi)
+        if over <= self.yaw_unwind_margin:
+            return _clamp(yaw, lo, hi)
+        alt = yaw - math.copysign(2.0 * math.pi, yaw)
+        return _clamp(alt, lo, hi)
+
     def _on_doa(self, msg: Doa) -> None:
         now = self._now()
         # The first reading after startup is whatever the chip was holding: leave
@@ -484,12 +501,14 @@ class IdleBehaviorNode(Node):
         self.last_attention = now
         if abs(mean) < self.doa_deadband:
             return  # already facing the speaker
-        yaw = self.cur[0] + self.yaw_sign * mean
+        yaw = self._unwind(self.cur[0] + self.yaw_sign * mean)
         self.get_logger().info(
             f'DOA {msg.angle} deg ({math.degrees(mean):+.0f} deg) at yaw '
             f'{self.cur[0]:+.2f} -> yaw {yaw:+.2f}')
         self.speaker_yaw = _clamp(yaw, *self.yaw_lim)
-        self.speaker_until = now + self.speaker_lock
+        # Plus travel time: an unwind can take ~4 s, and faces swept past on the
+        # way must not grab the head.
+        self.speaker_until = now + self.speaker_lock + abs(yaw - self.cur[0]) / self.attend_speed
         self.follow_until = 0.0  # stop following the old face; speaker lock picks up
         self._set_target(yaw, self.target[1], now)
 
