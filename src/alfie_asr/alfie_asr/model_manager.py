@@ -74,6 +74,33 @@ def ensure_turn_model():
         return None
 
 
+def get_speaker_model_path() -> Path:
+    """Get the CAM++ speaker-embedding ONNX path."""
+    return get_models_dir() / "speaker" / "campplus_en_voxceleb_16k.onnx"
+
+
+def ensure_speaker_model():
+    """Return the CAM++ speaker model path, downloading it once if possible; else None."""
+    path = get_speaker_model_path()
+    if path.exists():
+        return path
+    if not check_internet_connection("github.com"):
+        print(f"speaker model not found at {path} and no internet; speaker ID off.")
+        return None
+    try:
+        import urllib.request
+        from alfie_asr.speaker_id import MODEL_URL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Downloading speaker model to {path}...")
+        tmp = path.with_suffix(".part")
+        urllib.request.urlretrieve(MODEL_URL, tmp)
+        tmp.replace(path)
+        return path
+    except Exception as e:
+        print(f"speaker model download failed ({e}); speaker ID off.")
+        return None
+
+
 def check_internet_connection(host: str = "huggingface.co", port: int = 443, timeout: float = 3.0) -> bool:
     """Check if internet connection is available."""
     try:

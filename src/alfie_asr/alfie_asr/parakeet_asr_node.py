@@ -42,8 +42,8 @@ import numpy as np
 import onnxruntime as ort
 import onnx_asr
 
-from alfie_asr.model_manager import (ensure_models, ensure_turn_model,
-                                     ModelNotAvailableError)
+from alfie_asr.model_manager import (ensure_models, ensure_speaker_model,
+                                     ensure_turn_model, ModelNotAvailableError)
 
 # IMPORTANT: Load the ASR model before anything that might initialise CUDA
 # through PyTorch (cuBLAS handle conflict). Nothing below imports torch any more
@@ -56,6 +56,7 @@ except ModelNotAvailableError as e:
     print(f"FATAL: {e}")
     sys.exit(1)
 _turn_model_path = ensure_turn_model()
+_speaker_model_path = ensure_speaker_model()
 
 print("Pre-loading Parakeet ASR model with GPU...")
 ort.set_default_logger_severity(3)
@@ -79,8 +80,10 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool
 from alfie_msgs.msg import AudioFrame, ASRResult
+from alfie_msgs.srv import EnrollSpeaker
 
 from alfie_asr.hearing import SAMPLE_RATE, build_pipeline
+from alfie_asr.speaker_id import SpeakerID
 
 
 class ASRNode(Node):
@@ -101,6 +104,11 @@ class ASRNode(Node):
         hold_timeout_ms = int(self.declare_parameter('hold_timeout_ms', 2200).value)
         hold_max_s = float(self.declare_parameter('hold_max_s', 12.0).value)
         capture_dir = self.declare_parameter('capture_dir', '').value
+        # Speaker ID (speaker_id.py): CAM++ voiceprints on CPU, ~25 ms per turn.
+        speaker_enabled = bool(self.declare_parameter('speaker_id_enabled', True).value)
+        speaker_threshold = float(self.declare_parameter('speaker_threshold', 0.5).value)
+        speaker_store = self.declare_parameter(
+            'speaker_store', '~/.alfie_asr/voiceprints.json').value
 
         self.pipeline = build_pipeline(
             _vad_model_path, turn_path if turn_enabled else None,
@@ -113,6 +121,18 @@ class ASRNode(Node):
         self._capture_dir = Path(capture_dir).expanduser() if capture_dir else None
         if self._capture_dir:
             self._capture_dir.mkdir(parents=True, exist_ok=True)
+
+        self.speaker_id = None
+        if speaker_enabled and _speaker_model_path is not None:
+            try:
+                self.speaker_id = SpeakerID(_speaker_model_path, speaker_store,
+                                            threshold=speaker_threshold)
+                self.create_service(EnrollSpeaker, 'asr/enroll_speaker',
+                                    self._on_enroll)
+                self.get_logger().info(
+                    f'speaker ID on: {len(self.speaker_id.names())} voice(s) enrolled')
+            except Exception as e:
+                self.get_logger().error(f'speaker ID unavailable: {e}')
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.publisher_ = self.create_publisher(ASRResult, 'asrresult', qos)
@@ -182,6 +202,15 @@ class ASRNode(Node):
                 self.get_logger().error(f'transcription failed: {e}')
                 continue
             asr_s = time.monotonic() - t0
+            speaker, score, spk_ms = '', 0.0, 0.0
+            if self.speaker_id is not None:
+                t1 = time.monotonic()
+                try:
+                    speaker, score = self.speaker_id.identify(ev.audio)
+                except Exception as e:
+                    self.get_logger().warn(f'speaker ID failed: {e}',
+                                           throttle_duration_sec=30.0)
+                spk_ms = (time.monotonic() - t1) * 1000
             msg = ASRResult()
             msg.asrresult = text
             msg.speech_end = float(speech_end)
@@ -189,11 +218,23 @@ class ASRNode(Node):
             msg.asr_seconds = float(asr_s)
             msg.turn_prob = float(ev.turn_prob)
             msg.reason = ev.reason
+            msg.speaker = speaker
+            msg.speaker_score = float(score)
             self.publisher_.publish(msg)
+            who = f' [{speaker or "?"} {score:.2f}, {spk_ms:.0f} ms]' if spk_ms else ''
             self.get_logger().info(
-                f'[asr] {msg.duration:.2f}s audio in {asr_s * 1000:.0f} ms: {text!r}')
+                f'[asr] {msg.duration:.2f}s audio in {asr_s * 1000:.0f} ms: {text!r}{who}')
             if self._capture_dir:
                 self._capture(ev, msg)
+
+    def _on_enroll(self, req, resp):
+        if req.forget:
+            resp.ok, resp.message = self.speaker_id.forget(req.name)
+        else:
+            resp.ok, resp.message = self.speaker_id.enroll(req.name)
+        self.get_logger().info(f'enroll_speaker({req.name!r}, forget={req.forget}): '
+                               f'{resp.message}')
+        return resp
 
     def _capture(self, ev, msg):
         stamp = time.strftime('%Y%m%d_%H%M%S') + f'_{int(time.time() * 1000) % 1000:03d}'

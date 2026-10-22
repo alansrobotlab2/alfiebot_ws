@@ -100,3 +100,16 @@ def test_no_recent_memory_leaves_single_system_message():
                      call_tool=lambda n, a: {}, is_current=lambda: True)
     msgs = llm.calls[0]
     assert [m["role"] for m in msgs] == ["system", "user"]
+
+
+def test_summarize_names_recognized_speaker():
+    class FakeLLM:
+        seen = None
+
+        def stream_completion(self, messages, *, is_current, max_tokens=None):
+            FakeLLM.seen = messages
+            return '{"summary": "x", "facts": []}'
+
+    harness.summarize([{"role": "user", "content": "hi"}], FakeLLM(),
+                      speakers=["Alan"])
+    assert "The user in this conversation is Alan." in FakeLLM.seen[-1]["content"]

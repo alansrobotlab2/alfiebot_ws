@@ -9,9 +9,9 @@ prefix (agent_node._pin_base_prefix) is untouched. History keeps exactly what wa
 said, as with the interruption note.
 
 Legs (all CPU, no LLM call — the Orin has one LLM slot and the turn needs it):
-  * **facts**   — entities named in the message (plus ``primary_user`` and
-                  ``User`` for first-person questions — Alfie can't tell who is
-                  speaking) → up to 2 entities × 3 facts from memory/facts/.
+  * **facts**   — entities named in the message (plus the recognized speaker,
+                  else ``primary_user``, and ``User`` for first-person
+                  questions) → up to 2 entities × 3 facts from memory/facts/.
                   Plain file reads, ~ms.
   * **vault**   — one keyword (BM25, OR-mode) qmd query over content words plus
                   the episode's focus keywords. Lexical on purpose: on a small
@@ -144,7 +144,7 @@ class Prefetcher:
 
     # --- legs -----------------------------------------------------------------
 
-    def _facts_leg(self, text, kws):
+    def _facts_leg(self, text, kws, speaker=""):
         lowered = (text or "").lower()
         picked = []
         for ent in fact_store.entities():
@@ -157,7 +157,9 @@ class Prefetcher:
             if ent and ent not in picked:
                 picked.append(ent)
         if _FIRST_PERSON_RE.search(text or ""):
-            for name in (self.primary_user, "User"):
+            # "?" = an unrecognized voice: not primary_user, whoever that is.
+            first = "" if speaker == "?" else (speaker or self.primary_user)
+            for name in (first, "User"):
                 ent = fact_store.resolve_entity(name) if name else None
                 if ent and ent not in picked:
                     picked.append(ent)
@@ -226,9 +228,13 @@ class Prefetcher:
 
     # --- public API -------------------------------------------------------------
 
-    def build(self, text):
+    def build(self, text, speaker=""):
         """
         Return ``(context_block, stats)`` for this user message.
+
+        ``speaker`` (a recognized voice) answers first-person questions in place
+        of ``primary_user``; ``"?"`` (a voice speaker ID didn't recognize)
+        suppresses ``primary_user``.
 
         ``context_block`` is "" when nothing relevant was found (or the message is
         too short); ``stats`` is a small dict for the turn's log line.
@@ -242,7 +248,7 @@ class Prefetcher:
 
         query = " ".join(kws + self.focus.top(exclude=set(kws)))
         futs = {
-            "facts": self._pool.submit(self._facts_leg, text, kws),
+            "facts": self._pool.submit(self._facts_leg, text, kws, speaker),
             "vault": self._pool.submit(self._vault_leg, query, kws),
             "earlier": self._pool.submit(self._earlier_leg, text),
         }

@@ -58,7 +58,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from std_msgs.msg import Bool, Empty, String
 from alfie_msgs.msg import ASRResult, SpeechRequest, Speaking
-from alfie_msgs.srv import Detect
+from alfie_msgs.srv import Detect, EnrollSpeaker
 from std_srvs.srv import Trigger
 
 from alfie_agent import conversation as convo
@@ -80,6 +80,8 @@ MAX_WAKE_UTTERANCE_WORDS = 2
 # are compared against the reply being spoken.
 ECHO_MEMORY_S = 2.0
 TICK_S = 0.1
+# _heard_speaker value for "speaker ID ran and this voice isn't enrolled".
+UNKNOWN_VOICE = '?'
 
 
 class AgentNode(Node):
@@ -198,6 +200,8 @@ class AgentNode(Node):
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                        durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.estop_reset_cli = self.create_client(Trigger, 'estop_reset')
+        # Voice enrollment on the ASR node, for the `learn_voice` tool.
+        self.enroll_cli = self.create_client(EnrollSpeaker, 'asr/enroll_speaker')
 
         # Robot-facing ROS I/O for the body tools; announcements (timers, task
         # timeouts) are spoken from _on_tick once Alfie is idle.
@@ -215,7 +219,8 @@ class AgentNode(Node):
                         body=self.body,
                         weather_location=weather_location,
                         weather_units=weather_units,
-                        lloyd_url=lloyd_url, lloyd_timeout=lloyd_timeout)
+                        lloyd_url=lloyd_url, lloyd_timeout=lloyd_timeout,
+                        enroll_voice=self._enroll_voice)
         # Warm the QMD daemon off the init path: the first vault search is ~1.2 s
         # (cold embedding-model load) vs ~75 ms warm, so pay that now on a
         # background thread instead of on the user's first turn.
@@ -269,6 +274,8 @@ class AgentNode(Node):
         self._turn = int(time.time())
         # Active context for the *live* episode only (reset on idle compaction).
         self._episode_turns = []    # list of {"role", "content"}
+        self._episode_speakers = set()  # voices recognized this episode
+        self._heard_speaker = ''    # speaker of the transcript being handled
         # System prompt for the live episode: the base prompt, or (on a fresh
         # wake) the base prompt with a recent-memory window folded in. Rebuilt at
         # episode start so the window rides inside the position-0 system message.
@@ -430,6 +437,10 @@ class AgentNode(Node):
 
     def on_asrresult(self, msg):
         text = (msg.asrresult or '').strip()
+        # A recognized name; UNKNOWN_VOICE when speaker ID ran on enough audio
+        # and matched nobody; '' when it couldn't tell (short, or ID off).
+        self._heard_speaker = msg.speaker or (
+            UNKNOWN_VOICE if msg.speaker_score > 0.0 else '')
         tl = TurnTimeline(msg.speech_end or None)
         tl.mark('asr_done')
         if msg.asr_seconds:
@@ -642,7 +653,8 @@ class AgentNode(Node):
         self._timeline = tl
         self._timeline_logged = False
         tl.mark('turn_start')
-        threading.Thread(target=self._run_turn, args=(command, my_turn, note, tl),
+        threading.Thread(target=self._run_turn,
+                         args=(command, my_turn, note, tl, self._heard_speaker),
                          daemon=True).start()
 
     def _cancel_active(self, why):
@@ -731,7 +743,7 @@ class AgentNode(Node):
         out.more_follows = False
         self.speech_pub.publish(out)
 
-    def _run_turn(self, text, my_turn, note, tl):
+    def _run_turn(self, text, my_turn, note, tl, speaker=''):
         self.publish_generating(True)
         with self._lock:
             history = list(self._episode_turns)
@@ -742,7 +754,7 @@ class AgentNode(Node):
         context = ''
         if self.prefetch_enabled:
             try:
-                context, st = self.prefetcher.build(text)
+                context, st = self.prefetcher.build(text, speaker=speaker)
                 if not st.get('skipped'):
                     late = f", late={','.join(st['late'])}" if st['late'] else ''
                     self.get_logger().info(
@@ -753,6 +765,14 @@ class AgentNode(Node):
                 self.get_logger().warn(f'prefetch failed: {e}')
         tl.mark('prefetch')
         model_text = f'({note})\n\n{text}' if note else text
+        if speaker == UNKNOWN_VOICE:
+            model_text = ("(Voice not recognized: don't assume who is speaking.)\n"
+                          + model_text)
+        elif speaker:
+            # A recognized voice (alfie_asr speaker ID).
+            model_text = f'(Speaking: {speaker})\n{model_text}'
+            with self._lock:
+                self._episode_speakers.add(speaker)
         if context:
             model_text = f'{context}\n\n{model_text}'
         clauses = ClauseStream()
@@ -885,6 +905,26 @@ class AgentNode(Node):
             ],
         }
 
+    def _enroll_voice(self, name, forget=False):
+        """Learn or forget a voice via the ASR node, for tools/voice.py.
+
+        Runs on a tool worker thread (see _nanoowl_detect): call_async + wait.
+        """
+        if not self.enroll_cli.wait_for_service(timeout_sec=0.5):
+            return {"error": "voice recognition isn't running."}
+        req = EnrollSpeaker.Request()
+        req.name = name
+        req.forget = bool(forget)
+        done = threading.Event()
+        future = self.enroll_cli.call_async(req)
+        future.add_done_callback(lambda _f: done.set())
+        if not done.wait(timeout=5.0):
+            return {"error": "voice recognition timed out."}
+        resp = future.result()
+        if resp is None:
+            return {"error": "voice recognition call failed."}
+        return {"ok": resp.ok, "result": resp.message}
+
     def _on_estop_state(self, msg):
         engaged = bool(msg.data)
         if engaged and not self._estopped:
@@ -940,19 +980,23 @@ class AgentNode(Node):
             if self._compacting or self._generating or self._speaking:
                 return                      # a turn/TTS/compaction is in flight
             turns = self._episode_turns
+            speakers = sorted(self._episode_speakers)
             self._episode_turns = []        # hard reset of active context
+            self._episode_speakers = set()
             self._episode_system_prompt = self.system_prompt
             self._interrupt_note = None
             self._compacting = True
         self.get_logger().info(
             f'Episode idle; compacting {len(turns) // 2} turn(s) into memory.')
-        threading.Thread(target=self._compact, args=(turns,), daemon=True).start()
+        threading.Thread(target=self._compact, args=(turns, speakers),
+                         daemon=True).start()
 
-    def _compact(self, turns):
+    def _compact(self, turns, speakers=()):
         try:
             res = memory.record_episode(
                 turns,
-                summarize_fn=lambda t: harness.summarize(t, self.llm),
+                summarize_fn=lambda t: harness.summarize(t, self.llm,
+                                                         speakers=speakers),
                 now=datetime.now(timezone.utc),
             )
             if res:

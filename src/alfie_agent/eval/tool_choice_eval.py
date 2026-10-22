@@ -38,6 +38,7 @@ CASES = [
     ("What do you see?", "look"),
     ("What's seventeen times twenty three?", "calculate"),
     ("Remember that my sister Maria is allergic to peanuts.", "memory_add"),
+    ("Learn my voice, I'm Alan.", "learn_voice"),
     ("Tell me a joke.", None),
     ("What's the capital of France?", None),
     ("Good morning!", None),
@@ -55,6 +56,7 @@ FAKE = {
     "look": {"seeing": True, "summary": "a cup (ahead of you, close)"},
     "calculate": {"result": 391},
     "memory_add": {"success": True},
+    "learn_voice": {"ok": True, "result": "learned Alan's voice"},
 }
 
 

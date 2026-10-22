@@ -250,12 +250,24 @@ def parse_summary(raw):
     return {"summary": text.strip()[:400], "facts": []}
 
 
-def summarize(turns, llm, *, max_tokens=256):
+def _speakers_note(speakers):
+    speakers = sorted(set(speakers))
+    if len(speakers) == 1:
+        return f"The user in this conversation is {speakers[0]}. "
+    if speakers:
+        return (f"Voices recognized in this conversation: {', '.join(speakers)} "
+                "(lines are not attributed). ")
+    return ""
+
+
+def summarize(turns, llm, *, max_tokens=256, speakers=()):
     """
     Summarize an episode's turns into ``{"summary", "facts"}`` via the LLM.
 
     Runs off the conversation critical path (idle compaction). Returns an empty
-    summary if the call is cancelled or yields nothing.
+    summary if the call is cancelled or yields nothing. ``speakers`` are the
+    voices recognized in the episode (alfie_asr speaker ID), so facts are filed
+    under the person rather than ``User``.
     """
     convo = "\n".join(
         f"{'User' if t.get('role') == 'user' else 'Alfie'}: {t.get('content', '')}"
@@ -263,7 +275,8 @@ def summarize(turns, llm, *, max_tokens=256):
     )
     messages = [
         {"role": "system", "content": _SUMMARIZER_SYS},
-        {"role": "user", "content": convo + "\n\n" + _SUMMARIZER_INSTR},
+        {"role": "user", "content": convo + "\n\n" + _speakers_note(speakers)
+         + _SUMMARIZER_INSTR},
     ]
     raw = llm.stream_completion(messages, is_current=lambda: True,
                                 max_tokens=max_tokens)

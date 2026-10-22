@@ -1,0 +1,7 @@
+# Learn (or forget) a voice. Enrolling uses the utterances the ASR node heard in
+# the last ~90 s (the person should have spoken a few sentences first).
+string name
+bool forget false
+---
+bool ok
+string message

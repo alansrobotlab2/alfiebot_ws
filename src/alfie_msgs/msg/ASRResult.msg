@@ -10,3 +10,8 @@ float32 asr_seconds 0.0
 # "no_turn_model".
 float32 turn_prob -1.0
 string reason ''
+# Who said it, if the voice matched an enrolled voiceprint (alfie_asr
+# speaker_id); '' when unknown or too short to tell. speaker_score is the best
+# cosine similarity (also set when below the match threshold).
+string speaker ''
+float32 speaker_score 0.0

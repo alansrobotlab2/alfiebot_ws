@@ -59,6 +59,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Detection.msg"
   "msg/Detections.msg"
   "srv/ServoService.srv"
+  "srv/EnrollSpeaker.srv"
   "srv/BackRequestCalibration.srv"
   "srv/Detect.srv"
   DEPENDENCIES std_msgs sensor_msgs geometry_msgs

@@ -55,6 +55,7 @@ asrresult ─▶ agent_node ─▶ prefetch.py ─(<context> on the user msg)─
   - `web.py` — `web_search` (DuckDuckGo via `ddgs`) and `web_fetch`
     (trafilatura), voice-sized (see [Web and lloyd](#web-and-lloyd)).
   - `lloyd.py` — `ask_lloyd`: relay a request to lloyd's agent API.
+  - `voice.py` — `learn_voice`: enroll or forget a voice (see [Speaker ID](#speaker-id)).
 
 ### ROS interface
 
@@ -105,7 +106,7 @@ asrresult ─▶ agent_node ─▶ prefetch.py ─(<context> on the user msg)─
 | `weather_units` | `fahrenheit` | or `celsius` |
 | `lloyd_url` | `''` | lloyd's API over the tailnet, e.g. `http://<lloyd-host>:8080`; `''` disables `ask_lloyd` |
 | `lloyd_timeout` | `90.0` | seconds to wait for lloyd's answer |
-| `primary_user` | `''` | entity whose facts a first-person question ("what's *my*...") loads; Alfie can't tell who is speaking. e.g. `Alan` |
+| `primary_user` | `''` | entity whose facts a first-person question ("what's *my*...") loads when speaker ID can't tell (short utterance, or ID off). e.g. `Alan` |
 | `max_tokens` / `temperature` | `200` / `0.7` | generation |
 | `followup_window_s` | `6.0` | listening window after a wake / after each reply |
 | `question_window_s` | `20.0` | window after a reply that ended with a question |
@@ -247,10 +248,39 @@ half. Safety checks live in `Body`, next to the state they read.
   the rest of that turn (`harness.run_turn(taint_tools=, motion_tools=)`). A page
   that says "start the task" can't move the robot; the user just asks again.
 
-**Tool choice** (`eval/tool_choice_eval.py`: 22 fresh one-turn requests, real
-model, faked tools, 2026-10-22): 21/22. The miss is "look at the red cup", which
-picks `look` rather than `turn_head` (a fair reading). The 22 tools add ~330
-tokens to the pinned base prompt (~1350 total).
+**Tool choice** (`eval/tool_choice_eval.py`: 23 fresh one-turn requests, real
+model, faked tools, 2026-10-22): 22/23. The miss is "look at the red cup", which
+picks `look` rather than `turn_head` (a fair reading). The new tools add ~350
+tokens to the pinned base prompt (~1370 total, 23 tools).
+
+## Speaker ID
+
+The ASR node (`alfie_asr/speaker_id.py`) embeds every utterance of at least 1 s
+with 3D-Speaker's **CAM++** (ONNX, CPU, 30–100 ms; Kaldi fbank in plain numpy,
+because the ASR node must not import torch) and matches it against enrolled
+voiceprints by cosine similarity. `ASRResult` carries `speaker` and
+`speaker_score`.
+
+- **Enroll:** "Alfie, learn my voice, I'm Alan" → `learn_voice` →
+  `asr/enroll_speaker` (`alfie_msgs/EnrollSpeaker`), which averages the
+  utterances heard in the last 90 s (at least 3 s of speech; utterances that
+  don't resemble the rest are dropped). `forget=true` deletes a voice.
+- **Per turn:** a recognized voice reaches the model as `(Speaking: Alan)`, the
+  prefetch's first-person facts come from that person, and the summarizer is
+  told who the user was, so facts are filed under the right entity. A voice that
+  was long enough to check but matched nobody is marked
+  `(Voice not recognized: don't assume who is speaking.)`, and `primary_user` is
+  not used for it.
+- **Storage:** `~/.alfie_asr/voiceprints.json` (mode 600), outside the vault:
+  voiceprints are biometric data and the vault may be shared.
+- **ASR params:** `speaker_id_enabled` (`true`), `speaker_threshold` (`0.5`),
+  `speaker_store`. The model downloads once to
+  `~/.alfie_asr/models/speaker/` on first start.
+- **Measured** (Piper LibriTTS-R voices fed through `audio_frames`, 2026-10-22):
+  the enrolled voice matched at 0.58–0.79; unknown voices scored 0.13–0.44.
+  Real microphone audio will differ, so tune `speaker_threshold` live. Within one
+  conversation the model can repeat its earlier answer even after the voice
+  changes; recognition itself is per utterance.
 
 ## Prefix caching — fast first turns (`_pin_base_prefix`)
 

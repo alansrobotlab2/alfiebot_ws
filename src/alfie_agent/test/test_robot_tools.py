@@ -173,3 +173,14 @@ def test_body_timers_fire_and_cancel():
     assert said == ["Your tea timer is done."]
     assert b.timer_cancel()["cancelled"] == "pasta"
     assert "no timers" in b.timer_cancel()["error"]
+
+
+def test_learn_voice_tool():
+    from alfie_agent.tools import voice
+    voice.configure()
+    assert "isn't available" in voice.call_tool("learn_voice", {"name": "Alan"})["error"]
+    got = []
+    voice.configure(enroll=lambda n, f: got.append((n, f)) or {"ok": True})
+    voice.call_tool("learn_voice", {"name": " Alan ", "forget": True})
+    assert got == [("Alan", True)]
+    assert "name" in voice.call_tool("learn_voice", {})["error"]

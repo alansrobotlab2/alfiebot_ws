@@ -131,3 +131,20 @@ def test_second_person_loads_self_facts(v):
     facts.add_facts("Alfie", "hardware", ["Alfie's gripper has a silicone pad."])
     block, _ = prefetch.Prefetcher().build("what changed on your gripper")
     assert "silicone pad" in block
+
+
+def test_recognized_speaker_overrides_primary_user(v):
+    facts.add_facts("Alan", "preference", ["Alan likes Diet Coke."])
+    facts.add_facts("Maria", "preference", ["Maria likes root beer."])
+    p = prefetch.Prefetcher(primary_user="Alan")
+    block, _ = p.build("what soda do I like best", speaker="Maria")
+    assert "root beer" in block and "Diet Coke" not in block
+
+
+def test_unrecognized_voice_suppresses_primary_user(v):
+    facts.add_facts("Alan", "preference", ["Alan likes Diet Coke."])
+    p = prefetch.Prefetcher(primary_user="Alan")
+    block, _ = p.build("what soda do I like best", speaker="?")
+    assert "Diet Coke" not in block
+    block, _ = p.build("what soda do I like best", speaker="")
+    assert "Diet Coke" in block
