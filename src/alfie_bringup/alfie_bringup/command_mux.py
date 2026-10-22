@@ -85,19 +85,25 @@ SUB_OUTPUTS = {
 # vr: it has an explicit per-subsystem take/release plus an operator deadman, so
 # the person standing at the robot with it open wins. It publishes only while a
 # subsystem is held. It never drives the base.
+# "init" is robot_init, the startup sequence: it outranks everything (tool too)
+# while it runs, then stops publishing.
 DEFAULT_SOURCES: Dict[str, Dict[str, dict]] = {
-    'left_arm': {'tool': {'priority': 110, 'timeout': 0.5},
+    'left_arm': {'init': {'priority': 120, 'timeout': 0.5},
+                 'tool': {'priority': 110, 'timeout': 0.5},
                  'vr': {'priority': 100, 'timeout': 0.2},
                  'groot': {'priority': 50, 'timeout': 0.2}},
-    'right_arm': {'tool': {'priority': 110, 'timeout': 0.5},
+    'right_arm': {'init': {'priority': 120, 'timeout': 0.5},
+                  'tool': {'priority': 110, 'timeout': 0.5},
                   'vr': {'priority': 100, 'timeout': 0.2},
                   'groot': {'priority': 50, 'timeout': 0.2}},
-    'head': {'tool': {'priority': 110, 'timeout': 0.5},
+    'head': {'init': {'priority': 120, 'timeout': 0.5},
+             'tool': {'priority': 110, 'timeout': 0.5},
              'vr': {'priority': 100, 'timeout': 0.2},
              'groot': {'priority': 50, 'timeout': 0.2},
              'agent': {'priority': 30, 'timeout': 0.5},
              'idle': {'priority': 10, 'timeout': 0.5}},
-    'back': {'tool': {'priority': 110, 'timeout': 0.5},
+    'back': {'init': {'priority': 120, 'timeout': 0.5},
+             'tool': {'priority': 110, 'timeout': 0.5},
              'vr': {'priority': 100, 'timeout': 0.2},
              'groot': {'priority': 50, 'timeout': 0.2},
              'idle': {'priority': 10, 'timeout': 0.5}},

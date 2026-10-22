@@ -1,0 +1,60 @@
+# ============================================================================
+# robot_init configuration
+# ============================================================================
+# One-shot startup sequence (see robot_init.py): head -> 0, tuck the arms one
+# at a time in stages, then calibrate the back and raise it. Any stuck joint,
+# back fault or lost board aborts before the back is touched and latches the
+# mux e-stop.
+# ============================================================================
+
+/**:
+  ros__parameters:
+    startup_timeout: 90.0        # s to wait for boards, mux and calibrate_back service
+
+    # Ramp speeds. Slow on purpose: a snag should stall, not swing through.
+    head_speed: 0.6              # rad/s
+    arm_speed: 0.4               # rad/s
+
+    # Servo torque limit, 0..1000 (= 0..100% locked-rotor; 0 = firmware default,
+    # full). Reduced on the arms so a caught hand stalls the servo and trips the
+    # stuck check instead of forcing through. Raise if a joint can't lift itself.
+    head_torque: 0.0
+    arm_torque: 500.0
+    gripper_torque: 300.0
+
+    # Tuck one arm at a time so the hands can't meet. Stages within an arm:
+    #   wrist           gripper, wrist_roll, wrist_pitch
+    #   shoulder_yaw    back into the arm's own plane
+    #   elbow           fold the forearm first so the arm is short when it swings
+    #   shoulder_pitch  swing the folded arm into the tuck
+    arm_order: ['left', 'right']
+    arm_stage_order: ['wrist', 'shoulder_yaw', 'elbow', 'shoulder_pitch']
+
+    # Tuck pose, rad, ArmCmd joint order:
+    #   [shoulder_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll, gripper]
+    # Measured from the resting pose 2026-10-21. Elbow held at -1.5, just off its
+    # -1.571 limit.
+    left_arm_tuck: [0.0, -0.08, -1.5, 0.08, 0.0, 0.0]
+    right_arm_tuck: [0.0, 0.03, -1.5, -0.14, 0.0, 0.0]
+
+    # Stuck detection
+    stuck_tolerance: 0.25        # rad a joint may trail its ramp setpoint...
+    stuck_sec: 0.5               # ...for this long before it counts as stuck
+    reach_tolerance: 0.08        # rad from goal = arrived
+    settle_sec: 2.0              # s after the ramp ends to arrive
+
+    # Back
+    calibrate_timeout: 30.0      # s (firmware gives up at 20)
+    back_height: 0.34            # m. Firmware max travel is 0.350 (no top switch).
+    back_speed: 0.1              # m/s
+    back_accel: 0.1              # m/s^2
+    back_tolerance: 0.005        # m
+    back_timeout_margin: 10.0    # s beyond height / speed
+
+    # Latch the command_mux e-stop on any failure (holds everything in place).
+    estop_on_failure: true
+
+    # Played on success / on failure (paplay, default sink = reSpeaker).
+    # Relative paths are under share/alfie_bringup/resource; '' disables.
+    startup_sound: 'freesound_community-start-computeraif-14572.mp3'
+    error_sound: '51481822-error-382245.mp3'

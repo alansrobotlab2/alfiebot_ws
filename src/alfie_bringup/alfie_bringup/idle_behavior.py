@@ -160,7 +160,7 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('nod_refractory_sec', 0.35)  # min time between beats
         self.declare_parameter('nod_onset_ratio', 0.5)     # beat when env > ratio * recent peak
         self.declare_parameter('nod_min_level', 0.01)      # RMS floor (ignore near-silence)
-        self.declare_parameter('higher_head_sources', ['tool', 'vr', 'groot', 'agent'])
+        self.declare_parameter('higher_head_sources', ['init', 'tool', 'vr', 'groot', 'agent'])
         self.declare_parameter('higher_source_timeout', 0.5)
 
         g = self.get_parameter

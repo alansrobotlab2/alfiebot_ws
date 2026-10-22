@@ -24,6 +24,8 @@ setup(
         # install stereo calibration YAMLs / README (may be sparse until F1 is run)
         ('share/' + package_name + '/config/stereo_calibration',
             files('config/stereo_calibration/*')),
+        # install sounds (robot_init startup / error chimes)
+        ('share/' + package_name + '/resource', files('resource/*.mp3')),
         # install SSL certificates for Foxglove Bridge TLS
         ('share/' + package_name + '/certs', files('certs/*.pem')),
         # install SSL certificates for WebRTC streaming into package directory
@@ -49,6 +51,7 @@ setup(
             'odom_tf_broadcaster = alfie_bringup.odom_tf_broadcaster:main',
             'odom_covariance_relay = alfie_bringup.odom_covariance_relay:main',
             'stereo_camera_info_pub = alfie_bringup.stereo_camera_info_pub:main',
+            'robot_init = alfie_bringup.robot_init:main',
         ],
     },
 )

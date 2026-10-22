@@ -53,8 +53,12 @@ def generate_launch_description():
 
     return LaunchDescription([
 
-        # GR00T client is opt-in: it calibrates the back and moves it to
-        # back_init_height on startup, and needs the inference server (run
+        DeclareLaunchArgument(
+            'launch_init', default_value='true',
+            description='Run robot_init at startup (head zero, arm tuck, back calibration)'),
+
+        # GR00T client is opt-in: once robot_init has calibrated the back it
+        # moves it to back_init_height on startup, and needs the inference server (run
         # separately in the Isaac-GR00T container, see alfie_gr00t/ORIN_AGX_SERVER.md)
         # plus a fine-tuned checkpoint. Enable with launch_groot:=true.
         DeclareLaunchArgument(
@@ -172,6 +176,24 @@ def generate_launch_description():
             sigterm_timeout='5',
             sigkill_timeout='10',
             respawn=True
+        ),
+
+        # One-shot startup sequence, as mux source "init" (outranks everything):
+        # head servos -> 0, tuck each arm in stages at reduced torque, THEN
+        # calibrate the back down onto its limit switch and raise it. A stuck
+        # joint aborts before the back moves and latches the e-stop. Exits when
+        # done, so no respawn. Skip with launch_init:=false.
+        Node(
+            package='alfie_bringup',
+            namespace='alfie',
+            executable='robot_init',
+            name='robot_init_node',
+            parameters=[os.path.join(
+                get_package_share_directory('alfie_bringup'),
+                'config', 'robot_init.yaml')],
+            condition=IfCondition(LaunchConfiguration('launch_init')),
+            output='screen',
+            emulate_tty=True,
         ),
 
         # Idle "life" behavior: lowest-priority (prio 10) dim eye glow and the

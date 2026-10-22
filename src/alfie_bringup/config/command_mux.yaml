@@ -54,21 +54,29 @@
     # standing at the robot with it open is the one who should win. It only
     # publishes while a subsystem is held, so it is invisible the rest of the
     # time.
+    #
+    # "init" is robot_init, the one-shot startup sequence (head zero, arm tuck,
+    # back calibration). It outranks everything, tool included, for the few
+    # seconds it runs at bringup, then stops publishing for good.
     left_arm:
+      init:   {priority: 120, timeout: 0.5}
       tool:   {priority: 110, timeout: 0.5}
       vr:     {priority: 100, timeout: 0.2}
       groot:  {priority: 50, timeout: 0.2}
     right_arm:
+      init:   {priority: 120, timeout: 0.5}
       tool:   {priority: 110, timeout: 0.5}
       vr:     {priority: 100, timeout: 0.2}
       groot:  {priority: 50, timeout: 0.2}
     head:
+      init:   {priority: 120, timeout: 0.5}
       tool:   {priority: 110, timeout: 0.5}
       vr:     {priority: 100, timeout: 0.2}
       groot:  {priority: 50, timeout: 0.2}
       agent:  {priority: 30, timeout: 0.5}
       idle:   {priority: 10, timeout: 0.5}
     back:
+      init:   {priority: 120, timeout: 0.5}
       tool:   {priority: 110, timeout: 0.5}
       vr:     {priority: 100, timeout: 0.2}
       groot:  {priority: 50, timeout: 0.2}
