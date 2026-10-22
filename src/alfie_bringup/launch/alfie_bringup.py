@@ -346,6 +346,8 @@ def generate_launch_description():
             namespace='alfie',
             executable='agent_node',
             name='agent_node',
+            # Whose facts a first-person question ("what's my...") loads.
+            parameters=[{'primary_user': 'Alan'}],
             output='screen',
             emulate_tty=True,
             sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
