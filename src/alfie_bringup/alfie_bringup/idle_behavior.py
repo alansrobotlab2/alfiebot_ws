@@ -104,6 +104,10 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('doa_held_sec', 8.0)  # unchanged this long before speech: stale
         self.declare_parameter('speech_gate', 'asr')     # 'asr' (vad/speech) | 'array' (XVF VAD)
         self.declare_parameter('doa_onset_delay_sec', 0.4)  # DOA lags a new speaker
+        # From a long-held estimate the array can take ~1 s to converge: longer
+        # than a bare "hey alfie". Keep taking samples the array itself flags as
+        # speech for this long after vad/speech drops.
+        self.declare_parameter('doa_tail_sec', 2.0)
         self.declare_parameter('doa_min_samples', 3)     # consecutive speech samples (10 Hz)
         self.declare_parameter('doa_max_spread_deg', 25.0)
         self.declare_parameter('doa_deadband_deg', 15.0)
@@ -204,6 +208,7 @@ class IdleBehaviorNode(Node):
         self.doa_held_sec = float(g('doa_held_sec').value)
         self.speech_gate = str(g('speech_gate').value)
         self.doa_onset_delay = float(g('doa_onset_delay_sec').value)
+        self.doa_tail = float(g('doa_tail_sec').value)
         self.face_enabled = bool(g('face_enabled').value)
         self.face_prompt = str(g('face_prompt').value)
         self.face_backend = str(g('face_backend').value)
@@ -282,6 +287,8 @@ class IdleBehaviorNode(Node):
         self.doa_stale_angle = None  # raw reading held from before the last turn
         self.doa_onset_angle = None  # long-held raw reading at the last speech onset
         self.doa_changed_t = 0.0     # last time the raw reading changed
+        self.doa_why = collections.Counter()  # rejections this utterance (for the log)
+        self.doa_seen = []                    # raw readings this utterance (for the log)
         self.speaking_until = 0.0
         self.asr_speech_since = None  # vad/speech onset time while speech is on
         self.asr_speech_ended = 0.0   # last vad/speech falling edge
@@ -391,8 +398,9 @@ class IdleBehaviorNode(Node):
     def _speech(self, msg: Doa, now: float) -> bool:
         if self.speech_gate == 'array':
             return msg.speech_detected
-        return (self.asr_speech_since is not None
-                and now - self.asr_speech_since > self.doa_onset_delay)
+        if self.asr_speech_since is None:
+            return msg.speech_detected and now - self.asr_speech_ended < self.doa_tail
+        return now - self.asr_speech_since > self.doa_onset_delay
 
     def _on_tts_level(self, msg: Float32) -> None:
         # ~42 Hz: one RMS value per 512-sample window, published just before play.
@@ -473,6 +481,29 @@ class IdleBehaviorNode(Node):
         alt = yaw - math.copysign(2.0 * math.pi, yaw)
         return _clamp(alt, lo, hi)
 
+    def _doa_reject(self, msg: Doa, now: float):
+        """Why this DOA sample can't be used, or None if it can."""
+        if self.doa_stale_angle is not None:
+            if abs(_wrap(math.radians(msg.angle - self.doa_stale_angle))) <= self.doa_fresh:
+                return 'stale'  # still the estimate from before the turn
+            self.doa_stale_angle = None
+        if self.doa_onset_angle is not None:
+            if msg.angle == self.doa_onset_angle:
+                return 'held'  # unchanged since speech began: still the held estimate
+            self.doa_onset_angle = None
+        if not self._speech(msg, now):
+            return 'no_speech'
+        if now < self.speaking_until:
+            return 'speaking'
+        if self._outranked(now):
+            return 'outranked'
+        # A turn just commanded may not have started moving yet: the head looks
+        # still, but the array is about to swing and its next samples are junk.
+        if (self.cur is None or abs(self.cur[0] - self.target[0]) > self.settle_tol
+                or not self._yaw_still(now)):
+            return 'moving'
+        return None
+
     def _on_doa(self, msg: Doa) -> None:
         now = self._now()
         # The first reading after startup is whatever the chip was holding: leave
@@ -480,19 +511,13 @@ class IdleBehaviorNode(Node):
         if self.last_doa_angle is not None and msg.angle != self.last_doa_angle:
             self.doa_changed_t = now
         self.last_doa_angle = msg.angle
-        if self.doa_stale_angle is not None:
-            if abs(_wrap(math.radians(msg.angle - self.doa_stale_angle))) <= self.doa_fresh:
-                self.doa_buf.clear()
-                return  # still the estimate from before the turn
-            self.doa_stale_angle = None
-        if self.doa_onset_angle is not None:
-            if msg.angle == self.doa_onset_angle:
-                self.doa_buf.clear()
-                return  # unchanged since speech began: still the held estimate
-            self.doa_onset_angle = None
-        if (not self._speech(msg, now) or now < self.speaking_until
-                or self._outranked(now) or not self._yaw_still(now)):
+        why = self._doa_reject(msg, now)
+        if why is not None:
             self.doa_buf.clear()
+            if self.asr_speech_since is not None or now - self.asr_speech_ended < self.doa_tail:
+                self.doa_why[why] += 1
+                if not self.doa_seen or self.doa_seen[-1] != msg.angle:
+                    self.doa_seen.append(msg.angle)
             return
         rel = _wrap(self.doa_sign * (math.radians(msg.angle) - self.doa_offset))
         self.doa_buf.append(rel)
@@ -501,8 +526,11 @@ class IdleBehaviorNode(Node):
         buf = self.doa_buf[-self.doa_min_samples:]
         mean = math.atan2(sum(math.sin(a) for a in buf), sum(math.cos(a) for a in buf))
         if max(abs(_wrap(a - mean)) for a in buf) > self.doa_max_spread:
+            self.doa_why['spread'] += 1
             return  # inconsistent: wait for a steadier run of samples
         self.doa_buf.clear()
+        self.doa_why.clear()
+        self.doa_seen.clear()
         self.last_attention = now
         if abs(mean) < self.doa_deadband:
             return  # already facing the speaker
@@ -737,6 +765,12 @@ class IdleBehaviorNode(Node):
             self._set_target(self.target[0], self.neutral_pitch, now)
         if now - self.last_attention > self.attend_timeout:
             self._set_target(0.0, self.neutral_pitch, now)
+        if (self.doa_why and self.asr_speech_since is None
+                and now - self.asr_speech_ended > self.doa_tail):
+            self.get_logger().info(
+                f'DOA: no turn; rejected {dict(self.doa_why)}, readings {self.doa_seen}')
+            self.doa_why.clear()
+            self.doa_seen.clear()
         listening = now >= self.speaking_until and (
             self.asr_speech_since is not None
             or now - self.asr_speech_ended < self.listen_roll_hold)
