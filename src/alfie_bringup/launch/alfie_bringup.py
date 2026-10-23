@@ -377,8 +377,9 @@ def generate_launch_description():
                 'source_height': 600,  # Max resolution for ELP H120
                 'output_width': 352,   # Output resolution width (GR00T model input)
                 'output_height': 256,  # Output resolution height
-                # 10 fps = training_fps; capture_training.py sets the same rate for recording
-                'framerate': 10,
+                # 30 fps everywhere, including GR00T recording; rosbag_to_groot
+                # and the live client take the latest frame at training_fps (10)
+                'framerate': 30,
                 'jpeg_quality': 70,
                 'use_hardware_accel': True,
 
@@ -386,7 +387,8 @@ def generate_launch_description():
                 'camera_frame_id': 'stereo_camera_link',
 
                 # Auto gain on top of the camera's AE (exposure caps at the
-                # 100ms frame period). Gain floor 120 = training-set setting.
+                # frame period: 33ms @ 30fps, 100ms @ 10fps). Gain floor 120 =
+                # training-set setting.
                 'auto_gain': True,
                 'auto_gain_target': 90,
                 'auto_gain_min': 120,

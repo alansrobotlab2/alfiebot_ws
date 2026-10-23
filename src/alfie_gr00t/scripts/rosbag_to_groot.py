@@ -358,6 +358,15 @@ class RosbagToGrootConverter:
                 return msgs[idx-1][1]
             return msgs[idx][1]
 
+        # Images: most recent frame at or before the target time, matching the
+        # live client, which always uses the latest published frame. The camera
+        # runs faster than --fps, so this never looks ahead in time.
+        def find_latest(msgs, target_ts):
+            if not msgs:
+                return None
+            idx = np.searchsorted([m[0] for m in msgs], target_ts, side='right')
+            return msgs[max(idx - 1, 0)][1]
+
         # Interpolate data to target timestamps
         reference_time_ns = target_times_ns[0]
 
@@ -376,9 +385,9 @@ class RosbagToGrootConverter:
             episode.actions.append(action)
             episode.timestamps.append((ts_ns - reference_time_ns) / 1e9)
 
-            # Get nearest images for each camera
+            # Get latest image for each camera
             for cam_key, cam_msgs in image_msgs.items():
-                img = find_nearest([(m[0], m[1]) for m in cam_msgs], ts_ns)
+                img = find_latest(cam_msgs, ts_ns)
                 if img is not None:
                     episode.images[cam_key].append(((ts_ns - reference_time_ns) / 1e9, img))
 

@@ -2,13 +2,14 @@
 """
 Capture Training Launch File
 
-Launches data collection for capturing training demonstrations and sets the
-camera framerate to 10fps (matches rosbag_to_groot --fps). Requires alfie_bringup to be running, which already
-provides the camera and the VR teleop node.
+Launches data collection for capturing training demonstrations. Requires
+alfie_bringup to be running, which already provides the camera and the VR
+teleop node. The camera stays at its bringup rate (30fps); rosbag_to_groot
+resamples to --fps by taking the most recent frame at each sample time.
 """
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, ExecuteProcess, TimerAction
+from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 import os
@@ -28,20 +29,6 @@ def generate_launch_description():
         )
     )
 
-    # Set camera framerate to 10fps after a short delay (to ensure node is running)
-    # The camera node should be already running from alfie_bringup
-    set_framerate = TimerAction(
-        period=2.0,  # Wait 2 seconds for nodes to start
-        actions=[
-            ExecuteProcess(
-                cmd=['ros2', 'param', 'set', '/alfie/stereo_camera', 'framerate', '10'],
-                output='screen',
-                shell=False
-            )
-        ]
-    )
-
     return LaunchDescription([
         data_collection_launch,
-        set_framerate,
     ])

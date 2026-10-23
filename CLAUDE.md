@@ -116,7 +116,7 @@ Set `debug_save_images: true` in `config/groot_client.yaml` to save observation 
  - `scripts/groot_open_loop_eval.py` — Replays training episodes through the server (uses torchcodec + raw RGB ZMQ path) to verify model accuracy independent of live robot.
 
 ## Current Execution Parameters (groot_client.yaml)
- - `training_fps=10` (100ms per action step; must match `rosbag_to_groot.py --fps` and camera framerate)
+ - `training_fps=10` (100ms per action step; must match `rosbag_to_groot.py --fps`. The camera runs at 30fps; the converter and the live client both take the latest frame at or before each step)
  - `action_chunk_size=16, n_action_steps=8, latency_skip=3, inference_trigger_step=8`
  - Execution window: actions[3:11] = 8 steps = 800ms per chunk
  - Overflow: actions[11:16] bridges 500ms, covering the ~350ms inference RTT
