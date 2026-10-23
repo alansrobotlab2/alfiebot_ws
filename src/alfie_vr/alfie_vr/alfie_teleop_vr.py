@@ -11,8 +11,9 @@ hand control to other sources (GR00T, idle, joy) the rest of the time:
   left/right arm
             claimed on first grip (or Y reset), seeded from the measured pose;
             held at the last target on link loss (hold_timeout)
-  back      claimed on first A/B press, seeded from the measured height; held
-            on link loss (hold_timeout)
+  back      claimed on first A/B press, seeded from the measured height; each
+            press steps to the next BACK_PRESETS height; held on link loss
+            (hold_timeout)
 Published joint targets are rate-limited (max_joint_speed), so no claim, reset
 or IK jump can snap a joint.
 """
@@ -44,8 +45,9 @@ ARM_OFFSET = {'left': 0, 'right': 6}
 HEAD_YAW, HEAD_PITCH, HEAD_ROLL = 12, 13, 14
 
 BACK_MIN = 0.000
-BACK_MAX = 0.390
-BACK_MAX_RATE = 0.02     # m/s while A/B held
+BACK_MAX = 0.350         # picobackdriver ACTUATOR_MAX_POSITION (measured stroke)
+BACK_PRESETS = (0.0, 0.15, 0.25, 0.35)   # heights (m) A/B step through
+BACK_PRESET_TOL = 0.01   # within this of a preset counts as at it
 
 # Headset yaw beyond this (deg) is ambiguous (operator turned around); hold yaw.
 HEAD_YAW_WRAP_GUARD_DEG = 150.0
@@ -53,6 +55,15 @@ HEAD_YAW_WRAP_GUARD_DEG = 150.0
 
 def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
+
+
+def _next_back_preset(current, up):
+    """Next BACK_PRESETS height above (up) or below current; stays put at the ends."""
+    if up:
+        above = [p for p in BACK_PRESETS if p > current + BACK_PRESET_TOL]
+        return min(above) if above else current
+    below = [p for p in BACK_PRESETS if p < current - BACK_PRESET_TOL]
+    return max(below) if below else current
 
 
 def _button(buttons, name):
@@ -101,8 +112,8 @@ class AlfieTeleopVRNode(Node):
             'head_yaw_sign', 'head_pitch_sign', 'head_roll_sign',
             'max_linear_vel', 'max_angular_vel'}
         self.declare_parameter(
-            'back_height', 0.390,
-            ParameterDescriptor(description='Set to command a back height in meters (0.0 to 0.390)'))
+            'back_height', 0.350,
+            ParameterDescriptor(description='Set to command a back height in meters (0.0 to 0.350)'))
         self.add_on_set_parameters_callback(self._on_parameter_change)
 
         self.state_callback_group = ReentrantCallbackGroup()
@@ -160,6 +171,8 @@ class AlfieTeleopVRNode(Node):
         self.left_y_button_pressed = False
         self.is_recording = False
         self.right_thumbstick_pressed = False
+        self.right_a_button_pressed = False
+        self.right_b_button_pressed = False
 
         qos_recording = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.recording_start_pub = self.create_publisher(Bool, '/alfie/recording/start', qos_recording)
@@ -438,13 +451,16 @@ class AlfieTeleopVRNode(Node):
             az = -float(stick.get('x', 0.0)) * self.max_angular_vel  # ROS +z = CCW (left)
             buttons = meta.get('buttons') or {}
 
-            # B raises, A lowers the back
+            # Each B press raises, each A press lowers the back one preset
             button_a, button_b = _button(buttons, 'a'), _button(buttons, 'b')
-            if button_a or button_b:
+            press_a = button_a and not self.right_a_button_pressed
+            press_b = button_b and not self.right_b_button_pressed
+            if press_a != press_b:
                 self._claim_back(state)
-                step = BACK_MAX_RATE * dt * (1.0 if button_b else -1.0)
-                self.back_target = _clamp(self.back_target + step, BACK_MIN, BACK_MAX)
-                self.debug_log(f'Back height: {self.back_target:.3f}')
+                self.back_target = _next_back_preset(self.back_target, up=press_b)
+                self.get_logger().info(f'Back height: {self.back_target:.3f}')
+            self.right_a_button_pressed = button_a
+            self.right_b_button_pressed = button_b
 
             thumbstick_button = bool(buttons.get('thumbstick', False))
             if thumbstick_button and not self.right_thumbstick_pressed:

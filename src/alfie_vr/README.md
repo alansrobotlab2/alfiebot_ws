@@ -54,8 +54,8 @@ The headset orientation (relative to where you faced when the VR session started
 |-------|----------|
 | **Thumbstick X** | Rotate robot left/right |
 | **Thumbstick press** | Toggle episode recording |
-| **A Button** | Lower back height |
-| **B Button** | Raise back height |
+| **A Button** | Lower back to the next preset (0.35 → 0.25 → 0.15 → 0.0 m) |
+| **B Button** | Raise back to the next preset (0.0 → 0.15 → 0.25 → 0.35 m) |
 | **Grip Button (hold)** | Enable right arm tracking |
 
 ### Arm Control (while grip held, either arm)
@@ -87,7 +87,7 @@ This lets you reposition your hand in VR space without moving the robot arm.
 | `head_*_multiplier` | 2.0 | Headset → head gain |
 | `head_yaw_sign` / `head_pitch_sign` / `head_roll_sign` | -1.0 | Headset → servo direction (servo +yaw turns right, +pitch looks down) |
 | `max_linear_vel` / `max_angular_vel` | 0.15 / 0.5 | Joystick velocity scaling (accel limits are in command_mux) |
-| `back_height` | — | Set at runtime to command a back height (0.0–0.390 m) |
+| `back_height` | — | Set at runtime to command a back height (0.0–0.350 m) |
 
 ## Debug Visualizer
 
