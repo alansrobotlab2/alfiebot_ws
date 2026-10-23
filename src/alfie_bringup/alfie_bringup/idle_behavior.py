@@ -107,6 +107,9 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('doa_min_samples', 3)     # consecutive speech samples (10 Hz)
         self.declare_parameter('doa_max_spread_deg', 25.0)
         self.declare_parameter('doa_deadband_deg', 15.0)
+        # Look up this much (from neutral) on a DOA turn: the speaker is usually
+        # standing, and a level gaze can miss the face to lock onto.
+        self.declare_parameter('doa_pitch_up_deg', 15.0)
         self.declare_parameter('speaking_holdoff_sec', 0.7)  # ignore DOA after own TTS
         # attend: faces
         self.declare_parameter('face_enabled', True)
@@ -195,6 +198,7 @@ class IdleBehaviorNode(Node):
         self.doa_min_samples = max(1, int(g('doa_min_samples').value))
         self.doa_max_spread = math.radians(float(g('doa_max_spread_deg').value))
         self.doa_deadband = math.radians(float(g('doa_deadband_deg').value))
+        self.doa_pitch_up = math.radians(float(g('doa_pitch_up_deg').value))
         self.speaking_holdoff = float(g('speaking_holdoff_sec').value)
         self.doa_fresh = math.radians(float(g('doa_fresh_deg').value))
         self.doa_held_sec = float(g('doa_held_sec').value)
@@ -231,6 +235,7 @@ class IdleBehaviorNode(Node):
         self.speaker_lock = float(g('speaker_lock_sec').value)
         self.speaker_match = math.radians(float(g('speaker_match_deg').value))
         self.speaker_yaw = None   # yaw target of the current DOA speaker
+        self.doa_look_until = 0.0  # keep the raised DOA pitch until then if no face
         self.speaker_until = 0.0
         self.attend_timeout = float(g('attend_timeout_sec').value)
         self.listen_roll = float(g('listen_roll_rad').value)
@@ -508,9 +513,12 @@ class IdleBehaviorNode(Node):
         self.speaker_yaw = _clamp(yaw, *self.yaw_lim)
         # Plus travel time: an unwind can take ~4 s, and faces swept past on the
         # way must not grab the head.
-        self.speaker_until = now + self.speaker_lock + abs(yaw - self.cur[0]) / self.attend_speed
+        travel = abs(yaw - self.cur[0]) / self.attend_speed
+        self.speaker_until = now + self.speaker_lock + travel
+        # Else the face-lost reset drops the raised pitch on the next tick.
+        self.doa_look_until = now + self.face_lost + travel
         self.follow_until = 0.0  # stop following the old face; speaker lock picks up
-        self._set_target(yaw, self.target[1], now)
+        self._set_target(yaw, self.neutral_pitch + self.pitch_sign * self.doa_pitch_up, now)
 
     # ---- faces (NanoOWL) ----------------------------------------------------
     def _pose_at(self, t: float):
@@ -725,7 +733,7 @@ class IdleBehaviorNode(Node):
             self._maybe_request_face(now)
             if now < self.follow_until:
                 self._follow_target(now)
-        if now - self.last_face > self.face_lost:
+        if now - self.last_face > self.face_lost and now >= self.doa_look_until:
             self._set_target(self.target[0], self.neutral_pitch, now)
         if now - self.last_attention > self.attend_timeout:
             self._set_target(0.0, self.neutral_pitch, now)
