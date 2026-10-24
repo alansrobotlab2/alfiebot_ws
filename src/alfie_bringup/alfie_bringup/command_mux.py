@@ -54,6 +54,11 @@ from std_srvs.srv import Trigger
 
 NUM_ARM_SERVOS = 6
 NUM_HEAD_SERVOS = 3
+ARM_GRIPPER_INDEX = 5   # ArmCmd.joint_cmd order: ..., wrist_roll, gripper
+
+# ServoCmd.target_torque is the raw STS torque-limit register (0..1000); the
+# firmware turns 0 into full torque.
+SERVO_TORQUE_FULL = 1000.0
 
 # Servo slices in RobotLowState.servo_state (for e-stop hold-at-current-pose)
 LEFT_ARM_SLICE = slice(0, NUM_ARM_SERVOS)                                  # 0-5
@@ -140,6 +145,9 @@ class CommandMuxNode(Node):
         self.max_servo_speed = float(self._p('max_servo_speed', 6.0))
         self.max_servo_accel = float(self._p('max_servo_accel', 0.0))
         self.clamp_zero_speed = bool(self._p('clamp_zero_speed', False))
+        self.arm_max_torque = float(self._p('arm_max_torque', SERVO_TORQUE_FULL))
+        self.gripper_max_torque = float(self._p('gripper_max_torque', 300.0))
+        self.head_max_torque = float(self._p('head_max_torque', 500.0))
         self.estop_hold = bool(self._p('estop_hold', True))
         self.estop_eye_pwm = int(self._p('estop_eye_pwm', 1))
         self.estop_eye_flash_hz = float(self._p('estop_eye_flash_hz', 1.0))
@@ -294,6 +302,29 @@ class CommandMuxNode(Node):
                 s.target_acceleration = ma
         return servos
 
+    @staticmethod
+    def _cap_torque(s: ServoCmd, cap: float) -> None:
+        """Bound one torque limit; 0 (firmware: full) becomes the cap. <= 0 = no cap."""
+        if cap > 0.0 and (s.target_torque <= 0.0 or s.target_torque > cap):
+            s.target_torque = cap
+
+    def _cap_arm_torque(self, servos: List[ServoCmd]) -> List[ServoCmd]:
+        """Bound each arm joint's torque limit.
+
+        The gripper cap keeps a squeeze below the servo's own overload threshold
+        (EEPROM overloadtorque, 80%), so it holds an object instead of tripping
+        overload -> auto e-stop.
+        """
+        for i, s in enumerate(servos):
+            self._cap_torque(s, self.gripper_max_torque if i == ARM_GRIPPER_INDEX
+                             else self.arm_max_torque)
+        return servos
+
+    def _cap_head_torque(self, servos: List[ServoCmd]) -> List[ServoCmd]:
+        for s in servos:
+            self._cap_torque(s, self.head_max_torque)
+        return servos
+
     def _disabled_servo(self) -> ServoCmd:
         s = ServoCmd()
         s.enabled = False
@@ -329,7 +360,7 @@ class CommandMuxNode(Node):
         for name in ('left_arm', 'right_arm'):
             w = self._winner(name)
             if w is not None:
-                self._clamp_servos(w.msg.joint_cmd)
+                self._cap_arm_torque(self._clamp_servos(w.msg.joint_cmd))
                 self.pub[name].publish(w.msg)
 
         # Back: forward the winner as-is.
@@ -393,7 +424,7 @@ class CommandMuxNode(Node):
             return  # nothing fresh for the head module -> starve
         out = HeadCmd()
         if head_win is not None:
-            out.servos = self._clamp_servos(list(head_win.msg.servos))
+            out.servos = self._cap_head_torque(self._clamp_servos(list(head_win.msg.servos)))
         else:
             # eyes-only: keep head servos torque-off while eyes animate
             out.servos = [self._disabled_servo() for _ in range(NUM_HEAD_SERVOS)]
@@ -454,13 +485,15 @@ class CommandMuxNode(Node):
         hold = self.estop_hold and self.state is not None
         if hold:
             st = self.state
-            la = ArmCmd(); la.joint_cmd = self._hold_servos(st.servo_state[LEFT_ARM_SLICE])
-            ra = ArmCmd(); ra.joint_cmd = self._hold_servos(st.servo_state[RIGHT_ARM_SLICE])
+            la = ArmCmd(); la.joint_cmd = self._cap_arm_torque(
+                self._hold_servos(st.servo_state[LEFT_ARM_SLICE]))
+            ra = ArmCmd(); ra.joint_cmd = self._cap_arm_torque(
+                self._hold_servos(st.servo_state[RIGHT_ARM_SLICE]))
             self.pub['left_arm'].publish(la)
             self.pub['right_arm'].publish(ra)
 
             head = HeadCmd()
-            head.servos = self._hold_servos(st.servo_state[HEAD_SLICE])
+            head.servos = self._cap_head_torque(self._hold_servos(st.servo_state[HEAD_SLICE]))
             head.eye_pwm = self._estop_eye_pwm()
             self.pub['head'].publish(head)
 

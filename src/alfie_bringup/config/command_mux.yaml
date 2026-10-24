@@ -27,6 +27,14 @@
     # Servo APIs treat target_speed=0 as "unlimited". Leave false to preserve
     # that (VR sends 0); set true to also bound 0 -> max_servo_speed.
     clamp_zero_speed: false
+    # Torque-limit cap on every arm servo command (raw STS register, 0..1000;
+    # 0 from a source, which the firmware reads as full, becomes the cap).
+    # The gripper cap must stay well under the servo's overload threshold
+    # (EEPROM overloadtorque = 80%) so a squeeze holds instead of tripping
+    # overload -> auto e-stop. <= 0 disables that cap.
+    arm_max_torque: 1000.0
+    gripper_max_torque: 300.0     # overrides the grippers' EEPROM max torque (0x10, 200)
+    head_max_torque: 500.0         # same cap on the head servos
 
     # E-stop behavior
     estop_hold: true               # true = hold at current pose; false = limp (torque off)

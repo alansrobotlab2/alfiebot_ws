@@ -18,7 +18,7 @@
     # Servo torque limit, 0..1000 (= 0..100% locked-rotor; 0 = firmware default,
     # full). Reduced on the arms so a caught hand stalls the servo and trips the
     # stuck check instead of forcing through. Raise if a joint can't lift itself.
-    head_torque: 0.0
+    head_torque: 500.0
     arm_torque: 500.0
     gripper_torque: 300.0
 

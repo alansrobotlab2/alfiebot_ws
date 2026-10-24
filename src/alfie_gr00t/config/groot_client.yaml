@@ -163,9 +163,12 @@
     servo_accel_arms: 5.0          # rad/s²
     servo_accel_grippers: 8.0      # rad/s²
     servo_accel_head: 3.0          # rad/s²
-    servo_torque_arms: 0.5         # 0-1 fraction of max
-    servo_torque_grippers: 0.4
-    servo_torque_head: 0.3
+    # Torque limit, 0-1 fraction of max (scaled to the 0..1000 servo register).
+    # Grippers must stay well under the servo's 0.8 overload threshold so a
+    # squeeze holds instead of tripping auto e-stop; command_mux also caps them.
+    servo_torque_arms: 1.0
+    servo_torque_grippers: 0.3
+    servo_torque_head: 0.5
 
     # ==========================================================================
     # Real-Time Chunking (RTC)

@@ -21,6 +21,11 @@ from alfie_msgs.msg import ArmCmd, BackCmd, HeadCmd, RobotLowCmd, ServoCmd
 from ..utils.safety import SafetyMonitor
 
 
+# ServoCmd.target_torque is the raw STS torque-limit register (0..1000); the
+# torque params here are 0-1 fractions, scaled on the way out. The firmware
+# reads 0 as full torque, so an unscaled fraction silently became 100%.
+SERVO_TORQUE_FULL = 1000.0
+
 # Per-servo config: (speed rad/s, acceleration rad/s², torque 0-1)
 # Indexed by servo number (0-14)
 DEFAULT_SERVO_CONFIG = {
@@ -130,9 +135,9 @@ class ActionPublisher:
         servo_accel_arms: float = 5.0,
         servo_accel_grippers: float = 8.0,
         servo_accel_head: float = 3.0,
-        servo_torque_arms: float = 0.5,
-        servo_torque_grippers: float = 0.4,
-        servo_torque_head: float = 0.3,
+        servo_torque_arms: float = 1.0,
+        servo_torque_grippers: float = 0.3,
+        servo_torque_head: float = 0.5,
     ):
         self.node = node
         self.safety = safety or SafetyMonitor()
@@ -405,7 +410,7 @@ class ActionPublisher:
         cmd.target_location = position
         cmd.target_speed = speed
         cmd.target_acceleration = accel
-        cmd.target_torque = torque
+        cmd.target_torque = float(torque) * SERVO_TORQUE_FULL
         return cmd
 
     def _build_robot_low_cmd(self, action: np.ndarray) -> RobotLowCmd:

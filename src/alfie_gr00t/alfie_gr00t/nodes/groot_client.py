@@ -654,9 +654,9 @@ class GrootClientNode(Node):
         self.declare_parameter('servo_accel_arms', 5.0)
         self.declare_parameter('servo_accel_grippers', 8.0)
         self.declare_parameter('servo_accel_head', 3.0)
-        self.declare_parameter('servo_torque_arms', 0.5)
-        self.declare_parameter('servo_torque_grippers', 0.4)
-        self.declare_parameter('servo_torque_head', 0.3)
+        self.declare_parameter('servo_torque_arms', 1.0)
+        self.declare_parameter('servo_torque_grippers', 0.3)
+        self.declare_parameter('servo_torque_head', 0.5)
 
     def _activate_callback(self, msg: Bool):
         """Handle activation/deactivation requests."""
