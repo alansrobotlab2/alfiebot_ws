@@ -15,7 +15,7 @@ No ROS2 dependency — runs standalone against the ZMQ inference server.
 
 Usage:
     python ensemble_characterization.py \
-        --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
+        --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
         --episode-index 3 \
         --host 127.0.0.1 --port 5555 \
         --duration-sec 4
@@ -65,7 +65,7 @@ def collect_horizons(
     task: str,
     num_frames: int,
     rtc: bool = False,
-    rtc_freeze_steps: int = 4,
+    rtc_overlap_steps: int = 6,
 ) -> list[HorizonEntry]:
     """Collect horizons at realistic cadence.
 
@@ -73,28 +73,35 @@ def collect_horizons(
     frames that elapsed during the inference RTT before firing the next.
     This simulates what the robot would actually experience.
 
-    When rtc=True, sends prev_actions (tail of previous chunk) with each
-    inference to enable server-side RTC freeze+inpaint.
+    When rtc=True, sends the committed future with each inference: the
+    previous chunk's actions for the frames after this observation (execution
+    has advanced `frames_elapsed` steps into it), with the steps that will be
+    executed during the next RTT marked frozen. See core/rtc_prefix.py.
 
     Returns list of (obs_frame, (16,22) array, latency_ms).
     """
     entries: list[HorizonEntry] = []
     t = 0
     prev_horizon: np.ndarray | None = None
+    prev_advance = 0  # action steps executed from prev_horizon before this observation
 
     while t < num_frames:
         images = compressed_frames[t] if t < len(compressed_frames) else {}
 
-        # RTC: send tail of previous chunk as freeze context
+        # RTC: committed future = old chunk from where execution has reached;
+        # the next RTT executes about prev_advance more of them (frozen).
         prev_actions = None
+        frozen = None
         if rtc and prev_horizon is not None:
-            # Send last rtc_freeze_steps actions from previous chunk
-            prev_actions = prev_horizon[-rtc_freeze_steps:]
+            prev_actions = prev_horizon[prev_advance:prev_advance + rtc_overlap_steps]
+            frozen = min(prev_advance, len(prev_actions))
+            if len(prev_actions) == 0:
+                prev_actions, frozen = None, None
 
         t0 = time.monotonic()
         response = client.send_observation(
             images=images, state=states[t], language=task,
-            prev_actions=prev_actions,
+            prev_actions=prev_actions, rtc_frozen_steps=frozen,
         )
         latency_ms = (time.monotonic() - t0) * 1000
 
@@ -112,6 +119,7 @@ def collect_horizons(
                 # Advance by however many action frames elapsed during inference
                 frames_elapsed = max(1, round(latency_ms / ACTION_PERIOD_MS))
                 t += frames_elapsed
+                prev_advance = frames_elapsed
         else:
             # Timeout or error — retry same frame (don't skip ahead)
             logger.warning(f'  inference failed at obs_frame={t}, retrying...')
@@ -360,7 +368,7 @@ def run(args):
     print(f'  Episode:       {episode_index}')
     print(f'  Duration:      {args.duration_sec}s ({num_requested} frames)')
     print(f'  Task:          "{args.task}"')
-    print(f'  RTC:           {"ON (freeze={})".format(args.rtc_freeze_steps) if args.rtc else "OFF"}')
+    print(f'  RTC:           {"ON (overlap={})".format(args.rtc_overlap_steps) if args.rtc else "OFF"}')
     print(f'  Output:        {output_dir}/')
     print('=' * 60)
     print()
@@ -405,11 +413,11 @@ def run(args):
             client.close()
             sys.exit(1)
 
-        rtc_msg = ' with RTC freeze+inpaint' if args.rtc else ''
+        rtc_msg = ' with RTC (committed prefix)' if args.rtc else ''
         logger.info(f'Running inference at realistic cadence over {num_frames} frames{rtc_msg}...')
         entries = collect_horizons(
             client, compressed_frames, states[:num_frames], args.task, num_frames,
-            rtc=args.rtc, rtc_freeze_steps=args.rtc_freeze_steps,
+            rtc=args.rtc, rtc_overlap_steps=args.rtc_overlap_steps,
         )
         client.close()
 
@@ -462,9 +470,9 @@ def parse_args():
     parser.add_argument('--load-horizons', action='store_true',
                         help='Reuse cached .npz if available')
     parser.add_argument('--rtc', action='store_true',
-                        help='Send prev_actions for RTC freeze+inpaint (server must have --rtc)')
-    parser.add_argument('--rtc-freeze-steps', type=int, default=4,
-                        help='Number of freeze steps for RTC (default: %(default)s)')
+                        help='Send the committed prefix for RTC (server must run with --rtc)')
+    parser.add_argument('--rtc-overlap-steps', type=int, default=6,
+                        help='Committed actions sent per inference (RTC prefix length)')
     parser.add_argument('--verbose', '-v', action='store_true')
     return parser.parse_args()
 

@@ -42,6 +42,7 @@ from ..core.action_interpolator import ActionInterpolator
 from ..core.chunk_buffer import ChunkBuffer, TimestampedChunk
 from ..core.observation_bridge import Observation, ObservationBridge
 from ..core.rate_limited_interpolator import RateLimitedInterpolator
+from ..core.rtc_prefix import buffer_prefix, classic_prefix, frozen_steps
 from ..core.zmq_async_client import ZMQAsyncClient
 from ..core.zmq_client import ZMQClient, build_server_address, DEFAULT_IPC_PATH
 from ..utils.safety import SafetyMonitor
@@ -119,6 +120,19 @@ class GrootClientNode(Node):
         self.smoothing_strategy = self.get_parameter('smoothing_strategy').value
         self.smoothing_decay_m = self.get_parameter('smoothing_decay_m').value
         self.max_buffer_chunks = self.get_parameter('max_buffer_chunks').value
+
+        # Real-Time Chunking: send the committed future with every observation
+        # so the server inpaints the new chunk to agree with it (core/rtc_prefix.py).
+        self.rtc_enabled = self.get_parameter('rtc_enabled').value
+        self.rtc_overlap_steps = int(self.get_parameter('rtc_overlap_steps').value)
+        self._rtc_frozen = frozen_steps(
+            self.latency_skip, 0 if self.continuous_inference else self.chunk_blend_steps)
+        if self.rtc_enabled and self.rtc_overlap_steps <= self._rtc_frozen:
+            self.get_logger().warn(
+                f'rtc_overlap_steps={self.rtc_overlap_steps} must exceed the frozen '
+                f'steps ({self._rtc_frozen}); using {self._rtc_frozen + 2}')
+            self.rtc_overlap_steps = self._rtc_frozen + 2
+        self._rtc_sent = 0
 
         # Post-ensembling filter and interpolation
         self._smoothing_method = self.get_parameter('smoothing_method').value
@@ -429,6 +443,9 @@ class GrootClientNode(Node):
         self.get_logger().info(f'  Re-planning Rate:     {replan_hz:.2f} Hz')
 
         self.get_logger().info(f'  Chunk Blend Steps:    {self.chunk_blend_steps}')
+        self.get_logger().info(f'  RTC:                  {"on" if self.rtc_enabled else "off"}'
+                               + (f' (overlap={self.rtc_overlap_steps}, frozen={self._rtc_frozen})'
+                                  if self.rtc_enabled else ''))
         self.get_logger().info(f'  Action Step Period:   {self.action_step_period * 1000:.1f} ms ({self.training_fps} FPS)')
         if self.continuous_inference:
             self.get_logger().info(f'  --- Continuous Inference (ACTIVE) ---')
@@ -589,6 +606,12 @@ class GrootClientNode(Node):
 
         # Blend joints (not base) over N steps at chunk transitions.
         self.declare_parameter('chunk_blend_steps', 2)
+
+        # Real-Time Chunking (server must run with --rtc and >= 4 denoising steps).
+        # rtc_overlap_steps: committed actions sent per observation; the first
+        # latency_skip (+1 with blending) are frozen, the rest ramp to the new plan.
+        self.declare_parameter('rtc_enabled', False)
+        self.declare_parameter('rtc_overlap_steps', 6)
 
         # Debug: save observation images to /tmp/groot_debug_images/
         self.declare_parameter('debug_save_images', False)
@@ -851,11 +874,14 @@ class GrootClientNode(Node):
                 time.sleep(0.01)
                 continue
 
-            # Send observation to server (blocking ~280ms RTT)
+            # Send observation to server (blocking RTT), with the RTC prefix
+            prefix, frozen = self._rtc_prefix(time.monotonic())
             response = self.zmq_client.send_observation(
                 images=obs.images,
                 state=obs.state,
                 language=self.task_description,
+                prev_actions=prefix,
+                rtc_frozen_steps=frozen,
             )
 
             if response is None:
@@ -1001,16 +1027,19 @@ class GrootClientNode(Node):
                     time.sleep(min(trigger_time - elapsed, 0.01))
                     continue
 
-            # Capture observation and push (non-blocking)
+            # Capture observation and push (non-blocking), with the RTC prefix
             obs = self.observation_bridge.get_latest_observation()
             if obs is None or not obs.valid:
                 time.sleep(0.01)
                 continue
 
+            prefix, frozen = self._rtc_prefix(time.monotonic())
             obs_id = self.async_client.push_observation(
                 images=obs.images,
                 state=obs.state,
                 language=self.task_description,
+                prev_actions=prefix,
+                rtc_frozen_steps=frozen,
             )
 
             if obs_id >= 0:
@@ -1094,10 +1123,13 @@ class GrootClientNode(Node):
             push_time = time.monotonic()
             push_frame = self._time_to_frame(push_time)
 
+            prefix, frozen = self._rtc_prefix(push_time, push_frame)
             obs_id = self.async_client.push_observation(
                 images=obs.images,
                 state=obs.state,
                 language=self.task_description,
+                prev_actions=prefix,
+                rtc_frozen_steps=frozen,
             )
 
             if obs_id >= 0:
@@ -1137,11 +1169,14 @@ class GrootClientNode(Node):
             obs_time = time.monotonic()
             obs_frame = self._time_to_frame(obs_time)
 
-            # Blocking inference call (~280ms RTT)
+            # Blocking inference call, with the RTC prefix
+            prefix, frozen = self._rtc_prefix(obs_time, obs_frame)
             response = self.zmq_client.send_observation(
                 images=obs.images,
                 state=obs.state,
                 language=self.task_description,
+                prev_actions=prefix,
+                rtc_frozen_steps=frozen,
             )
 
             if response is None:
@@ -1237,6 +1272,40 @@ class GrootClientNode(Node):
             chunk_id=self._chunk_buffer.current_chunk_id,
             action_idx=current_frame % self.action_chunk_size,
         )
+
+    def _rtc_prefix(self, obs_time: float, obs_frame: Optional[int] = None):
+        """Committed actions for the frames after an observation (RTC prefix).
+
+        Returns (prefix, frozen) with prefix of shape (K, 22) in physical
+        units, or (None, None) when RTC is off or nothing is committed yet
+        (first chunk, or the current chunk has fewer than `frozen` steps left).
+        """
+        if not self.rtc_enabled:
+            return None, None
+        if self.continuous_inference:
+            if self._chunk_buffer is None or obs_frame is None:
+                return None, None
+            prefix = buffer_prefix(
+                self._chunk_buffer.get_action_raw, obs_frame,
+                self.rtc_overlap_steps, self._rtc_frozen)
+        else:
+            with self._action_lock:
+                chunk = self._action_chunk
+                chunk_ts = self._chunk_timestamp
+                effective_skip = self._effective_skip
+            if chunk is None:
+                return None, None
+            steps = int((obs_time - chunk_ts) / self.action_step_period)
+            prefix = classic_prefix(
+                chunk, effective_skip, steps, self.rtc_overlap_steps, self._rtc_frozen)
+        if prefix is None:
+            return None, None
+        frozen = min(self._rtc_frozen, len(prefix))
+        self._rtc_sent += 1
+        if self._rtc_sent == 1 or self._rtc_sent % 100 == 0:
+            self.get_logger().info(
+                f'[rtc] prefix #{self._rtc_sent}: overlap={len(prefix)} frozen={frozen}')
+        return prefix, frozen
 
     def _time_to_frame(self, mono_time: float) -> int:
         """Convert monotonic time to frame index since activation."""

@@ -22,22 +22,22 @@ Usage:
     # Basic evaluation
     python src/alfie_gr00t/alfie_gr00t/scripts/groot_replay_eval.py \
         --config src/alfie_gr00t/config/groot_client.yaml \
-        --dataset-path data/alfiebot.CanDoChallenge \
+        --dataset-path data/can_do_challenge/lerobot \
         --episode-index 0 \
         --host 127.0.0.1
 
     # Compare rate limiting on vs off
     python groot_replay_eval.py --config config/groot_client.yaml \\
-        --dataset-path data/alfiebot.CanDoChallenge --episode-index 0 \\
+        --dataset-path data/can_do_challenge/lerobot --episode-index 0 \\
         --output-dir /tmp/eval_rl_on/
 
     python groot_replay_eval.py --config config/groot_client.yaml \\
-        --dataset-path data/alfiebot.CanDoChallenge --episode-index 0 \\
+        --dataset-path data/can_do_challenge/lerobot --episode-index 0 \\
         --rate-limit-enabled false --output-dir /tmp/eval_rl_off/
 
     # Multiple episodes with CSV export
     python groot_replay_eval.py --config config/groot_client.yaml \\
-        --dataset-path data/alfiebot.CanDoChallenge \\
+        --dataset-path data/can_do_challenge/lerobot \\
         --episode-indices 0,1,2,3,4 --save-csv
 
 Output Directory Structure:
@@ -500,6 +500,39 @@ class ClientPipelineSimulator:
     # ------------------------------------------------------------------
     # Inference scheduling
     # ------------------------------------------------------------------
+
+    def rtc_prefix(self, overlap: int):
+        """(prefix, frozen) for RTC at the moment an inference is fired.
+
+        Classic mode: the actions this pipeline will keep executing from the
+        current chunk, starting at its current position; frozen = the skip it
+        applies on promotion. Continuous mode: the buffer's plan for the next
+        frames. Returns (None, None) when nothing is committed yet.
+        """
+        if overlap <= 0:
+            return None, None
+        if self.continuous:
+            if self._chunk_buffer is None:
+                return None, None
+            rows = []
+            for i in range(overlap):
+                a = self._chunk_buffer.get_action_raw(self._current_frame + i)
+                if a is None:
+                    break
+                rows.append(np.asarray(a, dtype=np.float32))
+            frozen = self.latency_skip
+            if len(rows) < max(frozen, 1):
+                return None, None
+            return np.stack(rows), min(frozen, len(rows))
+        chunk = self._action_chunk
+        if chunk is None:
+            return None, None
+        start = self._effective_skip + self._exec_idx
+        rows = np.asarray(chunk[start:start + overlap], dtype=np.float32)
+        frozen = self.latency_skip + (1 if self.chunk_blend_steps > 0 else 0)
+        if len(rows) < max(frozen, 1):
+            return None, None
+        return rows.copy(), min(frozen, len(rows))
 
     def needs_inference(self) -> bool:
         """Check if we need to fire inference at the current step.
@@ -1127,7 +1160,7 @@ def run_episode(
     task: str,
     closed_loop: bool = False,
     rtc: bool = False,
-    rtc_freeze_steps: int = 4,
+    rtc_overlap_steps: int = 6,
 ) -> dict:
     """Replay one episode through the full pipeline.
 
@@ -1164,10 +1197,13 @@ def run_episode(
         if pipeline.needs_inference():
             images = compressed_frames[gt_frame] if gt_frame < len(compressed_frames) else {}
 
-            # RTC: send tail of previous chunk as freeze context
+            # RTC: committed future = the current chunk from where execution has
+            # reached (new-chunk index 0 = this observation), frozen = the steps
+            # the pipeline will execute from it before promotion (its skip).
             prev_actions = None
+            rtc_frozen = None
             if rtc and prev_chunk is not None:
-                prev_actions = prev_chunk[-rtc_freeze_steps:]
+                prev_actions, rtc_frozen = pipeline.rtc_prefix(rtc_overlap_steps)
 
             # Build prefetch args for next frame
             pf_images = None
@@ -1184,6 +1220,7 @@ def run_episode(
                 state=state_raw,
                 language=task,
                 prev_actions=prev_actions,
+                rtc_frozen_steps=rtc_frozen,
                 prefetch_images=pf_images,
                 prefetch_state=pf_state,
                 prefetch_id=pf_id,
@@ -1342,7 +1379,7 @@ def run_eval(args):
     print(f'    max_base_angular_accel: {config["max_base_angular_accel"]}')
     print(f'    h264_conditioning:      {config["h264_conditioning"]}')
     if args.rtc:
-        print(f'    rtc:                    ON (freeze_steps={args.rtc_freeze_steps})')
+        print(f'    rtc:                    ON (overlap_steps={args.rtc_overlap_steps})')
     print('=' * 70)
     print()
 
@@ -1418,7 +1455,7 @@ def run_eval(args):
             task=task,
             closed_loop=args.closed_loop,
             rtc=args.rtc,
-            rtc_freeze_steps=args.rtc_freeze_steps,
+            rtc_overlap_steps=args.rtc_overlap_steps,
         )
         elapsed = time.time() - t0
         logger.info(f'Replay done in {elapsed:.1f}s ({result["num_inference"]} inference steps)')
@@ -1703,7 +1740,7 @@ Examples:
   # Basic evaluation with default config
   python groot_replay_eval.py \\
       --config config/groot_client.yaml \\
-      --dataset-path data/alfiebot.CanDoChallenge \\
+      --dataset-path data/can_do_challenge/lerobot \\
       --episode-index 0 --host 127.0.0.1
 
   # Compare rate limiting on vs off
@@ -1816,9 +1853,9 @@ Examples:
 
     # RTC (Real-Time Chunking)
     parser.add_argument('--rtc', action='store_true',
-                        help='Send prev_actions for RTC freeze+inpaint (server must have --rtc)')
-    parser.add_argument('--rtc-freeze-steps', type=int, default=4,
-                        help='Number of freeze steps for RTC (default: %(default)s)')
+                        help='Send the committed prefix for RTC (server must run with --rtc)')
+    parser.add_argument('--rtc-overlap-steps', type=int, default=6,
+                        help='Committed actions sent per inference (RTC prefix length)')
 
     # Logging
     parser.add_argument('-v', '--verbose', action='store_true',

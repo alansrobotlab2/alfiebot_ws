@@ -40,39 +40,43 @@
     # If server doesn't respond within this time, the request fails
     inference_timeout_ms: 5000
 
-    # Action chunk size — always 16 (must match training horizon)
-    action_chunk_size: 16
+    # Action chunk size: must equal the checkpoint's horizon
+    # (alfiebot_config.ACTION_HORIZON = 32; 2.1 s at 15 FPS).
+    action_chunk_size: 32
 
     # Rate the training data was resampled to (rosbag_to_groot.py --fps).
-    # One action step = 1/training_fps (100ms at 10 FPS); the 16-step horizon
-    # spans 1.6s. Also the sample rate for the butterworth/savgol smoother.
-    training_fps: 10.0
+    # One action step = 1/training_fps (66.7 ms at 15 FPS). Also the sample
+    # rate for the butterworth/savgol smoother.
+    training_fps: 15.0
 
-    # n_action_steps: how many of the 16 predicted actions to execute
-    # per chunk before promoting the next pending chunk.
-    #   8 = 800ms per chunk, window actions[3:11] with skip=3
-    #  13 = sequential mode (window [3:16], 1.3s, ~350ms dead time per cycle)
-    # Re-check after retraining that the window reaches the model's forward
-    # velocity phase (at 15 FPS it sat at ~0.75-1.0s into the horizon).
-    n_action_steps: 8
+    # n_action_steps: how many predicted actions to execute per chunk before
+    # promoting the next pending chunk. 4 = 267 ms, re-planning at ~2.5 Hz;
+    # the rest of the 32-step chunk is RTC overlap and overflow.
+    n_action_steps: 4
 
-    # Universal latency skip: all body parts read from action[skip + idx]
-    # to compensate for observation-to-action delay (~280ms = 3 steps at 10 FPS).
-    # With skip=3 and n_action_steps=8, execution window is actions[3:11].
-    latency_skip: 3
+    # Universal latency skip: all body parts read from action[skip + idx] to
+    # compensate for observation-to-action delay. The N1.7 INT8 pipeline on
+    # the Orin answers in ~110-130 ms with 4 denoising steps = 2 steps at 15 FPS.
+    # With skip=2 and n_action_steps=4 the execution window is actions[2:6].
+    latency_skip: 2
 
     # Inference trigger step: fire inference at this step within the execution
-    # window. Set equal to n_action_steps to fire at exhaust (sequential mode).
-    # Rule: NEVER fire mid-chunk — model must see RESULT of full trajectory.
-    # With n_steps=8, trigger=8: obs at 800ms, inference ~350ms RTT,
-    # overflow actions [11:16] bridge 500ms while waiting for pending chunk.
-    inference_trigger_step: 8
+    # window. Equal to n_action_steps = fire at exhaust; overflow actions [6:32]
+    # (1.7 s) bridge the RTT. Firing mid-chunk is only safe with RTC on, which
+    # keeps the new chunk consistent with what is still being executed.
+    inference_trigger_step: 4
 
     # Chunk transition blend steps: blend joints (not base velocity) from
     # the previous chunk's last executed action to the new chunk's trajectory
     # over N steps (~200ms for 2). Prevents joint position jumps at boundaries.
     # 0 = disabled (rate-limited interpolator handles smoothing instead).
     chunk_blend_steps: 0
+    # Real-Time Chunking: send the committed future with each observation so the
+    # server (started with --rtc, >= 4 denoising steps) inpaints the new chunk to
+    # agree with it. Frozen steps = latency_skip (+1 if chunk_blend_steps > 0).
+    rtc_enabled: true
+    rtc_overlap_steps: 6  # frozen 2 + 4 ramp steps; must exceed the frozen count
+
 
     # ==========================================================================
     # Task Configuration
@@ -218,7 +222,7 @@
 
     # Butterworth parameters (only used when smoothing_method: "butterworth")
     butterworth_order: 2      # Filter order
-    butterworth_cutoff_hz: 3.0  # Cutoff (Hz), must be < training_fps/2. 3Hz was optimal at 15 FPS (SMOOTHIT.md); re-sweep at 10 FPS
+    butterworth_cutoff_hz: 3.0  # Cutoff (Hz), must be < training_fps/2. 3Hz was optimal at 15 FPS (SMOOTHIT.md)
 
     # Interpolation method for upsampling training rate (10 FPS) → 100 Hz:
     #   'linear'       — linear lerp between consecutive actions (current default)

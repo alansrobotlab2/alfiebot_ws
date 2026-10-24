@@ -170,6 +170,8 @@ class ZMQAsyncClient:
         images: dict[str, bytes],
         state: np.ndarray,
         language: str,
+        prev_actions: Optional[np.ndarray] = None,
+        rtc_frozen_steps: Optional[int] = None,
     ) -> int:
         """Push observation to server (non-blocking).
 
@@ -177,6 +179,10 @@ class ZMQAsyncClient:
             images: Dictionary mapping camera names to JPEG bytes.
             state: State vector (22D).
             language: Task description string.
+            prev_actions: Optional (K, 22) RTC prefix: actions already committed
+                for the K frames after this observation (see core/rtc_prefix.py).
+            rtc_frozen_steps: How many of those the robot executes before the
+                new chunk can arrive.
 
         Returns:
             obs_id assigned to this observation, or -1 on failure.
@@ -194,6 +200,11 @@ class ZMQAsyncClient:
             'state': state.tolist() if isinstance(state, np.ndarray) else state,
             'language': language,
         }
+        if prev_actions is not None:
+            observation['prev_actions'] = (
+                prev_actions.tolist() if isinstance(prev_actions, np.ndarray) else prev_actions)
+            if rtc_frozen_steps is not None:
+                observation['rtc_frozen_steps'] = int(rtc_frozen_steps)
 
         try:
             packed = msg_to_bytes({

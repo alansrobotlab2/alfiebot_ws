@@ -292,6 +292,7 @@ class ZMQClient:
         prefetch_id: Optional[int] = None,
         use_prefetch_id: Optional[int] = None,
         prev_actions: Optional[np.ndarray] = None,
+        rtc_frozen_steps: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
         """Send observation and receive action prediction.
 
@@ -305,8 +306,11 @@ class ZMQClient:
             prefetch_language: Optional next-frame language (defaults to language).
             prefetch_id: ID for the prefetch observation (server caches result under this ID).
             use_prefetch_id: ID of a previously prefetched result to use for this request.
-            prev_actions: Optional (D, 22) array of committed actions from previous chunk
-                for RTC freeze+inpaint (physical units, server normalizes).
+            prev_actions: Optional (K, 22) array of actions already committed for
+                the K frames after this observation (RTC prefix, physical units;
+                the server normalizes). See core/rtc_prefix.py.
+            rtc_frozen_steps: How many of those K the robot executes before the
+                new chunk can arrive; the server holds them exactly.
 
         Returns:
             Action response dictionary with 'actions' key containing
@@ -319,9 +323,11 @@ class ZMQClient:
             'language': language,
         }
 
-        # RTC: send committed actions from previous chunk for freeze+inpaint
+        # RTC: committed actions for the frames after this observation
         if prev_actions is not None:
             observation['prev_actions'] = prev_actions.tolist() if isinstance(prev_actions, np.ndarray) else prev_actions
+            if rtc_frozen_steps is not None:
+                observation['rtc_frozen_steps'] = int(rtc_frozen_steps)
 
         # Tag observation with prefetch ID so server can validate cache hit
         if use_prefetch_id is not None:

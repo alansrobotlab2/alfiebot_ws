@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GR00T N1.6 inference server.
+"""GR00T N1.7 inference server.
 
 Thin wrapper around NVIDIA's PolicyServer + Gr00tPolicy. Adds a
 JpegPolicyWrapper that translates JPEG-over-WiFi observations from the
@@ -324,7 +324,8 @@ class JpegPolicyWrapper(BasePolicy):
     """
 
     def __init__(self, policy: BasePolicy, language_key: str,
-                 rtc_enabled: bool = False, rtc_freeze_steps: int = 4):
+                 rtc_enabled: bool = False, rtc_frozen_steps: int = -1,
+                 rtc_overlap_steps: int = 0, rtc_ramp_rate: float = 3.0):
         super().__init__(strict=False)
         self.policy = policy
         self.language_key = language_key
@@ -341,208 +342,158 @@ class JpegPolicyWrapper(BasePolicy):
         self._pending_backbone_states = None  # states for decode_action after finish_frame
         self._pending_backbone_id = None  # frame ID for validating backbone cache
 
-        # RTC (Real-Time Chunking) freeze+inpaint
+        # RTC (Real-Time Chunking), native N1.7 inpainting. frozen/overlap
+        # < 0 / 0 mean "as sent by the client".
         self._rtc_enabled = rtc_enabled
-        self._rtc_freeze_steps = rtc_freeze_steps
+        self._rtc_frozen_steps = rtc_frozen_steps
+        self._rtc_overlap_steps = rtc_overlap_steps
+        self._rtc_ramp_rate = rtc_ramp_rate
+        self._rtc_count = 0
         if rtc_enabled:
-            self._install_rtc_patch()
+            model = getattr(policy, 'model', None)
+            if model is None:
+                logging.warning('RTC requested but policy has no model (replay?); RTC off')
+                self._rtc_enabled = False
+            else:
+                steps = model.action_head.num_inference_timesteps
+                if steps < 4:
+                    logging.warning(
+                        f'RTC with {steps} denoising steps: the RTC study found 2-step '
+                        f'denoising cannot adapt around the frozen prefix; use >= 4')
+                logging.info(
+                    f'RTC enabled: frozen={"client" if rtc_frozen_steps < 0 else rtc_frozen_steps} '
+                    f'overlap={"client" if rtc_overlap_steps <= 0 else rtc_overlap_steps} '
+                    f'ramp={rtc_ramp_rate} denoising_steps={steps}')
 
     # ── RTC (Real-Time Chunking) ────────────────────────────────────────
+    #
+    # GR00T N1.7's action head inpaints natively when it is given an ``action``
+    # input plus options (gr00t/model/gr00t_n1d7/gr00t_n1d7.py,
+    # get_action_with_features): the first ``rtc_overlap_steps`` of the new
+    # chunk are seeded from rows [H - overlap, H) of ``action_input["action"]``
+    # (H = embodiment horizon), the first ``rtc_frozen_steps`` of those keep
+    # zero velocity (held exactly) and the rest ramp toward the fresh
+    # prediction. Upstream exposes this only at the model level; this wrapper
+    # is the plumbing. The client sends ``prev_actions`` (K, 22): the actions
+    # it has already committed for the K frames after the observation,
+    # physical units, and ``rtc_frozen_steps``: how many of them it executes
+    # before this chunk can arrive. See alfie_gr00t/core/rtc_prefix.py.
 
-    def _normalize_flat_actions(self, flat_actions: np.ndarray) -> np.ndarray:
-        """Normalize flat (D, 22) physical actions to model [-1,1] space.
+    def _rtc_seed_from_groups(
+        self,
+        groups: dict[str, np.ndarray],
+        raw_state: dict[str, np.ndarray] | None,
+        frozen: int,
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        """Model-space RTC seed and options from per-group absolute prefixes.
 
-        Uses the processor's per-joint-group min-max normalization params.
-        All Alfie action groups use ABSOLUTE representation, so no relative
-        conversion is needed.
+        groups: {action_key: (K, dim)} physical actions.
+        raw_state: {state_key: (T, D)} raw state of this observation, the
+            reference for RELATIVE action groups (same as training).
         """
-        result = np.zeros_like(flat_actions)
-        embodiment_tag = self.policy.embodiment_tag
-        sap = self.policy.processor.state_action_processor
-        norm_params = sap.norm_params[embodiment_tag.value if hasattr(embodiment_tag, 'value') else embodiment_tag]
+        policy = self.policy
+        tag = policy.embodiment_tag
+        tag_str = tag.value if hasattr(tag, 'value') else str(tag)
+        processor = policy.processor
+        sap = processor.state_action_processor
+        action_cfg = processor.modality_configs[tag_str]['action']
+        action_keys = action_cfg.modality_keys
+        horizon = len(action_cfg.delta_indices)
 
-        for name, start, end in STATE_PARTS:
-            params = norm_params['action'][name]
-            min_vals = np.asarray(params['min'], dtype=np.float32)
-            max_vals = np.asarray(params['max'], dtype=np.float32)
-            vals = flat_actions[..., start:end]
-            mask = ~np.isclose(max_vals, min_vals)
-            normed = np.zeros_like(vals)
-            normed[..., mask] = 2.0 * (vals[..., mask] - min_vals[mask]) / (max_vals[mask] - min_vals[mask]) - 1.0
-            result[..., start:end] = normed
+        overlap = min(len(g) for g in groups.values())
+        if self._rtc_overlap_steps > 0:
+            overlap = min(overlap, self._rtc_overlap_steps)
+        overlap = int(min(overlap, horizon))
+        frozen = max(0, min(int(frozen), overlap))
 
-        return result
+        # Normalize the prefix as new-chunk steps 0..overlap-1. RELATIVE groups
+        # carry per-step statistics of shape (horizon, D) and are converted
+        # relative to this observation's state, so the processor must see a
+        # full-horizon array with the prefix in the leading rows (the filler
+        # rows are discarded). That is the frame the model decodes step t in,
+        # so the frozen rows come back as exactly the committed actions.
+        full = {}
+        for key, g in groups.items():
+            g = np.asarray(g, dtype=np.float32).reshape(len(g), -1)[:overlap]
+            arr = np.repeat(g[:1], horizon, axis=0).copy()
+            arr[:overlap] = g
+            full[key] = arr
+        normalized = sap.apply_action(full, tag_str, state=raw_state)
+        flat = np.concatenate(
+            [np.asarray(normalized[k], dtype=np.float32).reshape(horizon, -1)[:overlap]
+             for k in action_keys], axis=-1)  # (overlap, d)
 
-    def _install_rtc_patch(self):
-        """Monkey-patch action_head.get_action_with_features with RTC inpainting.
-
-        When _rtc_context is set on the action_head before inference, the
-        patched method freezes the first `freeze_steps` actions to match
-        committed values from the previous chunk. This forces temporal
-        consistency at the source — inside the denoising loop.
-
-        Flow matching inpainting: after each Euler step, replace frozen
-        indices with the noise-schedule target:
-            frozen_target_t = (1 - tau) * z_frozen + tau * a_committed
-        where tau = (t+1) / num_steps.
-        """
-        action_head = self.policy.model.action_head
-        original_fn = action_head.get_action_with_features
-        freeze_steps = self._rtc_freeze_steps
-
-        # Pre-compute soft boundary mask (avoids hard seam at freeze boundary)
-        # 2-action exponential blend zone at the boundary
-        blend_zone = 2
-
-        def rtc_get_action_with_features(
-            backbone_features, state_features, embodiment_id, backbone_output,
-            action_input=None, options=None,
-        ):
-            # N1.7 action_head.get_action() passes action_input/options as kwargs
-            ctx = getattr(action_head, '_rtc_context', None)
-            if ctx is None:
-                return original_fn(
-                    backbone_features=backbone_features,
-                    state_features=state_features,
-                    embodiment_id=embodiment_id,
-                    backbone_output=backbone_output,
-                    action_input=action_input,
-                    options=options,
-                )
-
-            committed = ctx['committed']  # (1, freeze_steps, action_dim) normalized tensor
-            d = ctx['freeze_steps']
-
-            # --- Replicate the original denoising loop with inpainting ---
-            from transformers import BatchFeature
-
-            vl_embeds = backbone_features
-            batch_size = vl_embeds.shape[0]
-            device = vl_embeds.device
-            model_dtype = vl_embeds.dtype
-
-            actions = torch.randn(
-                size=(batch_size, action_head.config.action_horizon, action_head.action_dim),
-                dtype=torch.float32, device=device,
-            )
-
-            # Save initial noise at frozen positions for flow trajectory
-            z_frozen = actions[:, :d, :].clone()
-
-            dt = 1.0 / action_head.num_inference_timesteps
-
-            # Build soft mask: 1.0 = fully frozen, 0.0 = fully free
-            mask = torch.zeros(action_head.config.action_horizon, device=device)
-            for i in range(d):
-                if i < d - blend_zone:
-                    mask[i] = 1.0
-                else:
-                    # Exponential decay in blend zone
-                    dist_from_boundary = d - 1 - i
-                    mask[i] = float(np.exp(-3.0 * (blend_zone - 1 - dist_from_boundary)))
-            # mask shape: (action_horizon,) -> (1, action_horizon, 1) for broadcast
-            mask = mask.unsqueeze(0).unsqueeze(-1)
-
-            timestep_tensors = []
-            for t in range(action_head.num_inference_timesteps):
-                t_cont = t / float(action_head.num_inference_timesteps)
-                t_discretized = int(t_cont * action_head.num_timestep_buckets)
-                timestep_tensors.append(
-                    torch.full(size=(batch_size,), fill_value=t_discretized, device=device)
-                )
-
-            if action_head.config.add_pos_embed:
-                pos_ids = torch.arange(action_head.action_horizon, dtype=torch.long, device=device)
-                pos_embs = action_head.position_embedding(pos_ids).unsqueeze(0)
-
-            for t in range(action_head.num_inference_timesteps):
-                timesteps_tensor = timestep_tensors[t]
-                action_features = action_head.action_encoder(
-                    actions.to(model_dtype), timesteps_tensor, embodiment_id
-                )
-                if action_head.config.add_pos_embed:
-                    action_features = action_features + pos_embs
-
-                sa_embs = torch.cat((state_features, action_features), dim=1)
-
-                if action_head.config.use_alternate_vl_dit:
-                    model_output = action_head.model(
-                        hidden_states=sa_embs,
-                        encoder_hidden_states=vl_embeds,
-                        timestep=timesteps_tensor,
-                        image_mask=backbone_output.image_mask,
-                        backbone_attention_mask=backbone_output.backbone_attention_mask,
-                    )
-                else:
-                    model_output = action_head.model(
-                        hidden_states=sa_embs,
-                        encoder_hidden_states=vl_embeds,
-                        timestep=timesteps_tensor,
-                    )
-                if model_output.dtype != action_head.dtype:
-                    model_output = model_output.to(action_head.dtype)
-
-                pred = action_head.action_decoder(model_output, embodiment_id)
-                pred_velocity = pred[:, -action_head.action_horizon:]
-                actions = actions + dt * pred_velocity.float()
-
-                # RTC inpainting: replace frozen indices with flow trajectory target
-                tau = (t + 1) / action_head.num_inference_timesteps
-                frozen_target = (1.0 - tau) * z_frozen + tau * committed
-                # Apply soft mask: blend frozen_target into actions at frozen positions
-                actions[:, :d, :] = (
-                    mask[:, :d, :] * frozen_target
-                    + (1.0 - mask[:, :d, :]) * actions[:, :d, :]
-                )
-
-            return BatchFeature(
-                data={
-                    "action_pred": actions.to(model_dtype),
-                    "backbone_features": vl_embeds,
-                    "state_features": state_features,
-                }
-            )
-
-        action_head.get_action_with_features = rtc_get_action_with_features
-        logging.info(f'RTC patch installed: freeze_steps={freeze_steps}, blend_zone={blend_zone}')
-
-    def _set_rtc_context(self, observation: dict) -> None:
-        """Set RTC context on action_head before inference if prev_actions available."""
-        if not self._rtc_enabled:
-            return
-
-        prev_actions_raw = observation.get('prev_actions')
-        if prev_actions_raw is None:
-            self.policy.model.action_head._rtc_context = None
-            return
-
-        # prev_actions: list of lists [[22 floats], ...] or flat list -> (d, 22)
-        prev_arr = np.array(prev_actions_raw, dtype=np.float32)
-        if prev_arr.ndim == 1:
-            prev_arr = prev_arr.reshape(-1, 22)  # (d, 22)
-
-        # Normalize to model space
-        normalized = self._normalize_flat_actions(prev_arr)  # (d, 22)
-
-        # Pad to model's action_dim (22 -> 128) to match denoising space
-        model_action_dim = self.policy.model.action_head.action_dim
-        if normalized.shape[-1] < model_action_dim:
-            pad_width = model_action_dim - normalized.shape[-1]
-            normalized = np.pad(normalized, ((0, 0), (0, pad_width)), constant_values=0.0)
-
-        # Convert to tensor (1, d, model_action_dim) on model device
-        device = next(self.policy.model.parameters()).device
-        committed = torch.from_numpy(normalized).float().unsqueeze(0).to(device)
-
-        self.policy.model.action_head._rtc_context = {
-            'committed': committed,
-            'freeze_steps': committed.shape[1],
+        # The model copies action_input["action"][:, H - overlap:H] into the
+        # first `overlap` steps of the new chunk, so the prefix rides in the
+        # last rows of the seed.
+        seed = np.zeros((1, horizon, processor.max_action_dim), dtype=np.float32)
+        seed[0, horizon - overlap:horizon, :flat.shape[1]] = flat
+        device = next(policy.model.parameters()).device
+        options = {
+            'action_horizon': horizon,
+            'rtc_overlap_steps': overlap,
+            'rtc_frozen_steps': frozen,
+            'rtc_ramp_rate': float(self._rtc_ramp_rate),
         }
+        return torch.from_numpy(seed).to(device), options
 
-    def _clear_rtc_context(self) -> None:
-        """Clear RTC context after inference."""
-        if self._rtc_enabled:
-            self.policy.model.action_head._rtc_context = None
+    def _build_rtc(self, observation: dict, states: list) -> tuple[torch.Tensor, dict] | None:
+        """(seed, options) for this request, or None when RTC is off or no prefix came."""
+        if not self._rtc_enabled or getattr(self.policy, 'model', None) is None:
+            return None
+        prev = observation.get('prev_actions')
+        if prev is None:
+            return None
+        prev_arr = np.asarray(prev, dtype=np.float32)
+        if prev_arr.ndim == 1:
+            prev_arr = prev_arr.reshape(-1, 22)
+        if prev_arr.ndim != 2 or prev_arr.shape[1] != 22 or prev_arr.shape[0] == 0:
+            logging.warning(f'RTC: ignoring prev_actions with shape {prev_arr.shape}')
+            return None
+        frozen = observation.get('rtc_frozen_steps', 0) or 0
+        if self._rtc_frozen_steps >= 0:
+            frozen = self._rtc_frozen_steps  # CLI override
+        groups = {name: prev_arr[:, start:end] for name, start, end in STATE_PARTS}
+        raw_state = states[0] if states else None
+        try:
+            seed, options = self._rtc_seed_from_groups(groups, raw_state, int(frozen))
+        except Exception as e:
+            logging.warning(f'RTC: skipped for this request: {e}')
+            return None
+        self._rtc_count += 1
+        if self._rtc_count == 1 or self._rtc_count % 100 == 0:
+            logging.info(
+                f"RTC #{self._rtc_count}: overlap={options['rtc_overlap_steps']} "
+                f"frozen={options['rtc_frozen_steps']} ramp={options['rtc_ramp_rate']}")
+        return seed, options
+
+    def _decode_pred(self, model_pred, states: list) -> dict[str, np.ndarray]:
+        """Normalized model output -> physical-unit per-group actions."""
+        normalized_action = model_pred['action_pred'].float()
+        batched_states = {
+            k: np.stack([s[k] for s in states], axis=0)
+            for k in self.policy.modality_configs['state'].modality_keys
+        }
+        unnormalized = self.policy.processor.decode_action(
+            normalized_action.cpu().numpy(), self.policy.embodiment_tag, batched_states)
+        return {key: value.astype(np.float32) for key, value in unnormalized.items()}
+
+    def _run_action_head_rtc(self, collated_inputs: dict, states: list, rtc) -> dict[str, np.ndarray]:
+        """Backbone + action head with the RTC seed injected.
+
+        Mirrors Gr00tPolicy.run_inference, but Gr00tPolicy forwards neither an
+        action input nor options, and model.prepare_input would cast the seed
+        to the model dtype; injecting after prepare_input keeps it float32.
+        """
+        model = self.policy.model
+        raw = collated_inputs.get('inputs', collated_inputs)
+        seed, options = rtc
+        with torch.inference_mode():
+            backbone_inputs, action_inputs = model.prepare_input(raw)
+            action_inputs['action'] = seed
+            backbone_output = model.backbone(backbone_inputs)
+            model_pred = model.action_head.get_action(backbone_output, action_inputs, options)
+        return self._decode_pred(model_pred, states)
 
     # ── Image / State Processing ──────────────────────────────────────
 
@@ -654,18 +605,22 @@ class JpegPolicyWrapper(BasePolicy):
         """
         return self.policy.prepare_inputs(native_obs)
 
-    def _gpu_infer(self, collated_inputs: dict, states: list):
+    def _gpu_infer(self, collated_inputs: dict, states: list, rtc=None):
         """Run GPU-only inference + action reassembly.
 
         Args:
             collated_inputs: Output from policy.prepare_inputs().
             states: State list from policy.prepare_inputs().
+            rtc: Optional (seed, options) from _build_rtc().
 
         Returns:
             (flat_actions, info) where info includes gpu_infer_ms, reassemble_ms.
         """
         t0 = time.monotonic()
-        action_dict = self.policy.run_inference(collated_inputs, states)
+        if rtc is not None:
+            action_dict = self._run_action_head_rtc(collated_inputs, states, rtc)
+        else:
+            action_dict = self.policy.run_inference(collated_inputs, states)
         t_infer = time.monotonic()
 
         flat_actions = self._reassemble_actions(action_dict)
@@ -675,6 +630,9 @@ class JpegPolicyWrapper(BasePolicy):
             'gpu_infer_ms': (t_infer - t0) * 1000,
             'reassemble_ms': (t_reassemble - t_infer) * 1000,
         }
+        if rtc is not None:
+            info['rtc_overlap'] = rtc[1]['rtc_overlap_steps']
+            info['rtc_frozen'] = rtc[1]['rtc_frozen_steps']
         return flat_actions, info
 
     def _start_backbone_async(self, collated_inputs: dict, states: list, backbone_id: int):
@@ -700,7 +658,7 @@ class JpegPolicyWrapper(BasePolicy):
         self._pending_backbone_states = states
         self._pending_backbone_id = backbone_id
 
-    def _finish_backbone_and_infer(self):
+    def _finish_backbone_and_infer(self, rtc=None):
         """Wait for async backbone, run DiT + decode actions.
 
         Returns (flat_actions, info) like _gpu_infer(), but only runs
@@ -712,10 +670,15 @@ class JpegPolicyWrapper(BasePolicy):
         torch.cuda.current_stream().wait_event(self._pending_backbone_event)
         t_wait = time.monotonic()
 
+        options = None
+        if rtc is not None:
+            self._pending_action_input['action'] = rtc[0]
+            options = rtc[1]
         with torch.inference_mode():
             model_pred = model.action_head.get_action(
                 self._pending_backbone_output,
                 self._pending_action_input,
+                options,
             )
 
         normalized_action = model_pred["action_pred"].float()
@@ -750,6 +713,9 @@ class JpegPolicyWrapper(BasePolicy):
             'reassemble_ms': (t_reassemble - t_decode) * 1000,
             'backbone_hit': True,
         }
+        if rtc is not None:
+            info['rtc_overlap'] = rtc[1]['rtc_overlap_steps']
+            info['rtc_frozen'] = rtc[1]['rtc_frozen_steps']
         return flat_actions, info
 
     def _prefetch_vla(self, observation: dict[str, Any]):
@@ -842,8 +808,8 @@ class JpegPolicyWrapper(BasePolicy):
             )
             self._prefetch_id = prefetch_id
 
-        # Set RTC context before inference (if prev_actions provided)
-        self._set_rtc_context(observation)
+        # RTC seed from the client's committed prefix (None when not sent)
+        rtc = self._build_rtc(observation, states)
 
         # Check for backbone cache hit (backbone was started async on previous request)
         backbone_hit = False
@@ -852,7 +818,7 @@ class JpegPolicyWrapper(BasePolicy):
                 and self._pending_backbone_id == use_prefetch_id
                 and prefetch_hit):
             # Backbone was pre-computed for this frame — run only DiT + decode
-            flat_actions, gpu_info = self._finish_backbone_and_infer()
+            flat_actions, gpu_info = self._finish_backbone_and_infer(rtc=rtc)
             backbone_hit = True
         else:
             # Discard stale backbone cache
@@ -862,10 +828,7 @@ class JpegPolicyWrapper(BasePolicy):
             self._pending_backbone_states = None
             self._pending_backbone_id = None
             # Full GPU inference (overlaps with VLA prefetch thread)
-            flat_actions, gpu_info = self._gpu_infer(collated_inputs, states)
-
-        # Clear RTC context after inference
-        self._clear_rtc_context()
+            flat_actions, gpu_info = self._gpu_infer(collated_inputs, states, rtc=rtc)
 
         t_infer = time.monotonic()
 
@@ -956,7 +919,7 @@ class JpegPolicyWrapper(BasePolicy):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='GR00T N1.6 Inference Server',
+        description='GR00T N1.7 Inference Server',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 modes:
@@ -1006,9 +969,17 @@ examples:
     parser.add_argument('--async-push-port', type=int, default=5557,
                         help='PUSH socket port for async action results (default: %(default)s)')
     parser.add_argument('--rtc', action='store_true',
-                        help='Enable RTC (Real-Time Chunking) freeze+inpaint denoising')
-    parser.add_argument('--rtc-freeze-steps', type=int, default=4,
-                        help='Number of leading actions to freeze in RTC (default: %(default)s)')
+                        help='Enable Real-Time Chunking: seed each chunk with the actions the '
+                             'client has already committed (N1.7 native inpainting). '
+                             'Use >= 4 denoising steps.')
+    parser.add_argument('--rtc-frozen-steps', '--rtc-freeze-steps', type=int, default=-1,
+                        dest='rtc_frozen_steps',
+                        help='Override the frozen step count sent by the client '
+                             '(default: as sent = latency_skip [+1 with blending])')
+    parser.add_argument('--rtc-overlap-steps', type=int, default=0,
+                        help='Cap the overlap (prefix length) sent by the client (default: as sent)')
+    parser.add_argument('--rtc-ramp-rate', type=float, default=3.0,
+                        help='Exponential ramp rate from frozen to free steps (default: %(default)s)')
 
     return parser.parse_args()
 
@@ -1170,7 +1141,8 @@ def main():
     # Wrap with JPEG translation layer
     wrapped = JpegPolicyWrapper(
         policy, language_key=language_key,
-        rtc_enabled=args.rtc, rtc_freeze_steps=args.rtc_freeze_steps,
+        rtc_enabled=args.rtc, rtc_frozen_steps=args.rtc_frozen_steps,
+        rtc_overlap_steps=args.rtc_overlap_steps, rtc_ramp_rate=args.rtc_ramp_rate,
     )
 
     # Warmup inference to trigger torch.compile and other first-call overhead
@@ -1286,12 +1258,14 @@ def main():
 
                 # CPU-bound: VLA processor (resize/crop/normalize, tokenize, collate, dtype)
                 collated_inputs, states = wrapped._vla_prepare(native_obs)
+                # RTC seed from the client's committed prefix (CPU normalize + small H2D)
+                rtc = wrapped._build_rtc(observation, states)
                 t_vla = time.monotonic()
 
                 preprocess_ms = (t_preprocess - t0) * 1000
                 vla_prep_ms = (t_vla - t_preprocess) * 1000
 
-                preprocess_buffer.put((obs_id, collated_inputs, states, preprocess_ms, vla_prep_ms))
+                preprocess_buffer.put((obs_id, collated_inputs, states, preprocess_ms, vla_prep_ms, rtc))
                 async_request_count += 1
 
                 if async_request_count % 10 == 0:
@@ -1317,10 +1291,10 @@ def main():
             if item is None:
                 continue
 
-            obs_id, collated_inputs, states, preprocess_ms, vla_prep_ms = item
+            obs_id, collated_inputs, states, preprocess_ms, vla_prep_ms, rtc = item
 
             try:
-                flat_actions, info = wrapped._gpu_infer(collated_inputs, states)
+                flat_actions, info = wrapped._gpu_infer(collated_inputs, states, rtc=rtc)
 
                 gpu_infer_ms = info.get('gpu_infer_ms', 0.0)
                 reassemble_ms = info.get('reassemble_ms', 0.0)
