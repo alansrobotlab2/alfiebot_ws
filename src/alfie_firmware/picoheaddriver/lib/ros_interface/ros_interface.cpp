@@ -79,16 +79,18 @@ static void fillServoState(uint8_t index, alfie_msgs__msg__ServoState *st)
     st->current_location    = countToRad(m.currentLocation);
     st->current_speed       = speedToRadPerSec(m.currentSpeed);
 
-    // Present load is sign-magnitude, magnitude 0..1000 == 0..100%.
-    int16_t load = (m.currentLoad & 0x8000) ? -(int16_t)(m.currentLoad & 0x7FFF)
-                                            : (int16_t)m.currentLoad;
+    // Present load is sign-magnitude with the direction in BIT 10 (not 15, unlike
+    // speed and current), magnitude 0..1000 == 0..100%.
+    int16_t load = (m.currentLoad & 0x0400) ? -(int16_t)(m.currentLoad & 0x03FF)
+                                           : (int16_t)(m.currentLoad & 0x03FF);
     st->current_load        = (float)load / 10.0f;
 
     st->current_temperature = m.currentTemperature;
     st->servo_status        = m.servoStatus;
     st->is_moving           = (m.mobileSign != 0);
     st->current_voltage     = (float)m.currentVoltage / 10.0f;
-    st->current_current     = (float)m.currentCurrent * SERVO_CURRENT_MA_PER_UNIT;
+    // Present current is sign-magnitude too; bit 15 is direction, not amps.
+    st->current_current     = (float)(m.currentCurrent & 0x7FFF) * SERVO_CURRENT_MA_PER_UNIT;
 }
 
 void publishHeadState(void)

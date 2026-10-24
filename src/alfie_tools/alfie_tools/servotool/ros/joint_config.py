@@ -256,6 +256,10 @@ class Register:
     unit: str = ''
     scale: float = 0.0          # engineering value = raw * scale (0 = none)
     scaled_unit: str = ''
+    # Sign-magnitude registers: the bit that carries the direction (0 = plain
+    # unsigned). The servo does not use two's complement, so the raw word of a
+    # negative reading looks like a huge positive one.
+    sign_bit: int = 0
     note: str = ''
     # Writable registers must match the firmware's WRITABLE_REGS table exactly;
     # the firmware is the authority and rejects anything else, this just keeps
@@ -390,14 +394,15 @@ REGISTERS: List[Register] = [
              note='0 unlocks EEPROM writes, 1 protects them.'),
     # -- feedback -----------------------------------------------------------
     Register('currentlocation', 56, 'Current location', 'feedback', 'feedback', unit='counts'),
-    Register('currentspeed', 58, 'Current speed', 'feedback', 'feedback', unit='count/s'),
+    Register('currentspeed', 58, 'Current speed', 'feedback', 'feedback', unit='count/s',
+             sign_bit=15),
     Register('currentload', 60, 'Current load', 'feedback', 'feedback', unit='0.1 %',
-             scale=0.1, scaled_unit='%'),
+             scale=0.1, scaled_unit='%', sign_bit=10),
     Register('currentvoltage', 62, 'Current voltage', 'feedback', 'feedback', unit='0.1 V',
              scale=0.1, scaled_unit='V'),
     Register('currenttemperature', 63, 'Current temperature', 'feedback', 'feedback', unit='C'),
     Register('currentcurrent', 69, 'Current draw', 'feedback', 'feedback', unit='6.5 mA',
-             scale=6.5, scaled_unit='mA'),
+             scale=6.5, scaled_unit='mA', sign_bit=15),
     Register('servostatus', 65, 'Servo status', 'feedback', 'feedback',
              note='Fault bitfield; see the decoded flags above.'),
     Register('mobilesign', 66, 'Moving flag', 'feedback', 'feedback'),

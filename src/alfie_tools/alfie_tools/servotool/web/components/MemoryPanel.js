@@ -22,10 +22,20 @@ const KIND_LABEL = {
   feedback: 'live · measured',
 };
 
+/** Engineering value of a raw word: sign-magnitude registers carry the
+ *  direction in `sign_bit`, not in two's complement. */
+function decodeRaw(register, raw) {
+  if (!register.sign_bit) return raw;
+  const word = raw & 0xFFFF;
+  const sign = 1 << register.sign_bit;
+  return (word & sign) ? -(word & (sign - 1)) : word;
+}
+
 function formatValue(register, raw) {
   if (raw === undefined || raw === null) return '--';
-  if (!register.scale) return String(raw);
-  const scaled = raw * register.scale;
+  const value = decodeRaw(register, raw);
+  if (!register.scale) return value === raw ? String(raw) : `${raw} (${value} ${register.unit})`;
+  const scaled = value * register.scale;
   const digits = register.scale >= 1 ? 0 : 1;
   return `${raw} (${fmt(scaled, digits)} ${register.scaled_unit})`;
 }
@@ -71,7 +81,7 @@ function RegisterField({ register, value, disabled, onWrite }) {
 
 function RegisterRow({ register, value, editable, onWrite }) {
   const scaled = register.scale && value !== undefined && value !== null
-    ? `${fmt(value * register.scale, register.scale >= 1 ? 0 : 1)} ${register.scaled_unit}`
+    ? `${fmt(decodeRaw(register, value) * register.scale, register.scale >= 1 ? 0 : 1)} ${register.scaled_unit}`
     : null;
 
   return html`

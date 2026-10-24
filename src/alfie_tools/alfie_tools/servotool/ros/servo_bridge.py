@@ -729,7 +729,8 @@ class ServoBridge:
             'registers': [
                 {'field': r.field, 'address': r.address, 'label': r.label,
                  'group': r.group, 'kind': r.kind, 'unit': r.unit,
-                 'scale': r.scale, 'scaled_unit': r.scaled_unit, 'note': r.note,
+                 'scale': r.scale, 'scaled_unit': r.scaled_unit, 'sign_bit': r.sign_bit,
+                 'note': r.note,
                  'writable': r.writable, 'vmin': r.vmin, 'vmax': r.vmax}
                 for r in jc.REGISTERS
             ],
