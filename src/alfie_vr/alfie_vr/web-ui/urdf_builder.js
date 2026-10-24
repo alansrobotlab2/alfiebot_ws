@@ -229,6 +229,7 @@ export function buildUrdfRobot(urdfString, { log = console.log } = {}) {
 
         if (parent && child && links[parent] && links[child]) {
             childLinks.add(child);
+            links[child].userData.urdfParent = parent;
             applyOrigin(links[child], jointEl.querySelector('origin'));
             links[parent].add(links[child]);
         }
@@ -260,7 +261,9 @@ export function buildUrdfRobot(urdfString, { log = console.log } = {}) {
 }
 
 /**
- * Apply a TF transform to a link (exact frame name, then without leading slash)
+ * Apply a TF transform to a link (exact frame name, then without leading slash).
+ * Only transforms matching a URDF joint (same parent -> child) are applied, so
+ * frames outside the URDF tree (e.g. odom -> base_link) never move the root link.
  * @returns {boolean} true if a link was updated
  */
 export function applyLinkTransform(links, childFrameId, transform) {
@@ -271,6 +274,10 @@ export function applyLinkTransform(links, childFrameId, transform) {
         link = links[childFrameId.replace(/^\//, '')];
     }
     if (!link) return false;
+
+    const urdfParent = link.userData.urdfParent;
+    if (!urdfParent) return false;  // Root link stays at the scene origin
+    if (transform.frameId && transform.frameId.replace(/^\//, '') !== urdfParent) return false;
 
     // Apply position
     if (transform.position) {
