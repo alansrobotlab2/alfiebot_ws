@@ -50,11 +50,11 @@
   </material>
 
   <joint name="back_joint" type="prismatic">
-    <origin xyz="-0.001102 0.0016674 0.3291568" rpy="0. 0. 3.1415927"/>
+    <origin xyz="-0.001102 0.0016674 0.3791568" rpy="0. 0. 3.1415927"/>
     <parent link="base_link"/>
     <child link="back_link"/>
     <axis xyz="0. 0. 1."/>
-    <limit lower="0." upper="0.39" effort="10000000." velocity="0."/>
+    <limit lower="0." upper="0.35" effort="10000000." velocity="0."/>
   </joint>
   <joint name="head_pitch_joint" type="revolute">
     <origin xyz="-0.01875 -0. 0.053 " rpy="1.5707964 0.0 1.5707964"/>
