@@ -29,6 +29,12 @@ AUTO_ESTOP_STATUS_STRIKES = 3
 # can flag overload for a moment alongside a supply sag (2026-10-18: R shoulder
 # pitch at 10.6 V); a genuine stall or jam persists well past this.
 AUTO_ESTOP_OVERLOAD_SEC = 0.5
+# The filtered temperature must stay at/above critical this long (s) before
+# tripping. Servo temperature feedback is transiently unreliable for reasons
+# never pinned down: bursts of bogus readings long enough to beat the trimmed
+# mean (2026-10-23: R shoulder yaw read 87 C at a real 36 C). Thermal mass means
+# a genuine overtemp lasts minutes, so this costs nothing protective.
+AUTO_ESTOP_TEMP_SEC = 2.0
 
 
 # ============================================================================
@@ -150,9 +156,11 @@ class MasterLowStatusNode(Node):
         self.declare_parameter('auto_estop_enabled', True)
         self.declare_parameter('auto_estop_critical_temp_c', AUTO_ESTOP_CRITICAL_TEMP_C)
         self.declare_parameter('auto_estop_overload_sec', AUTO_ESTOP_OVERLOAD_SEC)
+        self.declare_parameter('auto_estop_temp_sec', AUTO_ESTOP_TEMP_SEC)
         self.auto_estop_enabled = self.get_parameter('auto_estop_enabled').value
         self.auto_estop_critical_temp = self.get_parameter('auto_estop_critical_temp_c').value
         self.auto_estop_overload_sec = float(self.get_parameter('auto_estop_overload_sec').value)
+        self.auto_estop_temp_sec = float(self.get_parameter('auto_estop_temp_sec').value)
         self._servo_fault_active = False       # aggregate rising-edge latch
         self._module_faults = {'left_arm': False, 'right_arm': False, 'head': False}
         # Per-module {servo_index: consecutive messages with a fault status bit}
@@ -160,6 +168,9 @@ class MasterLowStatusNode(Node):
             'left_arm': {}, 'right_arm': {}, 'head': {}}
         # Per-module {servo_index: time the overload bit was first seen (s)}
         self._overload_since: Dict[str, Dict[int, float]] = {
+            'left_arm': {}, 'right_arm': {}, 'head': {}}
+        # Per-module {servo_index: time the filtered temp first reached critical (s)}
+        self._hot_since: Dict[str, Dict[int, float]] = {
             'left_arm': {}, 'right_arm': {}, 'head': {}}
         qos_latched = QoSProfile(
             depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -479,7 +490,8 @@ class MasterLowStatusNode(Node):
         looks exactly like a real fault for one message: temperature uses the
         ServoMonitor's trimmed mean over its rolling window, and the status
         overtemp bit must persist for AUTO_ESTOP_STATUS_STRIKES consecutive
-        messages, and the overload bit for auto_estop_overload_sec.
+        messages, the overload bit for auto_estop_overload_sec, and the
+        filtered temperature at/above critical for auto_estop_temp_sec.
         Servo thermal mass means a genuine overtemp lasts many seconds, so the
         sub-second delay this adds costs nothing protective.
         """
@@ -489,6 +501,7 @@ class MasterLowStatusNode(Node):
         monitor = self.health_checks.get(f'{module}_servos')
         strikes = self._status_strikes[module]
         overload_since = self._overload_since[module]
+        hot_since = self._hot_since[module]
         now = self.get_clock().now().nanoseconds / 1e9
 
         faults = []
@@ -517,8 +530,12 @@ class MasterLowStatusNode(Node):
             temp = (monitor.filtered_temp(i, AUTO_ESTOP_MIN_TEMP_SAMPLES)
                     if monitor is not None else None)
             if temp is not None and temp >= self.auto_estop_critical_temp:
-                faults.append(f'{module}[{i}] temp={temp:.0f}C')
-                spoken.append(f'{_spoken_joint(module, i)} at {temp:.0f} degrees')
+                since = hot_since.setdefault(i, now)
+                if now - since >= self.auto_estop_temp_sec:
+                    faults.append(f'{module}[{i}] temp={temp:.0f}C ({now - since:.2f}s)')
+                    spoken.append(f'{_spoken_joint(module, i)} at {temp:.0f} degrees')
+            else:
+                hot_since.pop(i, None)
 
         # Track this module's fault state; edge-detect on the aggregate across all
         # modules so a healthy module's callback doesn't clear another's fault
