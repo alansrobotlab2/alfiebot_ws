@@ -410,7 +410,7 @@ void neckPowerCallback(const void *msgin) {
  * 1. Checks if already calibrating (rejects if so)
  * 2. Disables BackCmd processing
  * 3. Checks limit switch state
- * 4. If not triggered, moves downward at fixed PWM (74) until limit switch triggers
+ * 4. If not triggered, moves downward at fixed PWM (CALIBRATION_PWM) until limit switch triggers
  * 5. Executes immediate stop when limit switch is triggered
  * 6. Resets encoder counts and position to zero
  * 7. Sets is_calibrated flag
@@ -443,8 +443,8 @@ void calibrationServiceCallback(const void *req_msg, void *res_msg) {
     delay(50);
     
     // Calibration parameters
-    // Held to VELOCITY_PID_OUTPUT_LIMIT: this path bypasses the PID, so the duty
-    // ceiling set in config.h does not otherwise apply here.
+    // CALIBRATION_PWM (config.h) must stay at or below VELOCITY_PID_OUTPUT_LIMIT:
+    // this path bypasses the PID, so the duty ceiling does not otherwise apply here.
     //
     // THIS PATH CARRIES ITS OWN GUARDS - do not assume the usual ones apply.
     //
@@ -459,7 +459,8 @@ void calibrationServiceCallback(const void *req_msg, void *res_msg) {
     // driving into the bottom stop at the full duty ceiling, with the DRV8876's
     // ITRIP no longer providing a current limit either (see config.h, WHY THERE
     // IS NO CURRENT TRIP). Now a jammed or already-down axis aborts in ~400 ms.
-    const uint8_t CALIBRATION_PWM = VELOCITY_PID_OUTPUT_LIMIT;
+    static_assert(CALIBRATION_PWM > MIN_PWM_DOWNWARD && CALIBRATION_PWM <= VELOCITY_PID_OUTPUT_LIMIT,
+                  "CALIBRATION_PWM out of range");
     const uint32_t CALIBRATION_TIMEOUT_MS = 20000;  // 20 second timeout
     const uint32_t LED_UPDATE_INTERVAL_MS = 100;    // Update LED every 100ms during calibration
     

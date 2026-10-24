@@ -1078,8 +1078,16 @@
  * runaway detection, and it drives a gravity-loaded axis downward - the exact
  * situation a swapped motor lead or flipped PH polarity turns dangerous. 200
  * counts is ~2 mm of travel the wrong way.
+ *
+ * PWM is the fixed descent duty. It was VELOCITY_PID_OUTPUT_LIMIT (220), which
+ * with gravity assisting came down at ~70 mm/s; halved to 110 for a gentler
+ * landing on the switch. Must stay above MIN_PWM_DOWNWARD and at or below
+ * VELOCITY_PID_OUTPUT_LIMIT - this path bypasses the PID and its duty clamp.
+ * At half speed a healthy descent still covers ~14 mm (1400 counts) in the stall
+ * window, far above MIN_COUNTS.
  */
-#define CALIBRATION_STALL_MS        400     ///< No-progress window before aborting the homing descent
+#define CALIBRATION_PWM             110     ///< Homing descent duty (was 220, the duty ceiling)
+#define CALIBRATION_STALL_MS       400     ///< No-progress window before aborting the homing descent
 #define CALIBRATION_MIN_COUNTS      20      ///< Counts of progress needed within that window
 #define CALIBRATION_REVERSE_COUNTS  200     ///< Upward counts while commanded down that abort homing
 #define DRIVER_FAULT_RETRY_MS   1000    ///< Minimum spacing between nSLEEP re-arm attempts
