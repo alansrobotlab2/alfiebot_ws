@@ -42,15 +42,14 @@ folder under `~/alfiebot_ws/data/`, selected by a short `dataset` name:
 ~/alfiebot_ws/data/
 └── <dataset>/                  e.g. can_do_challenge
     ├── demonstrations/         raw MCAP bags from the recorder
-    │   ├── demo_20260102_195919/
-    │   └── manifest.json       annotations (annotate_demo.py)
+    │   └── demo_20260102_195919/
     └── lerobot/                GR00T LeRobot v2 output of rosbag_to_groot.py
         ├── meta/               info.json, modality.json, tasks.jsonl, episodes.jsonl, stats.json
         ├── data/chunk-000/
         └── videos/chunk-000/
 ```
 
-The recorder, converter, episode manager and annotation tool all take
+The recorder, converter and episode manager all take
 `--dataset NAME` (or the `ALFIE_DATASET` environment variable) and derive the
 paths from `alfie_gr00t/dataset_paths.py`. `--data-root` / `ALFIE_DATA_ROOT`
 moves the whole tree (e.g. to an external drive). Pass `<dataset>/lerobot` as
@@ -136,33 +135,17 @@ ros2 topic echo /alfie/recording/status      # RECORDING:<dataset>/demo_... or S
   - E-stop triggers
   - Hardware failures
 
-## Annotation
+## Reviewing Episodes
 
-After recording demonstrations, annotate them for training dataset curation:
-
-```bash
-./src/alfie_gr00t/scripts/annotate_demo.py --dataset can_do_challenge
-```
-
-This interactive tool lets you:
-- Mark demonstrations as successful/failed/partial
-- Rate grasp quality (1-5)
-- Note lighting conditions
-- Add free-form notes
-
-Annotations are saved to `manifest.json` in the dataset's `demonstrations/` directory.
-
-### View Statistics
+After converting, review and curate episodes in the Gradio episode manager:
 
 ```bash
-./src/alfie_gr00t/scripts/annotate_demo.py --dataset can_do_challenge --stats
+python3 src/alfie_gr00t/scripts/episode_manager.py --dataset can_do_challenge
 ```
 
-Shows:
-- Total demonstrations
-- Success rate
-- Average quality score
-- Distribution of conditions
+Open `http://<orin-ip>:7860` to play all four camera views, change an episode's
+task, delete bad episodes, or re-run the conversion. Regenerate `meta/stats.json`
+after deleting or relabelling episodes.
 
 ## Data Storage
 
@@ -365,9 +348,9 @@ lerobot/
 
 After collecting 500+ demonstrations:
 
-1. **Annotate all demos** - Use annotation tool to label quality
-2. **Filter dataset** - Remove corrupted/failed recordings
-3. **Convert to GR00T format** - Use `rosbag_to_groot.py` as described above
+1. **Convert to GR00T format** - Use `rosbag_to_groot.py` as described above
+2. **Review dataset** - Remove corrupted/failed episodes in the episode manager
+3. **Regenerate stats** - Run `gr00t/data/stats.py`
 4. **Train policy** - Fine-tune GR00T with `--dataset-path ~/alfiebot_ws/data/<dataset>/lerobot`
 
 ## Advanced Options

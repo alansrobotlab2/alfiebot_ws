@@ -24,7 +24,7 @@
 3. **Helper Scripts**
    - [check_topics.sh](scripts/check_topics.sh) - Pre-flight verification
    - [record_demo.sh](scripts/record_demo.sh) - Quick launcher
-   - [annotate_demo.py](scripts/annotate_demo.py) - Interactive annotation tool
+   - [episode_manager.py](scripts/episode_manager.py) - Web UI to review/relabel/delete episodes
 
 4. **Documentation**
    - [DATA_COLLECTION.md](DATA_COLLECTION.md) - Complete guide
@@ -75,9 +75,9 @@ ros2 topic pub --once /recording/start std_msgs/msg/Bool '{data: true}'
 ros2 topic pub --once /recording/stop std_msgs/msg/Bool '{data: true}'
 ```
 
-### 3. Annotate Demonstrations
+### 3. Review Episodes
 ```bash
-./src/alfie_gr00t/scripts/annotate_demo.py
+python3 src/alfie_gr00t/scripts/episode_manager.py --dataset <dataset>
 ```
 
 ## Data Format
@@ -94,8 +94,7 @@ demonstrations/
 ├── demo_20250129_143022/
 │   └── demo_20250129_143022_0.mcap
 ├── demo_20250129_143156/
-│   └── demo_20250129_143156_0.mcap
-└── manifest.json (created by annotate_demo.py)
+    └── demo_20250129_143156_0.mcap
 ```
 
 ## Next Steps

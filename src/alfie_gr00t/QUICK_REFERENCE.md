@@ -50,10 +50,10 @@ ros2 topic hz /alfie/robotlowstate
 5. **Stop recording** → Publish to `/alfie/recording/stop`
 6. **Repeat** → New position, record again
 
-## Annotation
+## Review / Relabel Episodes
 
 ```bash
-./src/alfie_gr00t/scripts/annotate_demo.py --dataset can_do_challenge
+python3 src/alfie_gr00t/scripts/episode_manager.py --dataset can_do_challenge   # http://<orin-ip>:7860
 ```
 
 ## Playback

@@ -11,8 +11,7 @@ folder under a common data root, named by a short ``dataset`` slug:
         lerobot/          GR00T-flavoured LeRobot v2 output of rosbag_to_groot.py
                           (meta/, data/, videos/) -- pass this to --dataset-path
 
-The recorder, the converter, the episode manager and the annotation tool all
-derive their paths from here so a dataset is chosen in exactly one place.
+The recorder, the converter and the episode manager all derive their paths from here so a dataset is chosen in exactly one place.
 ``ALFIE_DATA_ROOT`` and ``ALFIE_DATASET`` override the defaults for scripts run
 outside ROS launch.
 """
