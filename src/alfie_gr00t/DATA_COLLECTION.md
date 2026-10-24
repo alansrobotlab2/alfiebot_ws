@@ -137,15 +137,45 @@ ros2 topic echo /alfie/recording/status      # RECORDING:<dataset>/demo_... or S
 
 ## Reviewing Episodes
 
-After converting, review and curate episodes in the Gradio episode manager:
+The episode manager is a ROS node serving a browser UI for converting, reviewing
+and labelling a dataset:
 
 ```bash
-python3 src/alfie_gr00t/scripts/episode_manager.py --dataset can_do_challenge
+ros2 run alfie_gr00t episode_manager --ros-args -p dataset:=can_do_challenge
 ```
 
-Open `http://<orin-ip>:7860` to play all four camera views, change an episode's
-task, delete bad episodes, or re-run the conversion. Regenerate `meta/stats.json`
-after deleting or relabelling episodes.
+Open `http://alfiebot.local:7880/` (startup logs every URL that works). From there:
+
+- **Convert** runs `rosbag_to_groot.py` on any new bags in `demonstrations/` and
+  streams its output. Pick the task the new bags get, or `+ new task…` to name
+  one (the only way to give a fresh dataset its first task).
+- **Review** plays the four cameras in sync: <kbd>Space</kbd> play/pause,
+  <kbd>←</kbd>/<kbd>→</kbd> one frame, <kbd>Shift</kbd> for one second, playback
+  speed 0.25×–4×.
+- **Label** with the task buttons or <kbd>1</kbd>–<kbd>9</kbd>; it rewrites
+  `episodes.jsonl` and the episode's parquet `task_index`, then moves to the
+  next episode. <kbd>J</kbd>/<kbd>K</kbd> walk the list.
+- **Delete** removes the source bag, the parquet and videos, and the metadata row.
+  Other episodes keep their indices.
+
+A banner appears when `meta/stats.json` is older than `episodes.jsonl`; regenerate
+it before training.
+
+**Convert refuses to run while episodes have no bag** in `demonstrations/` (e.g.
+the bags were moved off the robot) unless you confirm: the converter treats a
+missing bag as a deleted demo and would drop those episodes.
+
+| parameter | default | meaning |
+|---|---|---|
+| `dataset` | `$ALFIE_DATASET` | dataset opened at startup; others are picked in the UI |
+| `data_root` | `$ALFIE_DATA_ROOT` or `~/alfiebot_ws/data` | folder of datasets |
+| `port` / `host` | `7880` / `0.0.0.0` | HTTP bind (no auth: keep it on a trusted network) |
+| `python` | `~/Isaac-GR00T/.venv/bin/python` | interpreter for the converter and parquet edits; needs pyarrow, pandas, zstandard |
+| `num_threads` / `use_gpu` | `8` / `false` | passed to `rosbag_to_groot.py` |
+| `recorder_status_topic` | `/alfie/recording/status` | data_recorder state, shown in the top bar |
+
+The node itself runs on system python with no extra packages (React and htm are
+vendored under `alfie_gr00t/episode_manager/web/`, no build step).
 
 ## Data Storage
 

@@ -21,7 +21,17 @@ setup(
             'config/groot_client.yaml',
             'config/groot_server.yaml',
         ]),
+        # The episode manager runs the converter from here.
+        ('share/' + package_name + '/scripts', ['scripts/rosbag_to_groot.py']),
     ],
+    # The episode manager's web UI (React is vendored, there is no build step)
+    # ships as package data next to the module.
+    package_data={
+        'alfie_gr00t.episode_manager': [
+            'web/*.html', 'web/*.css', 'web/*.js',
+            'web/components/*.js', 'web/vendor/*.js',
+        ],
+    },
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='alfie',
@@ -36,6 +46,7 @@ setup(
     entry_points={
         'console_scripts': [
             'data_recorder = alfie_gr00t.nodes.data_recorder:main',
+            'episode_manager = alfie_gr00t.episode_manager.episode_manager_node:main',
             'groot_client = alfie_gr00t.nodes.groot_client:main',
             'groot_server = alfie_gr00t.nodes.groot_server:main',
             'groot_inference_server = alfie_gr00t.scripts.groot_inference_server:main',

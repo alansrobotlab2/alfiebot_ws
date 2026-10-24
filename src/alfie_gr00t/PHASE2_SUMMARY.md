@@ -24,7 +24,7 @@
 3. **Helper Scripts**
    - [check_topics.sh](scripts/check_topics.sh) - Pre-flight verification
    - [record_demo.sh](scripts/record_demo.sh) - Quick launcher
-   - [episode_manager.py](scripts/episode_manager.py) - Web UI to review/relabel/delete episodes
+   - [episode_manager](alfie_gr00t/episode_manager/) - ROS node + web UI to review/relabel/delete episodes
 
 4. **Documentation**
    - [DATA_COLLECTION.md](DATA_COLLECTION.md) - Complete guide
@@ -77,7 +77,7 @@ ros2 topic pub --once /recording/stop std_msgs/msg/Bool '{data: true}'
 
 ### 3. Review Episodes
 ```bash
-python3 src/alfie_gr00t/scripts/episode_manager.py --dataset <dataset>
+ros2 run alfie_gr00t episode_manager --ros-args -p dataset:=<dataset>
 ```
 
 ## Data Format

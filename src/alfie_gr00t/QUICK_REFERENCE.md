@@ -53,7 +53,7 @@ ros2 topic hz /alfie/robotlowstate
 ## Review / Relabel Episodes
 
 ```bash
-python3 src/alfie_gr00t/scripts/episode_manager.py --dataset can_do_challenge   # http://<orin-ip>:7860
+ros2 run alfie_gr00t episode_manager --ros-args -p dataset:=can_do_challenge   # http://alfiebot.local:7880/
 ```
 
 ## Playback
