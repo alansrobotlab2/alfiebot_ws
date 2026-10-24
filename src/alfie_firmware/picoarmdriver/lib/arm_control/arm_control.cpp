@@ -147,4 +147,5 @@ void fillArmState(alfie_msgs__msg__ArmState *st)
         st->board_serial[i] = b.board_serial[i];
     }
     st->arm_side = b.arm_side;
+    st->board_temp = b.board_temp;
 }

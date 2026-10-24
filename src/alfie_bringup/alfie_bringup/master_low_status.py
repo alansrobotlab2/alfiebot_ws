@@ -1,7 +1,9 @@
+import math
 from typing import Dict, List, Optional
 import rclpy
 from rclpy.node import Node
-from alfie_msgs.msg import RobotLowState, ArmState, HeadState, BackState, JetsonState
+from alfie_msgs.msg import (RobotLowState, ArmState, HeadState, BackState, JetsonState,
+                            MecanumState)
 from alfie_msgs.msg import ServoState, SpeechRequest
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
@@ -111,12 +113,16 @@ class MasterLowStatusNode(Node):
       - right arm  -> low/right_arm/armstate  (ArmState, SI + polarity applied)
       - head       -> low/headstate           (HeadState, SI + polarity applied)
       - back/spine -> low/backstate           (BackState, actuator + BNO085 IMU)
-      - drive base -> low/odom                (nav_msgs/Odometry, fused wheel odom)
+      - drive base -> low/mecanumstate        (MecanumState, fused wheel odom + board temp)
       - jetson SBC -> low/jetsonstate         (JetsonState)
 
     This node subscribes to all of them and republishes the aggregate. The
     module firmware already converts servo feedback to SI units and applies
     per-servo polarity, so no unit conversion happens here.
+
+    The drive board's compact MecanumState is also republished as
+    nav_msgs/Odometry on low/odom (zero covariance; frame odom -> base_link) for
+    odom_tf_broadcaster / odom_covariance_relay.
     """
 
     def __init__(self):
@@ -180,8 +186,8 @@ class MasterLowStatusNode(Node):
             HeadState, 'low/headstate', self.head_callback, qos_best_effort)
         self.back_sub = self.create_subscription(
             BackState, 'low/backstate', self.back_callback, qos_best_effort)
-        self.odom_sub = self.create_subscription(
-            Odometry, 'low/odom', self.odom_callback, qos_best_effort)
+        self.mecanum_sub = self.create_subscription(
+            MecanumState, 'low/mecanumstate', self.mecanum_callback, qos_best_effort)
         # Base velocity command, raw and rate-limited, from command_mux
         self.current_cmd_vel_sub = self.create_subscription(
             Twist, 'low/current_cmd_vel', self.current_cmd_vel_callback, qos_best_effort)
@@ -195,6 +201,10 @@ class MasterLowStatusNode(Node):
             RobotLowState, 'robotlowstate', qos_best_effort)
         self.joint_state_pub = self.create_publisher(
             JointState, 'joint_states', qos_best_effort)
+        # RELIABLE, like the firmware's former direct odom publisher, so both
+        # reliable and best-effort subscribers match.
+        self.odom_pub = self.create_publisher(
+            Odometry, 'low/odom', QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
         # Neck-servo-0 (head pan) power heartbeat. Published once per 50 Hz cycle
         # ONLY while the servo has torque enabled, so the back board's BNO085 can
         # decouple its compass while the nearby motor current corrupts the mag.
@@ -238,6 +248,7 @@ class MasterLowStatusNode(Node):
         self.health_checks['left_arm_rate'].update()
         self.health_checks['left_arm_servos'].update(msg.joint_state)
         self.health_checks['left_arm_voltage'].update(msg.joint_state)
+        self.health_checks['left_arm_board_temp'].update(float(msg.board_temp))
         self._check_servo_faults('left_arm', msg.joint_state)
 
     def right_arm_callback(self, msg: ArmState) -> None:
@@ -245,6 +256,7 @@ class MasterLowStatusNode(Node):
         self.health_checks['right_arm_rate'].update()
         self.health_checks['right_arm_servos'].update(msg.joint_state)
         self.health_checks['right_arm_voltage'].update(msg.joint_state)
+        self.health_checks['right_arm_board_temp'].update(float(msg.board_temp))
         self._check_servo_faults('right_arm', msg.joint_state)
 
     def head_callback(self, msg: HeadState) -> None:
@@ -252,6 +264,7 @@ class MasterLowStatusNode(Node):
         self.health_checks['head_rate'].update()
         self.health_checks['head_servos'].update(msg.servos)
         self.health_checks['head_voltage'].update(msg.servos)
+        self.health_checks['head_board_temp'].update(float(msg.board_temp))
         self._check_servo_faults('head', msg.servos)
 
     def back_callback(self, msg: BackState) -> None:
@@ -259,8 +272,24 @@ class MasterLowStatusNode(Node):
         self.health_checks['back_rate'].update()
         self.health_checks['back_board_temp'].update(float(msg.board_temp))
 
-    def odom_callback(self, msg: Odometry) -> None:
-        self.odom = msg
+    def mecanum_callback(self, msg: MecanumState) -> None:
+        self.health_checks['mecanum_board_temp'].update(float(msg.board_temp))
+
+        odom = Odometry()
+        # The board stamps with its own uptime; restamp with host time so TF
+        # consumers get a usable stamp.
+        odom.header.stamp = self.get_clock().now().to_msg()
+        odom.header.frame_id = msg.header.frame_id or 'odom'
+        odom.child_frame_id = 'base_link'
+        odom.pose.pose.position.x = float(msg.x)
+        odom.pose.pose.position.y = float(msg.y)
+        odom.pose.pose.orientation.z = math.sin(msg.yaw * 0.5)
+        odom.pose.pose.orientation.w = math.cos(msg.yaw * 0.5)
+        odom.twist.twist.linear.x = float(msg.vx)
+        odom.twist.twist.linear.y = float(msg.vy)
+        odom.twist.twist.angular.z = float(msg.wz)
+        self.odom = odom
+        self.odom_pub.publish(odom)
 
     def current_cmd_vel_callback(self, msg: Twist) -> None:
         self.current_cmd_vel = msg

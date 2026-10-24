@@ -37,5 +37,16 @@ def fix_atomic_conflicts(source, target, env):
         except Exception as e:
             print(f"Warning: Could not remove atomic_64bits object: {e}")
 
-# Register the post-action after the project libraries are built
-env.AddPostAction("$BUILD_DIR/libFrameworkArduino.a", fix_atomic_conflicts)
+# Run immediately before linking.
+#
+# This was previously a post-action on $BUILD_DIR/libFrameworkArduino.a, which
+# only fires when the Arduino framework library itself is rebuilt. Any build that
+# regenerated libmicroros.a while libFrameworkArduino.a stayed cached - notably
+# `pio run -t clean_microros` followed by a normal build, which is what you do
+# after changing a .msg - left the conflicting object in place and failed at link
+# with "multiple definition of __atomic_load_8".
+#
+# The ELF target always needs building when anything changed, so hooking here
+# means the fix is applied on every link. Re-running `ar d` when the member is
+# already gone is a harmless no-op.
+env.AddPreAction("$BUILD_DIR/${PROGNAME}.elf", fix_atomic_conflicts)

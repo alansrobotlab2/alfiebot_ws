@@ -47,6 +47,9 @@ public:
     volatile uint8_t board_serial[8] = {};          ///< raw Pico unique id (flash RUID)
     char board_serial_str[2 * 8 + 1] = {0};         ///< 16-char hex id + NUL
 
+    // ---- Board health -----------------------------------------------------
+    volatile uint8_t board_temp = 0;  ///< RP2040 die temp (deg C), Core 0 at BOARD_TEMP_PERIOD_MS
+
     // ---- Status LED -------------------------------------------------------
     WS2812 statusLED;
 

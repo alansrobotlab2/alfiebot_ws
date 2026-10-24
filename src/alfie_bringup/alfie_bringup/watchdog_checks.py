@@ -618,11 +618,18 @@ def create_health_checks() -> Dict[str, HealthCheck]:
         temp_warn=50.0, current_warn_ma=3000.0)
 
     # ========================================================================
-    # Back Board Temperature Monitor
+    # Pico Board Temperature Monitors
     # ========================================================================
+    # RP2040 die temperature (internal sensor, +/- several deg C). The part is
+    # rated to 85 C; idle in the enclosure it reads ~50 C.
 
-    health_checks['back_board_temp'] = TemperatureMonitor(
-        name='Back Board Temp', warn_temp=45.0, critical_temp=45.0)
+    for key, name in (('left_arm_board_temp', 'Left Arm Board Temp'),
+                      ('right_arm_board_temp', 'Right Arm Board Temp'),
+                      ('head_board_temp', 'Head Board Temp'),
+                      ('back_board_temp', 'Back Board Temp'),
+                      ('mecanum_board_temp', 'Mecanum Board Temp')):
+        health_checks[key] = TemperatureMonitor(
+            name=name, warn_temp=60.0, critical_temp=70.0)
 
     # ========================================================================
     # Jetson Temperature Monitors

@@ -94,6 +94,7 @@
 #define SERVO_LOOP_PERIOD_MS    20        ///< Core 0 servo bus tick (50 Hz)
 #define ROS_TASK_PERIOD_MS      10        ///< Core 1 micro-ROS tick (100 Hz)
 #define STATE_PUBLISH_PERIOD_MS 20        ///< Outbound HeadState publish cadence (50 Hz)
+#define BOARD_TEMP_PERIOD_MS    1000      ///< Core 0 RP2040 die temperature read (1 Hz)
 
 // =============================================================================
 // SAFETY

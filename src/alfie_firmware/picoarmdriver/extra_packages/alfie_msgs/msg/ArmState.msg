@@ -11,3 +11,7 @@ uint8[8] board_serial
 
 # Resolved side: 0 = left, 1 = right, 255 = unknown (serial not in the table).
 uint8 arm_side
+
+# RP2040 die temperature (deg C, internal sensor), refreshed ~1 Hz. 0 until the
+# first read.
+uint8 board_temp

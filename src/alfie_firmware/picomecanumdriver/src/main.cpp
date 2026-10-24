@@ -69,6 +69,13 @@ void loop() {
         // Update all peripherals (motors, encoders, odometry, safety)
         rp.updatePeripherals();
     }
+
+    // analogReadTemp() blocks ~1 ms, so keep it off the control tick and slow.
+    static uint32_t last_temp_time = 0;
+    if (current_time - last_temp_time >= BOARD_TEMP_PERIOD_MS) {
+        last_temp_time = current_time;
+        rp.board_temp = (uint8_t)constrain(analogReadTemp() + 0.5f, 0.0f, 255.0f);
+    }
     
     // LED status blink pattern (updates every LED_BLINK_PERIOD_MS = 125ms)
     if (current_time - last_led_time >= LED_BLINK_PERIOD_MS) {

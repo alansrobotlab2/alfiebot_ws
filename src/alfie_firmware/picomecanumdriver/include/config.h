@@ -250,8 +250,8 @@ typedef enum {
 /**
  * @brief ROS node namespace (matches the head/back boards). Topics are declared
  * relative so they resolve under it: mecanumdrive -> /alfie/low/mecanumdrive,
- * odom -> /alfie/low/odom — same wire topics as before, but the node itself now
- * lives at /alfie/low/mecanum_drive_controller instead of the root namespace.
+ * mecanumstate -> /alfie/low/mecanumstate. The node lives at
+ * /alfie/low/mecanum_drive_controller.
  */
 #define NAMESPACE "alfie/low"
 
@@ -260,7 +260,8 @@ typedef enum {
  */
 #define ROS_TASK_FREQUENCY_HZ   100     ///< ROS task frequency (Hz)
 #define ROS_TASK_PERIOD_MS      10      ///< ROS task period (ms) = 1000/FREQUENCY
-#define STATE_PUBLISH_PERIOD_MS 20      ///< Outbound odometry publish cadence (50 Hz)
+#define STATE_PUBLISH_PERIOD_MS 20      ///< Outbound MecanumState publish cadence (50 Hz)
+#define BOARD_TEMP_PERIOD_MS    1000    ///< Core 0 RP2040 die temperature read (1 Hz)
 #define AGENT_PING_INTERVAL_MS  100     ///< Interval to ping agent when waiting (ms)
 #define AGENT_HEALTH_CHECK_MS   200     ///< Interval to check connection health (ms)
 #define AGENT_PING_TIMEOUT_MS   50      ///< Timeout for agent ping when waiting (ms)

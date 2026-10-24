@@ -5,7 +5,7 @@
  * This module handles all ROS2 communication including:
  * - Micro-ROS initialization and management
  * - Velocity command subscription (/mecanumdrive)
- * - Odometry publishing (/odom)
+ * - MecanumState publishing (odometry + board temp, /alfie/low/mecanumstate)
  * - Inter-core communication with motor control
  * 
  * @author Alfie Bot Project
@@ -21,7 +21,7 @@
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 #include <geometry_msgs/msg/twist.h>
-#include <nav_msgs/msg/odometry.h>
+#include <alfie_msgs/msg/mecanum_state.h>
 #include "config.h"
 
 // =============================================================================
@@ -64,11 +64,11 @@ extern rclc_executor_t executor;
 
 // Subscribers and Publishers
 extern rcl_subscription_t mecanum_subscriber;
-extern rcl_publisher_t odom_publisher;
+extern rcl_publisher_t state_publisher;
 
 // Message instances
 extern geometry_msgs__msg__Twist twist_msg;
-extern nav_msgs__msg__Odometry odom_msg;
+extern alfie_msgs__msg__MecanumState state_msg;
 
 // ROS state
 extern bool micro_ros_initialized;
@@ -116,10 +116,10 @@ void mecanumDriveCallback(const void *msgin);
 void processVelocityCommand(void);
 
 /**
- * @brief Publish odometry data to ROS2
- * Sends current robot odometry to /odom topic
+ * @brief Publish MecanumState (odometry + board temp) to ROS2
+ * Sends current robot odometry to /alfie/low/mecanumstate
  */
-void publishOdometry(void);
+void publishMecanumState(void);
 
 /**
  * @brief Monitor communication watchdog

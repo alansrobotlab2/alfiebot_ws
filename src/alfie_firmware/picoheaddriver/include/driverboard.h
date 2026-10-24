@@ -41,6 +41,9 @@ public:
     volatile uint16_t eye_pwm[NUM_EYES]   = {0, 0};  ///< commanded duty 0..4095
     volatile uint16_t eye_state[NUM_EYES] = {0, 0};  ///< last-applied duty 0..4095
 
+    // ---- Board health -----------------------------------------------------
+    volatile uint8_t board_temp = 0;  ///< RP2040 die temp (deg C), Core 0 at BOARD_TEMP_PERIOD_MS
+
     // ---- Status LED -------------------------------------------------------
     WS2812 statusLED;
 

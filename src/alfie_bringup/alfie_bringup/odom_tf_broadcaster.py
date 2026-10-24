@@ -2,10 +2,12 @@
 """
 odom -> base_link TF broadcaster.
 
-The mecanum firmware publishes ``nav_msgs/Odometry`` on the global ``/odom`` topic
-(frame ``odom``, child ``base_link``, full holonomic twist) but does NOT broadcast the
-corresponding TF. Nav2 / Isaac ROS need that transform to exist. This node republishes
-the odometry pose as an ``odom`` -> ``base_link`` transform.
+master_low_status republishes the mecanum board's odometry as ``nav_msgs/Odometry``
+on ``/alfie/low/odom`` (frame ``odom``, child ``base_link``, full holonomic twist) but
+does NOT broadcast the corresponding TF. Nav2 / Isaac ROS need that transform to exist. This node republishes
+the odometry pose as an ``odom`` -> ``base_link`` transform. The launch files set
+``base_frame:=base_footprint`` so the chain is odom -> base_footprint -> base_link
+(base_footprint -> base_link is a static TF).
 
 Mutually exclusive with the robot_localization EKF: when the EKF runs it OWNS this
 transform, so launch this node OR the EKF, never both (see foundations.launch.py

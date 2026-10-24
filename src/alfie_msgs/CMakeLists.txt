@@ -54,6 +54,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ImuState.msg"
   "msg/BackCmd.msg"
   "msg/BackState.msg"
+  "msg/MecanumState.msg"
   "msg/Doa.msg"
   "msg/LedCommand.msg"
   "msg/Detection.msg"

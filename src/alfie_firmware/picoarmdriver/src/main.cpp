@@ -71,6 +71,13 @@ void loop()
         serviceMemoryRequest();// one-shot register read parked by the ROS service
     }
 
+    // analogReadTemp() blocks ~1 ms, so keep it off the servo tick and slow.
+    static uint32_t last_temp_tick = 0;
+    if (now - last_temp_tick >= BOARD_TEMP_PERIOD_MS) {
+        last_temp_tick = now;
+        b.board_temp = (uint8_t)constrain(analogReadTemp() + 0.5f, 0.0f, 255.0f);
+    }
+
     updateStatusLED();         // self-throttled to LED_BLINK_PERIOD_MS
     delay(1);
 }

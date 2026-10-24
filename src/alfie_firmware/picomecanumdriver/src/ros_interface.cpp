@@ -24,11 +24,11 @@ rclc_executor_t executor;
 
 // Subscribers and Publishers
 rcl_subscription_t mecanum_subscriber;
-rcl_publisher_t odom_publisher;
+rcl_publisher_t state_publisher;
 
 // Message instances
 geometry_msgs__msg__Twist twist_msg;
-nav_msgs__msg__Odometry odom_msg;
+alfie_msgs__msg__MecanumState state_msg;
 
 // ROS state
 bool micro_ros_initialized = false;
@@ -104,17 +104,16 @@ bool createRosEntities(void) {
         return false;
     }
     
-    // Create publisher for odometry (relative: resolves to /alfie/low/odom).
-    // RELIABLE, deliberately: serialized nav_msgs/Odometry (~720 B, two 36-double
-    // covariance blocks) exceeds the 512 B XRCE serial MTU, and best-effort
-    // streams cannot fragment — a best-effort odom publisher fails EVERY publish
-    // silently. Reliable streams fragment, and a RELIABLE publisher remains
-    // QoS-compatible with the host's BEST_EFFORT subscribers.
-    ret = rclc_publisher_init_default(
-        &odom_publisher,
+    // Create publisher for MecanumState (relative: resolves to
+    // /alfie/low/mecanumstate). BEST_EFFORT like the other pico state topics:
+    // the compact message fits one XRCE serial frame. (nav_msgs/Odometry, ~720 B,
+    // did not, and had to be RELIABLE to fragment.) master_low_status
+    // republishes it as nav_msgs/Odometry on /alfie/low/odom.
+    ret = rclc_publisher_init_best_effort(
+        &state_publisher,
         &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
-        "odom"
+        ROSIDL_GET_MSG_TYPE_SUPPORT(alfie_msgs, msg, MecanumState),
+        "mecanumstate"
     );
     if (ret != RCL_RET_OK) {
         (void)rcl_subscription_fini(&mecanum_subscriber, &node);
@@ -126,7 +125,7 @@ bool createRosEntities(void) {
     // Create executor
     ret = rclc_executor_init(&executor, &support.context, 1, &allocator);
     if (ret != RCL_RET_OK) {
-        (void)rcl_publisher_fini(&odom_publisher, &node);
+        (void)rcl_publisher_fini(&state_publisher, &node);
         (void)rcl_subscription_fini(&mecanum_subscriber, &node);
         (void)rcl_node_fini(&node);
         rclc_support_fini(&support);
@@ -143,7 +142,7 @@ bool createRosEntities(void) {
     );
     if (ret != RCL_RET_OK) {
         rclc_executor_fini(&executor);
-        (void)rcl_publisher_fini(&odom_publisher, &node);
+        (void)rcl_publisher_fini(&state_publisher, &node);
         (void)rcl_subscription_fini(&mecanum_subscriber, &node);
         (void)rcl_node_fini(&node);
         rclc_support_fini(&support);
@@ -162,7 +161,7 @@ void destroyRosEntities(void) {
     if (ros_entities_created) {
         // Cleanup in reverse order of creation
         rclc_executor_fini(&executor);
-        rcl_publisher_fini(&odom_publisher, &node);
+        rcl_publisher_fini(&state_publisher, &node);
         rcl_subscription_fini(&mecanum_subscriber, &node);
         rcl_node_fini(&node);
         rclc_support_fini(&support);
@@ -227,11 +226,11 @@ void rosStateMachineTask(void) {
                 break;
             }
 
-            // Publish odometry data, throttled to a stable 50 Hz to match the
+            // Publish MecanumState, throttled to a stable 50 Hz to match the
             // master_status watchdog and avoid saturating the best-effort USB-CDC
             // link (the ROS task still ticks at 100 Hz for low command latency).
             if (micro_ros_initialized) {
-                EXECUTE_AT_RATE_MS(STATE_PUBLISH_PERIOD_MS, publishOdometry());
+                EXECUTE_AT_RATE_MS(STATE_PUBLISH_PERIOD_MS, publishMecanumState());
             }
 
             // Process ROS callbacks (commands) - give it 1ms to process queued messages
@@ -311,56 +310,44 @@ void processVelocityCommand(void) {
 }
 
 /**
- * @brief Publish odometry data to ROS2
- * Sends current robot odometry to /odom topic
+ * @brief Publish MecanumState (odometry + board temp) to ROS2
+ * Sends current robot odometry to /alfie/low/mecanumstate
  */
-void publishOdometry(void) {
+void publishMecanumState(void) {
     if (!micro_ros_initialized) {
         return;
     }
-    // Publish unconditionally at the STATE_PUBLISH cadence. Odometry doubles as
+    // Publish unconditionally at the STATE_PUBLISH cadence. This topic doubles as
     // the drive board's heartbeat: gating on new_odometry_data made the topic go
     // fully silent whenever Core 0's encoder/I2C path stalled, which is
     // indistinguishable from a dead board. Stale values still flow (consumers
     // can see them frozen); the flag is cleared for Core 0 bookkeeping only.
     new_odometry_data = false;
 
-    // Frame ids (point the rosidl strings at static buffers)
+    // Frame id (point the rosidl string at a static buffer)
     static char odom_frame_id[] = "odom";
-    static char base_frame_id[] = "base_link";
-    odom_msg.header.frame_id.data = odom_frame_id;
-    odom_msg.header.frame_id.size = strlen(odom_frame_id);
-    odom_msg.header.frame_id.capacity = sizeof(odom_frame_id);
-    odom_msg.child_frame_id.data = base_frame_id;
-    odom_msg.child_frame_id.size = strlen(base_frame_id);
-    odom_msg.child_frame_id.capacity = sizeof(base_frame_id);
+    state_msg.header.frame_id.data = odom_frame_id;
+    state_msg.header.frame_id.size = strlen(odom_frame_id);
+    state_msg.header.frame_id.capacity = sizeof(odom_frame_id);
 
     // Timestamp from local clock
     uint32_t now_ms = getSystemTimeMs();
-    odom_msg.header.stamp.sec = (int32_t)(now_ms / 1000);
-    odom_msg.header.stamp.nanosec = (uint32_t)((now_ms % 1000) * 1000000UL);
+    state_msg.header.stamp.sec = (int32_t)(now_ms / 1000);
+    state_msg.header.stamp.nanosec = (uint32_t)((now_ms % 1000) * 1000000UL);
 
-    // Pose
-    odom_msg.pose.pose.position.x = rp.odometry.position_x;
-    odom_msg.pose.pose.position.y = rp.odometry.position_y;
-    odom_msg.pose.pose.position.z = 0.0;
-
-    // Orientation (yaw -> quaternion about Z)
-    float yaw = rp.odometry.orientation;
-    odom_msg.pose.pose.orientation.x = 0.0;
-    odom_msg.pose.pose.orientation.y = 0.0;
-    odom_msg.pose.pose.orientation.z = sin(yaw * 0.5f);
-    odom_msg.pose.pose.orientation.w = cos(yaw * 0.5f);
+    // Pose (odom frame)
+    state_msg.x = rp.odometry.position_x;
+    state_msg.y = rp.odometry.position_y;
+    state_msg.yaw = rp.odometry.orientation;
 
     // Body-frame twist
-    odom_msg.twist.twist.linear.x = rp.odometry.linear_velocity_x;
-    odom_msg.twist.twist.linear.y = rp.odometry.linear_velocity_y;
-    odom_msg.twist.twist.linear.z = 0.0;
-    odom_msg.twist.twist.angular.x = 0.0;
-    odom_msg.twist.twist.angular.y = 0.0;
-    odom_msg.twist.twist.angular.z = rp.odometry.angular_velocity;
+    state_msg.vx = rp.odometry.linear_velocity_x;
+    state_msg.vy = rp.odometry.linear_velocity_y;
+    state_msg.wz = rp.odometry.angular_velocity;
 
-    (void)rcl_publish(&odom_publisher, &odom_msg, NULL);
+    state_msg.board_temp = rp.board_temp;
+
+    (void)rcl_publish(&state_publisher, &state_msg, NULL);
 }
 
 /**

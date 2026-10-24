@@ -67,6 +67,7 @@ public:
     volatile Odometry_t odometry;
     volatile bool new_velocity_command;
     volatile bool new_odometry_data;
+    volatile uint8_t board_temp;          ///< RP2040 die temp (deg C), Core 0 at BOARD_TEMP_PERIOD_MS
     
     /**
      * @brief Constructor - initializes all state variables

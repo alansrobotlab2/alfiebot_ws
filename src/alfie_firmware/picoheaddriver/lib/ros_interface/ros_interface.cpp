@@ -107,6 +107,7 @@ void publishHeadState(void)
 
     head_state_msg.eye_state[0] = b.eye_state[EYE_LEFT];
     head_state_msg.eye_state[1] = b.eye_state[EYE_RIGHT];
+    head_state_msg.board_temp = b.board_temp;
 
     rcl_publish(&state_publisher, &head_state_msg, NULL);
 }

@@ -2,7 +2,8 @@
 """
 Odometry covariance relay.
 
-The mecanum firmware publishes ``/odom`` with an all-zero covariance. robot_localization
+``/alfie/low/odom`` (republished by master_low_status from the mecanum board's
+MecanumState) carries an all-zero covariance. robot_localization
 does not override message covariances, and a zero covariance reads as "infinitely
 certain", which breaks the filter. This node subscribes to the raw ``/odom``, stamps
 sensible diagonal covariances onto pose and twist, and republishes as ``/odom_cov`` for

@@ -38,6 +38,7 @@ DriverBoard::DriverBoard() {
 
     // Initialize robot status
     robot_status = ERROR_NONE;
+    board_temp = 0;
 
     // Initialize ROS state machine variables
     agent_state = WAITING_AGENT;

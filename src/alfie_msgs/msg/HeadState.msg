@@ -9,3 +9,7 @@ ServoState[3] servos
 # [0] = left eye  (TB6612 channel A)
 # [1] = right eye (TB6612 channel B)
 uint16[2] eye_state
+
+# RP2040 die temperature (deg C, internal sensor), refreshed ~1 Hz. 0 until the
+# first read.
+uint8 board_temp
