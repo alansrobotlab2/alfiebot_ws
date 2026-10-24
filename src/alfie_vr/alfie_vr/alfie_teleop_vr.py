@@ -46,7 +46,7 @@ HEAD_YAW, HEAD_PITCH, HEAD_ROLL = 12, 13, 14
 
 BACK_MIN = 0.000
 BACK_MAX = 0.350         # picobackdriver ACTUATOR_MAX_POSITION (measured stroke)
-BACK_PRESETS = (0.0, 0.15, 0.25, 0.35)   # heights (m) A/B step through
+BACK_PRESETS = (0.0, 0.15, 0.25, 0.34)   # heights (m) A/B step through
 BACK_PRESET_TOL = 0.01   # within this of a preset counts as at it
 
 # Headset yaw beyond this (deg) is ambiguous (operator turned around); hold yaw.

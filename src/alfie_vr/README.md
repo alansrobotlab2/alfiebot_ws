@@ -54,8 +54,8 @@ The headset orientation (relative to where you faced when the VR session started
 |-------|----------|
 | **Thumbstick X** | Rotate robot left/right |
 | **Thumbstick press** | Toggle episode recording |
-| **A Button** | Lower back to the next preset (0.35 → 0.25 → 0.15 → 0.0 m) |
-| **B Button** | Raise back to the next preset (0.0 → 0.15 → 0.25 → 0.35 m) |
+| **A Button** | Lower back to the next preset (0.34 → 0.25 → 0.15 → 0.0 m) |
+| **B Button** | Raise back to the next preset (0.0 → 0.15 → 0.25 → 0.34 m) |
 | **Grip Button (hold)** | Enable right arm tracking |
 
 ### Arm Control (while grip held, either arm)
