@@ -86,8 +86,9 @@ def generate_launch_description():
         # Bags go to ~/alfiebot_ws/data/<dataset>/demonstrations. Switch later with
         # `ros2 param set /alfie/data_recorder dataset <name>`.
         DeclareLaunchArgument(
-            'dataset', default_value='default',
-            description='Dataset name the episode recorder writes into'),
+            'dataset', default_value='CleanTheRoom',
+            description='Dataset name the episode recorder writes into '
+                        '(~/alfiebot_ws/data/<dataset>/demonstrations)'),
 
         # Robot State Publisher - publishes URDF to /robot_description and TF transforms
         Node(
