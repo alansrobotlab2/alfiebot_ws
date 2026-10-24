@@ -468,7 +468,7 @@ def generate_launch_description():
             respawn=True
         ),
 
-        # Wheel /odom -> odom->base_link TF (firmware publishes /odom but no TF).
+        # Wheel /odom -> odom->base_footprint TF (firmware publishes /odom but no TF).
         # For fused wheel+IMU odometry instead, use foundations.launch.py
         # (use_ekf:=true), which swaps this for the robot_localization EKF.
         Node(
@@ -476,6 +476,7 @@ def generate_launch_description():
             namespace='alfie',
             executable='odom_tf_broadcaster',
             name='odom_tf_broadcaster',
+            parameters=[{'base_frame': 'base_footprint'}],
             remappings=tf_remaps,
             output='screen',
             emulate_tty=True,

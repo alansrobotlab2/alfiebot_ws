@@ -60,10 +60,11 @@ def generate_launch_description():
         output='screen',
     )
 
-    # --- Odometry -> base_link TF (mutually exclusive paths) --------------
+    # --- Odometry -> base_footprint TF (mutually exclusive paths) ---------
     odom_tf = Node(
         package='alfie_bringup', executable='odom_tf_broadcaster',
         name='odom_tf_broadcaster', output='screen',
+        parameters=[{'base_frame': 'base_footprint'}],
         remappings=tf_remaps,
         condition=UnlessCondition(use_ekf),
     )
