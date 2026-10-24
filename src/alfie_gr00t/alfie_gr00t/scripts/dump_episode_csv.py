@@ -7,7 +7,7 @@ ground-truth episode data against what the client actually commands.
 
 Usage:
     python dump_episode_csv.py \
-        --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
+        --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
         --episode 0 \
         --output /tmp/episode_0_ground_truth.csv
 """
@@ -38,7 +38,7 @@ def main():
     parser.add_argument(
         '--dataset-path',
         type=str,
-        default='/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge',
+        default='/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot',
         help='Path to LeRobot dataset root',
     )
     parser.add_argument(

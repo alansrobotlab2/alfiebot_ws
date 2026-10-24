@@ -83,7 +83,7 @@ k=15 (1005ms)  base=0.942  r_arm=0.867  r_hand=0.652  head=0.940
 
 ```
 python action_horizon_analysis.py \
-    --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
+    --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     --episode-indices 317,318,319,320,321,322 \
     --host 127.0.0.1 --port 5555 \
     --latency-ms 400 --save-dir /tmp/horizon_analysis_multi/

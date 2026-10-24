@@ -15,6 +15,7 @@ import json
 import re
 import subprocess
 import sys
+import os
 import time
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from pathlib import Path
 WORKSPACE = Path(__file__).resolve().parents[4]  # alfiebot_ws/
 REPLAY_EVAL = WORKSPACE / 'src/alfie_gr00t/alfie_gr00t/scripts/groot_replay_eval.py'
 CONFIG_YAML = WORKSPACE / 'src/alfie_gr00t/config/groot_client.yaml'
-DATASET_PATH = WORKSPACE / 'data/alfiebot.CanDoChallenge'
+DATASET_PATH = WORKSPACE / 'data' / os.environ.get('ALFIE_DATASET', 'can_do_challenge') / 'lerobot'
 RESULTS_DIR = WORKSPACE / 'smoothing_sweep_results'
 
 # Focus joints for per-joint analysis

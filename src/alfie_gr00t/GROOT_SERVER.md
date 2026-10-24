@@ -367,7 +367,7 @@ Replay mode serves pre-recorded actions from a LeRobot-format dataset. The clien
 ### Dataset Structure
 
 ```
-/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge/
+/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot/
 ├── data/chunk-000/
 │   ├── episode_000000.parquet    # 22D state + action vectors
 │   ├── episode_000001.parquet
@@ -384,7 +384,7 @@ Replay mode serves pre-recorded actions from a LeRobot-format dataset. The clien
 
 ```bash
 python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
-    --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     --episode-index 0 \
     --transport tcp --port 5555
 ```
@@ -393,7 +393,7 @@ python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server
 
 ```bash
 ros2 launch alfie_gr00t groot_inference.launch.py \
-    dataset_path:=/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    dataset_path:=/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     episode_index:=0
 ```
 
@@ -401,7 +401,7 @@ ros2 launch alfie_gr00t groot_inference.launch.py \
 
 ```bash
 ros2 run alfie_gr00t groot_server --ros-args \
-    -p dataset_path:=/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    -p dataset_path:=/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     -p episode_index:=0 \
     -p transport:=tcp \
     -p bind_port:=5555

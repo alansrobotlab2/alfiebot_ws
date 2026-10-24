@@ -78,6 +78,17 @@ def generate_launch_description():
             'launch_groot', default_value='false',
             description='Start the GR00T inference client (alfie_gr00t)'),
 
+        # Episode recorder idles until the VR right thumbstick toggles
+        # /alfie/recording/start|stop, then runs ros2 bag record.
+        DeclareLaunchArgument(
+            'launch_recorder', default_value='true',
+            description='Start the GR00T episode recorder (alfie_gr00t data_recorder)'),
+        # Bags go to ~/alfiebot_ws/data/<dataset>/demonstrations. Switch later with
+        # `ros2 param set /alfie/data_recorder dataset <name>`.
+        DeclareLaunchArgument(
+            'dataset', default_value='default',
+            description='Dataset name the episode recorder writes into'),
+
         # Robot State Publisher - publishes URDF to /robot_description and TF transforms
         Node(
             package='robot_state_publisher',
@@ -195,6 +206,14 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(PathJoinSubstitution([
                 FindPackageShare('alfie_gr00t'), 'launch', 'groot_inference.launch.py'])),
             condition=IfCondition(LaunchConfiguration('launch_groot')),
+        ),
+
+        # GR00T episode recorder (on by default, see launch_recorder above).
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(PathJoinSubstitution([
+                FindPackageShare('alfie_gr00t'), 'launch', 'data_collection.launch.py'])),
+            launch_arguments={'dataset': LaunchConfiguration('dataset')}.items(),
+            condition=IfCondition(LaunchConfiguration('launch_recorder')),
         ),
 
         Node(
@@ -335,7 +354,7 @@ def generate_launch_description():
                 'output_width': 352,   # Output resolution width (GR00T model input)
                 'output_height': 256,  # Output resolution height
                 # 30 fps everywhere, including GR00T recording; rosbag_to_groot
-                # and the live client take the latest frame at training_fps (10)
+                # and the live client take the latest frame at training_fps (15)
                 'framerate': 30,
                 'jpeg_quality': 70,
                 'use_hardware_accel': True,
@@ -344,7 +363,7 @@ def generate_launch_description():
                 'camera_frame_id': 'stereo_camera_link',
 
                 # Auto gain on top of the camera's AE (exposure caps at the
-                # frame period: 33ms @ 30fps, 100ms @ 10fps). Gain floor 120 =
+                # frame period: 33ms @ 30fps, 67ms @ 15fps). Gain floor 120 =
                 # training-set setting.
                 'auto_gain': True,
                 'auto_gain_target': 90,

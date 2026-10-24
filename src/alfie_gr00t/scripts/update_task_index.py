@@ -8,12 +8,13 @@ the corresponding parquet files to have the correct task_index value.
 Usage:
     python3 update_task_index.py [--data-dir PATH] [--dry-run]
 
-python3 ./src/alfie_gr00t/scripts/update_task_index.py --data-dir ./data/alfiebot.CanDoChallenge
+python3 ./src/alfie_gr00t/scripts/update_task_index.py --dataset can_do_challenge
 
 """
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -84,10 +85,21 @@ def main():
         description='Update task_index in parquet files based on episodes.jsonl'
     )
     parser.add_argument(
+        '--dataset',
+        default=os.environ.get('ALFIE_DATASET', 'default'),
+        help='Dataset name under --data-root (default: %(default)s)'
+    )
+    parser.add_argument(
+        '--data-root',
+        default=os.environ.get('ALFIE_DATA_ROOT', '~/alfiebot_ws/data'),
+        help='Root folder holding one sub-folder per dataset (default: %(default)s)'
+    )
+    parser.add_argument(
         '--data-dir',
         type=str,
-        default='data/alfiebot.CanDoChallenge',
-        help='Root directory containing data/ and meta/ subdirectories'
+        default=None,
+        help='LeRobot dataset root containing data/ and meta/ '
+             '(default: <data-root>/<dataset>/lerobot)'
     )
     parser.add_argument(
         '--dry-run',
@@ -97,7 +109,8 @@ def main():
 
     args = parser.parse_args()
 
-    data_root = Path(args.data_dir)
+    data_root = Path(args.data_dir) if args.data_dir else (
+        Path(os.path.expanduser(args.data_root)) / args.dataset / 'lerobot')
     meta_dir = data_root / 'meta'
     data_dir = data_root / 'data'
 

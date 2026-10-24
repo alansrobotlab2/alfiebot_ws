@@ -11,7 +11,7 @@ No ROS2 or inference server dependency — runs purely offline.
 Usage:
     python smoothing_simulator.py \
         --horizons /tmp/overlapped_test/horizons_ep320.npz \
-        --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
+        --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
         --episode-index 320 \
         --inference-rates 3.3,5.0 \
         --strategies latest,uniform,exp_m1,exp_m5,triangle \
@@ -20,7 +20,7 @@ Usage:
     # Batch mode
     python smoothing_simulator.py \
         --horizons-dir /tmp/overlapped_test/ \
-        --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
+        --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
         --episode-indices 317,318,319,320,321 \
         --inference-rates 3.3,5.0 \
         --output-dir /tmp/smoothing_results/

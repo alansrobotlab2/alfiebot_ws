@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
 """
-ROS2 Bag to GR00T N1.6 Training Data Converter
+ROS2 Bag to GR00T Training Data Converter
 
-Converts ROS2 bag demonstrations (MCAP format) into the GR00T training format:
+Converts ROS2 bag demonstrations (MCAP format) into the GR00T-flavoured
+LeRobot v2 format (Isaac-GR00T getting_started/data_preparation.md):
 - Parquet files for state/action data
 - MP4 videos for camera observations
-- Updated meta files (info.json, episodes.jsonl, tasks.jsonl)
+- Meta files (info.json, modality.json, episodes.jsonl, tasks.jsonl)
+
+Datasets live under one data root, one folder per dataset:
+    <data_root>/<dataset>/demonstrations/   raw bags from data_recorder
+    <data_root>/<dataset>/lerobot/          converted output (--dataset-path for GR00T)
 
 Usage:
-    python3 rosbag_to_groot.py [--demos-dir PATH] [--output-dir PATH] [--task-index N] [--fps N]
+    python3 rosbag_to_groot.py --dataset NAME [--task-index N] [--task-name TEXT] [--fps N]
 
 python3 rosbag_to_groot.py \
-    --demos-dir /home/alansrobotlab/Projects/alfiebot_ws/data/demonstrations \
-    --output-dir /home/alansrobotlab/Projects/alfiebot_ws/data/alfiebot.CanDoChallenge \
-    --task-index 0 \
-    --start-episode 0 \
-    --num-threads 32
+    --dataset can_do_challenge \
+    --task-index 0 --task-name "find the can and pick it up" \
+    --num-threads 8
+
+After converting, generate normalization stats (required by the trainer):
+    python gr00t/data/stats.py --dataset-path <data_root>/<dataset>/lerobot \
+        --embodiment-tag NEW_EMBODIMENT --modality-config-path <alfiebot_config.py>
 
 """
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -47,6 +55,64 @@ except ImportError as e:
     print(f"Error importing ROS2 modules: {e}")
     print("Make sure to source your ROS2 workspace: source install/setup.bash")
     sys.exit(1)
+
+# Dataset layout helper lives in the alfie_gr00t package; keep a fallback so
+# this script also runs with only ROS sourced.
+try:
+    from alfie_gr00t.dataset_paths import (
+        DEFAULT_DATA_ROOT, DEFAULT_DATASET, demos_dir as _demos_dir, lerobot_dir as _lerobot_dir,
+    )
+except ImportError:
+    DEFAULT_DATA_ROOT = '~/alfiebot_ws/data'
+    DEFAULT_DATASET = 'default'
+
+    def _demos_dir(dataset, root):
+        return Path(os.path.expanduser(root)) / dataset / 'demonstrations'
+
+    def _lerobot_dir(dataset, root):
+        return Path(os.path.expanduser(root)) / dataset / 'lerobot'
+
+
+# Joint names in state/action vector order (matches modality.json below and
+# the 22D layout in alfie_gr00t.core / alfiebot_config.py).
+STATE_ACTION_NAMES = [
+    'cmd_val_x', 'cmd_val_y', 'cmd_val_z', 'cmd_rot_x', 'cmd_rot_y', 'cmd_rot_z',
+    'back_joint',
+    'left_shoulder_yaw_joint', 'left_shoulder_pitch_joint', 'left_elbow_pitch_joint',
+    'left_wrist_pitch_joint', 'left_wrist_roll_joint', 'left_gripper_active_joint',
+    'right_shoulder_yaw_joint', 'right_shoulder_pitch_joint', 'right_elbow_pitch_joint',
+    'right_wrist_pitch_joint', 'right_wrist_roll_joint', 'right_gripper_active_joint',
+    'head_yaw_joint', 'head_pitch_joint', 'head_roll_joint',
+]
+
+CAMERA_KEYS = ['left_wide', 'right_wide', 'left_center', 'right_center']
+
+# Keys of the language annotation column; must match alfiebot_config.py
+# ("annotation." + this) and modality.json["annotation"].
+ANNOTATION_KEY = 'human.action.task_description'
+
+MODALITY_JSON = {
+    'state': {
+        'base': {'start': 0, 'end': 6},
+        'back': {'start': 6, 'end': 7},
+        'left_arm': {'start': 7, 'end': 12},
+        'left_hand': {'start': 12, 'end': 13},
+        'right_arm': {'start': 13, 'end': 18},
+        'right_hand': {'start': 18, 'end': 19},
+        'head': {'start': 19, 'end': 22},
+    },
+    'action': {
+        'base': {'start': 0, 'end': 6},
+        'back': {'start': 6, 'end': 7},
+        'left_arm': {'start': 7, 'end': 12},
+        'left_hand': {'start': 12, 'end': 13},
+        'right_arm': {'start': 13, 'end': 18},
+        'right_hand': {'start': 18, 'end': 19},
+        'head': {'start': 19, 'end': 22},
+    },
+    'video': {k: {'original_key': f'observation.images.{k}'} for k in CAMERA_KEYS},
+    'annotation': {ANNOTATION_KEY: {'original_key': 'task_index'}},
+}
 
 # Data processing imports
 import pandas as pd
@@ -111,10 +177,11 @@ class RosbagToGrootConverter:
         self,
         demos_dir: str,
         output_dir: str,
-        fps: int = 10,
+        fps: int = 15,
         chunk_size: int = 1000,
         num_threads: int = 1,
         use_gpu: bool = False,
+        robot_type: str = 'alfiebot',
     ):
         self.demos_dir = Path(demos_dir)
         self.output_dir = Path(output_dir)
@@ -132,6 +199,10 @@ class RosbagToGrootConverter:
         for d in [self.data_dir, self.videos_dir, self.meta_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
+        self.robot_type = robot_type
+        self.ensure_meta_files()
+        self.tasks_map = self.load_tasks()
+
         # Episode metadata for newly added episodes
         self.episode_metadata = []
         self.print_lock = Lock()
@@ -140,6 +211,99 @@ class RosbagToGrootConverter:
         self.gpu_encoder = None
         if self.use_gpu:
             self.gpu_encoder = self._detect_gpu_encoder()
+
+    # ------------------------------------------------------------------
+    # Meta files
+    # ------------------------------------------------------------------
+    def _video_feature(self) -> Dict:
+        return {
+            'dtype': 'video',
+            'shape': [self.VIDEO_HEIGHT, self.VIDEO_WIDTH, 3],
+            'names': ['height', 'width', 'channels'],
+            'info': {
+                'video.height': self.VIDEO_HEIGHT,
+                'video.width': self.VIDEO_WIDTH,
+                'video.codec': 'h264',
+                'video.pix_fmt': 'yuv420p',
+                'video.is_depth_map': False,
+                'video.fps': self.fps,
+                'video.channels': 3,
+                'has_audio': False,
+            },
+        }
+
+    def build_info_json(self) -> Dict:
+        """LeRobot v2.1 info.json for an empty dataset with our features."""
+        features = {
+            'action': {'dtype': 'float32', 'names': list(STATE_ACTION_NAMES),
+                       'shape': [len(STATE_ACTION_NAMES)]},
+            'observation.state': {'dtype': 'float32', 'names': list(STATE_ACTION_NAMES),
+                                  'shape': [len(STATE_ACTION_NAMES)]},
+        }
+        for cam in CAMERA_KEYS:
+            features[f'observation.images.{cam}'] = self._video_feature()
+        for name, dtype in [('timestamp', 'float32'), ('frame_index', 'int64'),
+                            ('episode_index', 'int64'), ('index', 'int64'),
+                            ('task_index', 'int64')]:
+            features[name] = {'dtype': dtype, 'shape': [1], 'names': None}
+        return {
+            'codebase_version': 'v2.1',
+            'robot_type': self.robot_type,
+            'total_episodes': 0,
+            'total_frames': 0,
+            'total_tasks': 0,
+            'total_videos': 0,
+            'total_chunks': 0,
+            'chunks_size': self.chunk_size,
+            'fps': self.fps,
+            'splits': {'train': '0:0'},
+            'data_path': 'data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet',
+            'video_path': 'videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4',
+            'features': features,
+        }
+
+    def ensure_meta_files(self) -> None:
+        """Create info.json / modality.json / tasks.jsonl for a new dataset."""
+        info_path = self.meta_dir / 'info.json'
+        if not info_path.exists():
+            with open(info_path, 'w') as f:
+                json.dump(self.build_info_json(), f, indent=4)
+            print(f"Created {info_path}")
+        modality_path = self.meta_dir / 'modality.json'
+        if not modality_path.exists():
+            with open(modality_path, 'w') as f:
+                json.dump(MODALITY_JSON, f, indent=4)
+            print(f"Created {modality_path}")
+        tasks_path = self.meta_dir / 'tasks.jsonl'
+        if not tasks_path.exists():
+            tasks_path.touch()
+            print(f"Created empty {tasks_path} (add tasks with --task-name)")
+
+    def load_tasks(self) -> Dict[int, str]:
+        """task_index -> task text from meta/tasks.jsonl."""
+        tasks = {}
+        tasks_path = self.meta_dir / 'tasks.jsonl'
+        if tasks_path.exists():
+            with open(tasks_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        t = json.loads(line)
+                        tasks[int(t['task_index'])] = t['task']
+        return tasks
+
+    def register_task(self, task_index: int, task_name: str) -> None:
+        """Add or rename a task in meta/tasks.jsonl."""
+        current = self.tasks_map.get(task_index)
+        if current == task_name:
+            return
+        if current is not None:
+            print(f"Renaming task {task_index}: '{current}' -> '{task_name}'")
+        self.tasks_map[task_index] = task_name
+        with open(self.meta_dir / 'tasks.jsonl', 'w') as f:
+            for idx in sorted(self.tasks_map):
+                f.write(json.dumps({'task_index': idx, 'task': self.tasks_map[idx]}) + '\n')
+        print(f"Registered task {task_index}: '{task_name}'")
 
     def _detect_gpu_encoder(self) -> Optional[str]:
         """Detect available GPU video encoder."""
@@ -179,6 +343,9 @@ class RosbagToGrootConverter:
 
     def find_demonstrations(self) -> List[Path]:
         """Find all demonstration directories."""
+        if not self.demos_dir.is_dir():
+            print(f"No demonstrations directory yet: {self.demos_dir}")
+            return []
         demos = sorted([
             d for d in self.demos_dir.iterdir()
             if d.is_dir() and d.name.startswith('demo_')
@@ -689,6 +856,7 @@ class RosbagToGrootConverter:
         metadata = {
             'episode_index': episode_index,
             'task_index': task_index,
+            'tasks': [self.tasks_map[task_index]] if task_index in self.tasks_map else [],
             'length': num_frames,
             'duration': episode.timestamps[-1] if episode.timestamps else 0,
             'source': demo_dir.name,
@@ -711,7 +879,7 @@ class RosbagToGrootConverter:
 
         if not demos and not existing_episodes:
             print("No demonstrations found and no existing episodes!")
-            return (0, 0, 0)
+            return (0, 0, 0, 0)
 
         current_demo_names = {d.name for d in demos}
         existing_demo_names = set(existing_episodes.keys())
@@ -942,7 +1110,8 @@ class RosbagToGrootConverter:
         info['total_episodes'] = num_episodes
         info['total_frames'] = total_frames
         info['total_chunks'] = (num_episodes + self.chunk_size - 1) // self.chunk_size
-        info['total_videos'] = num_episodes * 4  # 4 cameras per episode
+        info['total_videos'] = num_episodes * len(CAMERA_KEYS)
+        info['total_tasks'] = len(self.tasks_map)
         info['fps'] = self.fps
 
         # Update image feature shapes to match the encoded videos
@@ -969,22 +1138,27 @@ def print_usage_summary():
     """Print a friendly summary and argument reference."""
     print("""
 ============================================================
-  ROS2 Bag to GR00T N1.6 Training Data Converter
+  ROS2 Bag to GR00T Training Data Converter
 ============================================================
 
 Converts ROS2 bag demonstrations (MCAP format) into the
-GR00T training format: parquet files, MP4 videos, and
-meta files (info.json, episodes.jsonl, tasks.jsonl).
+GR00T LeRobot v2 format: parquet files, MP4 videos, and
+meta files (info.json, modality.json, episodes.jsonl, tasks.jsonl).
+
+Layout:  <data-root>/<dataset>/demonstrations/  (input bags)
+         <data-root>/<dataset>/lerobot/         (output dataset)
 
 Arguments:
-  --demos-dir DIR       Input directory containing demo_* folders
-                        (default: /home/alfie/alfiebot_ws/data/demonstrations)
-  --output-dir DIR      Output directory for GR00T format data
-                        (default: /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge)
-  --task-index N        Task index for labeling (0=pick up can, 1=put can down)
+  --dataset NAME        Dataset name (default: $ALFIE_DATASET or 'default')
+  --data-root DIR       Data root (default: $ALFIE_DATA_ROOT or ~/alfiebot_ws/data)
+  --demos-dir DIR       Override input directory containing demo_* folders
+  --output-dir DIR      Override output directory for GR00T format data
+  --task-index N        Task index to label the converted demos with
                         (default: 0)
+  --task-name TEXT      Language instruction for --task-index; written to
+                        meta/tasks.jsonl (required the first time an index is used)
   --fps N               Target frames per second for resampling; must match
-                        training_fps in groot_client.yaml (default: 10)
+                        training_fps in groot_client.yaml (default: 15)
   --start-episode N     Starting episode index, use to append to existing dataset
                         (default: 0)
   --num-threads N       Parallel threads for conversion
@@ -997,10 +1171,11 @@ Examples:
   # Check what demos and output data exist
   python3 rosbag_to_groot.py --report
 
-  # Convert all demos with defaults
-  python3 rosbag_to_groot.py
+  # Convert all demos of a dataset
+  python3 rosbag_to_groot.py --dataset can_do_challenge \\
+      --task-index 0 --task-name "find the can and pick it up"
 
-  # Convert with custom paths and multithreading
+  # Convert with explicit paths and multithreading
   python3 rosbag_to_groot.py \\
       --demos-dir /path/to/demos \\
       --output-dir /path/to/output \\
@@ -1019,37 +1194,56 @@ def main():
         return
 
     parser = argparse.ArgumentParser(
-        description='ROS2 Bag to GR00T N1.6 Training Data Converter',
+        description='ROS2 Bag to GR00T Training Data Converter',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  %(prog)s --report
+  %(prog)s --dataset can_do_challenge --report
+  %(prog)s --dataset can_do_challenge --task-index 0 --task-name "find the can and pick it up"
   %(prog)s --demos-dir /path/to/demos --output-dir /path/to/output
-  %(prog)s --start-episode 50 --num-threads 8 --use-gpu
+  %(prog)s --dataset can_do_challenge --start-episode 50 --num-threads 8 --use-gpu
 """
+    )
+    parser.add_argument(
+        '--dataset',
+        type=str,
+        default=os.environ.get('ALFIE_DATASET', DEFAULT_DATASET),
+        help='Dataset name under --data-root (default: %(default)s)'
+    )
+    parser.add_argument(
+        '--data-root',
+        type=str,
+        default=os.environ.get('ALFIE_DATA_ROOT', DEFAULT_DATA_ROOT),
+        help='Root folder holding one sub-folder per dataset (default: %(default)s)'
     )
     parser.add_argument(
         '--demos-dir',
         type=str,
-        default='/home/alfie/alfiebot_ws/data/demonstrations',
-        help='Directory containing demonstration folders (default: %(default)s)'
+        default=None,
+        help='Directory containing demo_* folders (default: <data-root>/<dataset>/demonstrations)'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge',
-        help='Output directory for GR00T format data (default: %(default)s)'
+        default=None,
+        help='Output directory for GR00T format data (default: <data-root>/<dataset>/lerobot)'
     )
     parser.add_argument(
         '--task-index',
         type=int,
         default=0,
-        help='Task index: 0=pick up can, 1=put can down (default: %(default)s)'
+        help='Task index to label the converted demos with (default: %(default)s)'
+    )
+    parser.add_argument(
+        '--task-name',
+        type=str,
+        default=None,
+        help='Language instruction for --task-index; stored in meta/tasks.jsonl'
     )
     parser.add_argument(
         '--fps',
         type=int,
-        default=10,
+        default=15,
         help='Target frames per second (default: %(default)s)'
     )
     parser.add_argument(
@@ -1077,24 +1271,36 @@ examples:
 
     args = parser.parse_args()
 
+    demos_dir = args.demos_dir or str(_demos_dir(args.dataset, args.data_root))
+    output_dir = args.output_dir or str(_lerobot_dir(args.dataset, args.data_root))
+
     converter = RosbagToGrootConverter(
-        demos_dir=args.demos_dir,
-        output_dir=args.output_dir,
+        demos_dir=demos_dir,
+        output_dir=output_dir,
         fps=args.fps,
         num_threads=args.num_threads,
         use_gpu=args.use_gpu,
+        robot_type=f'alfiebot_{args.dataset}',
     )
 
     if args.report:
         converter.report()
         return
 
+    if args.task_name:
+        converter.register_task(args.task_index, args.task_name)
+    elif args.task_index not in converter.tasks_map:
+        print(f"Error: task_index {args.task_index} is not in {converter.meta_dir / 'tasks.jsonl'}.")
+        print("       Pass --task-name \"<language instruction>\" to register it.")
+        sys.exit(1)
+
     print("="*60)
     print("ROS2 Bag to GR00T Converter (Incremental Sync)")
     print("="*60)
-    print(f"Demos directory: {args.demos_dir}")
-    print(f"Output directory: {args.output_dir}")
-    print(f"Task index: {args.task_index}")
+    print(f"Dataset: {args.dataset}")
+    print(f"Demos directory: {demos_dir}")
+    print(f"Output directory: {output_dir}")
+    print(f"Task index: {args.task_index} ('{converter.tasks_map[args.task_index]}')")
     print(f"Target FPS: {args.fps}")
     print(f"Number of threads: {args.num_threads}")
     print(f"GPU acceleration: {'Enabled' if args.use_gpu else 'Disabled'}")

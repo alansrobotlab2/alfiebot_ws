@@ -196,7 +196,7 @@ Servo  Name                  Min      Max
 
 Handles state/action normalization using training statistics from:
 ```
-/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge/meta/stats.jsonl
+/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot/meta/stats.jsonl
 ```
 
 ## Running the Client
@@ -324,7 +324,7 @@ groot_client:
     action_smoothing_alpha: 0.7
 
     # Data
-    stats_file: "/home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge/meta/stats.jsonl"
+    stats_file: "/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot/meta/stats.jsonl"
 ```
 
 ## State Machine
@@ -421,7 +421,7 @@ The inference server supports replaying recorded episodes from a LeRobot-format 
 
 Episodes are stored at:
 ```
-/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge/
+/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot/
 ├── data/chunk-000/
 │   ├── episode_000000.parquet
 │   ├── episode_000001.parquet
@@ -439,21 +439,21 @@ Episodes are stored at:
 ```bash
 # Replay episode 0
 python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
-    --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     --episode-index 0 \
     --transport tcp --port 5555
 
 # Replay a different episode
 python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
-    --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     --episode-index 3 \
     --transport tcp --port 5555
 
 # With custom stats file
 python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
-    --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     --episode-index 0 \
-    --stats-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge/meta/stats.json \
+    --stats-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot/meta/stats.json \
     --transport tcp --port 5555
 ```
 
@@ -462,13 +462,13 @@ python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server
 ```bash
 # Replay episode 0 with full client-server launch
 ros2 launch alfie_gr00t groot_inference.launch.py \
-    dataset_path:=/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    dataset_path:=/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     episode_index:=0
 
 # Replay over TCP (server on remote PC)
 ros2 launch alfie_gr00t groot_inference.launch.py \
     transport:=tcp \
-    dataset_path:=/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    dataset_path:=/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     episode_index:=2
 ```
 
@@ -478,7 +478,7 @@ ros2 launch alfie_gr00t groot_inference.launch.py \
 ros2 run alfie_gr00t groot_server --ros-args \
     -p transport:=tcp \
     -p bind_port:=5555 \
-    -p dataset_path:=/home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    -p dataset_path:=/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     -p episode_index:=0
 ```
 
@@ -487,7 +487,7 @@ ros2 run alfie_gr00t groot_server --ros-args \
 1. Start the replay server (on the PC or Jetson):
 ```bash
 python3 ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
-    --dataset-path /home/alfie/Isaac-GR00T/alfiebot.CanDoChallenge \
+    --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     --episode-index 0 \
     --transport tcp --port 5555
 ```

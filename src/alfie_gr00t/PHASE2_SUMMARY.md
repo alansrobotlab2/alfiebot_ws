@@ -82,7 +82,7 @@ ros2 topic pub --once /recording/stop std_msgs/msg/Bool '{data: true}'
 
 ## Data Format
 
-**Storage:** `~/alfiebot_ws/data/demonstrations/`
+**Storage:** `~/alfiebot_ws/data/<dataset>/demonstrations/`
 
 **Format:** MCAP with zstd compression
 

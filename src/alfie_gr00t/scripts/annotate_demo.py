@@ -200,9 +200,20 @@ def main():
         description='Annotate GR00T demonstration recordings'
     )
     parser.add_argument(
+        '--dataset',
+        default=os.environ.get('ALFIE_DATASET', 'default'),
+        help='Dataset name under --data-root (default: %(default)s)'
+    )
+    parser.add_argument(
+        '--data-root',
+        default=os.environ.get('ALFIE_DATA_ROOT', '~/alfiebot_ws/data'),
+        help='Root folder holding one sub-folder per dataset (default: %(default)s)'
+    )
+    parser.add_argument(
         '--data-dir',
-        default=os.path.expanduser('~/alfiebot_ws/data/demonstrations'),
-        help='Directory containing demonstration recordings'
+        default=None,
+        help='Directory containing demonstration recordings '
+             '(default: <data-root>/<dataset>/demonstrations)'
     )
     parser.add_argument(
         '--stats',
@@ -212,7 +223,9 @@ def main():
 
     args = parser.parse_args()
 
-    annotator = DemoAnnotator(args.data_dir)
+    data_dir = args.data_dir or os.path.join(
+        os.path.expanduser(args.data_root), args.dataset, 'demonstrations')
+    annotator = DemoAnnotator(data_dir)
 
     if args.stats:
         annotator.show_statistics()

@@ -2,21 +2,32 @@
 """
 Data Recorder Node for GR00T Training Dataset Collection
 
-Records synchronized sensor data and robot actions during teleoperation
-for imitation learning. Saves to ROS2 bag format for later conversion
-to GR00T training format.
+Records synchronized sensor data and robot state during teleoperation
+for imitation learning. Saves ROS2 bags (MCAP) for later conversion
+to the GR00T LeRobot format by scripts/rosbag_to_groot.py.
+
+Bags land in <data_root>/<dataset>/demonstrations/demo_YYYYMMDD_HHMMSS.
+The dataset is a ROS parameter and can be switched between episodes:
+
+    ros2 param set /alfie/data_recorder dataset can_do_challenge
 """
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import (
+    QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy,
+)
+from rcl_interfaces.msg import SetParametersResult
 import os
 import subprocess
 import datetime
 from pathlib import Path
 
 from std_msgs.msg import Bool, String
-from geometry_msgs.msg import Twist
+
+from alfie_gr00t.dataset_paths import (
+    DEFAULT_DATA_ROOT, DEFAULT_DATASET, demos_dir,
+)
 
 
 class DataRecorder(Node):
@@ -26,17 +37,20 @@ class DataRecorder(Node):
         super().__init__('data_recorder')
 
         # Parameters
-        self.declare_parameter('output_dir', '~/alfiebot_ws/data/demonstrations')
+        self.declare_parameter('data_root', DEFAULT_DATA_ROOT)
+        self.declare_parameter('dataset', DEFAULT_DATASET)
+        # Explicit bag directory; overrides data_root/dataset when non-empty.
+        self.declare_parameter('output_dir', '')
         self.declare_parameter('auto_start', False)
         self.declare_parameter('max_duration', 300.0)  # 5 minutes max per demo
 
-        self.output_dir = os.path.expanduser(
-            self.get_parameter('output_dir').value
-        )
+        self.data_root = self.get_parameter('data_root').value
+        self.dataset = self.get_parameter('dataset').value
+        self.output_dir_override = self.get_parameter('output_dir').value
         self.auto_start = self.get_parameter('auto_start').value
         self.max_duration = self.get_parameter('max_duration').value
 
-        # Create output directory
+        self.output_dir = self._resolve_output_dir()
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
 
         # Recording state
@@ -57,17 +71,19 @@ class DataRecorder(Node):
             '/alfie/stereo_camera/right_wide/image_raw/compressed',
             '/alfie/stereo_camera/right_wide/camera_info',
 
-            # Robot state
-            '/alfie/robotlowstate',  # Low-level robot state
+            # Robot state. State AND action both come from this message:
+            # servo current_location / target_location, back current /
+            # command position, current_cmd_vel / command_cmd_vel.
+            '/alfie/robotlowstate',
 
             '/alfie/robot_description',  # URDF
             '/alfie/tf',
-            '/alfie/tf/static',
+            '/alfie/tf_static',
 
             '/rosout',
 
             # Metadata
-            '/recording/metadata',
+            '/alfie/recording/metadata',
         ]
 
         # QoS profile for real-time data
@@ -92,11 +108,18 @@ class DataRecorder(Node):
             qos_profile
         )
 
-        # Metadata publisher for annotations (relative to namespace)
+        # Metadata publisher for annotations (relative to namespace).
+        # Transient-local so `ros2 bag record`, which subscribes a moment
+        # after we publish the start annotation, still receives it.
         self.metadata_pub = self.create_publisher(
             String,
             'recording/metadata',
-            10
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                history=HistoryPolicy.KEEP_LAST,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                depth=10,
+            )
         )
 
         # Status publisher (relative to namespace)
@@ -106,15 +129,52 @@ class DataRecorder(Node):
             10
         )
 
+        # Allow switching dataset / data_root between episodes
+        self.add_on_set_parameters_callback(self._on_set_parameters)
+
         # Timer to check recording duration
         self.create_timer(1.0, self.check_recording_duration)
 
-        self.get_logger().info(f'Data recorder initialized. Output dir: {self.output_dir}')
+        self.get_logger().info(
+            f'Data recorder initialized. Dataset: {self.dataset}  Output dir: {self.output_dir}')
         self.get_logger().info(f'Recording {len(self.topics_to_record)} topics')
 
         if self.auto_start:
             self.get_logger().info('Auto-start enabled, beginning recording...')
             self.start_recording()
+
+    def _resolve_output_dir(self) -> str:
+        if self.output_dir_override:
+            return os.path.expanduser(self.output_dir_override)
+        return str(demos_dir(self.dataset, self.data_root))
+
+    def _on_set_parameters(self, params):
+        """Apply dataset/data_root/output_dir changes; refuse mid-recording."""
+        path_params = {p.name: p.value for p in params
+                       if p.name in ('dataset', 'data_root', 'output_dir')}
+        if not path_params:
+            return SetParametersResult(successful=True)
+        if self.recording:
+            return SetParametersResult(
+                successful=False,
+                reason='Cannot change dataset while recording; stop first')
+        if 'dataset' in path_params:
+            name = str(path_params['dataset']).strip()
+            if not name or '/' in name or name in ('.', '..'):
+                return SetParametersResult(
+                    successful=False,
+                    reason="dataset must be a plain folder name (no '/')")
+            self.dataset = name
+        if 'data_root' in path_params:
+            self.data_root = str(path_params['data_root'])
+        if 'output_dir' in path_params:
+            self.output_dir_override = str(path_params['output_dir'])
+
+        self.output_dir = self._resolve_output_dir()
+        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+        self.get_logger().info(
+            f'Dataset switched to: {self.dataset}  Output dir: {self.output_dir}')
+        return SetParametersResult(successful=True)
 
     def start_recording_callback(self, msg):
         """Handle start recording request"""
@@ -153,32 +213,33 @@ class DataRecorder(Node):
         cmd.extend(['--compression-format', 'zstd'])
 
         try:
-            self.get_logger().info(f'Starting recording: {bag_name}')
+            self.get_logger().info(f'Starting recording: {bag_name} (dataset: {self.dataset})')
             self.get_logger().info(f'Command: {" ".join(cmd)}')
 
-            # Start recording process
-            self.bag_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
+            # Start recording process. Let its output flow to our console:
+            # a PIPE nobody drains would eventually block rosbag2.
+            self.bag_process = subprocess.Popen(cmd)
 
             self.recording = True
             self.recording_start_time = self.get_clock().now()
 
             # Publish initial metadata
             metadata = String()
-            metadata.data = f'timestamp:{timestamp},type:demonstration,status:started'
+            metadata.data = (
+                f'timestamp:{timestamp},type:demonstration,'
+                f'dataset:{self.dataset},status:started'
+            )
             self.metadata_pub.publish(metadata)
 
             status = String()
-            status.data = f'RECORDING:{bag_name}'
+            status.data = f'RECORDING:{self.dataset}/{bag_name}'
             self.status_pub.publish(status)
 
             self.get_logger().info(f'✓ Recording started: {bag_name}')
 
         except Exception as e:
             self.get_logger().error(f'Failed to start recording: {e}')
+            self.bag_process = None
             self.recording = False
 
     def stop_recording(self, reason='user_request'):
@@ -187,33 +248,44 @@ class DataRecorder(Node):
             self.get_logger().warn('Not currently recording!')
             return
 
+        bag_path = self.current_bag_path
         try:
             if self.bag_process:
                 self.get_logger().info(f'Stopping recording (reason: {reason})...')
 
-                # Send SIGINT to rosbag2 process
-                self.bag_process.terminate()
-                self.bag_process.wait(timeout=5.0)
-
-                # Publish final metadata
+                # Final annotation goes out before the bag closes so it is
+                # captured in the recording.
                 metadata = String()
                 metadata.data = f'status:stopped,reason:{reason}'
                 self.metadata_pub.publish(metadata)
+
+                # SIGTERM: ros2 bag record installs a handler that closes the
+                # bag cleanly (writes metadata.yaml, finishes compression).
+                self.bag_process.terminate()
+                try:
+                    self.bag_process.wait(timeout=15.0)
+                except subprocess.TimeoutExpired:
+                    self.get_logger().error(
+                        'rosbag2 did not exit after SIGTERM, killing it; '
+                        'the bag may be incomplete')
+                    self.bag_process.kill()
+                    self.bag_process.wait(timeout=5.0)
 
                 status = String()
                 status.data = 'STOPPED'
                 self.status_pub.publish(status)
 
-                self.get_logger().info(f'✓ Recording saved: {self.current_bag_path}')
-                self.get_logger().info(f'  To play back: ros2 bag play {self.current_bag_path}')
-
-                self.bag_process = None
-                self.recording = False
-                self.current_bag_path = None
-                self.recording_start_time = None
+                self.get_logger().info(f'✓ Recording saved: {bag_path}')
+                self.get_logger().info(f'  To play back: ros2 bag play {bag_path}')
 
         except Exception as e:
             self.get_logger().error(f'Error stopping recording: {e}')
+        finally:
+            # Always leave a clean state so the next start works.
+            self.bag_process = None
+            self.recording = False
+            self.current_bag_path = None
+            self.recording_start_time = None
 
     def check_recording_duration(self):
         """Check if recording has exceeded max duration"""

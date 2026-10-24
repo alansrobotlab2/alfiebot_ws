@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""Gradio-based episode manager for the alfiebot CanDoChallenge dataset."""
+"""Gradio-based episode manager for an alfiebot GR00T dataset.
 
+    python3 episode_manager.py --dataset can_do_challenge
+
+Datasets live at <data-root>/<dataset>/ with demonstrations/ (raw bags) and
+lerobot/ (converted GR00T data); see alfie_gr00t/dataset_paths.py.
+"""
+
+import argparse
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,15 +19,32 @@ import gradio as gr
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-DATASET_DIR = Path(__file__).resolve().parents[3] / "data" / "alfiebot.CanDoChallenge"
+DEFAULT_DATA_ROOT = os.environ.get("ALFIE_DATA_ROOT", "~/alfiebot_ws/data")
+DEFAULT_DATASET = os.environ.get("ALFIE_DATASET", "default")
+
+# Set by configure_paths(); module-level so the UI callbacks can read them.
+DATASET_NAME = DEFAULT_DATASET
+DATASET_DIR = Path(DEFAULT_DATA_ROOT).expanduser() / DEFAULT_DATASET / "lerobot"
 META_DIR = DATASET_DIR / "meta"
 VIDEO_DIR = DATASET_DIR / "videos" / "chunk-000"
 DATA_DIR = DATASET_DIR / "data" / "chunk-000"
+DEMOS_DIR = str(Path(DEFAULT_DATA_ROOT).expanduser() / DEFAULT_DATASET / "demonstrations")
 
 CAMERAS = ["left_wide", "right_wide", "left_center", "right_center"]
 
 ROSBAG_TO_GROOT_SCRIPT = Path(__file__).resolve().parent / "rosbag_to_groot.py"
-DEMOS_DIR = str(Path("~/alfiebot_ws/data/demonstrations").expanduser())
+
+
+def configure_paths(dataset, data_root):
+    """Point the manager at <data_root>/<dataset>/{lerobot,demonstrations}."""
+    global DATASET_NAME, DATASET_DIR, META_DIR, VIDEO_DIR, DATA_DIR, DEMOS_DIR
+    root = Path(data_root).expanduser()
+    DATASET_NAME = dataset
+    DATASET_DIR = root / dataset / "lerobot"
+    META_DIR = DATASET_DIR / "meta"
+    VIDEO_DIR = DATASET_DIR / "videos" / "chunk-000"
+    DATA_DIR = DATASET_DIR / "data" / "chunk-000"
+    DEMOS_DIR = str(root / dataset / "demonstrations")
 
 
 def load_episodes():
@@ -170,6 +195,7 @@ def run_rosbag_to_groot():
         "python3", str(ROSBAG_TO_GROOT_SCRIPT),
         "--demos-dir", DEMOS_DIR,
         "--output-dir", str(DATASET_DIR),
+        "--dataset", DATASET_NAME,
         "--task-index", "0",
         "--start-episode", "0",
         "--num-threads", "8",
@@ -483,6 +509,16 @@ def get_local_ip():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Episode manager for an alfiebot GR00T dataset")
+    parser.add_argument("--dataset", default=DEFAULT_DATASET,
+                        help="Dataset name under --data-root (default: %(default)s)")
+    parser.add_argument("--data-root", default=DEFAULT_DATA_ROOT,
+                        help="Root folder holding one sub-folder per dataset (default: %(default)s)")
+    cli = parser.parse_args()
+    configure_paths(cli.dataset, cli.data_root)
+    if not META_DIR.exists():
+        raise SystemExit(f"No converted dataset at {DATASET_DIR} "
+                         f"(run rosbag_to_groot.py --dataset {cli.dataset} first)")
     app = build_ui()
     ip = get_local_ip()
     print(f"\n  Access from other devices: http://{ip}:7860\n")

@@ -37,7 +37,7 @@ Offline benchmarking tool. Takes cached horizons + GT episodes, simulates contin
 ```bash
 python smoothing_simulator.py \
     --horizons /tmp/overlapped_test/horizons_ep320.npz \
-    --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
+    --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     --episode-index 320 \
     --inference-rates 3.3,5.0 \
     --strategies latest,uniform,exp_m1,exp_m5,triangle \
@@ -244,7 +244,7 @@ All build on top of `exp_m01` (the Phase 1 winner):
 # 15 FPS benchmark (filters only, fast)
 python smoothing_simulator.py \
     --horizons-dir /tmp/overlapped_test/ \
-    --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
+    --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     --episode-indices 311,313,315,317,319,321 \
     --inference-rates 3.3 \
     --strategies exp_m01,exp_m01_savgol5_p2,exp_m01_savgol7_p3,exp_m01_butter_c3,exp_m01_butter_c5,exp_m01_butter_c7 \
@@ -253,7 +253,7 @@ python smoothing_simulator.py \
 # 100 Hz benchmark (interpolation comparison)
 python smoothing_simulator.py \
     --horizons-dir /tmp/overlapped_test/ \
-    --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
+    --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
     --episode-indices 311,313,315,317,319,321 \
     --inference-rates 3.3 \
     --strategies exp_m01,exp_m01_spline,exp_m01_spline_savgol5,exp_m01_spline_butter5 \

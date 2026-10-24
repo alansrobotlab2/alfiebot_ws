@@ -13,7 +13,7 @@ No ROS2 dependency — runs standalone against the ZMQ inference server.
 
 Usage:
     python action_horizon_analysis.py \
-        --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \
+        --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
         --episode-index 3 \
         --host 127.0.0.1 --port 5555 \
         --save-dir /tmp/horizon_analysis/
@@ -713,15 +713,15 @@ def parse_args():
         epilog="""
 examples:
   # Single episode
-  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
+  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \\
            --episode-index 3 --host 127.0.0.1
 
   # Multiple episodes for statistical robustness
-  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
+  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \\
            --episode-indices 0,3,5,10 --host 127.0.0.1
 
   # Every 2nd frame (faster, still good coverage)
-  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/alfiebot.CanDoChallenge \\
+  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \\
            --episode-index 3 --step-interval 2 --host 127.0.0.1
 """,
     )

@@ -23,13 +23,38 @@ The data recorder captures all sensor observations and robot actions:
 
 ### Action Space (Output from GR00T)
 
-**Robot Commands:**
-- `/alfie/robotlowcmd` - Low-level robot commands (arms, grippers, base)
+There is no separate command topic. `/alfie/robotlowstate` carries both the
+measured state and the last command for every DOF (servo `target_location`,
+back `command_position`, base `command_cmd_vel`), and `rosbag_to_groot.py`
+derives the 22D action vector from those command fields.
 
 **Metadata:**
-- `/recording/metadata` - Annotations and labels
+- `/alfie/recording/metadata` - Annotations and labels (dataset name, start/stop)
 
-> **Note:** The GR00T policy will primarily use camera images + `/alfie/robotlowstate` as observations and output `/alfie/robotlowcmd` as actions. The additional topics are recorded for dataset analysis and debugging.
+> **Note:** The GR00T policy uses camera images + `/alfie/robotlowstate` as observations. The additional topics (`camera_info`, `tf`, `robot_description`, `rosout`) are recorded for dataset analysis and debugging.
+
+## Dataset Layout
+
+Every dataset (one challenge, one task family, one experiment) gets its own
+folder under `~/alfiebot_ws/data/`, selected by a short `dataset` name:
+
+```
+~/alfiebot_ws/data/
+└── <dataset>/                  e.g. can_do_challenge
+    ├── demonstrations/         raw MCAP bags from the recorder
+    │   ├── demo_20260102_195919/
+    │   └── manifest.json       annotations (annotate_demo.py)
+    └── lerobot/                GR00T LeRobot v2 output of rosbag_to_groot.py
+        ├── meta/               info.json, modality.json, tasks.jsonl, episodes.jsonl, stats.json
+        ├── data/chunk-000/
+        └── videos/chunk-000/
+```
+
+The recorder, converter, episode manager and annotation tool all take
+`--dataset NAME` (or the `ALFIE_DATASET` environment variable) and derive the
+paths from `alfie_gr00t/dataset_paths.py`. `--data-root` / `ALFIE_DATA_ROOT`
+moves the whole tree (e.g. to an external drive). Pass `<dataset>/lerobot` as
+`--dataset-path` to Isaac-GR00T.
 
 ## Quick Start
 
@@ -43,14 +68,22 @@ source install/setup.bash
 
 ### 2. Start the data recorder
 
+The recorder is started by `alfie_bringup.py` (`launch_recorder:=true` is the
+default, `dataset:=<name>` picks the dataset). To run it on its own:
+
 **Terminal 1: Launch data recorder**
 ```bash
-ros2 launch alfie_gr00t data_collection.launch.py
+ros2 launch alfie_gr00t data_collection.launch.py dataset:=can_do_challenge
 ```
 
 Or use the convenience script:
 ```bash
-./src/alfie_gr00t/scripts/record_demo.sh
+./src/alfie_gr00t/scripts/record_demo.sh --dataset can_do_challenge
+```
+
+Switch datasets between episodes without relaunching:
+```bash
+ros2 param set /alfie/data_recorder dataset soda_sort
 ```
 
 ### 3. Start/Stop recording
@@ -70,7 +103,7 @@ ros2 topic pub --once /alfie/recording/stop std_msgs/msg/Bool '{data: true}'
 ### 4. Check recording status
 
 ```bash
-ros2 topic echo /recording/status
+ros2 topic echo /alfie/recording/status      # RECORDING:<dataset>/demo_... or STOPPED
 ```
 
 ## Recording Workflow
@@ -108,7 +141,7 @@ ros2 topic echo /recording/status
 After recording demonstrations, annotate them for training dataset curation:
 
 ```bash
-./src/alfie_gr00t/scripts/annotate_demo.py
+./src/alfie_gr00t/scripts/annotate_demo.py --dataset can_do_challenge
 ```
 
 This interactive tool lets you:
@@ -117,12 +150,12 @@ This interactive tool lets you:
 - Note lighting conditions
 - Add free-form notes
 
-Annotations are saved to `manifest.json` in the data directory.
+Annotations are saved to `manifest.json` in the dataset's `demonstrations/` directory.
 
 ### View Statistics
 
 ```bash
-./src/alfie_gr00t/scripts/annotate_demo.py --stats
+./src/alfie_gr00t/scripts/annotate_demo.py --dataset can_do_challenge --stats
 ```
 
 Shows:
@@ -133,11 +166,11 @@ Shows:
 
 ## Data Storage
 
-**Default location:** `~/alfiebot_ws/data/demonstrations/`
+**Default location:** `~/alfiebot_ws/data/<dataset>/demonstrations/`
 
 Each recording creates a directory:
 ```
-demonstrations/
+<dataset>/demonstrations/
 ├── demo_20250129_143022/
 │   ├── metadata.yaml
 │   └── demo_20250129_143022_0.mcap
@@ -156,13 +189,13 @@ demonstrations/
 ### Play back a recording
 
 ```bash
-ros2 bag play ~/alfiebot_ws/data/demonstrations/demo_20250129_143022
+ros2 bag play ~/alfiebot_ws/data/<dataset>/demonstrations/demo_20250129_143022
 ```
 
 ### Inspect bag info
 
 ```bash
-ros2 bag info ~/alfiebot_ws/data/demonstrations/demo_20250129_143022
+ros2 bag info ~/alfiebot_ws/data/<dataset>/demonstrations/demo_20250129_143022
 ```
 
 ### Extract images for visualization
@@ -215,41 +248,35 @@ ROS2 bag automatically timestamps messages. If you see drift:
 
 ## Converting to GR00T Training Format
 
-Once you have recorded demonstrations, convert them to the GR00T N1.6 training format using `rosbag_to_groot.py`. This produces parquet files (state/action data), MP4 videos (camera observations), and meta files required for training.
+Once you have recorded demonstrations, convert them to the GR00T-flavoured
+LeRobot v2 format (Isaac-GR00T `getting_started/data_preparation.md`) using
+`rosbag_to_groot.py`. This produces parquet files (state/action data), MP4
+videos (camera observations), and the meta files required for training. On a
+brand-new dataset it also creates `meta/info.json`, `meta/modality.json` and
+`meta/tasks.jsonl`.
 
 ### Check available data
 
 Run with `--report` to see a summary of recorded demos and any existing converted output:
 
 ```bash
-python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
-    --demos-dir ~/alfiebot_ws/data/demonstrations \
-    --output-dir ~/alfiebot_ws/data/alfiebot.CanDoChallenge \
-    --report
+python3 src/alfie_gr00t/scripts/rosbag_to_groot.py --dataset can_do_challenge --report
 ```
 
 ### Convert all demos
 
-```bash
-python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
-    --demos-dir ~/alfiebot_ws/data/demonstrations \
-    --output-dir ~/alfiebot_ws/data/alfiebot.CanDoChallenge \
-    --task-index 0 \
-    --num-threads 8
-```
-
-### Append new demos to an existing dataset
-
-If you have already converted some demos and want to add more, use `--start-episode` set to the next episode number:
+The first time a task index is used, name it with `--task-name`; that string is
+the language instruction the model is trained on:
 
 ```bash
 python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
-    --demos-dir ~/alfiebot_ws/data/demonstrations \
-    --output-dir ~/alfiebot_ws/data/alfiebot.CanDoChallenge \
-    --task-index 0 \
-    --start-episode 50 \
+    --dataset can_do_challenge \
+    --task-index 0 --task-name "find the can and pick it up" \
     --num-threads 8
 ```
+
+The converter is an incremental sync: re-running it adds new `demo_*` folders,
+rebuilds episodes whose output is missing, and removes episodes whose bag is gone.
 
 ### GPU-accelerated video encoding
 
@@ -257,10 +284,46 @@ On the Jetson, use `--use-gpu` to encode videos with NVENC instead of CPU libx26
 
 ```bash
 python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
-    --demos-dir ~/alfiebot_ws/data/demonstrations \
-    --output-dir ~/alfiebot_ws/data/alfiebot.CanDoChallenge \
-    --num-threads 8 --use-gpu
+    --dataset can_do_challenge --task-index 0 --num-threads 8 --use-gpu
 ```
+
+### Generate normalization statistics
+
+The trainer refuses to load a dataset without `meta/stats.json`, and
+`relative_stats.json` must be regenerated whenever the action `delta_indices`
+in `alfiebot_config.py` change. From the Isaac-GR00T checkout:
+
+```bash
+python gr00t/data/stats.py \
+    --dataset-path ~/alfiebot_ws/data/can_do_challenge/lerobot \
+    --embodiment-tag NEW_EMBODIMENT \
+    --modality-config-path ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/alfiebot_config.py
+```
+
+### Fine-tune (GR00T N1.7)
+
+`alfiebot_config.py` trains a 32-step horizon (2.1 s at 15 FPS) with RELATIVE
+actions for the back, arms and head and ABSOLUTE actions for the base velocity
+and grippers; `launch_finetune.py` turns relative actions on itself. The image
+settings below match the base model's processor (short edge 256, 0.95 crop) so
+the 352x256 camera frames are used at native aspect:
+
+```bash
+cd ~/Isaac-GR00T && source .venv/bin/activate && source scripts/activate_orin.sh
+python gr00t/experiment/launch_finetune.py \
+    --base-model-path nvidia/GR00T-N1.7-3B \
+    --dataset-path ~/alfiebot_ws/data/can_do_challenge/lerobot \
+    --embodiment-tag NEW_EMBODIMENT \
+    --modality-config-path ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/alfiebot_config.py \
+    --shortest-image-edge 256 --crop-fraction 0.95 \
+    --color-jitter-params brightness 0.3 contrast 0.4 saturation 0.5 hue 0.08 \
+    --global-batch-size 32 --max-steps 10000 --save-steps 2000 \
+    --output-dir ~/Isaac-GR00T/alfie-gr00t
+```
+
+Several datasets train together by joining their paths with `:` in
+`--dataset-path` (`--ds-weights-alpha` sets the mixture weighting). After
+training, `action_chunk_size` in `groot_client.yaml` must equal the horizon.
 
 ### All options
 
@@ -272,10 +335,10 @@ python3 src/alfie_gr00t/scripts/rosbag_to_groot.py
 
 ### Output structure
 
-After conversion, the output directory will contain:
+After conversion, `<dataset>/lerobot/` will contain:
 
 ```
-alfiebot.CanDoChallenge/
+lerobot/
 ├── data/
 │   └── chunk-000/
 │       ├── episode_000000.parquet
@@ -291,8 +354,9 @@ alfiebot.CanDoChallenge/
 │       └── observation.images.right_center/
 └── meta/
     ├── info.json
-    ├── stats.json
-    ├── relative_stats.json
+    ├── modality.json
+    ├── stats.json            (gr00t/data/stats.py)
+    ├── relative_stats.json   (gr00t/data/stats.py)
     ├── episodes.jsonl
     └── tasks.jsonl
 ```
@@ -304,13 +368,18 @@ After collecting 500+ demonstrations:
 1. **Annotate all demos** - Use annotation tool to label quality
 2. **Filter dataset** - Remove corrupted/failed recordings
 3. **Convert to GR00T format** - Use `rosbag_to_groot.py` as described above
-4. **Train policy** - Fine-tune GR00T on RTX 5090
+4. **Train policy** - Fine-tune GR00T with `--dataset-path ~/alfiebot_ws/data/<dataset>/lerobot`
 
 ## Advanced Options
 
-### Custom output directory
+### Custom data root or bag directory
 
 ```bash
+# Whole tree on another drive: <data_root>/<dataset>/demonstrations
+ros2 launch alfie_gr00t data_collection.launch.py \
+    data_root:=/mnt/ssd/alfie_data dataset:=can_do_challenge
+
+# Explicit bag directory, ignores the dataset layout
 ros2 launch alfie_gr00t data_collection.launch.py \
     output_dir:=/path/to/custom/dir
 ```
