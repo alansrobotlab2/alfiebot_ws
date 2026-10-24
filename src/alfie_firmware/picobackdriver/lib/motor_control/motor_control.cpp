@@ -10,6 +10,7 @@
 #include <motor_control.h>
 #include <../../include/driverboard.h>
 #include "hardware/adc.h"
+#include "heartbeat_sync.h"
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -896,10 +897,11 @@ float applyAccelerationLimit(float target_velocity, float current_velocity,
  * - Cyan: Moving (when actuator is in motion)
  */
 void DriverBoard::updateRgbLED(void) {
-    static uint32_t last_update_time = 0;
-    static uint8_t led_step = 0;
-    uint32_t current_time = millis();
-    
+    // Step comes from the agent-synced clock (lib heartbeat_sync), so every
+    // board blinks in unison and loop latency never accumulates.
+    static uint8_t last_step = 0xFF;
+    uint8_t led_step;
+
     // Use the global agent_state from ros_interface.cpp (managed by Core 1)
     // This is declared as extern in ros_interface.h
     extern RosAgentState_t agent_state;
@@ -925,14 +927,9 @@ void DriverBoard::updateRgbLED(void) {
         return;
     }
 
-    // Update LED pattern every LED_BLINK_PERIOD_MS (125ms) to match main.cpp pattern timing
-    if (current_time - last_update_time >= LED_BLINK_PERIOD_MS) {
-        last_update_time = current_time;
-        
-        // Define blink patterns (same as in main.cpp)
-        // Normal pattern: 1,0,1,0,1,0,1,0 (when system loaded but ROS not connected)
+    // Only rewrite the LED when the heartbeat step changes (every 125 ms).
+    if (heartbeatStepChanged(last_step, led_step)) {
         // Heartbeat pattern: 1,0,1,0,0,0,0,0 (when ROS is connected)
-        const uint8_t normal_pattern[] = {1, 0, 1, 0, 1, 0, 1, 0};
         const uint8_t heartbeat_pattern[] = {1, 0, 1, 0, 0, 0, 0, 0};
         
         // Show state based on ROS connection and activity
@@ -978,8 +975,5 @@ void DriverBoard::updateRgbLED(void) {
                 statusLED.setColor(20, 20, 20);
                 break;
         }
-        
-        // Advance to next step (8 steps total, wraps around)
-        led_step = (led_step + 1) % 8;
     }
 }

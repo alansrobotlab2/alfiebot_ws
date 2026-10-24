@@ -48,8 +48,6 @@ void setup() {
  */
 void loop() {
     static uint32_t last_control_time = 0;
-    static uint32_t last_led_time = 0;
-    static uint8_t led_step = 0;
     uint32_t current_time = millis();
     
     // Run control loop at specified frequency
@@ -58,28 +56,6 @@ void loop() {
         
         // Update all peripherals (motors, encoders, odometry, safety)
         rp.updatePeripherals();
-    }
-    
-    // LED status blink pattern (updates every LED_BLINK_PERIOD_MS = 125ms)
-    if (current_time - last_led_time >= LED_BLINK_PERIOD_MS) {
-        last_led_time = current_time;
-        
-        // Define blink patterns
-        // Normal pattern: 1,0,1,0,1,0,1,0 (when system loaded but ROS not connected)
-        // Heartbeat pattern: 1,0,1,0,0,0,0,0 (when ROS is connected)
-        const uint8_t normal_pattern[] = {1, 0, 1, 0, 1, 0, 1, 0};
-        const uint8_t heartbeat_pattern[] = {1, 0, 1, 0, 0, 0, 0, 0};
-        
-        // Select pattern based on ROS connection state
-        bool led_state;
-        if (agent_state == AGENT_CONNECTED) {
-            led_state = heartbeat_pattern[led_step];
-        } else {
-            led_state = normal_pattern[led_step];
-        }
-        
-        // Advance to next step (8 steps total, wraps around)
-        led_step = (led_step + 1) % 8;
     }
     
     // Small delay to prevent overwhelming the CPU

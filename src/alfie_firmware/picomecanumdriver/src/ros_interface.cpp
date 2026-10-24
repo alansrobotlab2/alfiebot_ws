@@ -9,6 +9,7 @@
 #include "ros_interface.h"
 #include "driverboard.h"
 #include <rmw_microros/rmw_microros.h>
+#include "heartbeat_sync.h"
 #include <math.h>
 #include <string.h>
 
@@ -206,6 +207,7 @@ void rosStateMachineTask(void) {
                 delay(50);
             } else {
                 health_misses = 0;
+                heartbeatSyncNow();   // phase-lock the status LED heartbeat to the agent clock
             }
             break;
 
@@ -225,6 +227,8 @@ void rosStateMachineTask(void) {
             if (agent_state != AGENT_CONNECTED) {
                 break;
             }
+
+            heartbeatSyncTask();  // periodic re-sync (HEARTBEAT_RESYNC_MS)
 
             // Publish MecanumState, throttled to a stable 50 Hz to match the
             // master_status watchdog and avoid saturating the best-effort USB-CDC

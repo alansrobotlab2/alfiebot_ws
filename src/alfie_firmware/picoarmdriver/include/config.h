@@ -109,7 +109,6 @@
 // STATUS LED (onboard WS2812)
 // =============================================================================
 #define WS2812B_PIN             16        ///< onboard WS2812 data pin
-#define LED_BLINK_PERIOD_MS     125       ///< status LED tick (8 steps/second)
 
 // =============================================================================
 // LOOP TIMING

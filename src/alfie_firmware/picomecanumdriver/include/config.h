@@ -29,7 +29,6 @@
  * driven via Adafruit NeoPixel (there is no plain digital LED).
  */
 #define STATUS_LED_PIN          16           ///< WS2812 (NeoPixel) data pin
-#define LED_BLINK_PERIOD_MS     125          ///< LED blink timing unit (125ms = 8 steps per second)
 #define LED_BRIGHTNESS          64           ///< WS2812 brightness (0-255); green at full is very bright
 
 

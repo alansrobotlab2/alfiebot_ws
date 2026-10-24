@@ -16,6 +16,7 @@
 #include "ros_interface.h"
 #include "motor_control.h"
 #include "driverboard.h"
+#include "heartbeat_sync.h"
 
 // =============================================================================
 // GLOBAL DRIVERBOARD INSTANCE
@@ -58,8 +59,8 @@ void setup() {
  */
 void loop() {
     static uint32_t last_control_time = 0;
-    static uint32_t last_led_time = 0;
-    static uint8_t led_step = 0;
+    static uint8_t last_led_step = 0xFF;
+    uint8_t led_step;
     uint32_t current_time = millis();
     
     // Run control loop at specified frequency
@@ -77,10 +78,10 @@ void loop() {
         rp.board_temp = (uint8_t)constrain(analogReadTemp() + 0.5f, 0.0f, 255.0f);
     }
     
-    // LED status blink pattern (updates every LED_BLINK_PERIOD_MS = 125ms)
-    if (current_time - last_led_time >= LED_BLINK_PERIOD_MS) {
-        last_led_time = current_time;
-        
+    // LED status blink pattern. The step comes from the agent-synced clock
+    // (lib heartbeat_sync), so every board blinks in unison; the LED is only
+    // rewritten when the step changes (every 125 ms).
+    if (heartbeatStepChanged(last_led_step, led_step)) {
         // Define blink patterns
         // Normal pattern: 1,0,1,0,1,0,1,0 (when system loaded but ROS not connected)
         // Heartbeat pattern: 1,0,1,0,0,0,0,0 (when ROS is connected)
@@ -98,9 +99,6 @@ void loop() {
         // Green when on, off otherwise
         statusLed.setPixelColor(0, led_state ? statusLed.Color(0, 255, 0) : 0);
         statusLed.show();
-
-        // Advance to next step (8 steps total, wraps around)
-        led_step = (led_step + 1) % 8;
     }
     
     // Small delay to prevent overwhelming the CPU

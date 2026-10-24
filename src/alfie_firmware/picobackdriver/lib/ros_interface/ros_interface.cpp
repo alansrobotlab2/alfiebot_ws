@@ -9,6 +9,7 @@
 #include <ros_interface.h>
 #include <../../include/driverboard.h>
 #include <rmw_microros/rmw_microros.h>
+#include "heartbeat_sync.h"
 
 // =============================================================================
 // GLOBAL ROS INTERFACE VARIABLES
@@ -286,6 +287,7 @@ void rosStateMachineTask(void) {
                 delay(50);
             } else {
                 health_misses = 0;
+                heartbeatSyncNow();   // phase-lock the status LED heartbeat to the agent clock
             }
             break;
 
@@ -305,6 +307,8 @@ void rosStateMachineTask(void) {
             if (agent_state != AGENT_CONNECTED) {
                 break;
             }
+
+            heartbeatSyncTask();  // periodic re-sync (HEARTBEAT_RESYNC_MS)
 
             // Publish odometry data
             if (micro_ros_initialized) {

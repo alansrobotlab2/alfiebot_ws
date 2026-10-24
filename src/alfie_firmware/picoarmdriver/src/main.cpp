@@ -78,7 +78,7 @@ void loop()
         b.board_temp = (uint8_t)constrain(analogReadTemp() + 0.5f, 0.0f, 255.0f);
     }
 
-    updateStatusLED();         // self-throttled to LED_BLINK_PERIOD_MS
+    updateStatusLED();         // rewrites the LED only on a heartbeat step change
     delay(1);
 }
 

@@ -1,4 +1,5 @@
 #include "eye_control.h"
+#include "heartbeat_sync.h"
 
 extern DriverBoard b;
 
@@ -69,14 +70,14 @@ void eyesOff()
 
 void updateStatusLED()
 {
-    static uint32_t last_update_time = 0;
-    static uint8_t  led_step = 0;
-    uint32_t now = millis();
-
-    if (now - last_update_time < LED_BLINK_PERIOD_MS) {
+    // Step comes from the agent-synced clock (lib heartbeat_sync), so every
+    // board blinks in unison and loop latency never accumulates. The LED is
+    // only rewritten when the step changes.
+    static uint8_t last_step = 0xFF;
+    uint8_t led_step;
+    if (!heartbeatStepChanged(last_step, led_step)) {
         return;
     }
-    last_update_time = now;
 
     // Heartbeat pattern (ROS connected & idle): 1,0,1,0,0,0,0,0
     const uint8_t heartbeat_pattern[] = {1, 0, 1, 0, 0, 0, 0, 0};
@@ -104,6 +105,4 @@ void updateStatusLED()
             b.statusLED.setColor(20, 20, 20);      // dim white
             break;
     }
-
-    led_step = (led_step + 1) % 8;
 }

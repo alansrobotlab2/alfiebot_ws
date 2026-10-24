@@ -30,7 +30,6 @@
  */
 
 #define WS2812B_PIN             16      ///< WS2812B RGB LED data pin
-#define LED_BLINK_PERIOD_MS     125          ///< LED blink timing unit (125ms = 8 steps per second)
 
 
 // ==========================================================================

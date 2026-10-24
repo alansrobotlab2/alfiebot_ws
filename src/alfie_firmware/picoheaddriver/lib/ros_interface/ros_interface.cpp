@@ -2,6 +2,7 @@
 #include "driverboard.h"
 #include "servo_control.h"
 #include <rmw_microros/rmw_microros.h>
+#include "heartbeat_sync.h"
 
 extern DriverBoard b;
 
@@ -390,6 +391,7 @@ void rosStateMachineTask(void)
                 delay(50);
             } else {
                 health_misses = 0;
+                heartbeatSyncNow();   // phase-lock the status LED heartbeat to the agent clock
             }
             break;
 
@@ -405,6 +407,10 @@ void rosStateMachineTask(void)
                     agent_state = AGENT_DISCONNECTED;
                 }
             );
+
+            if (agent_state == AGENT_CONNECTED) {
+                heartbeatSyncTask();  // periodic re-sync (HEARTBEAT_RESYNC_MS)
+            }
 
             if (agent_state == AGENT_CONNECTED && micro_ros_initialized) {
                 // Spin every tick (100 Hz) for low command latency, but throttle
