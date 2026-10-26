@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -10,6 +10,10 @@ from launch.substitutions import Command
 import os
 from ament_index_python.packages import get_package_share_directory
 import importlib.resources
+
+
+# Seconds between micro-ROS agent starts.
+AGENT_STAGGER_S = 1.5
 
 
 def generate_launch_description():
@@ -51,6 +55,15 @@ def generate_launch_description():
             output='screen', emulate_tty=True,
             sigterm_timeout='5', sigkill_timeout='10', respawn=True)
 
+    def microros_agent(name, dev_suffix, delay):
+        return TimerAction(period=delay, actions=[Node(
+            package='micro_ros_agent', namespace='alfie',
+            executable='micro_ros_agent', name=f'microros_agent_{name}',
+            arguments=['serial', '--dev', f'/dev/ttyAlfie{dev_suffix}',
+                       '--baudrate', '1000000', '-v1'],
+            output='screen', emulate_tty=True,
+            sigterm_timeout='5', sigkill_timeout='10', respawn=True)])
+
     return LaunchDescription([
 
         DeclareLaunchArgument(
@@ -82,70 +95,14 @@ def generate_launch_description():
             respawn=True
         ),
 
-        Node(
-            package='micro_ros_agent',
-            namespace='alfie',
-            executable='micro_ros_agent',
-            arguments=['serial', '--dev', '/dev/ttyAlfieD', '--baudrate', '1000000', '-v1'],
-            name='microros_agent_drive',
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
-        ),
-
-        Node(
-            package='micro_ros_agent',
-            namespace='alfie',
-            executable='micro_ros_agent',
-            arguments=['serial', '--dev', '/dev/ttyAlfieB', '--baudrate', '1000000', '-v1'],
-            name='microros_agent_back',
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
-        ),
-
-        Node(
-            package='micro_ros_agent',
-            namespace='alfie',
-            executable='micro_ros_agent',
-            arguments=['serial', '--dev', '/dev/ttyAlfieH', '--baudrate', '1000000', '-v1'],
-            name='microros_agent_head',
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
-        ),
-
-        Node(
-            package='micro_ros_agent',
-            namespace='alfie',
-            executable='micro_ros_agent',
-            arguments=['serial', '--dev', '/dev/ttyAlfieL', '--baudrate', '1000000', '-v1'],
-            name='microros_agent_left_arm',
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
-        ),
-
-        Node(
-            package='micro_ros_agent',
-            namespace='alfie',
-            executable='micro_ros_agent',
-            arguments=['serial', '--dev', '/dev/ttyAlfieR', '--baudrate', '1000000', '-v1'],
-            name='microros_agent_right_arm',
-            output='screen',
-            emulate_tty=True,
-            sigterm_timeout='5',  # Wait 5 seconds for graceful shutdown
-            sigkill_timeout='10',  # Force kill after 10 seconds
-            respawn=True
-        ),
+        # micro-ROS agents, one per pico, started AGENT_STAGGER_S apart so the
+        # boards (re)connect one at a time rather than all hitting the shared
+        # USB hubs at once.
+        microros_agent('drive', 'D', 0 * AGENT_STAGGER_S),
+        microros_agent('back', 'B', 1 * AGENT_STAGGER_S),
+        microros_agent('head', 'H', 2 * AGENT_STAGGER_S),
+        microros_agent('left_arm', 'L', 3 * AGENT_STAGGER_S),
+        microros_agent('right_arm', 'R', 4 * AGENT_STAGGER_S),
 
         Node(
             package='alfie_bringup',

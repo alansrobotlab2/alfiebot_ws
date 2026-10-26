@@ -1315,13 +1315,9 @@ typedef enum {
 // (10 x 200ms cycle = ~2s of unresponsive agent, same effective latency as before).
 #define AGENT_HEALTH_MAX_MISSES 10
 
-// If the agent only shows up after the board has been waiting this long, the
-// USB-CDC FIFOs / XRCE framing on both ends are full of hours of stale ping
-// traffic and sessions establish degraded (observed: state rate stuck at
-// ~15-20 Hz until a power cycle). Reboot instead of connecting: re-enumeration
-// recreates the known-good fresh-boot condition, and the agent (respawn=True)
-// reconnects to a seconds-old board. Normal bringup never waits this long.
-#define AGENT_LONG_WAIT_REBOOT_MS 120000
+// No reboot-on-long-wait: rebooting every board the moment bringup started its
+// agents re-enumerated all of them at once and knocked the USB hub offline
+// (taking the mic and camera with it). A long idle is reconnected normally.
 
 /**
  * @brief Utility macro for executing code at specific intervals

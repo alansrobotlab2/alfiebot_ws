@@ -303,9 +303,6 @@ void destroyRosEntities(void)
 // =============================================================================
 // Connection state machine (Core 1)
 // =============================================================================
-// Time we entered WAITING_AGENT (0 == boot). Used to detect a long idle wait,
-// which leaves stale USB-CDC/XRCE state on both ends and degrades the session.
-static uint32_t waiting_since_ms = 0;
 // Consecutive failed health pings while CONNECTED (see AGENT_HEALTH_MAX_MISSES).
 static uint8_t  health_misses    = 0;
 
@@ -317,13 +314,6 @@ void rosStateMachineTask(void)
                 agent_state = (RMW_RET_OK == rmw_uros_ping_agent(AGENT_PING_TIMEOUT_MS, AGENT_PING_ATTEMPTS))
                                   ? AGENT_AVAILABLE : WAITING_AGENT;
             );
-            if (agent_state == AGENT_AVAILABLE &&
-                (millis() - waiting_since_ms) > AGENT_LONG_WAIT_REBOOT_MS) {
-                // Agent appeared after a long idle wait: reconnect from a fresh
-                // boot instead (recreates the known-good power-cycle condition;
-                // see AGENT_LONG_WAIT_REBOOT_MS in config.h).
-                rp2040.reboot();
-            }
             delay(50);
             break;
 
@@ -331,7 +321,6 @@ void rosStateMachineTask(void)
             agent_state = createRosEntities() ? AGENT_CONNECTED : WAITING_AGENT;
             if (agent_state == WAITING_AGENT) {
                 destroyRosEntities();
-                waiting_since_ms = millis();
                 delay(50);
             } else {
                 health_misses = 0;
@@ -376,12 +365,10 @@ void rosStateMachineTask(void)
             destroyRosEntities();
             delay(100);
             agent_state = WAITING_AGENT;
-            waiting_since_ms = millis();
             break;
 
         default:
             agent_state = WAITING_AGENT;
-            waiting_since_ms = millis();
             break;
     }
 }
