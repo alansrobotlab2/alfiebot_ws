@@ -122,6 +122,16 @@ Before the WebSocket connection will work, you need to accept the self-signed ce
 3. You should see: `Foxglove proxy OK - certificate accepted!`
 4. Now WSS connections will work from that browser
 
+### Episode Manager API (`/episodes/`)
+
+The same server also proxies `https://ROBOT_IP:8082/episodes/` to the GR00T
+episode manager node (`ros2 run alfie_gr00t episode_manager`, port 7880). The
+Foxglove **Episode Manager** panel (`src/alfie_foxglove_extension`) uses it as
+its server URL, e.g. `https://alfiebot.local:8082/episodes`, because the
+Foxglove web app can only call HTTPS endpoints. The node decides which web
+origins may call it (`allowed_origins` parameter, default
+`https://app.foxglove.dev`).
+
 ## Configuration Details
 
 The proxy configuration (`foxglove-proxy.conf`) includes:
@@ -215,6 +225,7 @@ sudo tail -f /var/log/nginx/error.log
 |------|----------|---------|-----|
 | 8765 | WS | foxglove_bridge (internal) | No |
 | 8082 | WSS | nginx proxy (external) | Yes |
+| 7880 | HTTP | episode_manager (also at 8082 `/episodes/`) | No |
 
 ## Firewall Configuration
 

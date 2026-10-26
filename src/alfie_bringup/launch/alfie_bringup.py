@@ -90,6 +90,13 @@ def generate_launch_description():
             description='Dataset name the episode recorder writes into '
                         '(~/alfiebot_ws/data/<dataset>/demonstrations)'),
 
+        # Episode manager serves the GR00T episode review/relabel API on :7880,
+        # for its own web UI and the Foxglove Episode Manager panel (through the
+        # nginx proxy at https://<robot>:8082/episodes, systemd/foxglove-proxy.conf).
+        DeclareLaunchArgument(
+            'launch_episode_manager', default_value='true',
+            description='Start the GR00T episode manager (alfie_gr00t episode_manager)'),
+
         # Robot State Publisher - publishes URDF to /robot_description and TF transforms
         Node(
             package='robot_state_publisher',
@@ -215,6 +222,22 @@ def generate_launch_description():
                 FindPackageShare('alfie_gr00t'), 'launch', 'data_collection.launch.py'])),
             launch_arguments={'dataset': LaunchConfiguration('dataset')}.items(),
             condition=IfCondition(LaunchConfiguration('launch_recorder')),
+        ),
+
+        # GR00T episode manager (on by default, see launch_episode_manager above).
+        # Opens the dataset the recorder writes into; others can be picked in the UI.
+        Node(
+            package='alfie_gr00t',
+            namespace='alfie',
+            executable='episode_manager',
+            name='episode_manager',
+            parameters=[{'dataset': LaunchConfiguration('dataset')}],
+            output='screen',
+            emulate_tty=True,
+            sigterm_timeout='5',
+            sigkill_timeout='10',
+            respawn=True,
+            condition=IfCondition(LaunchConfiguration('launch_episode_manager')),
         ),
 
         Node(

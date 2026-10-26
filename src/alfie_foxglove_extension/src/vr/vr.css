@@ -1,0 +1,60 @@
+/* AlfieVR panel: a thin toolbar over the embedded page. Scoped under .vr; the
+   palette follows the episode manager panel's. */
+
+.vr {
+  --bg: #0e1015;
+  --bg-panel: #161a22;
+  --line: #262c38;
+  --text: #e6e9ef;
+  --text-dim: #939bab;
+  --accent: #4da3ff;
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.vr[data-theme="light"] {
+  --bg: #f4f5f8;
+  --bg-panel: #ffffff;
+  --line: #d5d9e2;
+  --text: #171a21;
+  --text-dim: #5d6574;
+  --accent: #1f6fd1;
+}
+
+.vr code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+.vr .vr-dim { color: var(--text-dim); }
+
+.vr .vr-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.vr .vr-url { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.vr .vr-bar button, .vr .vr-bar a {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.vr .vr-bar button:hover, .vr .vr-bar a:hover { border-color: var(--accent); color: var(--accent); }
+.vr .vr-hint { margin-left: auto; font-size: 11.5px; white-space: nowrap; cursor: help; }
+
+/* The page has its own dark theme; give it a matching backdrop while it loads. */
+.vr .vr-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #000; }
+
+.vr .vr-empty { margin: auto; max-width: 480px; padding: 16px; text-align: center; }

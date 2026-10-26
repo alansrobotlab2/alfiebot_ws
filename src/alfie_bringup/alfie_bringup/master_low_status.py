@@ -17,24 +17,38 @@ from .watchdog_checks import (create_health_checks, HealthCheck,
 
 # Auto-estop: trip a protective stop when the actuator firmware reports a servo
 # fault. Critical temperature (deg C) beyond which we also trip, independent of
-# the firmware's own temperature status bit.
+# the firmware's own temperature status bit, and the lower temperature that
+# logs a warning first.
 AUTO_ESTOP_CRITICAL_TEMP_C = 65.0
+AUTO_ESTOP_WARN_TEMP_C = 60.0
 
 # Glitch rejection for the auto-estop criteria (see _check_servo_faults).
 # Readings arrive at ~50 Hz, so 10 samples is ~0.2 s of history before the
 # temperature trigger arms, and 3 strikes is ~60 ms of a persistent status bit.
 AUTO_ESTOP_MIN_TEMP_SAMPLES = 10
 AUTO_ESTOP_STATUS_STRIKES = 3
-# Overload must hold this long (s) before tripping. A shoulder lifting under VR
-# can flag overload for a moment alongside a supply sag (2026-10-18: R shoulder
-# pitch at 10.6 V); a genuine stall or jam persists well past this.
-AUTO_ESTOP_OVERLOAD_SEC = 0.5
-# The filtered temperature must stay at/above critical this long (s) before
-# tripping. Servo temperature feedback is transiently unreliable for reasons
-# never pinned down: bursts of bogus readings long enough to beat the trimmed
-# mean (2026-10-23: R shoulder yaw read 87 C at a real 36 C). Thermal mass means
-# a genuine overtemp lasts minutes, so this costs nothing protective.
-AUTO_ESTOP_TEMP_SEC = 2.0
+# Overload logs a warning after AUTO_ESTOP_OVERLOAD_WARN_SEC and trips
+# only after AUTO_ESTOP_OVERLOAD_SEC. A shoulder lifting under VR can flag
+# overload for a moment alongside a supply sag (2026-10-18: R shoulder pitch at
+# 10.6 V), and a loaded elbow tripped a 0.5 s limit during teleop (2026-10-25);
+# the warning gives the operator time to back off before a genuine stall or
+# jam trips the stop.
+AUTO_ESTOP_OVERLOAD_WARN_SEC = 0.5
+AUTO_ESTOP_OVERLOAD_SEC = 3.0
+# Grippers only warn on overload, never trip: a gripper closed on an object is
+# a stalled servo by design (2026-10-23: R gripper at 3 A / 9.2 V while
+# squeezing tripped twice), so a held grasp would otherwise e-stop. The
+# temperature trip still protects a gripper left squeezing too long.
+GRIPPER_SERVO_INDEX = 5  # in each arm module's servo list
+# The filtered temperature must stay at/above warn this long (s) before
+# warning, and at/above critical this long before tripping. Servo temperature
+# feedback is transiently unreliable for reasons never pinned down: bursts of
+# bogus readings long enough to beat the trimmed mean (2026-10-23: R shoulder
+# yaw read 87 C at a real 36 C; 2026-08-02: 77-105 C bursts beat a 2 s hold).
+# Thermal mass means a genuine overtemp lasts minutes, so this costs nothing
+# protective.
+AUTO_ESTOP_TEMP_WARN_SEC = 2.0
+AUTO_ESTOP_TEMP_SEC = 10.0
 
 
 # ============================================================================
@@ -155,11 +169,18 @@ class MasterLowStatusNode(Node):
         # the mux latch persists until a deliberate estop_reset.
         self.declare_parameter('auto_estop_enabled', True)
         self.declare_parameter('auto_estop_critical_temp_c', AUTO_ESTOP_CRITICAL_TEMP_C)
+        self.declare_parameter('auto_estop_warn_temp_c', AUTO_ESTOP_WARN_TEMP_C)
+        self.declare_parameter('auto_estop_overload_warn_sec', AUTO_ESTOP_OVERLOAD_WARN_SEC)
         self.declare_parameter('auto_estop_overload_sec', AUTO_ESTOP_OVERLOAD_SEC)
+        self.declare_parameter('auto_estop_temp_warn_sec', AUTO_ESTOP_TEMP_WARN_SEC)
         self.declare_parameter('auto_estop_temp_sec', AUTO_ESTOP_TEMP_SEC)
         self.auto_estop_enabled = self.get_parameter('auto_estop_enabled').value
         self.auto_estop_critical_temp = self.get_parameter('auto_estop_critical_temp_c').value
+        self.auto_estop_warn_temp = self.get_parameter('auto_estop_warn_temp_c').value
+        self.auto_estop_overload_warn_sec = float(
+            self.get_parameter('auto_estop_overload_warn_sec').value)
         self.auto_estop_overload_sec = float(self.get_parameter('auto_estop_overload_sec').value)
+        self.auto_estop_temp_warn_sec = float(self.get_parameter('auto_estop_temp_warn_sec').value)
         self.auto_estop_temp_sec = float(self.get_parameter('auto_estop_temp_sec').value)
         self._servo_fault_active = False       # aggregate rising-edge latch
         self._module_faults = {'left_arm': False, 'right_arm': False, 'head': False}
@@ -169,6 +190,15 @@ class MasterLowStatusNode(Node):
         # Per-module {servo_index: time the overload bit was first seen (s)}
         self._overload_since: Dict[str, Dict[int, float]] = {
             'left_arm': {}, 'right_arm': {}, 'head': {}}
+        # Per-module servo indices already warned for their current overload
+        self._overload_warned: Dict[str, set] = {
+            'left_arm': set(), 'right_arm': set(), 'head': set()}
+        # Per-module {servo_index: time the filtered temp first reached warn (s)}
+        self._warm_since: Dict[str, Dict[int, float]] = {
+            'left_arm': {}, 'right_arm': {}, 'head': {}}
+        # Per-module servo indices already warned for their current warm spell
+        self._temp_warned: Dict[str, set] = {
+            'left_arm': set(), 'right_arm': set(), 'head': set()}
         # Per-module {servo_index: time the filtered temp first reached critical (s)}
         self._hot_since: Dict[str, Dict[int, float]] = {
             'left_arm': {}, 'right_arm': {}, 'head': {}}
@@ -490,8 +520,10 @@ class MasterLowStatusNode(Node):
         looks exactly like a real fault for one message: temperature uses the
         ServoMonitor's trimmed mean over its rolling window, and the status
         overtemp bit must persist for AUTO_ESTOP_STATUS_STRIKES consecutive
-        messages, the overload bit for auto_estop_overload_sec, and the
-        filtered temperature at/above critical for auto_estop_temp_sec.
+        messages, the overload bit for auto_estop_overload_sec (with a
+        logged warning at auto_estop_overload_warn_sec; grippers only warn),
+        and the filtered temperature at/above critical for auto_estop_temp_sec
+        (with a logged warning once at/above warn for auto_estop_temp_warn_sec).
         Servo thermal mass means a genuine overtemp lasts many seconds, so the
         sub-second delay this adds costs nothing protective.
         """
@@ -501,6 +533,9 @@ class MasterLowStatusNode(Node):
         monitor = self.health_checks.get(f'{module}_servos')
         strikes = self._status_strikes[module]
         overload_since = self._overload_since[module]
+        overload_warned = self._overload_warned[module]
+        warm_since = self._warm_since[module]
+        temp_warned = self._temp_warned[module]
         hot_since = self._hot_since[module]
         now = self.get_clock().now().nanoseconds / 1e9
 
@@ -512,11 +547,21 @@ class MasterLowStatusNode(Node):
             overloaded = False
             if status & SERVO_STATUS_OVERLOAD:
                 since = overload_since.setdefault(i, now)
-                if now - since >= self.auto_estop_overload_sec:
+                gripper = module != 'head' and i == GRIPPER_SERVO_INDEX
+                if not gripper and now - since >= self.auto_estop_overload_sec:
                     bits.append(f'overload ({now - since:.2f}s)')
                     overloaded = True
+                elif (now - since >= self.auto_estop_overload_warn_sec
+                        and i not in overload_warned and not self._estopped):
+                    overload_warned.add(i)
+                    limit = ('gripper, no e-stop' if gripper else
+                             f'e-stop at {self.auto_estop_overload_sec:.1f}s')
+                    self.get_logger().warn(
+                        f'Servo overload warning: {module}[{i}] overloaded for '
+                        f'{now - since:.2f}s ({limit})')
             else:
                 overload_since.pop(i, None)
+                overload_warned.discard(i)
 
             overtemp = bool(status & SERVO_STATUS_TEMPERATURE)
             strikes[i] = strikes.get(i, 0) + 1 if overtemp else 0
@@ -529,6 +574,18 @@ class MasterLowStatusNode(Node):
 
             temp = (monitor.filtered_temp(i, AUTO_ESTOP_MIN_TEMP_SAMPLES)
                     if monitor is not None else None)
+            if temp is not None and temp >= self.auto_estop_warn_temp:
+                since = warm_since.setdefault(i, now)
+                if (now - since >= self.auto_estop_temp_warn_sec
+                        and i not in temp_warned and not self._estopped):
+                    temp_warned.add(i)
+                    self.get_logger().warn(
+                        f'Servo temperature warning: {module}[{i}] at {temp:.0f}C '
+                        f'(e-stop at {self.auto_estop_critical_temp:.0f}C for '
+                        f'{self.auto_estop_temp_sec:.0f}s)')
+            else:
+                warm_since.pop(i, None)
+                temp_warned.discard(i)
             if temp is not None and temp >= self.auto_estop_critical_temp:
                 since = hot_since.setdefault(i, now)
                 if now - since >= self.auto_estop_temp_sec:

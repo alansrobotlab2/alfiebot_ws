@@ -21,8 +21,16 @@ Parameters:
     recorder_status_topic
                        data_recorder status, shown in the top bar
                        (default /alfie/recording/status)
+    allowed_origins    web origins allowed to call the API cross-origin, for the
+                       Foxglove Episode Manager panel (alfie_foxglove_extension).
+                       Refused origins are logged once; "*" allows any
+                       (default ["https://app.foxglove.dev"])
+    urls_topic         where the node advertises its URLs (std_msgs/String,
+                       JSON {"urls": [...]}, latched) so the Foxglove panel can
+                       find it over the bridge (default /alfie/episode_manager/urls)
 """
 
+import json
 import os
 import signal
 import socket
@@ -32,6 +40,7 @@ import threading
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.signals import SignalHandlerOptions
 from std_msgs.msg import String
 
@@ -100,6 +109,9 @@ def main(args=None):
     use_gpu = bool(node.declare_parameter('use_gpu', False).value)
     status_topic = node.declare_parameter(
         'recorder_status_topic', '/alfie/recording/status').value
+    allowed_origins = list(node.declare_parameter(
+        'allowed_origins', ['https://app.foxglove.dev']).value)
+    urls_topic = node.declare_parameter('urls_topic', '/alfie/episode_manager/urls').value
 
     manager = EpisodeManager(root, dataset, python, converter, num_threads, use_gpu, logger)
     if not manager.dataset.meta.is_dir():
@@ -124,7 +136,7 @@ def main(args=None):
     spin_thread.start()
 
     try:
-        server = EpisodeManagerServer(host, port, manager, logger)
+        server = EpisodeManagerServer(host, port, manager, logger, allowed_origins)
     except OSError as exc:
         logger.error(f'cannot bind {host}:{port}: {exc}')
         executor.shutdown()
@@ -133,7 +145,18 @@ def main(args=None):
         rclpy.shutdown()
         sys.exit(1)
 
-    logger.info(f'episode manager [{dataset}]: {"  ".join(_urls(host, port))}')
+    urls = _urls(host, port)
+    logger.info(f'episode manager [{dataset}]: {"  ".join(urls)}')
+
+    # The Foxglove panel can't see which address Foxglove used to reach the
+    # bridge, so the robot tells it, over the bridge. Latched for late joiners,
+    # and repeated in case the bridge subscribed with volatile durability.
+    urls_pub = node.create_publisher(
+        String, urls_topic,
+        QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    urls_msg = String(data=json.dumps({'urls': urls}))
+    urls_pub.publish(urls_msg)
+    node.create_timer(5.0, lambda: urls_pub.publish(urls_msg))
     logger.info(f'converter: {python} {converter}')
     if host in ('0.0.0.0', '::', ''):
         logger.warn('episode manager is unauthenticated and reachable from the whole '

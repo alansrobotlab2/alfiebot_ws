@@ -8,6 +8,11 @@ it, but cannot seek one, and scrubbing four synced cameras is the whole point.
 
 There is no authentication and the default bind is 0.0.0.0, so anyone who can
 reach the port can relabel or delete episodes. Keep it on a trusted network.
+
+Cross-origin callers (the Foxglove panel in alfie_foxglove_extension) are let in
+only from ``allowed_origins``. POSTs from any other origin are refused outright:
+a CORS preflight alone is not enough, because a page anywhere on the web can
+send a text/plain POST without one, and a browser on the LAN would deliver it.
 """
 
 import json
@@ -16,7 +21,7 @@ import os
 import posixpath
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Set
 from urllib.parse import parse_qs, urlparse
 
 WEB_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -41,12 +46,36 @@ class _Handler(BaseHTTPRequestHandler):
         if self.server.logger is not None:
             self.server.logger.debug('http %s' % (fmt % args))
 
+    def _origin_allowed(self) -> Optional[str]:
+        """Return the request's Origin if it may read responses, else None."""
+        origin = self.headers.get('Origin')
+        # No Origin, or our own page's (it matches the Host): not cross-origin.
+        if not origin or urlparse(origin).netloc == self.headers.get('Host'):
+            return None
+        allowed = self.server.allowed_origins
+        if origin in allowed or '*' in allowed:
+            return origin
+        if origin not in self.server.refused_origins:
+            self.server.refused_origins.add(origin)
+            if self.server.logger is not None:
+                self.server.logger.warn(
+                    f'refusing cross-origin requests from {origin}; add it to the '
+                    f'allowed_origins parameter if that is the Foxglove app')
+        return None
+
+    def _send_cors(self) -> None:
+        origin = self._origin_allowed()
+        if origin is not None:
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Vary', 'Origin')
+
     def _send(self, code: int, body: bytes, content_type: str,
               extra: Optional[Dict[str, str]] = None) -> None:
         self.send_response(code)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        self._send_cors()
         for key, value in (extra or {}).items():
             self.send_header(key, value)
         self.end_headers()
@@ -92,8 +121,31 @@ class _Handler(BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:         # noqa: N802 - http.server API
         self.do_GET()
 
+    def do_OPTIONS(self) -> None:      # noqa: N802 - http.server API
+        """CORS preflight: allowed origins only, and the API's own methods."""
+        if self._origin_allowed() is None:
+            self._error(403, 'origin not allowed')
+            return
+        self.send_response(204)
+        self._send_cors()
+        self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Range')
+        self.send_header('Access-Control-Max-Age', '600')
+        # Chrome asks before a public site (app.foxglove.dev) reaches a LAN address.
+        if self.headers.get('Access-Control-Request-Private-Network') == 'true':
+            self.send_header('Access-Control-Allow-Private-Network', 'true')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
     def do_POST(self) -> None:         # noqa: N802 - http.server API
         path = urlparse(self.path).path
+        # Browsers send Origin on every POST, so this also stops a foreign page
+        # posting text/plain bodies, which skip the CORS preflight.
+        origin = self.headers.get('Origin')
+        if (origin and urlparse(origin).netloc != self.headers.get('Host')
+                and self._origin_allowed() is None):
+            self._error(403, 'origin not allowed')
+            return
         handler: Optional[Callable[[Dict[str, Any]], Any]] = {
             '/api/select_dataset': lambda p: self.manager.select_dataset(str(p.get('name'))),
             '/api/set_task': lambda p: self.manager.set_task(int(p['episode']), int(p['task'])),
@@ -161,6 +213,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header('Accept-Ranges', 'bytes')
         self.send_header('Content-Length', str(end - start + 1))
         self.send_header('Cache-Control', 'no-cache')
+        self._send_cors()
         if code == 206:
             self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
         self.end_headers()
@@ -202,7 +255,10 @@ class EpisodeManagerServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, host: str, port: int, manager, logger=None) -> None:
+    def __init__(self, host: str, port: int, manager, logger=None,
+                 allowed_origins: Iterable[str] = ()) -> None:
         super().__init__((host, port), _Handler)
         self.manager = manager
         self.logger = logger
+        self.allowed_origins = set(allowed_origins)
+        self.refused_origins: Set[str] = set()   # each logged once
