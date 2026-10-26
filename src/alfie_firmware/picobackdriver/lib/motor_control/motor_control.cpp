@@ -447,7 +447,7 @@ void DriverBoard::updateActuatorState(void) {
         actuator_state.current_velocity = motor.current_velocity;
         actuator_state.current_acceleration = motor.current_acceleration;
         actuator_state.pulses = motor.encoder_count;
-        actuator_state.pwm_output = (uint8_t)abs(motor.pwm_output);
+        actuator_state.pwm_output = motor.pwm_output;
         // Fault state snapshot. handleMotorSafety() runs after this in
         // updatePeripherals(), so these lag by one 2 ms cycle - immaterial next
         // to the 50 Hz publish rate, and it keeps all Core 1 reads coming from

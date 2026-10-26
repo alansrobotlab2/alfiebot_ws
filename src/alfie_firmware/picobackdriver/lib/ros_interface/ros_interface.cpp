@@ -484,7 +484,7 @@ void calibrationServiceCallback(const void *req_msg, void *res_msg) {
         analogWrite(MOTOR_EN_PIN, CALIBRATION_PWM);
         
         // Update actuator state to show PWM is active during calibration
-        rp.actuator_state.pwm_output = CALIBRATION_PWM;
+        rp.actuator_state.pwm_output = -CALIBRATION_PWM;   // descending
         rp.new_actuator_state = true;
         
         // Poll limit switch until triggered, stalled, reversed, or timed out.

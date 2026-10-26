@@ -16,7 +16,10 @@ float32 current_position
 float32 current_velocity
 float32 current_acceleration
 int64 pulse_count
-uint8 pwm_output
+# Signed duty actually applied: + drives up, - drives down, 0 = brake.
+# Magnitude 0-255 (clamped to VELOCITY_PID_OUTPUT_LIMIT). Was uint8, which
+# dropped the sign and wrapped anything negative.
+int16 pwm_output
 
 bool is_calibrated
 

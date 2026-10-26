@@ -98,7 +98,7 @@ typedef struct {
     float current_velocity;     ///< Current velocity (m/s)
     float current_acceleration; ///< Current acceleration (m/s²)
     int64_t pulses;             ///< Encoder pulse count
-    uint8_t pwm_output;         ///< Current PWM output magnitude (0-255)
+    int16_t pwm_output;         ///< Signed PWM output (-255 to 255, + = up)
     bool is_calibrated;         ///< True if system has been successfully calibrated
     uint8_t error_code;         ///< Latched fault code (ERROR_* in config.h)
     float stall_position;       ///< Position where the last stall latched (m)

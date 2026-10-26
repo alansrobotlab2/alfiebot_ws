@@ -249,7 +249,7 @@ class Tuner(Node):
                 t=time.time() - t0,
                 pos=s.current_position,
                 vel=s.current_velocity,
-                pwm=s.pwm_output if s.pwm_output <= 127 else s.pwm_output - 256,
+                pwm=s.pwm_output,
                 cmd_vel=target_vel,
                 error_code=s.error_code,
             ))
