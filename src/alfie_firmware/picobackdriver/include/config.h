@@ -332,7 +332,8 @@
 // SECOND: neither motor can draw enough current to threaten the driver anyway.
 //
 //   90:1 / 110 rpm   3.3 ohm winding measured  ->  3.64 A locked rotor at 12 V
-//   56:1 / 178 rpm   (the intended end state)  ->  same family, same order
+//   56:1 / 178 rpm   (FITTED, 2026-10-25)      ->  same family, winding NOT yet
+//                                                  re-measured; 3.3 ohm assumed
 //
 // against a DRV8876 rated 3.5 A continuous with OCP at 3.5-5.5 A and a 44 C/W
 // package. The duty ceiling matters more than any of that: at
@@ -374,8 +375,11 @@
 // wrong sign, which turns the loop into positive feedback on a gravity-loaded
 // actuator and drives it into a hard stop. The runaway guard in
 // handleMotorSafety() is the backstop, but catching it cold like this is better.
-#define MOTOR_ENCODER_A         3       ///< Encoder A (swapped again for the 110 rpm motor's encoder)
-#define MOTOR_ENCODER_B         2       ///< Encoder B (swapped again for the 110 rpm motor's encoder)
+//
+// 56:1 FITTED (2026-10-25): unchanged from the 110 rpm motor and VERIFIED -
+// a burst that drove the back down counted negative. It was PH that flipped.
+#define MOTOR_ENCODER_A         3       ///< Encoder A (verified on the 56:1)
+#define MOTOR_ENCODER_B         2       ///< Encoder B (verified on the 56:1)
 
 /**
  * @brief Motor Direction Polarity (DRV8876 PH pin level)
@@ -393,8 +397,11 @@
  * The encoder rides the same shaft either way, so position sense (up = +position)
  * is unchanged and MOTOR_ENCODER_A/B do not need revisiting.
  */
-#define MOTOR_PH_UP             HIGH    ///< PH level to drive actuator up (flipped for the 110 rpm motor)
-#define MOTOR_PH_DOWN           LOW     ///< PH level to drive actuator down (flipped for the 110 rpm motor)
+//
+// FLIPPED AGAIN for the 56:1 (2026-10-25): an UP burst drove the back down with
+// the encoder counting negative, i.e. the encoder was right and PH was wrong.
+#define MOTOR_PH_UP             LOW     ///< PH level to drive actuator up (flipped for the 56:1 motor - verified by burst)
+#define MOTOR_PH_DOWN           HIGH    ///< PH level to drive actuator down (flipped for the 56:1 motor - verified by burst)
 
 /**
  * @brief PWM Configuration for Motors
@@ -469,8 +476,8 @@
 //   Ratio  NoLoad  NoLoad  Rated    Rated  Rated  Stall    Stall
 //          RPM     mA      kg.cm    RPM    A      kg.cm    A
 //   30:1   333     120     3.5      250    1.0    5        2.3   <- REJECTED
-//   56:1   178     120     6.5      140    1.0    9        2.3   <- gen1, on order
-//   90:1   110     120     10       85     1.0    15       2.3   <- CURRENT
+//   56:1   178     120     6.5      140    1.0    9        2.3   <- CURRENT (gen1 motor)
+//   90:1   110     120     10       85     1.0    15       2.3   <- interim, replaced
 //
 // The 30:1 was fitted during the gen2 rebuild and could not lift the back. That
 // was measured, not inferred: hands off, it produced no motion at duty 50 and
@@ -478,9 +485,19 @@
 // chopped at ITRIP. Its 5 kg.cm stall torque is an absolute ceiling no driver,
 // duty or trip setting can raise.
 //
-// Now on the 90:1 (110 RPM) as an interim, with the 56:1 (178 RPM) on order.
-// The 56:1 is the intended end state - it was the gen1 configuration and is the
+// The 90:1 (110 RPM) ran as an interim. The 56:1 (178 RPM) was FITTED on
+// 2026-10-25 - the intended end state, the gen1 configuration and the
 // speed/torque compromise this mechanism was built around.
+//
+// *** 56:1 NOTE: MOST NUMBERS BELOW WERE MEASURED ON THE 90:1. ***
+// The constants have been rescaled by gearbox ratio (speed x 178/110, torque
+// and Kt x 56/90, counts/m x 56/90). The per-section notes still quote the
+// 90:1 measurements as the basis for that scaling; each rescaled constant says
+// so. Re-measure: duty sweep (MIN_PWM_UPWARD), full-stroke speed
+// (MAX_ACTUATOR_VELOCITY), descent peaks (RUNAWAY_VELOCITY_MPS), GEAR_RATIO.
+//
+// At 56:1 the load needs 90/56 = 1.61x the current it did at 90:1: ~0.72 A
+// running against the 0.45 A measured, still inside the 1.0 A rating.
 //
 // A second manufacturer sheet gives stall 2.4 A and 0.65 A at 1 kg.cm. Taken
 // together with the matrix and the bench measurement:
@@ -574,12 +591,12 @@
 // the 3.3 ohm winding. Force = 10.81 x (0.90 - 0.12) = 8.4 kgf against an
 // inferred 4.5 kgf load - a comfortable margin, and the drive runs at ~47% of
 // its voltage-adjusted no-load speed, which is a healthy operating point.
-#define MOTOR_KT_KGCM_PER_A     6.88    ///< Torque constant at 90:1 (15 kg.cm / 2.18 A) - documentation only
+#define MOTOR_KT_KGCM_PER_A     4.13    ///< Torque constant at 56:1 (9 kg.cm / 2.18 A) - documentation only. Was 6.88 at 90:1
 #define PULLEY_PITCH_RADIUS_M   0.006366 ///< 20T GT2: 40mm circumference / 2pi. Belt force = torque / this
 #define MOTOR_MAX_CURRENT_MA    1500    ///< Target DRV8876 ITRIP setting (mA) - documentation only, not enforced
-#define MOTOR_STALL_TORQUE_NM   1.47    ///< 15 kg.cm stall torque at 90:1
-#define MOTOR_FREE_SPEED_RPM    110     ///< No-load speed at gearbox output (RPM), 90:1 @ 12 V - CONFIRMED by voltage-speed slope
-#define MOTOR_RATED_RPM         85      ///< Rated (loaded) speed at gearbox output (RPM)
+#define MOTOR_STALL_TORQUE_NM   0.88    ///< 9 kg.cm stall torque at 56:1
+#define MOTOR_FREE_SPEED_RPM    178     ///< No-load speed at gearbox output (RPM), 56:1 @ 12 V - datasheet, not yet confirmed
+#define MOTOR_RATED_RPM         140     ///< Rated (loaded) speed at gearbox output (RPM)
 
 /**
  * @brief Gear Ratio Configuration
@@ -645,8 +662,18 @@
  *
  * RE-CALIBRATE AFTER ANY ENCODER OR DECODER CHANGE. That is the lesson: this
  * constant is only as good as the counting underneath it.
+ *
+ * *** 56:1 FITTED (2026-10-25) ***
+ *
+ * The 90:1 calibration landed on the datasheet ratio to 0.1%, so the geometry
+ * model is trusted and the new value is simply the datasheet 56:1:
+ *
+ *     model      11 PPR x 4 x 56 / 0.040 m = 61,600 counts/m   (61.6 counts/mm)
+ *     350 mm   = 21,560 counts  (was 34,685)
+ *
+ * Confirm with bringup/position_test.cpp's calibration procedure.
  */
-#define GEAR_RATIO              90.0    ///< MEASURED 90.1 (34685 counts = 350.00 mm); set to the exact datasheet 90:1
+#define GEAR_RATIO              56.0    ///< 56:1 datasheet ratio (90:1 measured 90.1 against datasheet 90) - confirm on hardware
 #define OUTPUT_SHAFT_MAX_RPM    (MOTOR_FREE_SPEED_RPM / GEAR_RATIO)  ///< Max output shaft RPM
 
 /**
@@ -729,7 +756,28 @@
 // driver's 2 ms retry chatter rather than the firmware stall detector. Duty 220
 // already gives 6.87 s measured, so the last 0.9 s costs the entire OCP margin.
 // Not worth it. If 6 s becomes a hard requirement, fit the 56:1/178 rpm motor.
-#define MAX_ACTUATOR_VELOCITY       0.046    ///< Max linear velocity (m/s) - MEASURED, fixed decoder
+//
+// *** 56:1: 0.060, SCALED FROM THE 90:1 FIT, NOT MEASURED ***
+//
+// Slope scales with output speed, intercept with load current (90/56):
+//
+//     v = 5.82 x 178/110 x (V - 1.50 x 90/56)  =  9.42 x (V - 2.41)  mm/s
+//     duty 200 (9.41 V)  -> ~66 mm/s        duty 220 (10.35 V) -> ~75 mm/s
+//
+// MEASURED 2026-10-25 - THE FIT ABOVE WAS OPTIMISTIC. Full strokes, rig at
+// fixed duty, steady speed:
+//
+//     duty    up          down (gravity-assisted, peak)
+//      100    -           41.3 mm/s  (45)
+//      160    38.7 mm/s   66.0 mm/s  (71)
+//      200    50.8 mm/s   84.6 mm/s  (88)
+//      220    52.4-56.6   -
+//
+// Loaded ascent gains only ~5% over the 90:1, not 1.6x: the load eats far more
+// of the 56:1's lower torque. 0.048 is ~90% of the slower duty-220 run, the same
+// headroom rule as 0.046 was. 350 mm takes ~7.3 s. Keep robot_init back_speed in
+// sync.
+#define MAX_ACTUATOR_VELOCITY       0.048    ///< Max linear velocity (m/s) - 56:1 MEASURED (0.046 at 90:1)
 #define MAX_ACTUATOR_ACCELERATION   0.35     ///< Max linear acceleration (m/s²) - halved to cap accel-phase current
 
 /**
@@ -791,8 +839,41 @@
  *   Thermally, a 2.28 A stall is ~3.6 W in the DRV8876's ~0.7 ohm and ~17 W in
  *   the winding. Inside the part's 44 C/W rating; hard on the motor if held.
  */
-#define VELOCITY_PID_KP         2500.0  ///< Velocity proportional gain (PWM counts per m/s error)
-#define VELOCITY_PID_KI         3000.0  ///< Velocity integral gain - supplies the gravity-holding bias
+// 56:1 (2026-10-25): FEEDFORWARD NOW CARRIES THE LOAD. The notes above size KP
+// and KI for a loop where the integral had to supply the whole gravity bias.
+// On the 56:1 that bias is 140-210 counts for a climb, and winding it into the
+// integral gave 2-4 s rise times and a stored integral that fought every
+// reversal (it floored to +100 against a down command and latched a stall).
+// KP 2500 -> 5000 with no feedforward barely changed the rise - the integral
+// was the bottleneck, not the gain.
+//
+// Steady duty, signed, measured on the real firmware (plus the rig strokes):
+//
+//     up     20 mm/s -> +133    30 -> +155    40 -> +184    48 -> +201
+//     down   20 mm/s ->  -51    30 ->  -71    40 ->  -93    49 -> -109
+//
+//     up:    duty =  82 + 2.5 x v[mm/s]     gravity + friction ~ 82 counts
+//     down:  duty = -10 + 2.0 x v[mm/s]     (v < 0) friction slightly outweighs gravity
+//
+// Fitted from the steady tails of a closed-loop pid_tune run. A first fit
+// (90 / -8 / 2400) used open-loop rig strokes for the down side and ran ~10
+// counts hot, which showed up as 10-15% overshoot trimmed off over ~2 s.
+//
+// The PID trims the residual, so the integral is capped at ~75 counts.
+#define VELOCITY_FF_UP_OFFSET   78.0    ///< Feedforward duty to hold a climb against gravity + friction (counts)
+#define VELOCITY_FF_UP_GAIN     2500.0  ///< Feedforward duty per m/s, ascending (counts per m/s)
+#define VELOCITY_FF_DOWN_OFFSET -13.0   ///< Feedforward duty offset descending - friction slightly outweighs gravity
+#define VELOCITY_FF_DOWN_GAIN   2000.0  ///< Feedforward duty per m/s, descending (counts per m/s)
+// Friction rises with height, in both directions, repeatably across three runs:
+// the residual after the terms above ran ~6 counts low at the bottom of a climb
+// and ~10 counts short at the top of a descent. Since up steps start low and
+// down steps start high, both began where the plain feedforward was off - that
+// was the early ~10% velocity bump. Applied opposing the motion, about +/-5
+// counts across the stroke; the offsets above are the stroke-centre values.
+#define VELOCITY_FF_FRICTION_SLOPE  40.0    ///< Extra friction duty per metre of height (counts/m)
+#define VELOCITY_FF_FRICTION_REF_M  0.160   ///< Height where the friction term is zero (m)
+#define VELOCITY_PID_KP         3000.0  ///< Velocity proportional gain (PWM counts per m/s error)
+#define VELOCITY_PID_KI         3000.0  ///< Velocity integral gain - trims the feedforward residual
 #define VELOCITY_PID_KD         0.0     ///< Velocity derivative gain - disabled, velocity signal too noisy
 // Raised 160 -> 220 to hit the 350 mm transition inside 8 s. Set by OCP MARGIN,
 // which is the criterion that actually matters here:
@@ -823,7 +904,10 @@
 // lift. Expect ~0.9 A. Anything approaching 2 A means the load has changed and
 // this whole derivation needs revisiting.
 #define VELOCITY_PID_OUTPUT_LIMIT   220     ///< Duty ceiling (86%) - set by OCP margin, see above
-#define VELOCITY_PID_INTEGRAL_LIMIT 0.045   ///< Integral windup limit (meters); KI x this = 135 counts
+// 56:1: with feedforward carrying the load the integral only trims the residual,
+// so it is capped at 75 counts. (Before feedforward it needed ~210 - capped at
+// 135 the loop stalled at 22 mm/s on a 30 mm/s step.)
+#define VELOCITY_PID_INTEGRAL_LIMIT 0.025   ///< Integral windup limit (meters); KI x this = 75 counts of trim
 
 /**
  * @brief PWM Limits and Deadband
@@ -873,8 +957,20 @@
  * sag -> nudge -> sag limit cycle on a back-driveable gravity load. The real fix
  * is a proper dead-band in applyVelocityPID (force 0 when inside tolerance and
  * target velocity is 0), which is a code change, not a constant.
+ *
+ * 56:1 RE-MEASURED 2026-10-25, fixed decoder, four 300 ms bursts per level:
+ *
+ *     duty   counts per burst          duty   counts per burst
+ *     60-80  0, 0, 0, 0                 120   344  333  341  366
+ *       90   6  102  110  116           140   485  456  519  498
+ *      100   191  190  183  155         160   622  616  640  602
+ *
+ * Break-away is ~85-90 and duty 90 still produced a near-zero burst. 100 is the
+ * lowest level where every burst moved (worst 155 counts = 2.5 mm), so the
+ * floor stays at 100 - the scaled estimate of ~150 was well off. Linear above
+ * that at ~7.8 counts per duty count.
  */
-#define MIN_PWM_UPWARD          100     ///< Minimum PWM for upward motion - MEASURED, lowest duty that moves reliably
+#define MIN_PWM_UPWARD          100     ///< Minimum PWM for upward motion - MEASURED on the 56:1, lowest duty that moves reliably
 #define MIN_PWM_DOWNWARD        20      ///< Minimum PWM for downward motion (gravity assists)
 
 /**
@@ -882,7 +978,16 @@
  * Promoted out of updateMotorControl() so stall recovery can use the same value
  * to decide whether a new command is genuinely asking for a different position.
  */
-#define POSITION_TOLERANCE_M    0.002   ///< Position deadband (m)
+#define POSITION_TOLERANCE_M    0.001   ///< Position deadband (m) - 2 mm before the 56:1 tune
+
+/**
+ * @brief Outer position loop: desired_velocity = POSITION_KP x position error,
+ * then clamped to the commanded / max velocity and ramped.
+ *
+ * Steady tracking lag on a moving target is v / POSITION_KP: at 5 (the old
+ * hardcoded value) a 31 mm/s GR00T-style trajectory lagged ~6 mm.
+ */
+#define POSITION_KP             12.0    ///< Position gain (1/s) - was hardcoded 5.0 in motor_control.cpp
 
 /**
  * @brief Control Loop Timing
@@ -919,7 +1024,12 @@
  */
 #define STALL_PWM_THRESHOLD     40      ///< |PWM| at or above which the motor counts as driven
 #define STALL_VELOCITY_MPS      0.005   ///< |velocity| below which the motor counts as not moving
-#define STALL_TIMEOUT_MS        250     ///< How long both must hold before latching a stall
+#define STALL_TIMEOUT_MS        250     ///< How long both must hold before latching a stall (after motion this attempt)
+// Break-away gets longer. On the 56:1 a move starting from rest at duty 100-120
+// needs 100-200 ms just to break away, and the 250 ms window latched a false
+// LOAD_EXCEEDED on ordinary repositioning moves. Applies only while the attempt
+// has not yet moved, so a block on a MOVING actuator still trips at 250 ms.
+#define STALL_BREAKAWAY_MS      500     ///< Stall window before the first motion of an attempt
 
 /**
  * @brief Stall Recovery
@@ -1024,7 +1134,16 @@
 //
 // Re-check after the decoder fix: some of that 3x transient was the old decoder
 // injecting spurious counts, so the true peaks may now be lower.
-#define RUNAWAY_VELOCITY_MPS    0.150   ///< Overspeed threshold (m/s) - absolute, see above
+//
+// 56:1 (2026-10-25): LOWERED 0.150 -> 0.080, MEASURED. 0.150 could never fire on
+// this motor - even a powered descent does not reach it:
+//
+//   closed-loop peak, every pid_tune step + homing     0.054 m/s (0.052 smoothed)
+//   open-loop descent at duty 200 (rig)                0.085 m/s, peak 0.088
+//   PMODE floating (commanded down -> ~225 inverted)   ~0.095 m/s, extrapolated
+//
+// 0.080 sits 48% above anything legitimate and below every powered runaway.
+#define RUNAWAY_VELOCITY_MPS    0.080   ///< Overspeed threshold (m/s) - absolute, see above
 #define RUNAWAY_REVERSE_MPS     0.015   ///< Wrong-direction speed that counts as a reversal (m/s)
 #define RUNAWAY_CONFIRM_MS      150     ///< How long either condition must hold before latching
 
@@ -1070,7 +1189,7 @@
  * the only bound on a failed homing run was CALIBRATION_TIMEOUT_MS, i.e. up to
  * 20 s of driving into the bottom stop at the full duty ceiling.
  *
- * MIN_COUNTS is deliberately a very low bar: at 99 counts/mm a healthy descent
+ * MIN_COUNTS is deliberately a very low bar: at 99 counts/mm (90:1) a healthy descent
  * covers ~28 mm (2800 counts) in the stall window, so 20 counts distinguishes
  * "genuinely not moving" from "moving slowly" with a wide margin.
  *
@@ -1085,8 +1204,17 @@
  * VELOCITY_PID_OUTPUT_LIMIT - this path bypasses the PID and its duty clamp.
  * At half speed a healthy descent still covers ~14 mm (1400 counts) in the stall
  * window, far above MIN_COUNTS.
+ *
+ * 56:1: 110 -> 60 -> 80. 60 measured 27 mm/s on one 125 mm descent, but it sits
+ * too close to where gravity balances friction (steady descents need only
+ * duty = -13 + 2.0 x v[mm/s]), and friction on this mechanism varies by ~30
+ * counts run to run. On a stiff day a homing run from 340 mm averaged 15 mm/s
+ * and hit the 20 s CALIBRATION_TIMEOUT_MS at 33 mm - robot_init would latch the
+ * e-stop. 80 is ~33 mm/s nominal and ~22 on a stiff day: under 16 s from the
+ * top, still a gentler landing than 110 was at 90:1. The timeout stays at 20 s
+ * because homing blocks the micro-ROS executor for its whole duration.
  */
-#define CALIBRATION_PWM             110     ///< Homing descent duty (was 220, the duty ceiling)
+#define CALIBRATION_PWM             80      ///< Homing descent duty (60 too friction-sensitive; 110 at 90:1)
 #define CALIBRATION_STALL_MS       400     ///< No-progress window before aborting the homing descent
 #define CALIBRATION_MIN_COUNTS      20      ///< Counts of progress needed within that window
 #define CALIBRATION_REVERSE_COUNTS  200     ///< Upward counts while commanded down that abort homing

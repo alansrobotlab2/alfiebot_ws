@@ -90,7 +90,7 @@ Velocity-PID step-response harness. Needs the real firmware flashed, the
 micro-ROS agent running, and the actuator homed.
 
 ```bash
-python3 bringup/pid_tune.py --velocities 0.020 0.030 0.040 0.046 --csv /tmp/steps.csv
+python3 bringup/pid_tune.py --velocities 0.020 0.030 0.040 0.048 --csv /tmp/steps.csv
 python3 bringup/pid_tune.py --down          # also measure descending steps
 ```
 
@@ -98,9 +98,9 @@ Reports per step: steady-state error, rise time, overshoot, settling, ripple,
 and the fraction of samples pinned at the duty ceiling or at MIN_PWM_UPWARD.
 
 **`BackCmd.velocity` is a velocity LIMIT, not a command.** The firmware runs a
-cascade — position error x POSITION_KP (5.0, hardcoded in `motor_control.cpp`,
-not exposed in config.h) -> clamped to the commanded velocity -> acceleration
-ramp -> velocity PID. A step is produced by commanding a distant position with a
+cascade — position error x POSITION_KP (config.h) -> clamped to the commanded
+velocity and the sqrt(2·a·|e|) braking curve -> acceleration ramp -> velocity
+PID with feedforward. A step is produced by commanding a distant position with a
 velocity cap so the outer proportional term saturates.
 
 Two limits on what it can tell you:

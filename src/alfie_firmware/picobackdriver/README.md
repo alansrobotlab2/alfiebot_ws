@@ -15,7 +15,7 @@ revision of this document said about it.
 |---|---|
 | **MCU** | Waveshare RP2040 Zero (serial `5303284740EC7D9C` → `/dev/ttyAlfieB`) |
 | **Driver** | DRV8876 (3.5 A, 44.3 °C/W, integrated current sense + fault reporting) |
-| **Motor** | JGB37-520B, **90:1**, 110 rpm @ 12 V, 11 PPR quadrature encoder |
+| **Motor** | JGB37-520B, **56:1**, 178 rpm @ 12 V, 11 PPR quadrature encoder (fitted 2026-10-25, replacing the interim 90:1 / 110 rpm) |
 | **Transmission** | 20T 2GT pulley (2 mm pitch, 40 mm circumference), GT2 belt |
 | **IMU** | BNO085 on I2C0 |
 | **Status LED** | WS2812B on GP16 |
@@ -26,7 +26,7 @@ revision of this document said about it.
 | GPIO | Signal | Notes |
 |---|---|---|
 | GP28 | `EN` | PWM, 24 kHz |
-| GP27 | `PH` | direction — `MOTOR_PH_UP = HIGH` |
+| GP27 | `PH` | direction — `MOTOR_PH_UP = LOW` (56:1 motor) |
 | GP26 | `PMODE` | driven **LOW** for PH/EN mode. Never leave floating |
 | GP15 | `nSLEEP` | HIGH = active |
 | GP7 | `nFAULT` | open-drain input, internal pull-up |
@@ -59,20 +59,27 @@ motor current.** See `config.h`, "WHY THERE IS NO CURRENT TRIP".
 
 ## Calibrated constants
 
-Measured on hardware, not derived. Everything downstream depends on these.
+> **56:1 fitted 2026-10-25.** The constants below are the 56:1 values, rescaled
+> from the 90:1 calibration by gearbox ratio. They are not yet confirmed on
+> hardware. The performance table and its fit are 90:1 measurements. Re-run
+> `position_test.cpp` calibration and the duty sweep, and verify encoder phasing
+> and PH polarity by hand before the first powered move.
 
 ```
-GEAR_RATIO              90.0        90:1, confirmed against 34685 counts = 350.00 mm
-ENCODER_COUNTS_PER_METER 99,000     = 11 PPR × 4 × 90 / 0.040 m
-counts per mm           99.0
+GEAR_RATIO              56.0        56:1 datasheet (90:1 calibrated to 90.1 against datasheet 90)
+ENCODER_COUNTS_PER_METER 61,600     = 11 PPR × 4 × 56 / 0.040 m
+counts per mm           61.6        350 mm = 21,560 counts
 ACTUATOR_MAX_POSITION   0.350 m     real stroke from the limit switch
 ```
 
-Two independent checks agree: the count calibration lands within 0.1% of the
+At 90:1, two independent checks agreed: the count calibration lands within 0.1% of the
 geometric model, and the measured voltage-speed slope (5.82 mm/s per volt) is
 within 5% of the theoretical 6.11 for 110 rpm through a 40 mm pulley.
 
-### Measured performance
+### Measured performance (90:1)
+
+At 56:1 the scaled fit is `v = 9.42 × (V_applied − 2.41)` mm/s: ~66 mm/s at
+duty 200 and ~75 mm/s at duty 220, unmeasured.
 
 | duty | speed (up) | 350 mm | stall current |
 |---|---|---|---|
@@ -106,9 +113,9 @@ Dual-core, cascaded control.
 - **Core 1** — micro-ROS state machine at a drift-free **50 Hz**.
 
 ```
-BackCmd.position ──► position error ──► × POSITION_KP (5.0) ──► desired velocity
+BackCmd.position ──► position error ──► × POSITION_KP (12) ──► desired velocity
                                                                       │
-        BackCmd.velocity (a LIMIT, not a command) ──► clamp ◄──────────┘
+  BackCmd.velocity (a LIMIT) and √(2·a·|e|) braking curve ──► clamp ◄─┘
                                                      │
                             MAX_ACTUATOR_ACCELERATION ▼ ramp
                                                      │
@@ -116,29 +123,55 @@ BackCmd.position ──► position error ──► × POSITION_KP (5.0) ──�
 ```
 
 **`BackCmd.velocity` is a maximum, not a setpoint.** Position is the command;
-velocity and acceleration are constraints on how it gets there.
+velocity and acceleration are constraints on how it gets there. Leaving either
+at 0 means "use the maximum": GR00T's action publisher sends position only, and
+before 2026-10-25 a 0 acceleration froze the ramp so the back never moved.
 
-`POSITION_KP` is currently hardcoded in `motor_control.cpp`, not exposed in
-`config.h`.
+The braking curve caps speed at what the commanded acceleration can shed before
+the target, so slow ramps (VR teleop uses 0.1 m/s²) land without overshoot.
+
+Measured with GR00T-style position-only commands at 15 Hz (`POSITION_KP` 12,
+1 mm tolerance): steps of 3-20 mm land within 0.1-0.7 mm in 0.12-0.54 s with no
+overshoot; a 31 mm/s sine lags 2.3 mm on average (v / POSITION_KP); full strokes
+take 7.3 s with under 0.7 mm overshoot.
 
 ### Gains and limits
 
 ```
-VELOCITY_PID_KP             2500.0    PWM counts per m/s of error
-VELOCITY_PID_KI             3000.0    supplies the gravity-holding bias
+VELOCITY_FF_UP_OFFSET       78        feedforward: up duty = 78 + 2.5 × v[mm/s] + friction
+VELOCITY_FF_UP_GAIN         2500      counts per m/s
+VELOCITY_FF_DOWN_OFFSET     -13       feedforward: down duty = -13 + 2.0 × v[mm/s] - friction (v < 0)
+VELOCITY_FF_DOWN_GAIN       2000      counts per m/s
+VELOCITY_FF_FRICTION_SLOPE  40        friction = 40 counts/m × (height − 0.160 m), opposing motion
+VELOCITY_PID_KP             3000.0    PWM counts per m/s of error, trims the feedforward
+VELOCITY_PID_KI             3000.0
 VELOCITY_PID_KD             0.0       disabled
 VELOCITY_PID_OUTPUT_LIMIT   220       duty ceiling = current ceiling
-VELOCITY_PID_INTEGRAL_LIMIT 0.045
-MAX_ACTUATOR_VELOCITY       0.046 m/s
+VELOCITY_PID_INTEGRAL_LIMIT 0.025     KI × limit = 75 counts of trim
+MAX_ACTUATOR_VELOCITY       0.048 m/s measured on the 56:1
 MAX_ACTUATOR_ACCELERATION   0.35 m/s²
-MIN_PWM_UPWARD              100       floor on any non-zero output
+MIN_PWM_UPWARD              100       floor, commanded direction only (re-measured on the 56:1)
 MIN_PWM_DOWNWARD            20        gravity assists
-POSITION_TOLERANCE_M        0.002
+POSITION_TOLERANCE_M        0.001     brake inside this
+POSITION_KP                 12.0      outer loop gain (1/s)
 ```
 
-⚠️ `MIN_PWM_UPWARD = 100` already produces ~18.7 mm/s. Against a 46 mm/s cap
-that leaves a **2.5:1 controllable range** — commanded velocities below the
-floor make the loop chatter between zero and 18.7 mm/s.
+Feedforward carries the load (56:1 tune, 2026-10-25); the PID only trims it.
+Friction rises with height in both directions (repeatable, ~±5 counts across
+the stroke), so the feedforward includes a height term. Velocity is the count
+difference over a 20 ms window timed in `micros()`.
+
+⚠️ **The load drifts warm.** After ~2 h of cycling the same speeds needed ~30
+more counts of duty (board 41 → 50 °C, motor and gearbox warm), and 48 mm/s up
+pinned at the 220 ceiling. The feedforward was fitted cool; the integral absorbs
+up to 75 counts of drift.
+Step response 20-48 mm/s up and down: rise 240-450 ms, steady-state error
+within ±1.5%, 2-5% ripple. A full 0 -> 340 mm stroke takes 8.2 s.
+
+Inside `POSITION_TOLERANCE_M` with the ramp at rest the bridge simply brakes
+(the short brake holds the 56:1 with no measurable sag). Before that, encoder
+noise was floored into continuous +100 / -20 pulses at every hold. Floors apply
+only in the commanded direction, and the integral resets when it flips.
 
 ---
 
@@ -146,8 +179,8 @@ floor make the loop chatter between zero and 18.7 mm/s.
 
 | Detector | Trips on | Recovery |
 |---|---|---|
-| **Stall** | duty above `STALL_PWM_THRESHOLD` with no motion for 250 ms | Classified: `MOTOR_BLOCKED` (was moving, then stopped) hard-latches immediately; `LOAD_EXCEEDED` (never broke away) retries 3× at 3 s intervals then latches |
-| **Runaway** | over 0.150 m/s, or motion against the command for 150 ms | Latches until reset — miswiring cannot be retried away |
+| **Stall** | duty above `STALL_PWM_THRESHOLD` with no motion for 250 ms (500 ms before the first motion of a move — break-away) | Classified: `MOTOR_BLOCKED` (was moving, then stopped) hard-latches immediately; `LOAD_EXCEEDED` (never broke away) retries 3× at 3 s intervals then latches |
+| **Runaway** | over 0.080 m/s, or motion against the command for 150 ms | Latches until reset — miswiring cannot be retried away |
 | **nFAULT** | debounced low | Real device fault only (OCP/TSD/UVLO); chopping is disabled. Re-arms via nSLEEP cycle, rate-limited to 1/s |
 | **Calibration** | see below | Own guards, because the usual two cannot fire on that path |
 
@@ -237,8 +270,10 @@ ros2 service call /alfie/low/calibrate_back alfie_msgs/srv/BackRequestCalibratio
 1. Rejects the call if calibration is already running.
 2. Blocks incoming `BackCmd` for the duration.
 3. Reads the limit switch — **HIGH = triggered** (normally-closed).
-4. If not already at the bottom, drives down at `VELOCITY_PID_OUTPUT_LIMIT`
-   while polling the switch and the encoder.
+4. If not already at the bottom, drives down at a fixed `CALIBRATION_PWM` (80)
+   while polling the switch and the encoder. From the top of the stroke that is
+   ~25 mm/s and ~13.5 s, inside the 20 s timeout. 60 was too close to where
+   gravity balances friction: on a stiff day it averaged 15 mm/s and timed out.
 5. On assertion: immediate brake, encoders reset, PID state cleared,
    `is_calibrated` set.
 
@@ -327,9 +362,6 @@ constant, including dead ends, so they are not re-explored.
 - **`MIN_PWM_UPWARD` was measured with the broken encoder decoder** (see below)
   and may be conservative. Re-measuring could widen the 2.5:1 controllable speed
   range considerably.
-- **The velocity PID is untuned** against the corrected scale. Gains predate the
-  calibration.
-- **`POSITION_KP` is hardcoded** in `motor_control.cpp` rather than in `config.h`.
 - **No current measurement anywhere in the system** — IPROPI is grounded. Load is
   inferred from the voltage-speed relationship, not measured.
 

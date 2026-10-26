@@ -11,7 +11,7 @@ HOW A VELOCITY STEP IS PRODUCED
     BackCmd.velocity is a velocity LIMIT, not a velocity command. The firmware
     runs a cascade:
 
-        position error -> x POSITION_KP (5.0) -> desired_velocity
+        position error -> x POSITION_KP (12, config.h) -> desired_velocity
                        -> clamped to min(cmd.velocity, MAX_ACTUATOR_VELOCITY)
                        -> acceleration ramp (MAX_ACTUATOR_ACCELERATION)
                        -> applyVelocityPID -> PWM
@@ -194,12 +194,14 @@ class Tuner(Node):
     def goto(self, position, velocity, settle=1.0, timeout=40.0):
         """Blocking move, used for repositioning between measured steps."""
         position = min(max(position, self.args.floor), self.args.ceiling)
-        self.send(position, velocity)
-        ok = self.spin_until(
-            lambda: (self.state is not None
+        # Re-send every spin: the firmware's 500 ms command watchdog parks the
+        # target at the current position if the command stream stops.
+        def arrived():
+            self.send(position, velocity)
+            return ((self.state is not None
                      and abs(self.state.current_position - position) < 0.004)
-                    or self.fault(),
-            timeout)
+                    or self.fault())
+        ok = self.spin_until(arrived, timeout)
         t0 = time.time()
         while rclpy.ok() and time.time() - t0 < settle:
             self.send(position, velocity)
@@ -219,7 +221,8 @@ class Tuner(Node):
             return res
 
         # Target far enough that the outer P term stays saturated throughout.
-        # desired_velocity = 5.0 * error, so error > target_vel/5 keeps it pinned.
+        # desired_velocity = POSITION_KP (12) * error, also capped by the braking
+        # curve sqrt(2 a e). error > target_vel/5 keeps both pinned with margin.
         span = a.ceiling - a.floor - 2 * a.margin
         target = a.ceiling - a.margin if up else a.floor + a.margin
         needed = target_vel / 5.0
@@ -262,7 +265,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--velocities", type=float, nargs="+",
-                   default=[0.020, 0.030, 0.040, 0.046],
+                   default=[0.020, 0.030, 0.040, 0.048],
                    help="commanded velocity caps in m/s")
     p.add_argument("--min-trackable", type=float, default=0.0187,
                    help="below this the MIN_PWM_UPWARD floor makes tracking "

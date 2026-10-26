@@ -120,7 +120,7 @@ class RobotInitNode(Node):
         # Back
         self.declare_parameter('calibrate_timeout', 30.0)  # s; firmware's own limit is 20
         self.declare_parameter('back_height', 0.34)        # m; firmware clamps to 0.350
-        self.declare_parameter('back_speed', 0.046)        # m/s; firmware clamps to 0.046
+        self.declare_parameter('back_speed', 0.048)        # m/s; firmware clamps to 0.048
         self.declare_parameter('back_accel', 0.35)         # m/s^2; firmware clamps to 0.35
         self.declare_parameter('back_tolerance', 0.005)    # m
         self.declare_parameter('back_timeout_margin', 10.0)  # s on top of height / speed

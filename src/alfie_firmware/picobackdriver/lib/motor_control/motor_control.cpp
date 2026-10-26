@@ -275,22 +275,29 @@ void DriverBoard::updateMotorControl(void) {
                                          ACTUATOR_MIN_POSITION,
                                          ACTUATOR_MAX_POSITION);
         
-        // Clamp acceleration to maximum
-        motor.max_acceleration = constrain(motor.max_acceleration, 
-                                          0.0, 
-                                          MAX_ACTUATOR_ACCELERATION);
+        // Clamp acceleration to maximum. 0 (unset) means "use the maximum", as it
+        // already did for velocity: a position-only BackCmd (GR00T's action
+        // publisher sends exactly that) otherwise froze the ramp at 0 m/s and
+        // the back never moved.
+        motor.max_acceleration = (motor.max_acceleration > 0.0)
+            ? constrain(motor.max_acceleration, 0.0, MAX_ACTUATOR_ACCELERATION)
+            : MAX_ACTUATOR_ACCELERATION;
         
         // Position control: Calculate velocity needed to reach target position
         // Velocity and acceleration from command are constraints, not direct control inputs
         float position_error = motor.target_position - motor.current_position;
         
         // Simple proportional position control to generate velocity setpoint
-        const float POSITION_KP = 5.0; // Position gain - increased from 3.0 for faster settling
         float desired_velocity = POSITION_KP * position_error;
         
         // Limit velocity based on commanded max velocity (if non-zero) or system max
         // actuator_cmd.velocity specifies the MAXIMUM velocity to use, not a direct velocity command
         float max_vel = (actuator_cmd.velocity != 0.0) ? fabs(actuator_cmd.velocity) : MAX_ACTUATOR_VELOCITY;
+        // Braking curve: never ask for more speed than the ramp can shed before
+        // the target, v = sqrt(2 a |e|). Without it a low commanded acceleration
+        // (VR teleop sends 0.1 m/s^2) overshot by 8-9 mm, because the P term only
+        // starts slowing 4 mm out and the ramp needs 11 mm to stop from 48 mm/s.
+        max_vel = fminf(max_vel, sqrtf(2.0f * motor.max_acceleration * fabsf(position_error)));
         desired_velocity = constrain(desired_velocity, -max_vel, max_vel);
         
         // Stop if within tolerance
@@ -311,10 +318,21 @@ void DriverBoard::updateMotorControl(void) {
                                                        motor.max_acceleration, 
                                                        dt);
         
-        // Apply velocity PID controller
-        motor.pwm_output = applyVelocityPID(motor.ramped_velocity, 
-                                           motor.current_velocity, 
-                                           dt);
+        // Hold dead-band: inside tolerance with the ramp at rest, brake outright.
+        // Otherwise encoder noise (+/-0.002 m/s) gives the PID a few counts of
+        // output, which the MIN_PWM floors turn into +100 / -20 pulses - the
+        // hold chattered continuously. The short brake holds the 56:1 with no
+        // measurable sag, and a real sag past tolerance re-engages the loop.
+        if (motor.target_velocity == 0.0 && motor.ramped_velocity == 0.0) {
+            motor.velocity_error_integral = 0.0;
+            motor.velocity_error_previous = 0.0;
+            motor.pwm_output = 0;
+        } else {
+            // Apply velocity PID controller
+            motor.pwm_output = applyVelocityPID(motor.ramped_velocity,
+                                               motor.current_velocity,
+                                               dt);
+        }
         
         
         // Direction first, then magnitude. The old TB6612 code wrote PWM before
@@ -346,7 +364,6 @@ void DriverBoard::readEncoder(void) {
 void DriverBoard::updateActuatorState(void) {
     static uint32_t last_update_time = 0;
     static uint32_t last_temp_update = 0;
-    static int32_t last_count = 0;
     uint32_t current_time = millis();
     float dt = (current_time - last_update_time) / 1000.0; // Convert to seconds
     
@@ -361,24 +378,42 @@ void DriverBoard::updateActuatorState(void) {
         // Calculate position from encoder counts
         motor.current_position = (float)motor.encoder_count / ENCODER_COUNTS_PER_METER;
         
-        // Calculate velocity from encoder pulses
-        int32_t count_diff = motor.encoder_count - last_count;
-        last_count = motor.encoder_count;
-        
         // Store previous velocity for acceleration calculation
         float previous_velocity = motor.current_velocity;
         
-        // Convert encoder counts to velocity (m/s)
-        float raw_velocity = 0.0;
+        // Velocity = counts over a VELOCITY_WINDOW-sample window, timed in micros.
+        // Replaces a 2 ms difference timed in millis() plus a light EMA: at
+        // 30 mm/s a 2 ms window holds only ~3.7 counts, and millis() rounds the
+        // 2 ms period to 2 or 3, so each raw sample carried ~30% quantization
+        // and timing error. A 20 ms window cuts that ~3x for similar lag.
+        static const uint8_t VELOCITY_WINDOW = 10;
+        static int32_t  win_count[VELOCITY_WINDOW];
+        static uint32_t win_us[VELOCITY_WINDOW];
+        static uint8_t  win_head = 0;
+        static uint8_t  win_fill = 0;
+        const uint32_t now_us = micros();
+
         if (dt > 0) {
-            raw_velocity = ((float)count_diff / ENCODER_COUNTS_PER_METER) / dt;
-            
-            // Apply low-pass filter to smooth velocity (reduce encoder quantization noise)
-            // Exponential moving average: filtered = alpha * new + (1-alpha) * old
-            const float VELOCITY_FILTER_ALPHA = 0.3; // 0.3 = moderate filtering
-            motor.current_velocity = VELOCITY_FILTER_ALPHA * raw_velocity + 
-                                    (1.0 - VELOCITY_FILTER_ALPHA) * motor.current_velocity;
-            
+            if (win_fill < VELOCITY_WINDOW) {
+                // Not enough history yet: velocity over what there is.
+                if (win_fill > 0) {
+                    const float span = (now_us - win_us[0]) * 1e-6f;
+                    motor.current_velocity = ((float)(motor.encoder_count - win_count[0])
+                                              / ENCODER_COUNTS_PER_METER) / span;
+                }
+                win_count[win_fill] = motor.encoder_count;
+                win_us[win_fill] = now_us;
+                win_fill++;
+            } else {
+                // win_head holds the oldest sample; replace it after reading.
+                const float span = (now_us - win_us[win_head]) * 1e-6f;
+                motor.current_velocity = ((float)(motor.encoder_count - win_count[win_head])
+                                          / ENCODER_COUNTS_PER_METER) / span;
+                win_count[win_head] = motor.encoder_count;
+                win_us[win_head] = now_us;
+                win_head = (win_head + 1) % VELOCITY_WINDOW;
+            }
+
             // Calculate acceleration (change in velocity over time)
             motor.current_acceleration = (motor.current_velocity - previous_velocity) / dt;
             
@@ -555,7 +590,8 @@ void DriverBoard::handleMotorSafety(void) {
     if (driving && stopped && !motor.stall_detected) {
         if (stall_start_ms == 0) {
             stall_start_ms = now;
-        } else if ((uint32_t)(now - stall_start_ms) >= STALL_TIMEOUT_MS) {
+        } else if ((uint32_t)(now - stall_start_ms) >=
+                   (moved_this_attempt ? STALL_TIMEOUT_MS : STALL_BREAKAWAY_MS)) {
             motor.stall_detected = true;
             // Moving first, then stopped => something got in the way. Never
             // moving at all => could not break away from the load.
@@ -795,6 +831,28 @@ int16_t applyVelocityPID(float target_velocity, float current_velocity, float dt
     // Proportional term
     float p_term = VELOCITY_PID_KP * error;
     
+    // Feedforward carries the duty a loaded move needs, so the PID only trims the
+    // residual. Without it the whole ~140-210 counts of a climb had to wind up in
+    // the integral: 2-4 s rise, and the stored integral fought every reversal.
+    float ff_term = 0.0;
+    // Friction rises with height in both directions, so it opposes the motion.
+    const float friction = VELOCITY_FF_FRICTION_SLOPE
+                           * (rp.motor.current_position - VELOCITY_FF_FRICTION_REF_M);
+    if (target_velocity > 0.0) {
+        ff_term = VELOCITY_FF_UP_OFFSET + VELOCITY_FF_UP_GAIN * target_velocity + friction;
+    } else if (target_velocity < 0.0) {
+        ff_term = VELOCITY_FF_DOWN_OFFSET + VELOCITY_FF_DOWN_GAIN * target_velocity - friction;
+    }
+
+    // Integral learned in one direction is wrong in the other (gravity flips from
+    // load to assist), so drop it when the target direction changes.
+    static int8_t last_direction = 0;
+    const int8_t direction = (target_velocity > 0.0) - (target_velocity < 0.0);
+    if (direction != 0 && direction != last_direction) {
+        rp.motor.velocity_error_integral = 0.0;
+    }
+    if (direction != 0) last_direction = direction;
+
     // Integral term with anti-windup and reset when target velocity is zero
     // Reset integral when stopped to prevent wind-up during settling
     if (target_velocity == 0.0 && fabs(current_velocity) < 0.003) {
@@ -817,7 +875,7 @@ int16_t applyVelocityPID(float target_velocity, float current_velocity, float dt
     rp.motor.velocity_error_previous = error;
     
     // Calculate total PID output
-    float pid_output = p_term + i_term + d_term;
+    float pid_output = ff_term + p_term + i_term + d_term;
     
     // Smoother deadband compensation to overcome static friction
     // Only add compensation when starting from zero velocity, not continuously
@@ -845,11 +903,14 @@ int16_t applyVelocityPID(float target_velocity, float current_velocity, float dt
                                             -VELOCITY_PID_OUTPUT_LIMIT, 
                                             VELOCITY_PID_OUTPUT_LIMIT);
     
-    // Apply minimum PWM thresholds when any non-zero PWM is commanded
-    // This ensures motor always has enough power to overcome friction and gravity
-    if (pwm_output > 0 && pwm_output < MIN_PWM_UPWARD) {
+    // Apply minimum PWM thresholds, but only in the commanded direction. An output
+    // against the target direction is the loop braking (e.g. a small up-push
+    // slowing a descent) and must not be floored into a full break-away kick -
+    // that turned leftover integral into +100 against a down command and latched
+    // a false stall.
+    if (direction > 0 && pwm_output > 0 && pwm_output < MIN_PWM_UPWARD) {
         pwm_output = MIN_PWM_UPWARD;
-    } else if (pwm_output < 0 && pwm_output > -MIN_PWM_DOWNWARD) {
+    } else if (direction < 0 && pwm_output < 0 && pwm_output > -MIN_PWM_DOWNWARD) {
         pwm_output = -MIN_PWM_DOWNWARD;
     }
     

@@ -46,7 +46,7 @@
     # Back
     calibrate_timeout: 30.0      # s (firmware gives up at 20)
     back_height: 0.34            # m. Firmware max travel is 0.350 (no top switch).
-    back_speed: 0.046            # m/s. = firmware MAX_ACTUATOR_VELOCITY; higher is clamped
+    back_speed: 0.048            # m/s. = firmware MAX_ACTUATOR_VELOCITY; higher is clamped
     back_accel: 0.35             # m/s^2. = firmware MAX_ACTUATOR_ACCELERATION
     back_tolerance: 0.005        # m
     back_timeout_margin: 10.0    # s beyond height / speed

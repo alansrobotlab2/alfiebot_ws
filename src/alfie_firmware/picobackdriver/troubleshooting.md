@@ -221,7 +221,7 @@ and note that any resistor other than a short re-enables chopping.
 | Kt | 6.88 kg·cm/A |
 | Winding | **3.3–5.9 Ω measured** (use 3.3 min for protection sizing) |
 
-A **56:1 / 178 RPM** unit is on order and is the intended end state.
+A **56:1 / 178 RPM** unit (9 kg·cm stall, Kt 4.13 kg·cm/A) was fitted on 2026-10-25 and replaces this one; see `config.h` for the rescaled constants.
 
 ### Key formulas
 
