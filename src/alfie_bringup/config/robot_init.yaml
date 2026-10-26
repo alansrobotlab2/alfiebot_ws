@@ -10,6 +10,7 @@
 /**:
   ros__parameters:
     startup_timeout: 90.0        # s to wait for boards, mux and calibrate_back service
+    enable_timeout: 15.0         # s for every servo to report enabled (commands landing)
 
     # Ramp speeds. Slow on purpose: a snag should stall, not swing through.
     head_speed: 0.6              # rad/s

@@ -16,6 +16,9 @@ arm joint has been confirmed in the tuck pose:
 
 Commands go through the command_mux as source "init" (cmd/<subsystem>/init),
 which outranks every other source, so nothing fights the sequence while it runs.
+Before the first move every joint holds where it is until its board reports the
+servo enabled: that proves the whole path (mux -> board) is delivering, which
+a board's state topic appearing does not.
 
 Stuck detection: each joint follows a ramped setpoint at reduced torque (a snag
 stalls the servo rather than forcing through it). A joint that trails its
@@ -100,6 +103,7 @@ class RobotInitNode(Node):
         self.declare_parameter('rate_hz', 50.0)
         self.declare_parameter('startup_timeout', 90.0)   # s, for boards + mux to appear
         self.declare_parameter('state_timeout', 0.5)      # s, board state older = board lost
+        self.declare_parameter('enable_timeout', 15.0)    # s for every servo to report enabled
         # Motion
         self.declare_parameter('head_speed', 0.6)         # rad/s ramp
         self.declare_parameter('arm_speed', 0.4)          # rad/s ramp
@@ -135,6 +139,7 @@ class RobotInitNode(Node):
         self.rate = float(g('rate_hz'))
         self.startup_timeout = float(g('startup_timeout'))
         self.state_timeout = float(g('state_timeout'))
+        self.enable_timeout = float(g('enable_timeout'))
         self.head_speed = float(g('head_speed'))
         self.arm_speed = float(g('arm_speed'))
         self.arm_order = list(g('arm_order'))
@@ -254,6 +259,7 @@ class RobotInitNode(Node):
         # Torque on, holding wherever each joint is now.
         for m in self.modules.values():
             m.setpoint = m.positions()
+        self._wait_enabled()
 
         self._move('head', dict(zip(HEAD_JOINTS, [0.0] * len(HEAD_JOINTS))), self.head_speed)
         for side in self.arm_order:
@@ -276,6 +282,21 @@ class RobotInitNode(Node):
             time.sleep(0.2)
         if self.estopped:
             raise InitError('e-stop is latched; reset it and rerun robot_init')
+
+    def _wait_enabled(self) -> None:
+        """Hold position until every servo reports enabled, i.e. our commands land."""
+        deadline = time.monotonic() + self.enable_timeout
+        while True:
+            self._check()
+            waiting = [name for name, m in self.modules.items()
+                       if not all(sv.enabled for sv in m.servos)]
+            if not waiting:
+                return
+            if time.monotonic() > deadline:
+                raise InitError(
+                    f'commands not reaching {", ".join(waiting)} after '
+                    f'{self.enable_timeout:.0f}s (servos never reported enabled)')
+            time.sleep(0.1)
 
     def _not_ready(self) -> List[str]:
         missing = []
