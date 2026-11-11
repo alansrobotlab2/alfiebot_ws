@@ -1,0 +1,191 @@
+<title>Alfie VR Controls Print</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@600&display=swap">
+<style>
+/* Layout (print edition): one fixed 1600x900 sheet; controllers left and right, callouts in the outer margins and the centre gap, reference strip along the bottom */
+/* Print edition: single light look, light controller shells, dark ink only where it carries meaning */
+:root {
+  --bg: #ffffff;
+  --sheet: #ffffff;
+  --fg: #11161c;
+  --muted: #4a545f;
+  --line: #c3cbd3;
+  --panel: #f4f6f8;
+  --left: #0b6f6b;
+  --right: #a3530a;
+  --body: #e6eaee;
+  --body-hi: #9aa4ae;
+  --btn: #2b323b;
+  --btn-fg: #ffffff;
+  --rec: #c0261f;
+  --f-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@page { size: landscape; margin: 10mm; }
+@media print {
+  body { padding: 0 !important; }
+  .scroller { overflow: visible; max-width: none; }
+  svg.sheet { min-width: 0; border-radius: 0; }
+}
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 24px;
+}
+.scroller { max-width: 1600px; margin: 0 auto; overflow-x: auto; }
+svg.sheet { display: block; width: 100%; min-width: 960px; height: auto; aspect-ratio: 16 / 9; background: var(--sheet); border-radius: 12px; outline: 1px solid var(--line); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+.h1 { font: 700 46px var(--f-display); fill: var(--fg); letter-spacing: .02em; }
+.sub { font: 400 17px var(--f-body); fill: var(--muted); }
+.t { font: 700 25px var(--f-display); fill: var(--fg); letter-spacing: .03em; }
+.d { font: 400 16px var(--f-body); fill: var(--muted); }
+.key { font: 600 15px var(--f-mono); fill: var(--btn-fg); }
+.tag { font: 700 16px var(--f-display); fill: #fff; letter-spacing: .14em; }
+.pt { font: 700 20px var(--f-display); fill: var(--fg); letter-spacing: .05em; }
+.pl { font: 400 16px var(--f-body); fill: var(--fg); }
+.pl tspan.m { fill: var(--muted); }
+.bar { fill: var(--line); }
+.barl { font: 600 13px var(--f-mono); fill: var(--fg); }
+.L { color: var(--left); }
+.R { color: var(--right); }
+.ld { stroke: currentColor; stroke-width: 2; fill: none; }
+.dot { fill: currentColor; }
+</style>
+
+<div class="scroller">
+<svg class="sheet" viewBox="0 0 1600 900" role="img" aria-label="Alfie VR controller reference: left and right Quest controllers with each control labelled">
+  <defs>
+    <symbol id="ctl" viewBox="0 0 320 460">
+      <path d="M110 58 Q160 6 210 58 Q160 34 110 58 Z" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-width="2" stroke-dasharray="5 4"/>
+      <path d="M106 200 C 102 300 114 382 138 420 Q 160 448 182 420 C 206 382 218 300 214 200 Z" fill="var(--body)"/>
+      <path d="M206 236 C 222 282 222 334 208 376 L 194 370 C 206 332 206 284 194 240 Z" fill="currentColor" fill-opacity=".28" stroke="currentColor" stroke-width="2" stroke-dasharray="5 4"/>
+      <ellipse cx="160" cy="150" rx="114" ry="96" fill="var(--body-hi)"/>
+      <ellipse cx="160" cy="150" rx="104" ry="86" fill="var(--body)"/>
+      <circle cx="120" cy="140" r="37" fill="var(--btn)"/>
+      <circle cx="120" cy="140" r="24" fill="var(--body-hi)" stroke="var(--btn)" stroke-width="3"/>
+      <circle cx="120" cy="140" r="14" fill="none" stroke="var(--body)" stroke-width="2"/>
+      <circle cx="206" cy="106" r="19" fill="var(--btn)"/>
+      <circle cx="216" cy="166" r="19" fill="var(--btn)"/>
+      <ellipse cx="140" cy="204" rx="9" ry="7" fill="var(--btn)"/>
+    </symbol>
+  </defs>
+
+  <!-- Title -->
+  <text class="h1" x="40" y="74">ALFIE VR CONTROLS</text>
+  <text class="sub" x="40" y="106">Quest controllers in the headset browser · https://&lt;robot&gt;:8443 · menu and Meta buttons unused</text>
+
+  <!-- ================= LEFT CONTROLLER ================= -->
+  <g class="L">
+    <use href="#ctl" x="250" y="150" width="352" height="506"/>
+    <text class="key" x="477" y="272" text-anchor="middle">Y</text>
+    <text class="key" x="488" y="338" text-anchor="middle">X</text>
+    <rect x="376" y="648" width="100" height="28" rx="14" fill="currentColor"/>
+    <text class="tag" x="426" y="668" text-anchor="middle">LEFT</text>
+
+    <!-- Thumbstick (outer) -->
+    <line class="ld" x1="382" y1="304" x2="222" y2="304"/><circle class="dot" cx="382" cy="304" r="5"/>
+    <text class="t" x="210" y="296" text-anchor="end">DRIVE</text>
+    <text class="d" x="210" y="322" text-anchor="end">tilt: fwd · back · strafe</text>
+    <text class="t" x="210" y="372" text-anchor="end">PASSTHRU</text>
+    <text class="d" x="210" y="398" text-anchor="end">click: see the room</text>
+
+    <!-- Trigger -->
+    <line class="ld" x1="459" y1="190" x2="608" y2="190"/><circle class="dot" cx="459" cy="190" r="5"/>
+    <text class="t" x="620" y="198">GRIPPER</text>
+    <text class="d" x="620" y="222">trigger: pull = close</text>
+
+    <!-- Y -->
+    <line class="ld" x1="496" y1="267" x2="608" y2="267"/>
+    <circle cx="632" cy="267" r="13" fill="var(--btn)"/><text class="key" x="632" y="272" text-anchor="middle">Y</text>
+    <text class="t" x="654" y="275">ARMS TO ZERO</text>
+
+    <!-- X -->
+    <line class="ld" x1="507" y1="333" x2="608" y2="333"/>
+    <circle cx="632" cy="333" r="13" fill="var(--btn)"/><text class="key" x="632" y="338" text-anchor="middle">X</text>
+    <text class="t" x="654" y="341">HELP</text>
+    <text class="d" x="654" y="365">hold: show key</text>
+
+    <!-- Grip -->
+    <line class="ld" x1="481" y1="487" x2="608" y2="487"/><circle class="dot" cx="481" cy="487" r="5"/>
+    <text class="t" x="620" y="495">ARM ENABLE</text>
+    <text class="d" x="620" y="519">squeeze: enable</text>
+  </g>
+
+  <!-- ================= RIGHT CONTROLLER ================= -->
+  <g class="R">
+    <g transform="translate(1350,0) scale(-1,1)"><use href="#ctl" x="0" y="150" width="352" height="506"/></g>
+    <text class="key" x="1123" y="272" text-anchor="middle">B</text>
+    <text class="key" x="1112" y="338" text-anchor="middle">A</text>
+    <rect x="1119" y="648" width="110" height="28" rx="14" fill="currentColor"/>
+    <text class="tag" x="1174" y="668" text-anchor="middle">RIGHT</text>
+
+    <!-- Thumbstick (outer) -->
+    <line class="ld" x1="1218" y1="304" x2="1378" y2="304"/><circle class="dot" cx="1218" cy="304" r="5"/>
+    <text class="t" x="1390" y="296">TURN</text>
+    <text class="d" x="1390" y="322">tilt: left · right</text>
+    <text class="t" x="1390" y="372"><tspan fill="var(--rec)">●</tspan> RECORD</text>
+    <text class="d" x="1390" y="398">click: start / stop</text>
+
+    <!-- Trigger -->
+    <line class="ld" x1="1141" y1="190" x2="992" y2="190"/><circle class="dot" cx="1141" cy="190" r="5"/>
+    <text class="t" x="980" y="198" text-anchor="end">GRIPPER</text>
+    <text class="d" x="980" y="222" text-anchor="end">trigger: pull = close</text>
+
+    <!-- B -->
+    <line class="ld" x1="1104" y1="267" x2="992" y2="267"/>
+    <circle cx="968" cy="267" r="13" fill="var(--btn)"/><text class="key" x="968" y="272" text-anchor="middle">B</text>
+    <text class="t" x="946" y="275" text-anchor="end">BACK UP ▲</text>
+
+    <!-- A -->
+    <line class="ld" x1="1093" y1="333" x2="992" y2="333"/>
+    <circle cx="968" cy="333" r="13" fill="var(--btn)"/><text class="key" x="968" y="338" text-anchor="middle">A</text>
+    <text class="t" x="946" y="341" text-anchor="end">BACK DOWN ▼</text>
+    <text class="d" x="946" y="365" text-anchor="end">one preset per press</text>
+
+    <!-- Grip -->
+    <line class="ld" x1="1119" y1="487" x2="992" y2="487"/><circle class="dot" cx="1119" cy="487" r="5"/>
+    <text class="t" x="980" y="495" text-anchor="end">ARM ENABLE</text>
+    <text class="d" x="980" y="519" text-anchor="end">squeeze: enable</text>
+  </g>
+
+  <!-- ================= REFERENCE STRIP ================= -->
+  <g>
+    <rect x="40" y="700" width="365" height="168" rx="10" fill="var(--panel)" stroke="var(--line)"/>
+    <text class="pt" x="62" y="734">WHILE GRIPPING</text>
+    <text class="pl" x="62" y="766">push / pull <tspan class="m">→</tspan> reach</text>
+    <text class="pl" x="62" y="792">up / down <tspan class="m">→</tspan> arm height</text>
+    <text class="pl" x="62" y="818">sideways <tspan class="m">→</tspan> shoulder pan</text>
+    <text class="pl" x="62" y="844">tilt / roll <tspan class="m">→</tspan> wrist</text>
+
+    <rect x="425" y="700" width="365" height="168" rx="10" fill="var(--panel)" stroke="var(--line)"/>
+    <text class="pt" x="447" y="734">HEADSET → HEAD</text>
+    <text class="pl" x="447" y="766">look around, head follows</text>
+    <text class="pl" x="447" y="792"><tspan class="m">2× gain from where you faced</tspan></text>
+    <text class="pl" x="447" y="818"><tspan class="m">at session start</tspan></text>
+    <text class="pl" x="447" y="844"><tspan class="m">yaw ±180° · pitch ±60° · roll ±20°</tspan></text>
+
+    <rect x="810" y="700" width="365" height="168" rx="10" fill="var(--panel)" stroke="var(--line)"/>
+    <text class="pt" x="832" y="734">BACK HEIGHT</text>
+    <text class="pl" x="1153" y="734" text-anchor="end"><tspan class="m">metres</tspan></text>
+    <rect class="bar" x="832" y="826" width="70" height="24" rx="3"/>
+    <rect class="bar" x="912" y="802" width="70" height="48" rx="3"/>
+    <rect class="bar" x="992" y="778" width="70" height="72" rx="3"/>
+    <rect class="bar" x="1072" y="754" width="70" height="96" rx="3"/>
+    <text class="barl" x="867" y="843" text-anchor="middle">0.00</text>
+    <text class="barl" x="947" y="820" text-anchor="middle">0.15</text>
+    <text class="barl" x="1027" y="796" text-anchor="middle">0.25</text>
+    <text class="barl" x="1107" y="772" text-anchor="middle">0.34</text>
+
+    <rect x="1195" y="700" width="365" height="168" rx="10" fill="var(--panel)" stroke="var(--line)"/>
+    <text class="pt" x="1217" y="734">STOPPING</text>
+    <text class="pl" x="1217" y="766">let go of grip <tspan class="m">→</tspan> arm freezes</text>
+    <text class="pl" x="1217" y="792">link lost <tspan class="m">→</tspan> base stops, arms hold</text>
+    <text class="pl" x="1217" y="818">E-stop <tspan class="m">→</tspan> VR ignored</text>
+    <text class="pl" x="1217" y="844"><tspan class="m">trigger works only while gripping</tspan></text>
+  </g>
+</svg>
+</div>

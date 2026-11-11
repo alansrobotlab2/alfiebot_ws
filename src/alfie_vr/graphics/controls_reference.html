@@ -1,0 +1,261 @@
+<title>Alfie VR Controls</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: two controller plates side by side (illustration + numbered legend), then a strip of reference cards */
+:root {
+  --bg: #eef1f4;
+  --surface: #ffffff;
+  --fg: #1b2128;
+  --muted: #5b6672;
+  --line: #d3dae1;
+  --left: #0f8a86;      /* left-hand accent */
+  --right: #c26a12;     /* right-hand accent */
+  --body: #2b323b;      /* controller shell */
+  --body-hi: #3b444f;
+  --btn: #161b21;
+  --btn-fg: #e9edf1;
+  --ghost: rgba(27,33,40,.06);
+  --rec: #c8302b;
+  --f-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161b; --surface: #1a2027; --fg: #e6eaee; --muted: #97a3ae; --line: #2c343d;
+    --left: #3cc4bd; --right: #f0a24a; --body: #39424d; --body-hi: #4a5561;
+    --btn: #1b2027; --btn-fg: #e9edf1; --ghost: rgba(230,234,238,.06); --rec: #ff6a5f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161b; --surface: #1a2027; --fg: #e6eaee; --muted: #97a3ae; --line: #2c343d;
+  --left: #3cc4bd; --right: #f0a24a; --body: #39424d; --body-hi: #4a5561;
+  --btn: #1b2027; --btn-fg: #e9edf1; --ghost: rgba(230,234,238,.06); --rec: #ff6a5f;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 14px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 40px;
+}
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 24px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; }
+h1 { font-family: var(--f-display); font-weight: 700; font-size: 34px; letter-spacing: .01em; margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); margin: 0; max-width: 62ch; }
+.sub code, td code, li code { font-family: var(--f-mono); font-size: 12px; }
+
+.plates { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 20px; }
+.plate { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 18px 8px; min-width: 0; display: grid; gap: 4px; }
+.plate h2 { font-family: var(--f-display); font-weight: 700; font-size: 22px; margin: 0; display: flex; align-items: center; gap: 10px; letter-spacing: .02em; text-transform: uppercase; }
+.plate h2 .hand { width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center; color: #fff; font-size: 16px; }
+.plate.l h2 .hand { background: var(--left); }
+.plate.r h2 .hand { background: var(--right); }
+.plate.l { --acc: var(--left); }
+.plate.r { --acc: var(--right); }
+.fig { display: flex; justify-content: center; }
+.fig svg { width: 100%; max-width: 340px; height: auto; display: block; }
+
+ol.legend { list-style: none; margin: 0; padding: 0; display: grid; }
+ol.legend li { display: grid; grid-template-columns: 26px 1fr; gap: 4px 12px; padding: 11px 0; border-top: 1px solid var(--line); }
+.num { width: 24px; height: 24px; border-radius: 50%; background: var(--acc); color: #fff; font: 600 12px/24px var(--f-mono); text-align: center; margin-top: 1px; }
+.ctl { font-weight: 600; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.ctl .how { font-weight: 500; color: var(--muted); font-size: 12px; }
+.does { grid-column: 2; color: var(--fg); margin: 0; }
+.does + .does { margin-top: 2px; }
+.does b { font-weight: 600; }
+.muted { color: var(--muted); }
+.chip { font: 600 10.5px/1 var(--f-body); letter-spacing: .06em; text-transform: uppercase; padding: 4px 6px 3px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.chip.rec { color: var(--rec); border-color: currentColor; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; min-width: 0; }
+.card h3 { font-family: var(--f-display); font-weight: 600; font-size: 18px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .03em; }
+.card ul { margin: 0; padding-left: 18px; display: grid; gap: 5px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+td { padding: 5px 0; border-top: 1px solid var(--line); vertical-align: top; }
+td:first-child { color: var(--muted); padding-right: 12px; white-space: nowrap; }
+tr:first-child td { border-top: 0; }
+.presets { display: flex; align-items: flex-end; gap: 6px; margin: 6px 0 10px; height: 74px; }
+.presets div { flex: 1; background: var(--ghost); border: 1px solid var(--line); border-radius: 4px 4px 0 0; display: flex; align-items: flex-start; justify-content: center; font: 500 12px var(--f-mono); padding-top: 4px; font-variant-numeric: tabular-nums; }
+.keys { display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.key { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--btn); color: var(--btn-fg); font: 600 11px var(--f-mono); vertical-align: middle; margin-right: 4px; }
+footer { color: var(--muted); font-size: 12px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Alfie VR Controls</h1>
+      <p class="sub">Quest Touch controllers in the headset browser (<code>https://&lt;robot&gt;:8443</code>). Nothing moves until you move: each subsystem starts from the robot's measured pose.</p>
+    </div>
+  </header>
+
+  <section class="plates">
+    <article class="plate l">
+      <h2><span class="hand">L</span>Left controller</h2>
+      <div class="fig"><svg id="svgL" viewBox="0 0 320 460" role="img" aria-label="Left controller with numbered controls"></svg></div>
+      <ol class="legend">
+        <li><span class="num">1</span>
+          <span class="ctl">Thumbstick <span class="chip">Base</span><span class="chip">View</span></span>
+          <p class="does"><b>Tilt</b> up/down drives forward/back, left/right strafes. Up to 0.15 m/s.</p>
+          <p class="does"><b>Click</b> toggles <b>passthrough</b>. You see the room; the robot's head freezes where it is.</p></li>
+        <li><span class="num">2</span>
+          <span class="ctl">Y button <span class="chip">Arms</span></span>
+          <p class="does">Moves <b>both arms to zero</b>.</p></li>
+        <li><span class="num">3</span>
+          <span class="ctl">X button <span class="how">hold</span><span class="chip">View</span></span>
+          <p class="does">Shows the <b>controls key</b> in the headset in place of the HUD. Let go to return.</p></li>
+        <li><span class="num">4</span>
+          <span class="ctl">Trigger <span class="how">index finger</span><span class="chip">Gripper</span></span>
+          <p class="does">Left gripper, proportional: released = open, full pull = closed. <span class="muted">Only while the grip is held.</span></p></li>
+        <li><span class="num">5</span>
+          <span class="ctl">Grip <span class="how">hold, middle finger</span><span class="chip">Arm</span></span>
+          <p class="does"><b>Left arm follows</b> the controller. Release to freeze the arm; grab again to carry on from there.</p></li>
+        <li><span class="num">6</span>
+          <span class="ctl">Menu button</span>
+          <p class="does muted">Not used.</p></li>
+      </ol>
+    </article>
+
+    <article class="plate r">
+      <h2><span class="hand">R</span>Right controller</h2>
+      <div class="fig"><svg id="svgR" viewBox="0 0 320 460" role="img" aria-label="Right controller with numbered controls"></svg></div>
+      <ol class="legend">
+        <li><span class="num">1</span>
+          <span class="ctl">Thumbstick <span class="chip">Base</span><span class="chip rec">● Record</span></span>
+          <p class="does"><b>Tilt</b> left/right turns in place. Up to 0.5 rad/s. Up/down does nothing.</p>
+          <p class="does"><b>Click</b> starts or stops <b>episode recording</b>.</p></li>
+        <li><span class="num">2</span>
+          <span class="ctl">B button <span class="chip">Back</span></span>
+          <p class="does"><b>Raises</b> the back to the next preset.</p></li>
+        <li><span class="num">3</span>
+          <span class="ctl">A button <span class="chip">Back</span></span>
+          <p class="does"><b>Lowers</b> the back to the next preset.</p></li>
+        <li><span class="num">4</span>
+          <span class="ctl">Trigger <span class="how">index finger</span><span class="chip">Gripper</span></span>
+          <p class="does">Right gripper, proportional: released = open, full pull = closed. <span class="muted">Only while the grip is held.</span></p></li>
+        <li><span class="num">5</span>
+          <span class="ctl">Grip <span class="how">hold, middle finger</span><span class="chip">Arm</span></span>
+          <p class="does"><b>Right arm follows</b> the controller. Release to freeze the arm; grab again to carry on from there.</p></li>
+        <li><span class="num">6</span>
+          <span class="ctl">Meta button</span>
+          <p class="does muted">Headset system button. Not used by Alfie.</p></li>
+      </ol>
+    </article>
+  </section>
+
+  <section class="cards">
+    <div class="card">
+      <h3>Arm while gripping</h3>
+      <table>
+        <tr><td>Push / pull</td><td>Reach forward / back</td></tr>
+        <tr><td>Raise / lower</td><td>Arm up / down</td></tr>
+        <tr><td>Move left / right</td><td>Shoulder pan</td></tr>
+        <tr><td>Tilt wrist up / down</td><td>Wrist pitch</td></tr>
+        <tr><td>Roll wrist</td><td>Wrist roll</td></tr>
+        <tr><td>Trigger</td><td>Gripper</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>Headset → head</h3>
+      <table>
+        <tr><td>Look left / right</td><td>Head yaw, ±180°</td></tr>
+        <tr><td>Look up / down</td><td>Head pitch, ±60°</td></tr>
+        <tr><td>Tilt head</td><td>Head roll, ±20°</td></tr>
+      </table>
+      <p class="muted" style="margin:8px 0 0">2× gain, measured from the direction you faced when the VR session started.</p>
+    </div>
+    <div class="card">
+      <h3>Back height presets</h3>
+      <div class="presets" aria-hidden="true">
+        <div style="height:22%">0.00</div><div style="height:48%">0.15</div><div style="height:72%">0.25</div><div style="height:100%">0.34</div>
+      </div>
+      <div class="keys"><span><span class="key">B</span>one step up</span><span><span class="key">A</span>one step down</span><span class="muted">metres</span></div>
+    </div>
+    <div class="card">
+      <h3>If things go wrong</h3>
+      <ul>
+        <li>Let go of the grip to stop an arm instantly.</li>
+        <li>Headset or controller lost: the base stops within 0.3 s; arms and back hold position.</li>
+        <li>E-stop: VR input is ignored and everything holds the measured pose.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>Source: <code>src/alfie_vr</code> (alfie_teleop_vr.py, web-ui/controller_tracking.js). Illustration is schematic, not to scale.</footer>
+</div>
+
+<script>
+(function () {
+  const NS = 'http://www.w3.org/2000/svg';
+  const W = 320;
+  function el(tag, attrs, parent) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  // Geometry drawn for the LEFT controller; the right one is the mirror image.
+  function build(svg, side) {
+    const right = side === 'R';
+    const acc = right ? 'var(--right)' : 'var(--left)';
+    const mx = x => right ? W - x : x;
+    const shell = el('g', right ? { transform: `translate(${W},0) scale(-1,1)` } : {}, svg);
+
+    // Trigger (under the front edge of the face)
+    el('path', { d: 'M110 58 Q160 6 210 58 Q160 34 110 58 Z', fill: acc, 'fill-opacity': '.18',
+      stroke: acc, 'stroke-width': 2, 'stroke-dasharray': '5 4' }, shell);
+    // Handle
+    el('path', { d: 'M106 200 C 102 300 114 382 138 420 Q 160 448 182 420 C 206 382 218 300 214 200 Z',
+      fill: 'var(--body)' }, shell);
+    // Grip button on the handle's inner side
+    el('path', { d: 'M206 236 C 222 282 222 334 208 376 L 194 370 C 206 332 206 284 194 240 Z',
+      fill: acc, 'fill-opacity': '.25', stroke: acc, 'stroke-width': 2, 'stroke-dasharray': '5 4' }, shell);
+    // Face
+    el('ellipse', { cx: 160, cy: 150, rx: 114, ry: 96, fill: 'var(--body-hi)' }, shell);
+    el('ellipse', { cx: 160, cy: 150, rx: 104, ry: 86, fill: 'var(--body)' }, shell);
+    // Thumbstick
+    el('circle', { cx: 120, cy: 140, r: 37, fill: 'var(--btn)' }, shell);
+    el('circle', { cx: 120, cy: 140, r: 24, fill: 'var(--body-hi)', stroke: 'var(--btn)', 'stroke-width': 3 }, shell);
+    el('circle', { cx: 120, cy: 140, r: 14, fill: 'none', stroke: 'var(--body)', 'stroke-width': 2 }, shell);
+    // Face buttons
+    el('circle', { cx: 206, cy: 106, r: 19, fill: 'var(--btn)' }, shell);
+    el('circle', { cx: 216, cy: 166, r: 19, fill: 'var(--btn)' }, shell);
+    // Menu / Meta button
+    el('ellipse', { cx: 140, cy: 204, rx: 9, ry: 7, fill: 'var(--btn)' }, shell);
+
+    // Unmirrored text on the buttons
+    const lbl = right ? ['B', 'A'] : ['Y', 'X'];
+    [[206, 106, lbl[0]], [216, 166, lbl[1]]].forEach(([x, y, t]) => {
+      const tx = el('text', { x: mx(x), y: y + 5, 'text-anchor': 'middle', fill: 'var(--btn-fg)',
+        'font-family': 'JetBrains Mono, monospace', 'font-size': 15, 'font-weight': 600 }, svg);
+      tx.textContent = t;
+    });
+
+    // Numbered callouts: [n, badgeX, badgeY, targetX, targetY]
+    const callouts = [
+      [1, 30, 92, 92, 118],
+      [2, 290, 70, 222, 96],
+      [3, 296, 206, 232, 176],
+      [4, 268, 22, 204, 40],
+      [5, 290, 320, 214, 310],
+      [6, 56, 262, 132, 210],
+    ];
+    callouts.forEach(([n, bx, by, tx, ty]) => {
+      el('line', { x1: mx(bx), y1: by, x2: mx(tx), y2: ty, stroke: acc, 'stroke-width': 1.5 }, svg);
+      el('circle', { cx: mx(tx), cy: ty, r: 3, fill: acc }, svg);
+      el('circle', { cx: mx(bx), cy: by, r: 13, fill: acc }, svg);
+      const t = el('text', { x: mx(bx), y: by + 4.5, 'text-anchor': 'middle', fill: '#fff',
+        'font-family': 'JetBrains Mono, monospace', 'font-size': 13, 'font-weight': 600 }, svg);
+      t.textContent = n;
+    });
+  }
+  build(document.getElementById('svgL'), 'L');
+  build(document.getElementById('svgR'), 'R');
+})();
+</script>
