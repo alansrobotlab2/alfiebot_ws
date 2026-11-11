@@ -32,6 +32,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import zstandard as zstd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -208,6 +209,7 @@ class RosbagToGrootConverter:
         # Demo names that could not be converted (empty/short bags, missing topics).
         self.failed_demos = []
         self.print_lock = Lock()
+        self.finished_count = 0   # episodes done or failed, under print_lock
 
         # Detect available GPU encoder
         self.gpu_encoder = None
@@ -510,7 +512,7 @@ class RosbagToGrootConverter:
             t += dt_ns
 
         if len(target_times_ns) < 5:
-            print(f"  Warning: Episode too short ({len(target_times_ns)} frames)")
+            print(f"  Warning: Episode too short ({len(target_times_ns)} frames) in {demo_dir}")
             return None
 
         # Helper to find nearest message
@@ -830,15 +832,19 @@ class RosbagToGrootConverter:
         total_demos: int,
     ) -> Optional[Tuple[int, Dict]]:
         """Process a single episode (thread-safe)."""
+        started = time.monotonic()
         with self.print_lock:
-            print(f"\nProcessing {demo_dir.name} ({demo_number}/{total_demos})...")
+            print(f"\nStarting {demo_dir.name} -> episode_{episode_index:06d} "
+                  f"(queued {demo_number}/{total_demos})")
 
         episode = self.read_rosbag(demo_dir)
         if episode is None:
+            self._report_finished('Failed', demo_dir.name, total_demos, started,
+                                  'not converted, see warning above')
             return None
 
         with self.print_lock:
-            print(f"  Extracted {len(episode.states)} frames")
+            print(f"  Extracted {len(episode.states)} frames from {demo_dir.name}")
 
         # Save parquet
         parquet_path, num_frames = self.save_episode_parquet(
@@ -851,8 +857,9 @@ class RosbagToGrootConverter:
         # Save videos
         video_paths = self.save_episode_videos(episode, episode_index)
 
-        with self.print_lock:
-            print(f"  Saved {len(video_paths)} videos")
+        self._report_finished('Done', demo_dir.name, total_demos, started,
+                              f'episode_{episode_index:06d}, {num_frames} frames, '
+                              f'{len(video_paths)} videos')
 
         # Return metadata for later collection
         metadata = {
@@ -865,6 +872,15 @@ class RosbagToGrootConverter:
         }
 
         return num_frames, metadata
+
+    def _report_finished(self, verb: str, name: str, total: int, started: float,
+                         detail: str) -> None:
+        """One line per finished episode. The episode manager keys its ROS log on
+        "Done "/"Failed " and the "(k/n complete)" counter, so keep the format."""
+        with self.print_lock:
+            self.finished_count += 1
+            print(f"{verb} {name}: {detail}, {time.monotonic() - started:.1f}s "
+                  f"({self.finished_count}/{total} complete)")
 
     def convert_all(self, task_index: int = 0) -> Tuple[int, int, int, int]:
         """Incrementally sync demonstrations to GR00T format.
@@ -1005,6 +1021,7 @@ class RosbagToGrootConverter:
                                 num_added += 1
 
         # Phase 6: Merge and save episodes metadata
+        print("\nWriting episode metadata...")
         all_episodes = list(existing_episodes.values()) + self.episode_metadata
         all_episodes.sort(key=lambda ep: ep['episode_index'])
 

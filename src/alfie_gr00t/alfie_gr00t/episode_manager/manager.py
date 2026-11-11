@@ -5,11 +5,89 @@ running, because the converter rewrites episodes.jsonl and info.json when it
 finishes and would silently undo anything done in the meantime.
 """
 
+import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from alfie_gr00t.episode_manager.dataset import ConvertJob, Dataset, DatasetError
+
+
+class ConvertProgressLog:
+    """Turns rosbag_to_groot.py output into ROS log lines.
+
+    The raw output interleaves 8 worker threads, and its "Starting X (queued n/m)"
+    lines say when an episode was picked up, not finished. This logs each
+    episode's start and finish, warnings at WARN, the sync plan and summary, and
+    a heartbeat with what is still in flight so a long encode doesn't look hung.
+    """
+
+    _STARTING = re.compile(r'^Starting (\S+) -> (\S+) \(queued (\d+)/(\d+)\)')
+    _FINISHED = re.compile(r'^(Done|Failed) (\S+): .*\((\d+)/(\d+) complete\)')
+    _WARN = re.compile(r'warning|error|failed|traceback|exception', re.IGNORECASE)
+    _INFO_PREFIXES = ('Found ', 'Sync plan', 'Skipping ', 'Removing episode',
+                      'Registered task', 'Renaming task', 'Writing episode metadata',
+                      'Saved ', 'Updated ', 'Sync complete', 'Skipped:', 'Removed:',
+                      'Rebuilt:', 'Added:', 'Total episodes', 'Total frames',
+                      'Delete or re-record')
+
+    def __init__(self, logger, dataset: str):
+        self.logger = logger
+        self.tag = f'[convert {dataset}]'
+        self.total = 0
+        self.finished = 0
+        self.failed: List[str] = []
+        self.in_flight: Dict[str, float] = {}   # bag name -> monotonic start
+        self._lock = threading.Lock()
+
+    def line(self, raw: str) -> None:
+        if self.logger is None:
+            return
+        text = raw.strip()
+        if not text or set(text) <= {'='}:
+            return
+        m = self._STARTING.match(text)
+        if m:
+            name, episode, _, total = m.groups()
+            with self._lock:
+                self.total = int(total)
+                self.in_flight[name] = time.monotonic()
+                running = len(self.in_flight)
+            self.logger.info(f'{self.tag} start {name} -> {episode} ({running} running)')
+            return
+        m = self._FINISHED.match(text)
+        if m:
+            verb, name, done, total = m.groups()
+            with self._lock:
+                self.in_flight.pop(name, None)
+                self.finished, self.total = int(done), int(total)
+                if verb == 'Failed':
+                    self.failed.append(name)
+            log = self.logger.warn if verb == 'Failed' else self.logger.info
+            log(f'{self.tag} {text}')
+            return
+        if self._WARN.search(text) and not text.startswith(('Skipped:', 'Rebuilt:')):
+            self.logger.warn(f'{self.tag} {text}')
+        elif text.startswith(self._INFO_PREFIXES) and not text.startswith('Saved parquet'):
+            self.logger.info(f'{self.tag} {text}')
+
+    def heartbeat(self, elapsed: float) -> None:
+        if self.logger is None:
+            return
+        with self._lock:
+            now = time.monotonic()
+            flight = sorted(self.in_flight.items(), key=lambda kv: kv[1])
+            done, total, failed = self.finished, self.total, len(self.failed)
+        if not total:
+            self.logger.info(f'{self.tag} still running after {elapsed:.0f}s '
+                             f'(scanning bags / planning sync)')
+            return
+        busy = ', '.join(f'{n} {now - t:.0f}s' for n, t in flight) or 'none'
+        phase = 'encoding' if flight else 'writing metadata'
+        self.logger.info(f'{self.tag} {elapsed:.0f}s: {done}/{total} finished'
+                         f'{f" ({failed} failed)" if failed else ""}, {phase}; '
+                         f'in progress: {busy}')
 
 
 class EpisodeManager:
@@ -29,6 +107,16 @@ class EpisodeManager:
 
     def _log(self, msg: str) -> None:
         if self.logger is not None:
+            self.logger.info(msg)
+
+    def _job_done(self, msg: str) -> None:
+        if self.logger is None:
+            return
+        job = self.job
+        if job is not None and job.returncode not in (0, None) and not job.cancelled:
+            self.logger.error(f'{msg} (exit code {job.returncode}); full output in the '
+                              f'UI converter panel')
+        else:
             self.logger.info(msg)
 
     def _busy(self) -> bool:
@@ -127,7 +215,10 @@ class EpisodeManager:
             if self.use_gpu:
                 cmd.append('--use-gpu')
             try:
-                self.job = ConvertJob(cmd, ds.name, on_done=self._log)
+                progress = ConvertProgressLog(self.logger, ds.name)
+                self.job = ConvertJob(cmd, ds.name, on_done=self._job_done,
+                                      on_line=progress.line,
+                                      on_heartbeat=progress.heartbeat)
             except OSError as exc:
                 return {'ok': False, 'error': f'cannot start converter: {exc}'}
         self._log(f'converting {ds.name}: ' + ' '.join(cmd))

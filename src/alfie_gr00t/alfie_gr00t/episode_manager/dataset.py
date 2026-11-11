@@ -243,11 +243,19 @@ class ConvertJob:
     """rosbag_to_groot.py running in the background, output kept for the UI."""
 
     MAX_LINES = 4000
+    HEARTBEAT_S = 30.0
 
     def __init__(self, cmd: List[str], dataset: str,
-                 on_done: Optional[Callable[[str], None]] = None):
+                 on_done: Optional[Callable[[str], None]] = None,
+                 on_line: Optional[Callable[[str], None]] = None,
+                 on_heartbeat: Optional[Callable[[float], None]] = None):
+        """``on_line`` sees every converter output line as it arrives;
+        ``on_heartbeat(elapsed_s)`` fires every HEARTBEAT_S while it runs."""
         self.cmd = cmd
         self._on_done = on_done
+        self._on_line = on_line
+        self._on_heartbeat = on_heartbeat
+        self._stopped = threading.Event()
         self.dataset = dataset
         self.lines: deque = deque(maxlen=self.MAX_LINES)
         self.started = time.time()
@@ -261,16 +269,32 @@ class ConvertJob:
             # Unbuffered child so progress shows up as it happens.
             env={**os.environ, 'PYTHONUNBUFFERED': '1'})
         threading.Thread(target=self._pump, daemon=True).start()
+        if on_heartbeat is not None:
+            threading.Thread(target=self._heartbeat, daemon=True).start()
 
     def _pump(self) -> None:
         for line in self._proc.stdout:
+            line = line.rstrip('\n')
             with self._lock:
-                self.lines.append(line.rstrip('\n'))
+                self.lines.append(line)
+            if self._on_line is not None:
+                try:
+                    self._on_line(line)
+                except Exception:   # logging must never stop the pump draining stdout
+                    pass
         self.returncode = self._proc.wait()
         self.finished = time.time()
+        self._stopped.set()
         if self._on_done is not None:
             self._on_done(f'conversion of {self.dataset} {self.status()["state"]} '
                           f'after {self.finished - self.started:.0f}s')
+
+    def _heartbeat(self) -> None:
+        while not self._stopped.wait(self.HEARTBEAT_S):
+            try:
+                self._on_heartbeat(time.time() - self.started)
+            except Exception:
+                pass
 
     @property
     def running(self) -> bool:
