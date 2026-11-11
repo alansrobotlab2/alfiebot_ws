@@ -97,12 +97,15 @@ export const passthroughMode = {
 };
 
 // ========================================
-// Center View Toggle State
+// Center View / Controls Key State
 // ========================================
 
 export const centerViewState = {
-    visible: true,  // Defaults to on, toggle with left joystick button
-    lastButtonState: false,  // Track button state for edge detection
+    visible: true,  // Center camera overlay on the video screen
+};
+
+export const controlsKeyState = {
+    visible: false,  // True while left X is held: controls key replaces the HUD
 };
 
 // ========================================

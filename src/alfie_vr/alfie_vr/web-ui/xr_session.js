@@ -4,6 +4,7 @@
 
 import {
     passthroughMode,
+    controlsKeyState,
     preAllocatedBuffers,
 } from './state.js';
 import {
@@ -30,6 +31,11 @@ import {
     startUrdfPanel,
     disposeUrdfPanel,
 } from './vr_urdf_panel.js';
+import {
+    updateControlsKeyPanel,
+    drawControlsKeyPanel,
+    disposeControlsKeyPanel,
+} from './controls_key_panel.js';
 import { getCurrentFrameBitmap } from './robot_state.js';
 import { invertMatrix } from './gl_utils.js';
 import { setStatus, vrLog } from './ui_status.js';
@@ -257,6 +263,7 @@ function onSessionEnd() {
     // Dispose all GL-context-bound state so re-entering VR starts clean
     disposeUrdfPanel();
     disposeOverlayPanels();
+    disposeControlsKeyPanel();
     disposeVideoRenderer();
     if (gl) {
         const loseContext = gl.getExtension('WEBGL_lose_context');
@@ -313,6 +320,22 @@ function onXRFrame(time, frame) {
 
     const glLayer = session.renderState.baseLayer;
     gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
+
+    // Holding left X: the controls key replaces the HUD (also over passthrough)
+    if (controlsKeyState.visible) {
+        gl.clearColor(0.0, 0.0, 0.0, 0.95);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        frameCounter++;
+        updateControlsKeyPanel(gl);
+        const keyProg = getQuadProgram();
+        for (const view of pose.views) {
+            const viewport = glLayer.getViewport(view);
+            gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+            invertMatrix(view.transform.matrix, viewMatrixBuffer);
+            drawControlsKeyPanel(view, viewMatrixBuffer, pose.transform.matrix, keyProg);
+        }
+        return;
+    }
 
     // Check passthrough mode - if active, use 0% opacity (full passthrough) and skip rendering
     if (passthroughMode.active) {

@@ -16,7 +16,7 @@ import {
     rightController,
     headsetPose,
     passthroughMode,
-    centerViewState,
+    controlsKeyState,
     resetController,
     resetHeadsetPose,
 } from './state.js';
@@ -225,7 +225,7 @@ export function resetTracking() {
     resetController(leftController);
     resetController(rightController);
     resetHeadsetPose();
-    centerViewState.lastButtonState = false;
+    controlsKeyState.visible = false;
 }
 
 // ========================================
@@ -258,7 +258,7 @@ export function handleInputSourcesChange(event) {
         if (session && hasOtherGamepadSource(session, hand, removed)) continue;
         tracked[hand] = false;
         resetController(controller);
-        if (hand === 'left') centerViewState.lastButtonState = false;
+        if (hand === 'left') controlsKeyState.visible = false;
         sendReleaseHand(hand, 'input_source_removed');
         vrLog(`Controller lost: ${hand}`);
     }
@@ -306,21 +306,17 @@ export function processInputSources(frame, refSpace, session) {
 
             // Buttons
             if (handedness === 'left') {
-                const thumbstickPressed = !!gamepad.buttons[3]?.pressed;
+                const xPressed = !!gamepad.buttons[4]?.pressed;
                 controller.buttons = {
                     squeeze: isGripPressed,
-                    thumbstick: thumbstickPressed,
-                    x: !!gamepad.buttons[4]?.pressed,
+                    thumbstick: !!gamepad.buttons[3]?.pressed,  // server: passthrough toggle
+                    x: xPressed,
                     y: !!gamepad.buttons[5]?.pressed,
                     menu: !!gamepad.buttons[6]?.pressed
                 };
 
-                // Toggle center view on left thumbstick button press (edge detection)
-                if (thumbstickPressed && !centerViewState.lastButtonState) {
-                    centerViewState.visible = !centerViewState.visible;
-                    vrLog(`Center view: ${centerViewState.visible ? 'ON' : 'OFF'}`);
-                }
-                centerViewState.lastButtonState = thumbstickPressed;
+                // Hold X: the controls key replaces the HUD until released
+                controlsKeyState.visible = xPressed;
             } else {
                 controller.buttons = {
                     squeeze: isGripPressed,
@@ -339,7 +335,7 @@ export function processInputSources(frame, refSpace, session) {
     for (const hand of ['left', 'right']) {
         if (!seen[hand] && tracked[hand]) {
             resetController(controllerForHand(hand));
-            if (hand === 'left') centerViewState.lastButtonState = false;
+            if (hand === 'left') controlsKeyState.visible = false;
         }
         tracked[hand] = seen[hand];
     }

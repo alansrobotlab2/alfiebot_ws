@@ -20,6 +20,7 @@ setup(
             'web-ui/*.html',
             'web-ui/*.js',
             'web-ui/*.css',
+            'web-ui/*.png',
             'web-ui/libs/*',
             'cert.pem',
             'key.pem',

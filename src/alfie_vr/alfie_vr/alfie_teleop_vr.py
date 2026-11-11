@@ -167,7 +167,7 @@ class AlfieTeleopVRNode(Node):
 
         # Edge detection
         self.passthrough_mode_active = False
-        self.left_x_button_pressed = False
+        self.left_thumbstick_pressed = False
         self.left_y_button_pressed = False
         self.is_recording = False
         self.right_thumbstick_pressed = False
@@ -389,7 +389,7 @@ class AlfieTeleopVRNode(Node):
             if not headset and not self.passthrough_mode_active:
                 self._release('head')
 
-        # Passthrough (X) stops headset telemetry but keeps the head locked in
+        # Passthrough (left stick click) stops headset telemetry but keeps the head locked in
         # place; release it once the controllers are gone too.
         if not headset and not controllers:
             self._release('head')
@@ -429,12 +429,13 @@ class AlfieTeleopVRNode(Node):
             ly = -float(stick.get('x', 0.0)) * self.max_linear_vel  # strafe (ROS +y = left)
             buttons = meta.get('buttons') or {}
 
-            button_x = _button(buttons, 'x')
-            if button_x and not self.left_x_button_pressed:
+            # Left stick click toggles passthrough (X is browser-only: hold for the controls key)
+            left_click = bool(buttons.get('thumbstick', False))
+            if left_click and not self.left_thumbstick_pressed:
                 self.passthrough_mode_active = not self.passthrough_mode_active
                 self.get_logger().info(f'Passthrough mode: {"ON" if self.passthrough_mode_active else "OFF"}')
                 self.vr_monitor.set_passthrough_mode(self.passthrough_mode_active)
-            self.left_x_button_pressed = button_x
+            self.left_thumbstick_pressed = left_click
 
             button_y = _button(buttons, 'y')
             if button_y and not self.left_y_button_pressed:

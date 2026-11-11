@@ -44,8 +44,9 @@ The headset orientation (relative to where you faced when the VR session started
 |-------|----------|
 | **Thumbstick Y** | Drive forward/backward |
 | **Thumbstick X** | Strafe left/right |
+| **Thumbstick press** | Toggle passthrough mode |
 | **Grip Button (hold)** | Enable left arm tracking |
-| **X Button** | Toggle passthrough mode |
+| **X Button (hold)** | Show the controls key in place of the HUD; release to return (browser only, `web-ui/controls_key.png`) |
 | **Y Button** | Move both arms to the zero position |
 
 ### Right Controller
@@ -117,5 +118,6 @@ Set `enable_debug_viz = True` in `alfie_teleop_vr.py` for a pygame window showin
 
 WebSocket `wss://<robot>:8442`, JSON:
 - Pose frame: `{seq, timestamp, headset?, leftController?, rightController?}`. A device key is omitted while that device is not tracked.
+- The controls key is a 1920x1080 render of the dark 16:9 controls sheet. Re-render it when the mapping changes.
 - `{"type": "release_all", "reason": ...}` and `{"type": "release_hand", "hand": "left"|"right", "reason": ...}`.
 - Server → client: `{"command": "passthrough_mode", "active": bool}`.
