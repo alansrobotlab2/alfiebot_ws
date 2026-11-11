@@ -95,6 +95,16 @@ sudo systemctl restart nginx
 sudo systemctl status nginx
 ```
 
+## Updating
+
+After pulling a change to `foxglove-proxy.conf` (for example a new panel
+route), repeat step 1 and reload:
+
+```bash
+sudo cp /home/alfie/alfiebot_ws/systemd/foxglove-proxy.conf /etc/nginx/sites-available/foxglove-proxy
+sudo nginx -t && sudo systemctl reload nginx
+```
+
 ## Usage
 
 ### Connecting from Foxglove Studio
@@ -131,6 +141,14 @@ its server URL, e.g. `https://alfiebot.local:8082/episodes`, because the
 Foxglove web app can only call HTTPS endpoints. The node decides which web
 origins may call it (`allowed_origins` parameter, default
 `https://app.foxglove.dev`).
+
+### Servotool API (`/servotool/`)
+
+`https://ROBOT_IP:8082/servotool/` proxies to the servotool node
+(`ros2 run alfie_tools servotool`, port 7870) for the Foxglove **Servo Tool**
+panel, unbuffered so its `/api/stream` Server-Sent Events arrive live. Like the
+episode manager, the node decides which origins may call it
+(`allowed_origins`, default `https://app.foxglove.dev`).
 
 ## Configuration Details
 
@@ -226,6 +244,7 @@ sudo tail -f /var/log/nginx/error.log
 | 8765 | WS | foxglove_bridge (internal) | No |
 | 8082 | WSS | nginx proxy (external) | Yes |
 | 7880 | HTTP | episode_manager (also at 8082 `/episodes/`) | No |
+| 7870 | HTTP | servotool (also at 8082 `/servotool/`) | No |
 
 ## Firewall Configuration
 

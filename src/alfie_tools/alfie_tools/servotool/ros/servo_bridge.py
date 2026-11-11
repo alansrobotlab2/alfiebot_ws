@@ -209,7 +209,7 @@ class ServoBridge:
         self.calibrate_cli = node.create_client(
             BackRequestCalibration, f'{p}low/calibrate_back', callback_group=group)
 
-        # Register-map service, one per servo module (read-only in this build).
+        # Register-map service, one per servo module: reads, writes and the EEPROM lock.
         self.memory_cli = {
             jc.LEFT_ARM: node.create_client(
                 ServoService, f'{p}low/left_arm/servoservice', callback_group=group),

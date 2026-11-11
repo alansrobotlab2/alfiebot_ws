@@ -19,14 +19,24 @@ Parameters:
     control_timeout   seconds without an operator heartbeat before releasing
                       every held subsystem (default 1.5)
     max_speed         upper bound on commanded joint speed, rad/s (default 6)
+    allowed_origins   web origins allowed to call the API cross-origin, for the
+                      Foxglove Servo Tool panel (alfie_foxglove_extension).
+                      Refused origins are logged once; "*" allows any
+                      (default ["https://app.foxglove.dev"])
+    urls_topic        where the node advertises its URLs (std_msgs/String,
+                      JSON {"urls": [...]}, latched) so the Foxglove panel can
+                      find it over the bridge (default /alfie/servotool/urls)
 """
 
+import json
 import socket
 import sys
 import threading
 
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.qos import DurabilityPolicy, QoSProfile
+from std_msgs.msg import String
 
 from alfie_tools.servotool.ros.servo_bridge import ServoBridge
 from alfie_tools.servotool.server.http_server import ServoToolServer
@@ -75,6 +85,9 @@ def main(args=None):
     host = node.declare_parameter('host', '0.0.0.0').value
     port = int(node.declare_parameter('port', 7870).value)
     stream_rate = float(node.declare_parameter('stream_rate_hz', 10.0).value)
+    allowed_origins = list(node.declare_parameter(
+        'allowed_origins', ['https://app.foxglove.dev']).value)
+    urls_topic = node.declare_parameter('urls_topic', '/alfie/servotool/urls').value
 
     bridge = ServoBridge(node)
 
@@ -87,7 +100,8 @@ def main(args=None):
     spin_thread.start()
 
     try:
-        server = ServoToolServer(host, port, bridge, logger, stream_rate)
+        server = ServoToolServer(host, port, bridge, logger, stream_rate,
+                                 allowed_origins)
     except OSError as exc:
         logger.error(f'cannot bind {host}:{port}: {exc}')
         executor.shutdown()
@@ -95,7 +109,18 @@ def main(args=None):
         rclpy.shutdown()
         sys.exit(1)
 
-    logger.info(f'servotool web UI: {"  ".join(_urls(host, port))}')
+    urls = _urls(host, port)
+    logger.info(f'servotool web UI: {"  ".join(urls)}')
+
+    # The Foxglove panel can't see which address Foxglove used to reach the
+    # bridge, so the robot tells it, over the bridge. Latched for late joiners,
+    # and repeated in case the bridge subscribed with volatile durability.
+    urls_pub = node.create_publisher(
+        String, urls_topic,
+        QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    urls_msg = String(data=json.dumps({'urls': urls}))
+    urls_pub.publish(urls_msg)
+    node.create_timer(5.0, lambda: urls_pub.publish(urls_msg))
     if host in ('0.0.0.0', '::', ''):
         logger.warn('servotool is unauthenticated and reachable from the whole '
                     'network - anyone who can open it can move the arms')
