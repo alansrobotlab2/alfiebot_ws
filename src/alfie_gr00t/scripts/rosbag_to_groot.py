@@ -205,6 +205,8 @@ class RosbagToGrootConverter:
 
         # Episode metadata for newly added episodes
         self.episode_metadata = []
+        # Demo names that could not be converted (empty/short bags, missing topics).
+        self.failed_demos = []
         self.print_lock = Lock()
 
         # Detect available GPU encoder
@@ -955,7 +957,9 @@ class RosbagToGrootConverter:
                     result = self.process_single_episode(
                         demo_dir, episode_index, task_index, i + 1, total_to_process
                     )
-                    if result is not None:
+                    if result is None:
+                        self.failed_demos.append(demo_dir.name)
+                    else:
                         num_frames, metadata = result
                         self.episode_metadata.append(metadata)
                         if is_rebuild:
@@ -982,7 +986,9 @@ class RosbagToGrootConverter:
                     completed_metadata = {}
                     for future in as_completed(futures):
                         result = future.result()
-                        if result is not None:
+                        if result is None:
+                            self.failed_demos.append(work_items[futures[future]][0].name)
+                        else:
                             num_frames, metadata = result
                             completed_metadata[futures[future]] = metadata
 
@@ -1338,7 +1344,15 @@ examples:
     print(f"  Added:    {num_added}")
     print(f"  Total episodes: {total_episodes}")
     print(f"  Total frames:   {total_frames}")
+    if converter.failed_demos:
+        failed = sorted(converter.failed_demos)
+        print(f"  FAILED:   {len(failed)} (not converted; see warnings above)")
+        for name in failed:
+            print(f"    {name}")
+        print("  Delete or re-record these bags; they are retried on every run.")
     print("="*60)
+    if converter.failed_demos:
+        sys.exit(1)
 
 
 if __name__ == '__main__':
