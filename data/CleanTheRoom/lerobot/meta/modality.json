@@ -1,0 +1,81 @@
+{
+    "state": {
+        "base": {
+            "start": 0,
+            "end": 6
+        },
+        "back": {
+            "start": 6,
+            "end": 7
+        },
+        "left_arm": {
+            "start": 7,
+            "end": 12
+        },
+        "left_hand": {
+            "start": 12,
+            "end": 13
+        },
+        "right_arm": {
+            "start": 13,
+            "end": 18
+        },
+        "right_hand": {
+            "start": 18,
+            "end": 19
+        },
+        "head": {
+            "start": 19,
+            "end": 22
+        }
+    },
+    "action": {
+        "base": {
+            "start": 0,
+            "end": 6
+        },
+        "back": {
+            "start": 6,
+            "end": 7
+        },
+        "left_arm": {
+            "start": 7,
+            "end": 12
+        },
+        "left_hand": {
+            "start": 12,
+            "end": 13
+        },
+        "right_arm": {
+            "start": 13,
+            "end": 18
+        },
+        "right_hand": {
+            "start": 18,
+            "end": 19
+        },
+        "head": {
+            "start": 19,
+            "end": 22
+        }
+    },
+    "video": {
+        "left_wide": {
+            "original_key": "observation.images.left_wide"
+        },
+        "right_wide": {
+            "original_key": "observation.images.right_wide"
+        },
+        "left_center": {
+            "original_key": "observation.images.left_center"
+        },
+        "right_center": {
+            "original_key": "observation.images.right_center"
+        }
+    },
+    "annotation": {
+        "human.action.task_description": {
+            "original_key": "task_index"
+        }
+    }
+}
