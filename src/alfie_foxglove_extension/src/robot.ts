@@ -4,13 +4,17 @@
 // There is no extension API for the data source, so there are two routes:
 //  - the web app mirrors it into its own page URL as ?ds.url=... (the desktop
 //    app does not);
-//  - the episode manager node advertises its URLs on URLS_TOPIC, which any
-//    panel can subscribe to over the bridge Foxglove is already connected to.
+//  - the episode manager and servotool nodes advertise their URLs on a latched
+//    topic each (URLS_TOPIC, SERVOTOOL_URLS_TOPIC), which any panel can
+//    subscribe to over the bridge Foxglove is already connected to.
 
 import { Immutable, MessageEvent } from "@foxglove/extension";
 
 /** std_msgs/String, JSON {"urls": ["http://<lan ip>:7880/", ...]}, best first. */
 export const URLS_TOPIC = "/alfie/episode_manager/urls";
+
+/** Same format, from the servotool node (alfie_tools), e.g. http://<lan ip>:7870/. */
+export const SERVOTOOL_URLS_TOPIC = "/alfie/servotool/urls";
 
 /** The bridge URL Foxglove is connected to (web app only), e.g. ws://192.168.50.201:8765. */
 export function dataSourceUrl(): string | undefined {
@@ -21,11 +25,14 @@ export function dataSourceUrl(): string | undefined {
   }
 }
 
-/** The episode manager's advertised URLs from this frame's messages, if any arrived. */
-export function advertisedUrls(frame: Immutable<MessageEvent[]> | undefined): string[] | undefined {
+/** A node's advertised URLs (episode manager by default) from this frame's messages, if any arrived. */
+export function advertisedUrls(
+  frame: Immutable<MessageEvent[]> | undefined,
+  topic: string = URLS_TOPIC,
+): string[] | undefined {
   let urls: string[] | undefined;
   for (const event of frame ?? []) {
-    if (event.topic !== URLS_TOPIC) {
+    if (event.topic !== topic) {
       continue;
     }
     try {

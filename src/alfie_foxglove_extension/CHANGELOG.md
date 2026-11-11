@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- Servo Tool panel: a port of the servotool web UI (alfie_tools), talking to
+  the servotool node's HTTP API and state stream. Finds the node through
+  /alfie/servotool/urls or the bridge address, like the Episode Manager.
+
 ## 0.2.0
 
 - AlfieVR panel: the alfie_vr web UI (https://<robot>:8443/) in an iframe,

@@ -3,7 +3,7 @@
   "displayName": "Alfie",
   "description": "Custom Foxglove panels for the Alfie robot",
   "publisher": "alfie",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "Apache-2.0",
   "main": "./dist/extension.js",
   "keywords": [],

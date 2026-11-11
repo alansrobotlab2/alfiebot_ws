@@ -6,12 +6,15 @@ Custom Foxglove panels for Alfie, packaged as one Foxglove extension.
 |---|---|
 | Episode Manager | `alfie_gr00t` episode manager node (HTTP API) |
 | AlfieVR | `alfie_vr` web UI served by `alfie_teleop_vr` (HTTPS, port 8443) |
+| Servo Tool | `alfie_tools` servotool node (HTTP API + SSE, port 7870) |
 
 ## Build
 
-Needs Node.js 18+ and npm (not part of the ROS install):
+Needs Node.js 18+ and npm (not part of the ROS install). On the robot, Node is
+unpacked in `~/.local/node` and is not on `PATH` by default:
 
 ```bash
+export PATH=$HOME/.local/node/bin:$PATH    # on the robot
 npm install
 npm run build          # compile to dist/
 npm run package        # -> alfie.alfie-foxglove-extension-<version>.foxe
@@ -23,7 +26,12 @@ to `share/alfie_foxglove_extension/extensions/`, so run `npm run package`
 before `colcon build`.
 
 Bump `version` in `package.json` (and add a `CHANGELOG.md` entry) when you ship
-a change so Foxglove replaces the installed copy.
+a change so Foxglove replaces the installed copy, and delete the previous
+`.foxe` from this folder (`*.foxe` is gitignored, so it is never committed).
+
+The panels that call the robot's web services through nginx (Episode Manager
+and Servo Tool from the web app) need the current `systemd/foxglove-proxy.conf`
+installed on the robot; see `systemd/FOXGLOVE-PROXY.md`.
 
 ## Install
 
@@ -62,6 +70,32 @@ that talks to the same HTTP API, so both work side by side.
 
 Keyboard shortcuts (J/K, Space, arrows, 1-9, Del) work while the panel has
 focus, and take precedence over Foxglove's own while it does.
+
+## Servo Tool panel
+
+A port of servotool's own web UI (`alfie_tools/servotool/web`): pick a servo,
+command its joint, read and edit its register map, plus the eyes and back.
+It talks to the same HTTP API and state stream, so both work side by side and
+share one set of control ownership; the node keeps every safety rule (take /
+release per subsystem, the heartbeat deadman, clamping to URDF limits).
+
+1. servotool is a bench tool and not part of bringup:
+   `ros2 run alfie_tools servotool` on the robot.
+2. Add the **Servo Tool** panel. With **Server URL** left empty it finds the
+   node the same way the Episode Manager does: the node advertises its URLs on
+   `/alfie/servotool/urls` (latched), and the web app's `ds.url` maps
+   `ws://<robot>:8765` -> `http://<robot>:7870` and
+   `wss://<robot>:8082` -> `https://<robot>:8082/servotool`
+   (`systemd/foxglove-proxy.conf`; from the HTTPS web app the panel always goes
+   through that route).
+3. Cross-origin calls are allowed only from the node's `allowed_origins`
+   parameter (default `https://app.foxglove.dev`); refused origins are logged
+   once.
+
+Holding control needs the panel to keep heartbeating. If Foxglove is hidden
+long enough for the browser to throttle its timers, or the panel is closed,
+the node releases everything after `control_timeout` (1.5 s) - and a released
+arm goes limp.
 
 ## AlfieVR panel
 
