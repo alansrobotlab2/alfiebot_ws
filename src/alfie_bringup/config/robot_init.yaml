@@ -21,7 +21,7 @@
     # stuck check instead of forcing through. Raise if a joint can't lift itself.
     head_torque: 500.0
     arm_torque: 500.0
-    gripper_torque: 300.0
+    gripper_torque: 200.0
 
     # Tuck one arm at a time so the hands can't meet. Stages within an arm:
     #   wrist           gripper, wrist_roll, wrist_pitch

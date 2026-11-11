@@ -136,7 +136,7 @@ class ActionPublisher:
         servo_accel_grippers: float = 8.0,
         servo_accel_head: float = 3.0,
         servo_torque_arms: float = 1.0,
-        servo_torque_grippers: float = 0.3,
+        servo_torque_grippers: float = 0.2,
         servo_torque_head: float = 0.5,
     ):
         self.node = node

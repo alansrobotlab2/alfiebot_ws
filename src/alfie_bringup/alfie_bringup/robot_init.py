@@ -109,7 +109,7 @@ class RobotInitNode(Node):
         self.declare_parameter('arm_speed', 0.4)          # rad/s ramp
         self.declare_parameter('head_torque', 0.0)        # 0..1000; 0 = firmware default (full)
         self.declare_parameter('arm_torque', 500.0)       # 0..1000
-        self.declare_parameter('gripper_torque', 300.0)   # 0..1000
+        self.declare_parameter('gripper_torque', 200.0)   # 0..1000
         self.declare_parameter('arm_order', ['left', 'right'])
         self.declare_parameter('arm_stage_order',
                                ['wrist', 'shoulder_yaw', 'elbow', 'shoulder_pitch'])

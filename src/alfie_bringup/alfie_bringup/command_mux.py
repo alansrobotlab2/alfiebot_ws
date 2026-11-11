@@ -146,7 +146,7 @@ class CommandMuxNode(Node):
         self.max_servo_accel = float(self._p('max_servo_accel', 0.0))
         self.clamp_zero_speed = bool(self._p('clamp_zero_speed', False))
         self.arm_max_torque = float(self._p('arm_max_torque', SERVO_TORQUE_FULL))
-        self.gripper_max_torque = float(self._p('gripper_max_torque', 300.0))
+        self.gripper_max_torque = float(self._p('gripper_max_torque', 200.0))
         self.head_max_torque = float(self._p('head_max_torque', 500.0))
         self.estop_hold = bool(self._p('estop_hold', True))
         self.estop_eye_pwm = int(self._p('estop_eye_pwm', 1))
