@@ -20,6 +20,7 @@ import mimetypes
 import os
 import posixpath
 import re
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, Iterable, Optional, Set
 from urllib.parse import parse_qs, urlparse
@@ -262,3 +263,15 @@ class EpisodeManagerServer(ThreadingHTTPServer):
         self.logger = logger
         self.allowed_origins = set(allowed_origins)
         self.refused_origins: Set[str] = set()   # each logged once
+
+    def handle_error(self, request, client_address) -> None:
+        """A client dropping its keep-alive connection (page reload, Foxglove
+        panel closed, bringup restart) is routine; socketserver would print a
+        full traceback for it. Anything else still gets the traceback."""
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError,
+                            TimeoutError)):
+            if self.logger is not None:
+                self.logger.debug(f'client {client_address[0]} dropped the connection: {exc}')
+            return
+        super().handle_error(request, client_address)
