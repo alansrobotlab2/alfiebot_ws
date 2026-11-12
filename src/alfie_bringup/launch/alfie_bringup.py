@@ -533,6 +533,9 @@ def generate_launch_description():
                 'max_qos_depth': 2,  # Limit queue depth
                 'capabilities': ['clientPublish', 'connectionGraph', 'assets'],
             }],
+            # INFO logs every client (un)subscribe and every connection-graph
+            # publish (each node/topic change, e.g. per recording); keep warnings.
+            ros_arguments=['--log-level', 'warn'],
             remappings=[
                 ('/initialpose', '/alfie/initialpose'),
                 ('/move_base_simple/goal', '/alfie/move_base_simple/goal'),
