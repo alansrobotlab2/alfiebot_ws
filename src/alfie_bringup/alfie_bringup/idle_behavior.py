@@ -43,6 +43,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rcl_interfaces.msg import SetParametersResult
 
 from std_msgs.msg import Bool, Empty, Float32, String
 from sensor_msgs.msg import CompressedImage
@@ -67,6 +68,10 @@ class IdleBehaviorNode(Node):
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
         # ---- Parameters -----------------------------------------------------
+        # Log DOA turns, listening tilt, face backend etc. at INFO (debugging);
+        # off = only start-up, warnings and errors. Settable at runtime.
+        self.verbose = bool(self.declare_parameter('verbose', False).value)
+        self.add_on_set_parameters_callback(self._on_set_verbose)
         self.declare_parameter('rate_hz', 50.0)  # = head firmware servo loop (attend ramp)
         self.declare_parameter('eyes_enabled', True)
         self.declare_parameter('eye_idle_pwm', 1)
@@ -328,6 +333,19 @@ class IdleBehaviorNode(Node):
             f'idle_behavior started (eyes={self.eyes_enabled}, '
             f'head={self.head_enabled}, mode={self.head_mode})')
 
+    def _detail(self, msg: str) -> None:
+        """Diagnostic messages: INFO when the verbose parameter is on, else DEBUG."""
+        if self.verbose:
+            self.get_logger().info(msg)
+        else:
+            self.get_logger().debug(msg)
+
+    def _on_set_verbose(self, params):
+        for p in params:
+            if p.name == 'verbose':
+                self.verbose = bool(p.value)
+        return SetParametersResult(successful=True)
+
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds / 1e9
 
@@ -360,7 +378,7 @@ class IdleBehaviorNode(Node):
             self.face_backend = 'nanoowl'
             return
         self.create_subscription(CompressedImage, topic, self._on_face_img, qos)
-        self.get_logger().info(f'face tracking: YuNet on {topic}')
+        self._detail(f'face tracking: YuNet on {topic}')
 
     def _on_face_img(self, msg: CompressedImage) -> None:
         # Detect as frames arrive rather than on the next tick (saves up to a tick).
@@ -535,7 +553,7 @@ class IdleBehaviorNode(Node):
         if abs(mean) < self.doa_deadband:
             return  # already facing the speaker
         yaw = self._unwind(self.cur[0] + self.yaw_sign * mean)
-        self.get_logger().info(
+        self._detail(
             f'DOA {msg.angle} deg ({math.degrees(mean):+.0f} deg) at yaw '
             f'{self.cur[0]:+.2f} -> yaw {yaw:+.2f}')
         self.speaker_yaw = _clamp(yaw, *self.yaw_lim)
@@ -767,7 +785,7 @@ class IdleBehaviorNode(Node):
             self._set_target(0.0, self.neutral_pitch, now)
         if (self.doa_why and self.asr_speech_since is None
                 and now - self.asr_speech_ended > self.doa_tail):
-            self.get_logger().info(
+            self._detail(
                 f'DOA: no turn; rejected {dict(self.doa_why)}, readings {self.doa_seen}')
             self.doa_why.clear()
             self.doa_seen.clear()
@@ -776,7 +794,7 @@ class IdleBehaviorNode(Node):
             or now - self.asr_speech_ended < self.listen_roll_hold)
         if listening != self.listening:
             self.listening = listening
-            self.get_logger().info('listening: tilt' if listening else 'listening: level')
+            self._detail('listening: tilt' if listening else 'listening: level')
         roll = self.listen_roll if listening else 0.0
         dt = _clamp(now - self.sp_t, 0.0, 0.1)
         self.sp_t = now

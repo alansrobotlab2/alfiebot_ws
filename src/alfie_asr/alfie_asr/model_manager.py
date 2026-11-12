@@ -218,7 +218,6 @@ def ensure_models() -> tuple[Path, Path]:
 
     # If both models exist, return paths
     if asr_available and vad_available:
-        print("All models found locally.")
         return get_asr_model_dir(), get_vad_model_path()
 
     # Try to download/copy missing models

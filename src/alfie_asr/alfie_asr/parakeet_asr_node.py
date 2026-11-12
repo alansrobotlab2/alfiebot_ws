@@ -49,7 +49,6 @@ from alfie_asr.model_manager import (ensure_models, ensure_speaker_model,
 # through PyTorch (cuBLAS handle conflict). Nothing below imports torch any more
 # — the VAD runs through onnxruntime directly (hearing.SileroOnnx) — but the
 # order is kept so a future import can't reintroduce the clash.
-print("Checking for local models...")
 try:
     _asr_model_dir, _vad_model_path = ensure_models()
 except ModelNotAvailableError as e:
@@ -58,7 +57,6 @@ except ModelNotAvailableError as e:
 _turn_model_path = ensure_turn_model()
 _speaker_model_path = ensure_speaker_model()
 
-print("Pre-loading Parakeet ASR model with GPU...")
 ort.set_default_logger_severity(3)
 _sess_options = ort.SessionOptions()
 _sess_options.intra_op_num_threads = 4
@@ -73,11 +71,11 @@ _asr_model = onnx_asr.load_model(
     sess_options=_sess_options,
     providers=_providers
 )
-print("ASR model pre-loaded successfully")
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rcl_interfaces.msg import SetParametersResult
 from std_msgs.msg import Bool
 from alfie_msgs.msg import AudioFrame, ASRResult
 from alfie_msgs.srv import EnrollSpeaker
@@ -89,6 +87,11 @@ from alfie_asr.speaker_id import SpeakerID
 class ASRNode(Node):
     def __init__(self):
         super().__init__('asr_node')
+
+        # Log per-turn timing / turn commits at INFO (debugging); off = only what
+        # was heard, enrolment, start-up, warnings and errors. Settable at runtime.
+        self.verbose = bool(self.declare_parameter('verbose', False).value)
+        self.add_on_set_parameters_callback(self._on_set_verbose)
 
         # --- parameters (lloyd's measured defaults; see hearing.py) ---
         vad_threshold = float(self.declare_parameter('vad_threshold', 0.45).value)
@@ -129,7 +132,7 @@ class ASRNode(Node):
                                             threshold=speaker_threshold)
                 self.create_service(EnrollSpeaker, 'asr/enroll_speaker',
                                     self._on_enroll)
-                self.get_logger().info(
+                self._detail(
                     f'speaker ID on: {len(self.speaker_id.names())} voice(s) enrolled')
             except Exception as e:
                 self.get_logger().error(f'speaker ID unavailable: {e}')
@@ -151,6 +154,19 @@ class ASRNode(Node):
             f'ASRNode initialized: vad thr {seg.threshold:.2f}, min silence '
             f'{seg._min_silence * 1000 // SAMPLE_RATE} ms, pad {speech_pad_ms} ms, '
             f'turn model {"on (thr %.2f)" % turn_threshold if self.pipeline.turn else "off"}.')
+
+    def _detail(self, msg: str) -> None:
+        """Diagnostic messages: INFO when the verbose parameter is on, else DEBUG."""
+        if self.verbose:
+            self.get_logger().info(msg)
+        else:
+            self.get_logger().debug(msg)
+
+    def _on_set_verbose(self, params):
+        for p in params:
+            if p.name == 'verbose':
+                self.verbose = bool(p.value)
+        return SetParametersResult(successful=True)
 
     def audio_callback(self, msg):
         # Audio is always processed (even while the robot speaks): the reSpeaker's
@@ -185,7 +201,7 @@ class ASRNode(Node):
                     self._publish_vad(False)
                 elif ev.kind == 'turn':
                     speech_end = arrived - ev.lag_samples / SAMPLE_RATE
-                    self.get_logger().info(
+                    self._detail(
                         f'turn committed: {ev.audio.size / SAMPLE_RATE:.2f}s '
                         f'({ev.reason}, p={ev.turn_prob:.3f})')
                     self._turns.put((ev, speech_end))
@@ -222,8 +238,11 @@ class ASRNode(Node):
             msg.speaker_score = float(score)
             self.publisher_.publish(msg)
             who = f' [{speaker or "?"} {score:.2f}, {spk_ms:.0f} ms]' if spk_ms else ''
-            self.get_logger().info(
-                f'[asr] {msg.duration:.2f}s audio in {asr_s * 1000:.0f} ms: {text!r}{who}')
+            if self.verbose:
+                self.get_logger().info(
+                    f'[asr] {msg.duration:.2f}s audio in {asr_s * 1000:.0f} ms: {text!r}{who}')
+            else:
+                self.get_logger().info(f'heard: {text!r}' + (f' ({speaker})' if speaker else ''))
             if self._capture_dir:
                 self._capture(ev, msg)
 
