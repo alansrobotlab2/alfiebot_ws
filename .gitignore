@@ -58,3 +58,6 @@ qtcreator-*
 
 # Catkin custom files
 CATKIN_IGNORE
+
+# Runtime-downloaded model caches (e.g. alfie_room DINOv2 encoder)
+models/

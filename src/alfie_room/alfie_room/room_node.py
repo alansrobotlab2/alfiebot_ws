@@ -42,6 +42,24 @@ from std_msgs.msg import String
 
 from alfie_room.room_store import RoomStore
 
+# Fallback source for the encoder when `model_path` is missing: the Transformers.js
+# ONNX export of facebook/dinov2-small (the same ViT-S/14 weights torch.hub's
+# dinov2_vits14 uses). Its first output is last_hidden_state (1, tokens, 384),
+# already layer-normed, so Encoder._pool's CLS pick matches the torch.hub
+# export. Fetched once and copied to `model_path`; every later start loads that
+# file and never touches the network.
+MODEL_REPO_ID = 'onnx-community/dinov2-small'
+MODEL_REPO_FILE = 'onnx/model.onnx'
+
+
+def _internet_available(host='huggingface.co', port=443, timeout=3.0):
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
 
 class RoomNode(Node):
     def __init__(self):
@@ -73,6 +91,15 @@ class RoomNode(Node):
         self._encoder = None
         self._encoder_lock = threading.Lock()
         self._encoder_error = None
+        self._fetching = False
+        self._fetch_error = None
+
+        # Missing model: fetch it once in the background so the first
+        # classify/teach doesn't stall on an ~89 MB download. Offline, the node
+        # still comes up; requests report the missing model until it appears.
+        if not os.path.exists(self.model_path):
+            self._fetching = True
+            threading.Thread(target=self._fetch_model, daemon=True).start()
 
         # --- ROS I/O ----------------------------------------------------------
         # Match the camera publisher: BEST_EFFORT, keep-last depth 1 (latest frame).
@@ -110,6 +137,38 @@ class RoomNode(Node):
         with self._frame_lock:
             return self._left_jpeg
 
+    # --- model fetch (one-time, background) -----------------------------------
+
+    def _fetch_model(self):
+        """Download the encoder to `model_path` once; never raises."""
+        log = self.get_logger()
+        try:
+            if not _internet_available():
+                self._fetch_error = 'no internet for the one-time download'
+                log.error(f'room model missing at {self.model_path} and no '
+                          'internet; room recognition is off until it is present.')
+                return
+            import shutil
+            import tempfile
+            from huggingface_hub import hf_hub_download
+            log.info(f'room model missing; downloading {MODEL_REPO_ID}/'
+                     f'{MODEL_REPO_FILE} -> {self.model_path} (first run only)')
+            out_dir = os.path.dirname(os.path.abspath(self.model_path))
+            os.makedirs(out_dir, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=out_dir) as tmp:
+                src = hf_hub_download(MODEL_REPO_ID, MODEL_REPO_FILE,
+                                      local_dir=tmp)
+                part = self.model_path + '.part'
+                shutil.move(src, part)
+                os.replace(part, self.model_path)  # atomic: never a half file
+            log.info(f'room model cached at {self.model_path}')
+        except Exception as e:
+            self._fetch_error = f'download failed: {e}'
+            log.error(f'room model download failed ({e}); room recognition '
+                      'is off until the model is present.')
+        finally:
+            self._fetching = False
+
     # --- encoder (lazy load) --------------------------------------------------
 
     def _get_encoder(self):
@@ -122,11 +181,17 @@ class RoomNode(Node):
             if self._encoder_error is not None:
                 return None, self._encoder_error
             if not os.path.exists(self.model_path):
-                self._encoder_error = (
-                    f'model not found at {self.model_path} — run '
-                    'scripts/export_dinov2_onnx.py')
-                self.get_logger().error(self._encoder_error)
-                return None, self._encoder_error
+                # Not cached as _encoder_error: the file may still arrive (a
+                # background fetch, or a manual copy), so re-check every request.
+                if self._fetching:
+                    return None, ('room model is still downloading; '
+                                  'try again in a minute')
+                err = (f'model not found at {self.model_path}'
+                       + (f' ({self._fetch_error})' if self._fetch_error else '')
+                       + ' — connect to the internet and restart room_node, '
+                       'or run scripts/export_dinov2_onnx.py')
+                self.get_logger().error(err)
+                return None, err
             try:
                 from alfie_room.encoder import Encoder
                 self.get_logger().info(f'Loading encoder {self.model_path} ...')
