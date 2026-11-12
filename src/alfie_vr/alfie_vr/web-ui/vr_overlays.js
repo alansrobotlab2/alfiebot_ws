@@ -7,7 +7,7 @@ import {
     headsetPose,
 } from './state.js';
 import { TexturedPanel, drawRoundedRect } from './gl_panel.js';
-import { getRosoutMessages } from './robot_state.js';
+import { getRosoutMessages, getRecordingState } from './robot_state.js';
 import { vrLog } from './ui_status.js';
 import { updateStatePanel, drawStatePanel, disposeStatePanel } from './state_panel.js';
 import { updateStreamPanel, drawStreamPanel, disposeStreamPanel } from './stream_panel.js';
@@ -35,7 +35,7 @@ const ROSOUT_PANEL_CONFIG = {
 
 // Top bearing indicator panel configuration
 const BEARING_PANEL_CONFIG = {
-    width: 0.12,                // Compact centered panel
+    width: 0.20,                // Centered; wide enough for the arrow and the record dot
     height: 0.04,
     horizontalOffset: 0.0,      // Centered horizontally
     verticalOffset: 0.22,       // Above main screen
@@ -48,6 +48,8 @@ const BEARING_PANEL_CONFIG = {
     displayMultiplier: 2,       // Multiplier for displayed bearing value
     cornerRadius: 0.0,          // Shader corner radius
     refreshFrames: 5,           // Repaint every N XR frames (bearing needs responsive updates)
+    recordDotRadius: 10,        // Record indicator at the right edge (pixels)
+    recordDotColor: '#ff2222',
 };
 
 const LEVEL_COLORS = {
@@ -206,6 +208,22 @@ function updateBearingPanelCanvas() {
         } else {
             // Yaw is negative (looking left), arrow points left
             ctx.fillText('◀', centerX - arrowOffset, centerY);
+        }
+    }
+
+    // Record indicator: ring while rosbag2 is starting, solid dot once recording
+    const recState = getRecordingState();
+    if (recState) {
+        const r = BEARING_PANEL_CONFIG.recordDotRadius;
+        ctx.beginPath();
+        ctx.arc(canvas.width - r - 6, centerY, recState === 'recording' ? r : r - 2, 0, Math.PI * 2);
+        if (recState === 'recording') {
+            ctx.fillStyle = BEARING_PANEL_CONFIG.recordDotColor;
+            ctx.fill();
+        } else {
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = BEARING_PANEL_CONFIG.recordDotColor;
+            ctx.stroke();
         }
     }
 

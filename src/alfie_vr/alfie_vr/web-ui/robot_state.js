@@ -23,6 +23,9 @@ const ROBOT_DESCRIPTION_TOPIC = '/alfie/robot_description';
 const TF_TOPIC = '/alfie/tf';
 const TF_STATIC_TOPIC = '/alfie/tf_static';
 const ROSOUT_TOPIC = '/rosout';
+// data_recorder status: STOPPED | STARTING:<ds>/<bag> | RECORDING:<ds>/<bag>, re-sent at 1 Hz
+const RECORDING_STATUS_TOPIC = '/alfie/recording/status';
+const RECORDING_STATUS_STALE_MS = 3000;
 
 // ========================================
 // Module State
@@ -200,6 +203,29 @@ export function onUrdfAvailable(listener) {
 /**
  * Get rosout messages array
  */
+let recordingStatus = '';
+let recordingStatusAt = 0;
+
+function handleRecordingStatusMessage(data) {
+    try {
+        recordingStatus = parseStdString(data);
+        recordingStatusAt = performance.now();
+    } catch (error) {
+        console.warn('Recording status decode error:', error);
+    }
+}
+
+/**
+ * Episode recorder state for the HUD: 'recording', 'starting' (rosbag2 still
+ * subscribing) or null (stopped, or no status in the last few seconds).
+ */
+export function getRecordingState() {
+    if (performance.now() - recordingStatusAt > RECORDING_STATUS_STALE_MS) return null;
+    if (recordingStatus.startsWith('RECORDING')) return 'recording';
+    if (recordingStatus.startsWith('STARTING')) return 'starting';
+    return null;
+}
+
 export function getRosoutMessages() {
     return rosoutMessages;
 }
@@ -254,6 +280,7 @@ export function initFoxgloveConnection() {
     foxgloveConn.subscribe(TF_TOPIC, handleTFMessage);
     foxgloveConn.subscribe(TF_STATIC_TOPIC, handleTFMessage);
     foxgloveConn.subscribe(ROSOUT_TOPIC, handleRosoutMessage);
+    foxgloveConn.subscribe(RECORDING_STATUS_TOPIC, handleRecordingStatusMessage);
 
     startTfRateTracking();
     foxgloveConn.connect();
