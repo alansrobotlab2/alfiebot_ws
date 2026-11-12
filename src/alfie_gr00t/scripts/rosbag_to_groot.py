@@ -174,6 +174,12 @@ class RosbagToGrootConverter:
     VIDEO_WIDTH = 352
     VIDEO_HEIGHT = 256
 
+    # Recorder startup trimming (see read_rosbag): a gap longer than HOLE_NS
+    # in state or any camera counts as a hole; holes ending within
+    # STARTUP_WINDOW_NS of the first state message are startup and trimmed.
+    HOLE_NS = int(0.1e9)
+    STARTUP_WINDOW_NS = int(8e9)
+
     def __init__(
         self,
         demos_dir: str,
@@ -183,7 +189,9 @@ class RosbagToGrootConverter:
         num_threads: int = 1,
         use_gpu: bool = False,
         robot_type: str = 'alfiebot',
+        rebuild_all: bool = False,
     ):
+        self.rebuild_all = rebuild_all
         self.demos_dir = Path(demos_dir)
         self.output_dir = Path(output_dir)
         self.fps = fps
@@ -436,6 +444,19 @@ class RosbagToGrootConverter:
                 dctx.copy_stream(ifh, ofh)
         return mcap_path
 
+    @staticmethod
+    def _msg_time_ns(msg, bag_time_ns: int) -> int:
+        """Publish time of a message: its header stamp, else the bag's receive time.
+
+        The two normally agree to <1 ms, but while `ros2 bag record` is busy
+        (mostly during its startup) it stalls ~0.3 s and then receives the
+        queued messages in one burst, so receive times bunch up and no longer
+        say when the data was measured. Header stamps stay correct.
+        """
+        stamp = msg.header.stamp
+        stamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+        return stamp_ns if stamp_ns > 0 else bag_time_ns
+
     def read_rosbag(self, demo_dir: Path) -> Optional[EpisodeData]:
         """Read a ROS2 bag and extract all relevant data."""
         # Find the MCAP file
@@ -476,7 +497,7 @@ class RosbagToGrootConverter:
 
             if topic == '/alfie/robotlowstate':
                 msg = deserialize_message(data, RobotLowState)
-                state_msgs.append((timestamp_ns, msg))
+                state_msgs.append((self._msg_time_ns(msg, timestamp_ns), msg))
             elif topic in self.CAMERA_TOPICS:
                 msg = deserialize_message(data, CompressedImage)
                 cam_key = self.CAMERA_TOPICS[topic]
@@ -488,10 +509,14 @@ class RosbagToGrootConverter:
                     img = fit_image(img, self.VIDEO_WIDTH, self.VIDEO_HEIGHT)
                     # Convert BGR to RGB
                     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                    image_msgs[cam_key].append((timestamp_ns, img))
+                    image_msgs[cam_key].append((self._msg_time_ns(msg, timestamp_ns), img))
 
         if not state_msgs:
             print(f"  Warning: Missing state data in {demo_dir}")
+            return None
+        missing_cams = [k for k, v in image_msgs.items() if not v]
+        if missing_cams:
+            print(f"  Warning: No images from {', '.join(missing_cams)} in {demo_dir}")
             return None
 
         # Sort by timestamp
@@ -499,9 +524,35 @@ class RosbagToGrootConverter:
         for cam_key in image_msgs:
             image_msgs[cam_key].sort(key=lambda x: x[0])
 
-        # Determine time range from state messages
-        start_time_ns = state_msgs[0][0]
+        # Trim the recorder's startup. `ros2 bag record` subscribes to the
+        # topics one by one over its first seconds, so cameras show up after
+        # state, and messages can be dropped while it stalls. Start the
+        # episode once state and all cameras are flowing and the last startup
+        # hole (in publish time) has passed, otherwise the first frames pair
+        # moving state/action with a frozen (future) image.
+        streams = {'state': np.array([m[0] for m in state_msgs], dtype=np.int64)}
+        for cam_key, msgs in image_msgs.items():
+            streams[cam_key] = np.array([m[0] for m in msgs], dtype=np.int64)
+        first_state_ns = int(streams['state'][0])
+        start_time_ns = max(int(ts[0]) for ts in streams.values())
+        window_end_ns = first_state_ns + self.STARTUP_WINDOW_NS
+        late_holes = []
+        for name, ts in streams.items():
+            for i in np.flatnonzero(np.diff(ts) > self.HOLE_NS):
+                hole_end = int(ts[i + 1])
+                if hole_end <= window_end_ns:
+                    start_time_ns = max(start_time_ns, hole_end)
+                else:
+                    late_holes.append((name, (hole_end - first_state_ns) / 1e9,
+                                       int(ts[i + 1] - ts[i]) / 1e6))
         end_time_ns = state_msgs[-1][0]
+        trimmed_s = (start_time_ns - first_state_ns) / 1e9
+        if trimmed_s > 0:
+            print(f"  Trimmed {trimmed_s:.2f}s of recorder startup from {demo_dir.name}")
+        for name, at_s, gap_ms in late_holes:
+            if at_s > trimmed_s:
+                print(f"  Warning: {gap_ms:.0f} ms recording hole in {name} at "
+                      f"{at_s:.1f}s of {demo_dir.name} (kept; review the episode)")
 
         # Generate target timestamps at desired FPS
         target_times_ns = []
@@ -913,7 +964,9 @@ class RosbagToGrootConverter:
         rebuild_names = set()
         for name in common_names:
             ep_meta = existing_episodes[name]
-            if self._episode_files_exist(ep_meta):
+            if self.rebuild_all:
+                rebuild_names.add(name)
+            elif self._episode_files_exist(ep_meta):
                 unchanged_names.add(name)
             else:
                 rebuild_names.add(name)
@@ -951,27 +1004,32 @@ class RosbagToGrootConverter:
             ]
             next_idx = (max(all_existing_indices) + 1) if all_existing_indices else 0
 
-            # Build list of (demo_dir, episode_index) pairs
-            # Rebuilds reuse their existing index; new demos get sequential indices
-            work_items = []  # (demo_dir, episode_index)
+            # Build list of (demo_dir, episode_index, task_index) items.
+            # Rebuilds reuse their existing index and task label (it may have
+            # been relabelled in the episode manager); new demos get
+            # sequential indices and the task given on the command line.
+            work_items = []
             added_demos = sorted([demo_dir_map[n] for n in added_names], key=lambda d: d.name)
             new_idx_counter = next_idx
             for demo_dir in added_demos:
                 if demo_dir.name in rebuild_names:
-                    ep_idx = existing_episodes[demo_dir.name]['episode_index']
+                    ep_meta = existing_episodes[demo_dir.name]
+                    ep_idx = ep_meta['episode_index']
+                    ep_task = int(ep_meta.get('task_index', task_index))
                 else:
                     ep_idx = new_idx_counter
                     new_idx_counter += 1
-                work_items.append((demo_dir, ep_idx))
+                    ep_task = task_index
+                work_items.append((demo_dir, ep_idx, ep_task))
 
             total_to_process = len(work_items)
 
             if self.num_threads <= 1:
                 # Single-threaded
-                for i, (demo_dir, episode_index) in enumerate(work_items):
+                for i, (demo_dir, episode_index, ep_task) in enumerate(work_items):
                     is_rebuild = demo_dir.name in rebuild_names
                     result = self.process_single_episode(
-                        demo_dir, episode_index, task_index, i + 1, total_to_process
+                        demo_dir, episode_index, ep_task, i + 1, total_to_process
                     )
                     if result is None:
                         self.failed_demos.append(demo_dir.name)
@@ -988,12 +1046,12 @@ class RosbagToGrootConverter:
                 # Multi-threaded
                 with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
                     futures = {}
-                    for i, (demo_dir, episode_index) in enumerate(work_items):
+                    for i, (demo_dir, episode_index, ep_task) in enumerate(work_items):
                         future = executor.submit(
                             self.process_single_episode,
                             demo_dir,
                             episode_index,
-                            task_index,
+                            ep_task,
                             i + 1,
                             total_to_process,
                         )
@@ -1189,6 +1247,8 @@ Arguments:
   --use-gpu             Use GPU-accelerated video encoding (NVENC/AMF/QSV)
   --report              Show summary of available demos and existing output
                         data without converting anything
+  --rebuild-all         Reconvert every existing episode from its bag, keeping
+                        its episode index and task label
 
 Examples:
   # Check what demos and output data exist
@@ -1291,6 +1351,12 @@ examples:
         action='store_true',
         help='Report on available demos and existing output data without converting'
     )
+    parser.add_argument(
+        '--rebuild-all',
+        action='store_true',
+        help='Reconvert every existing episode from its bag, keeping its episode '
+             'index and task label (use after changing the converter)'
+    )
 
     args = parser.parse_args()
 
@@ -1304,6 +1370,7 @@ examples:
         num_threads=args.num_threads,
         use_gpu=args.use_gpu,
         robot_type=f'alfiebot_{args.dataset}',
+        rebuild_all=args.rebuild_all,
     )
 
     if args.report:
