@@ -42,7 +42,7 @@
 
     # Action chunk size: must equal the checkpoint's horizon
     # (checkpoint-20000: new_embodiment delta_indices 0..15 = 16 steps, 1.07 s at 15 FPS;
-    # alfiebot_config.ACTION_HORIZON = 32 is the retrain target).
+    # alfiebot_config.ACTION_HORIZON = 16 to match).
     action_chunk_size: 16
 
     # Rate the training data was resampled to (rosbag_to_groot.py --fps).

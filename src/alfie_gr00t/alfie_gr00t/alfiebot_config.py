@@ -14,10 +14,12 @@ from gr00t.data.types import (
 # NOT imported by the inference server at runtime — the server loads
 # config directly from the checkpoint's processor_config.json.
 #
-# Horizon: 32 steps at 15 FPS = 2.1 s, inside the 1.3-2.7 s span N1.7 was
-# pretrained on (40 steps at 15-30 Hz) and long enough for Real-Time Chunking
-# (the deployment guide asks for >= 32 when RTC is used). The client executes
-# a few steps per chunk and uses the rest as overlap/overflow.
+# Horizon: 16 steps at 15 FPS = 1.07 s, matching checkpoint-20000 (trained
+# with delta_indices 0..15). The client executes 8 steps per chunk and keeps
+# the rest as overlap/overflow. Inference cost does not depend on this (the
+# model pads every chunk to 40 steps). The deployment guide suggests >= 32 for
+# Real-Time Chunking; RTC was validated at 16 on this checkpoint (seam jumps
+# -50%, jerk -61%, Isaac-GR00T rtc_smoothness_eval.py), so 16 is kept for now.
 #
 # Representation (N1.7 guidance, getting_started/real_world_deployment.md):
 # RELATIVE (delta from the current state) for position-controlled joints,
@@ -28,7 +30,7 @@ from gr00t.data.types import (
 #
 # Changing delta_indices or the representations requires regenerating
 # meta/stats.json and meta/relative_stats.json with gr00t/data/stats.py.
-ACTION_HORIZON = 32
+ACTION_HORIZON = 16
 
 alfiebot_config = {
     "video": ModalityConfig(
