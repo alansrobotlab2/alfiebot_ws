@@ -7,7 +7,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-import av
 import cv2
 import message_filters
 import numpy as np
@@ -309,6 +308,7 @@ class ObservationBridge:
         buf = io.BytesIO()
 
         # Encode: RGB → H.264 yuv420p (same params as rosbag_to_groot.py lines 504-521)
+        import av  # lazy: only needed with h264_conditioning (not on system python)
         output = av.open(buf, mode='w', format='mp4')
         stream = output.add_stream('libx264', rate=1)
         stream.width = w

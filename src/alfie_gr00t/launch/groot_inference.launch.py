@@ -46,12 +46,18 @@ OVERRIDABLE_ARGS = {
     'enable_safety_limits': 'Enable joint and velocity safety limits',
     'base_smoothing_alpha': 'Base velocity EMA coefficient (1.0 = no smoothing)',
     'joint_smoothing_alpha': 'Joint position EMA coefficient (0-1)',
-    'action_chunk_size': 'Action chunk size, must match training horizon (16)',
+    'action_chunk_size': 'Action chunk size, must match the checkpoint horizon',
     'n_action_steps': 'Actions to execute per chunk',
     'latency_skip': 'Universal latency skip (all body parts)',
     'inference_trigger_step': 'Fire inference at this step within execution window',
     'chunk_blend_steps': 'Blend joints (not base) over N steps at chunk transitions',
     'interpolate_actions': 'Interpolate between actions for smooth 100Hz output',
+    'continuous_inference': 'Continuous inference + temporal ensembling (false = classic windows)',
+    # RTC (server must run --rtc for the prefix to be used)
+    'rtc_enabled': 'Send the committed-action prefix (prev_actions) for RTC',
+    'rtc_overlap_steps': 'RTC prefix length in steps (must exceed the frozen count)',
+    # Diagnostics
+    'csv_log_path': 'Base path for the step CSVs and the per-chunk JSONL log',
 }
 
 
@@ -66,7 +72,8 @@ def _launch_client(context):
             continue
         # Parse like ros2 param would, so '12' -> int, 'true' -> bool. String
         # params stay raw so a task containing ':' isn't read as a mapping.
-        string_params = ('transport', 'server_host', 'ipc_path', 'task_description')
+        string_params = ('transport', 'server_host', 'ipc_path', 'task_description',
+                         'csv_log_path')
         overrides[name] = value if name in string_params else yaml.safe_load(value)
 
     actions = [LogInfo(msg='GR00T client: parameters from groot_client.yaml')]

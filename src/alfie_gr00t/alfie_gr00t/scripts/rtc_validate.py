@@ -34,6 +34,7 @@ ap.add_argument('--executed', type=int, default=4, help='steps executed before t
 ap.add_argument('--overlap', type=int, default=6)
 ap.add_argument('--frozen', type=int, default=2)
 ap.add_argument('--denoising-steps', type=int, default=4)
+ap.add_argument('--trt-engine-dir', default='', help='full-pipeline TRT engines/ dir (else PyTorch)')
 ap.add_argument('--out', default='/tmp/rtc_validate.json')
 args = ap.parse_args()
 
@@ -50,6 +51,8 @@ from gr00t.policy.gr00t_policy import Gr00tPolicy
 tag = EmbodimentTag(args.embodiment)
 t0 = time.time()
 policy = Gr00tPolicy(embodiment_tag=tag, model_path=args.checkpoint, device='cuda')
+if args.trt_engine_dir:
+    srv.load_trt_pipeline(policy, args.trt_engine_dir)
 policy.model.action_head.num_inference_timesteps = args.denoising_steps
 print(f'model loaded in {time.time()-t0:.0f}s', flush=True)
 modality = policy.get_modality_config()

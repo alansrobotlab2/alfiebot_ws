@@ -438,6 +438,8 @@ class ActionPublisher:
         # Back command (index 6)
         msg.back_cmd = BackCmd()
         msg.back_cmd.position = float(action[6])
+        msg.back_cmd.velocity = 0.2       # as VR teleop
+        msg.back_cmd.acceleration = 0.1
 
         # Left arm servos (indices 7-11 -> servos 0-4)
         for i in range(5):

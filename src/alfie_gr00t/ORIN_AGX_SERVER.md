@@ -39,19 +39,21 @@ python ./alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.
 committed for the frames after each observation (`rtc_enabled` in
 `groot_client.yaml`) and the server seeds the new chunk with them through
 N1.7's native inpainting, so consecutive chunks agree where they meet. It
-needs at least 4 denoising steps (2-step denoising cannot adapt around the
-frozen prefix, see `RTC_ANALYSIS.md`). `--rtc-ramp-rate` shapes the blend from
+works with 2 or 4 denoising steps: on N1.7's native inpainting 2-step RTC
+smooths seams as well as 4-step (offline eval 2026-11-12; the N1.6 finding in
+`RTC_ANALYSIS.md` that 2 steps cannot adapt no longer holds). `--rtc-ramp-rate` shapes the blend from
 frozen to free steps; `--rtc-frozen-steps` / `--rtc-overlap-steps` override
 what the client sends.
 
-```bash
-# previous N1.6 form, for reference
-python ./alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
-  --checkpoint ./Isaac-GR00T/alfie-gr00t/checkpoint-2000 \
-  --trt-engine-path ./Isaac-GR00T/groot_n1d6_onnx/dit_model_fp16_orin.trt \
-  --denoising-steps 4 \
-  --verbose
-```
+TensorRT: `--trt-engine-dir <engines/>` loads Isaac-GR00T's full-pipeline
+engines (ViT + LLM + fused action head, built by
+`scripts/deployment/build_trt_pipeline.py`) through
+`gr00t.policy.inference_optimizations.load_tensorrt_engines`. The fused action
+head honors RTC, and the engine matching `--denoising-steps` is picked at call
+time. Run from `~/Isaac-GR00T/.venv`; engines are tied to its TRT version. If
+behaviour looks off, retry with `--no-backbone-pipeline` (the engines replay
+CUDA graphs on the current stream; the second-stream backbone overlap is
+untested with them).
 
 ## Open-Loop Evaluation
 

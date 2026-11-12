@@ -30,7 +30,7 @@ Both the groot server and the groot client run locally on the AGX Orin; there is
 
 ## Client-Server Split
 The GR00T inference system is split into two processes, both on the Orin:
- - **Server** (`127.0.0.1`, REQ/REP 5555, async PUSH/PULL 5556/5557): Runs the GR00T model. Receives observations over ZMQ, returns action chunks (horizon = checkpoint `delta_indices`, 32 for alfiebot_config.py). Run it per `src/alfie_gr00t/ORIN_AGX_SERVER.md`.
+ - **Server** (`127.0.0.1`, REQ/REP 5555, async PUSH/PULL 5556/5557): Runs the GR00T model. Receives observations over ZMQ, returns action chunks (horizon = checkpoint `delta_indices`: 16 for the deployed `checkpoints/alfie/checkpoint-20000`; `alfiebot_config.py` targets 32 for the next retrain). Run it per `src/alfie_gr00t/ORIN_AGX_SERVER.md`. With `--trt-engine-dir` it loads Isaac-GR00T's full-pipeline INT8 TensorRT engines (`~/Isaac-GR00T/gr00t_trt_deployment/alfie_int8_rtc/engines`, RTC-capable, fused 2/4-step; other step counts fall back to per-step engines); must run from `~/Isaac-GR00T/.venv`. GPU image preprocessing is on by default.
  - **Client**: ROS2 node that collects camera images + robot state, sends them to the server via ZMQ, and publishes actions to the robot.
 
 The server can run as either:
@@ -44,10 +44,12 @@ The server can run as either:
  - `core/zmq_client.py` — ZMQ REQ/REP client for communicating with the server.
  - `scripts/groot_inference_server.py` — Standalone inference server. Loads the GR00T checkpoint, receives JPEG images + state via ZMQ msgpack, runs inference, returns raw unnormalized actions.
  - `scripts/hybrid_image_test.py` — Diagnostic tool that sends saved images through ZMQ to isolate visual domain gap issues.
+ - `scripts/ab_trial.py` — Runs one robot trial: moves arms + head to the pick-task start pose through the groot mux inputs, activates the client, deactivates after `--duration`.
+ - `scripts/rtc_ab_analysis.py` — Compares live runs on raw policy output (seam jump, jerk vs demonstrations, RTT, late %, hold %) from the client's CSV + `_chunks.jsonl` logs.
 
 ## Communication Protocol (ZMQ msgpack)
 Client sends: `{ 'left_wide': <jpeg_bytes>, 'right_wide': <jpeg_bytes>, ..., 'state': <22D float list>, 'language': <task string> }`
-Server returns: `{ 'actions': <Hx22 float array> }` (H = horizon, 32). With RTC the client adds `'prev_actions': <Kx22>` (actions already committed for the K steps after the observation) and `'rtc_frozen_steps': <int>`; see `core/rtc_prefix.py`.
+Server returns: `{ 'actions': <Hx22 float array> }` (H = checkpoint horizon, 16 for checkpoint-20000). With RTC the client adds `'prev_actions': <Kx22>` (actions already committed for the K steps after the observation) and `'rtc_frozen_steps': <int>`; see `core/rtc_prefix.py`.
 Ping: Client sends `{'ping': True}`, server returns `{'pong': True}`.
 
 ## Config Files
@@ -77,27 +79,29 @@ Training images go through an additional H.264 yuv420p encode/decode in rosbag_t
 # Troubleshooting & Benchmarking ---
 
 ## CSV Diagnostic Files
-The client logs two CSV files when `csv_log_path` is set (default: `/tmp/groot_client_debug.csv`):
+The client logs three files when `csv_log_path` is set (default: `/tmp/groot_client_debug.csv`; `csv_log_path:=...` on the launch line gives each run its own set):
  - `/tmp/groot_client_debug.csv` — 100Hz full-fidelity log. Columns: `timestamp, step, chunk_id, action_idx, action_<joint>, smoothed_<joint>, state_<joint>` for all 22 DOF. Use this for hold-and-wait analysis, trajectory shape, tracking error, and smoothing behavior.
- - `/tmp/groot_client_debug_actions.csv` — One row per action step (15 FPS). Columns: `timestamp, chunk_id, action_idx, effective_skip, action_<joint>, state_<joint>`. Use this for chunk timing, effective_skip validation, and action-level trajectory analysis.
+ - `/tmp/groot_client_debug_actions.csv` — One row per action step (15 FPS). Columns: `timestamp, chunk_id, action_idx, effective_skip, action_<joint>, state_<joint>`; `action_*` is the RAW chunk action, before EMA/rate limiting (in the 100Hz file `action_*` is already rate-limited). Use this for chunk timing, effective_skip validation, and action-level trajectory analysis.
+ - `/tmp/groot_client_debug_chunks.jsonl` — One line per chunk from the server: raw actions, obs/arrival time, `rtt_ms`, whether an RTC prefix was sent.
 
 ## Key Metrics to Check After a Run
 1. **effective_skip** (actions CSV): Should be constant 2 (= latency_skip). If inflated (5+), the overshoot bug has returned.
-2. **Hold-and-wait %**: Count rows with action_idx==31 (last action) in the debug CSV. Should be 0% (overflow [6:32] covers the RTT many times over). If >50%, execution window is too narrow or inference is too slow.
+2. **Hold-and-wait %**: Count rows with action_idx==15 (last action of the 16-step chunk; 31 for a 32-step checkpoint) in the debug CSV. Should be 0% (overflow [10:16] = 0.4 s covers the RTT). Hold only starts when RTT exceeds the overflow; an RTT just over `latency_skip` steps shows up as late chunks (`late%` in `rtc_ab_analysis.py`) and bigger seam jumps instead.
 3. **Base velocity (lx, az)**: Forward velocity should reach 0.02-0.06 m/s during approach. If <0.005, robot isn't moving.
-4. **action_idx distribution**: Should be roughly uniform across 2-5, with a short tail into 6-8 while waiting for inference. If the tail reaches the 20s, inference is far slower than expected.
-5. **Head yaw consistency**: Spread <0.05 rad confirms PyTorch backend. Spread >0.1 rad means TRT bf16 — switch to PyTorch immediately.
-6. **Chunk cycle time**: Time between consecutive chunk_id transitions. Should be ~0.4s (267ms exec + ~130ms inference, bridged by overflow actions).
+4. **action_idx distribution**: Should be roughly uniform across the execution window (2-9), with a short tail into 10-11 while waiting for inference. If the tail reaches 15, inference is far slower than expected.
+5. **Head yaw consistency** (Test 7): Spread <0.05 rad is a healthy backend. Spread >0.1 rad means a noisy engine — rebuild or fall back to PyTorch.
+6. **Chunk cycle time**: Time between consecutive chunk_id transitions. Should be ~0.64s (533ms exec + ~100ms inference, bridged by overflow actions).
 9. **RTC seam**: with `rtc_enabled`, the first `latency_skip` actions of each new chunk must equal the old chunk's actions at the same frames (the server holds them). Client log `[rtc] prefix` and server log `RTC #n` confirm the prefix is flowing; if the server never logs it, the client is not sending `prev_actions`.
 7. **Arm tracking error**: `|action_right_shoulder_pitch - state_right_shoulder_pitch|` should be <0.1 rad. Persistent >0.2 rad means servos can't track.
 8. **Gripper**: Right gripper should show full range (0→close) during pick attempts. If stuck near 0, model isn't commanding a grasp.
 
 ## Quick Diagnostic Commands
 ```bash
-# Check TRT vs PyTorch backend (run BEFORE debugging live robot)
-# Uses hybrid_image_test.py Test 7: 5x identical inputs, check HEAD_YAW SPREAD
-# Spread <0.05 = PyTorch (good), >0.1 = TRT bf16 (bad)
-python3 scripts/hybrid_image_test.py --test 7 --host 127.0.0.1
+# Consistency check (run BEFORE debugging live robot)
+# hybrid_image_test.py runs all its tests (there is no --test flag); read Test 7:
+# 5x identical inputs, HEAD_YAW SPREAD <0.05 = good (the INT8 full-pipeline TRT
+# engines measured 0.018), >0.1 = noisy backend (the old N1.6 TRT bf16 DiT)
+python3 scripts/hybrid_image_test.py --host 127.0.0.1 --dataset-path data/CleanTheRoom/lerobot
 
 # Analyze a run CSV with python
 python3 -c "
@@ -120,21 +124,31 @@ Set `debug_save_images: true` in `config/groot_client.yaml` to save observation 
 
 ## Current Execution Parameters (groot_client.yaml)
  - `training_fps=15` (66.7ms per action step; must match `rosbag_to_groot.py --fps`. The camera runs at 30fps; the converter and the live client both take the latest frame at or before each step)
- - `action_chunk_size=32, n_action_steps=4, latency_skip=2, inference_trigger_step=4`
- - Execution window: actions[2:6] = 4 steps = 267ms per chunk
- - Overflow: actions[6:32] bridges 1.7s, covering the ~110-130ms N1.7 inference RTT (INT8 engines, 4 denoising steps)
- - RTC: `rtc_enabled=true, rtc_overlap_steps=6`; the server runs with `--rtc` and >= 4 denoising steps. Frozen steps = latency_skip (+1 with chunk blending)
- - Hold-and-wait gap: none expected
- - Re-planning rate: ~2.5 Hz
- - Rate-limited interpolator: enabled (G1-style velocity-capped joints)
+ - Classic execution (`continuous_inference: false`). Continuous mode steps its EMA/Butterworth at 100 Hz instead of per action step; don't use it without fixing that.
+ - `action_chunk_size=16` (checkpoint-20000), `n_action_steps=8, latency_skip=2, inference_trigger_step=8`
+ - Execution window: actions[2:10] = 8 steps = 533ms per chunk; overflow actions[10:16] bridge 0.4s
+ - Inference RTT on the robot (TRT INT8, full stack + LLM loaded): ~100ms at 4 denoising steps, ~155ms at 8 steps through the per-step engines (then launch with `latency_skip:=3`)
+ - RTC: `rtc_enabled=true, rtc_overlap_steps=6`; the server runs with `--rtc`. Frozen steps = latency_skip, i.e. exactly the steps the client skips, so RTC pins no executed step (only the ramp reaches them)
+ - Motion matched to VR teleop (how the data was recorded): 4 rad/s software rate limit on arms/grippers/head, servo speed/accel 0 (unlimited), no deadband, back velocity 0.2 / accel 0.1; joint EMA 0.3
+ - Start pose: `back_init_height=0.34`; `ab_trial.py` puts arms + head at the pick-task start pose before activating (the idle node steers the head between trials)
  - Base velocity limits: lx=0.15 m/s, ly=0.15 m/s, az=0.8 rad/s
+ - Launch overrides: `n_action_steps`, `inference_trigger_step`, `latency_skip`, `rtc_enabled`, `rtc_overlap_steps`, `continuous_inference`, `joint_smoothing_alpha`, `csv_log_path`
+
+## Robot findings, 2026-11-12 (checkpoint-20000, CleanTheRoom; logs in ~/gr00t_ab/2026-11-12, trials.csv)
+ - 4 denoising steps: smooth, but the bimodal actions get averaged. Demonstrated base turns are 0 or ~0.46 rad/s; live az came out at 0.005-0.05 rad/s, no head scan, near misses.
+ - 8 denoising steps: head scan and full-rate turns return, first completed pick (which ran on into the trash-can motion with the pick task text), but head-yaw and base commands flip direction step to step (jitter). Fused 6/8-step engines and an offline comparison are with the Isaac-GR00T session.
+ - 4 steps per chunk made the arm command flip-flop between reach and hold on consecutive chunks (11 jumps >0.1 rad per run, RTC on or off); 8 per chunk fixed most of it.
+ - Task text is a weak condition: holding the can with the back up looks like the start of a trash episode and the model continues into it.
+ - A copycat (base state -> base action) test on training frames was negative: from zero base state the model starts turns at ~85% of the demonstrated rate.
 
 ## Known Pitfalls
  - **Never add inference RTT as extra latency skip.** `latency_skip=3` already compensates for observation-to-action delay. Adding overshoot causes a death spiral of shrinking execution windows (see 2026-02-17 incident).
  - **Never fire inference mid-chunk without RTC.** Without a committed prefix the model must see the RESULT of its full trajectory; mid-chunk triggers caused arm pogoing at chunk boundaries. RTC is the mechanism that makes overlapping chunks consistent.
- - **RTC needs >= 4 denoising steps.** With 2 steps the denoiser cannot adapt around the frozen prefix and chunk-boundary spread gets worse (RTC_ANALYSIS.md). The native N1.7 path lives in `groot_inference_server.py` (`_build_rtc`), not in Isaac-GR00T's `Gr00tPolicy`, which still drops `options`.
- - **Horizon changes mean new stats.** `alfiebot_config.ACTION_HORIZON` (32) must match `action_chunk_size` in the client yaml and `meta/relative_stats.json` must be regenerated after any `delta_indices` or representation change.
- - **Always use PyTorch backend** (not TRT bf16). TRT bf16 causes catastrophic noise in flow matching denoising. Run Test 7 consistency check before any live debugging session.
+ - **RTC step count.** The ">= 4 denoising steps" rule came from N1.6 (RTC_ANALYSIS.md); on N1.7's native inpainting 2-step RTC smooths seams as well as 4-step offline. The native N1.7 path lives in `groot_inference_server.py` (`_build_rtc`), not in Isaac-GR00T's `Gr00tPolicy`, which still drops `options`.
+ - **Horizon changes mean new stats.** `action_chunk_size` in the client yaml must match the DEPLOYED checkpoint's horizon (16 for checkpoint-20000; `alfiebot_config.ACTION_HORIZON` is 32 for the next retrain) and `meta/relative_stats.json` must be regenerated after any `delta_indices` or representation change.
+ - **Backend.** The old N1.6 single-file TRT bf16 DiT caused catastrophic noise in flow matching denoising and is no longer supported. The Isaac-GR00T full-pipeline INT8 engines (`--trt-engine-dir`) pass Test 7 and match PyTorch open-loop; PyTorch (~390 ms) is too slow for the current client timing. Run the Test 7 consistency check after any engine rebuild.
+ - **Client runs on system python**, which needs `python3-zmq` and `python3-msgpack` (apt). `av` is only imported when `h264_conditioning` is on.
+ - **Don't judge the policy from an off-distribution start.** Trials must start from the training start pose (back 0.34 m, arms tucked, head centred); 75 of 83 pick demos begin with a head scan and a large base turn, and only 8 have the can already in view.
  - **Config lives in the checkpoint**, not `alfiebot_config.py`. Always check `processor_config.json` in the checkpoint directory to know actual action representations and normalization stats.
 
 # ROS2 ---

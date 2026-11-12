@@ -22,6 +22,7 @@ Threading model:
 """
 
 import csv
+import json
 from enum import Enum
 from pathlib import Path
 import threading
@@ -274,6 +275,10 @@ class GrootClientNode(Node):
         self._last_logged_abs_idx = -1
         if self.csv_log_path:
             self._init_action_csv(self.csv_log_path)
+        # Per-chunk log: every raw chunk as returned by the server, with timing
+        self._chunk_log_file = None
+        if self.csv_log_path:
+            self._init_chunk_log(self.csv_log_path)
 
         # Initialize safety monitor
         # Watchdog timeout must exceed the chunk execution time plus inference latency
@@ -623,7 +628,7 @@ class GrootClientNode(Node):
         self.declare_parameter('interpolate_actions', True)
 
         # Back initialization height (meters). Set to -1.0 to disable.
-        self.declare_parameter('back_init_height', 0.1)
+        self.declare_parameter('back_init_height', 0.34)
 
         # Continuous inference mode: always-churning inference with temporal
         # ensembling via ChunkBuffer. When false, uses the existing
@@ -793,12 +798,12 @@ class GrootClientNode(Node):
 
     def _check_starting_pose(self):
         """Check if robot starting pose is within training data distribution."""
+        # Medians at episode start, CleanTheRoom (2026-11-12)
         EXPECTED_START = {
-            6:  ('back_joint', 0.098, 0.02),
-            9:  ('left_elbow_pitch', -1.477, 0.15),
-            19: ('head_yaw', 0.0, 0.5),
-            20: ('head_pitch', -0.04, 0.3),
-            21: ('head_roll', 0.06, 0.15),
+            6:  ('back_joint', 0.340, 0.02),
+            19: ('head_yaw', 0.009, 0.2),
+            20: ('head_pitch', 0.071, 0.2),
+            21: ('head_roll', -0.012, 0.15),
         }
 
         obs = self.observation_bridge.get_latest_observation()
@@ -875,7 +880,8 @@ class GrootClientNode(Node):
                 continue
 
             # Send observation to server (blocking RTT), with the RTC prefix
-            prefix, frozen = self._rtc_prefix(time.monotonic())
+            sync_obs_time = time.monotonic()
+            prefix, frozen = self._rtc_prefix(sync_obs_time)
             response = self.zmq_client.send_observation(
                 images=obs.images,
                 state=obs.state,
@@ -900,6 +906,7 @@ class GrootClientNode(Node):
             if chunk is None:
                 self.get_logger().warn('Invalid action response from server')
                 continue
+            self._log_chunk(chunk, sync_obs_time, time.monotonic(), prefix is not None)
 
             # Log chunk diagnostics
             skip = self.latency_skip
@@ -967,6 +974,7 @@ class GrootClientNode(Node):
         """
         trigger_time = self.inference_trigger_step * self.action_step_period
         awaiting_result = False  # True after push, until result received
+        push_info: dict[int, tuple[float, bool]] = {}  # obs_id -> (push time, RTC prefix sent)
 
         while self._running:
             if not self._active or self._state != ClientState.ACTIVE:
@@ -983,6 +991,9 @@ class GrootClientNode(Node):
                 if chunk is not None:
                     obs_id = result.get('obs_id', -1)
                     latency_ms = result.get('latency_ms', 0)
+                    now = time.monotonic()
+                    push_t, rtc_sent = push_info.pop(obs_id, (now, False))
+                    self._log_chunk(chunk, push_t, now, rtc_sent, latency_ms)
 
                     with self._action_lock:
                         has_chunk = self._action_chunk is not None
@@ -1033,7 +1044,8 @@ class GrootClientNode(Node):
                 time.sleep(0.01)
                 continue
 
-            prefix, frozen = self._rtc_prefix(time.monotonic())
+            push_t = time.monotonic()
+            prefix, frozen = self._rtc_prefix(push_t)
             obs_id = self.async_client.push_observation(
                 images=obs.images,
                 state=obs.state,
@@ -1044,6 +1056,9 @@ class GrootClientNode(Node):
 
             if obs_id >= 0:
                 awaiting_result = True
+                push_info[obs_id] = (push_t, prefix is not None)
+                if len(push_info) > 50:
+                    del push_info[min(push_info)]
             else:
                 self.get_logger().warn('[async] Failed to push observation')
                 time.sleep(0.01)
@@ -1347,6 +1362,31 @@ class GrootClientNode(Node):
         self._action_csv_writer.writerow(row)
         self._action_csv_file.flush()
 
+    def _init_chunk_log(self, base_path: str):
+        """Initialize the per-chunk JSONL log (<stem>_chunks.jsonl)."""
+        p = Path(base_path)
+        path = p.parent / f'{p.stem}_chunks.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._chunk_log_file = open(path, 'w')
+        self.get_logger().info(f'Per-chunk logging enabled: {path}')
+
+    def _log_chunk(self, chunk: np.ndarray, obs_time: float, arrival_time: float,
+                   rtc_prefix: bool, server_ms: float = 0.0):
+        """Write one raw chunk (before any smoothing) with its timing."""
+        if self._chunk_log_file is None:
+            return
+        rec = {
+            'chunk_id': self._total_chunks,
+            'obs_time': obs_time,
+            'arrival_time': arrival_time,
+            'rtt_ms': (arrival_time - obs_time) * 1000.0,
+            'server_ms': float(server_ms),
+            'rtc_prefix': bool(rtc_prefix),
+            'actions': np.asarray(chunk, dtype=np.float32).round(6).tolist(),
+        }
+        self._chunk_log_file.write(json.dumps(rec) + '\n')
+        self._chunk_log_file.flush()
+
     def _close_action_csv(self):
         """Close per-action CSV log file."""
         if self._action_csv_file is not None:
@@ -1477,6 +1517,10 @@ class GrootClientNode(Node):
         if self._rate_limiter is not None:
             # G1-style: feed target, step rate limiter at 100 Hz.
             # Position joints are velocity-capped; base velocity passes through.
+            if self._rate_limiter.get_current() is None:
+                seed_obs = self.observation_bridge.get_latest_observation()
+                if seed_obs is not None and seed_obs.valid:
+                    self._rate_limiter.seed(seed_obs.state)
             self._rate_limiter.set_target(target)
             action = self._rate_limiter.step()
             if action is None:
@@ -1564,6 +1608,9 @@ class GrootClientNode(Node):
         self.action_publisher.publish_stop()
         self.action_publisher.close_csv()
         self._close_action_csv()
+        if self._chunk_log_file is not None:
+            self._chunk_log_file.close()
+            self._chunk_log_file = None
         self.zmq_client.close()
         if self.async_client is not None:
             self.async_client.close()

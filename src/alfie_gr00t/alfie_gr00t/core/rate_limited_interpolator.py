@@ -201,6 +201,12 @@ class RateLimitedInterpolator:
         self._current = result
         return result.astype(np.float32)
 
+    def seed(self, current: np.ndarray):
+        """Start interpolating from the measured pose instead of snapping to
+        the first target (servo speed is unlimited, so a snap would be a jump)."""
+        if self._current is None:
+            self._current = np.asarray(current, dtype=np.float64).copy()
+
     def reset(self):
         """Clear interpolation state (e.g., on deactivation)."""
         self._current = None

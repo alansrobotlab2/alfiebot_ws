@@ -41,8 +41,9 @@
     inference_timeout_ms: 5000
 
     # Action chunk size: must equal the checkpoint's horizon
-    # (alfiebot_config.ACTION_HORIZON = 32; 2.1 s at 15 FPS).
-    action_chunk_size: 32
+    # (checkpoint-20000: new_embodiment delta_indices 0..15 = 16 steps, 1.07 s at 15 FPS;
+    # alfiebot_config.ACTION_HORIZON = 32 is the retrain target).
+    action_chunk_size: 16
 
     # Rate the training data was resampled to (rosbag_to_groot.py --fps).
     # One action step = 1/training_fps (66.7 ms at 15 FPS). Also the sample
@@ -50,21 +51,27 @@
     training_fps: 15.0
 
     # n_action_steps: how many predicted actions to execute per chunk before
-    # promoting the next pending chunk. 4 = 267 ms, re-planning at ~2.5 Hz;
-    # the rest of the 32-step chunk is RTC overlap and overflow.
-    n_action_steps: 4
+    # promoting the next pending chunk. 8 = 533 ms, re-planning at ~1.6-1.9 Hz;
+    # the rest of the 16-step chunk is RTC overlap and overflow.
+    # 8, not 4 (2026-11-12 robot trials): the arm lags its command, so a chunk
+    # planned 267 ms into a reach sees an arm that has barely moved and plans
+    # "hold"; with relative actions the command then flip-flops between reach
+    # and hold on consecutive chunks. A whole reach fits in one 8-step window.
+    n_action_steps: 8
 
     # Universal latency skip: all body parts read from action[skip + idx] to
     # compensate for observation-to-action delay. The N1.7 INT8 pipeline on
-    # the Orin answers in ~110-130 ms with 4 denoising steps = 2 steps at 15 FPS.
-    # With skip=2 and n_action_steps=4 the execution window is actions[2:6].
+    # the Orin answers in ~100 ms with 4 denoising steps = 2 steps at 15 FPS.
+    # With skip=2 and n_action_steps=8 the execution window is actions[2:10].
+    # RTT must stay under skip * 66.7 ms: use 3 when the server runs 8 denoising
+    # steps through the per-step engines (~155 ms RTT); 2 is enough under ~133 ms.
     latency_skip: 2
 
     # Inference trigger step: fire inference at this step within the execution
-    # window. Equal to n_action_steps = fire at exhaust; overflow actions [6:32]
-    # (1.7 s) bridge the RTT. Firing mid-chunk is only safe with RTC on, which
+    # window. Equal to n_action_steps = fire at exhaust; overflow actions [10:16]
+    # (0.4 s) bridge the RTT. Firing mid-chunk is only safe with RTC on, which
     # keeps the new chunk consistent with what is still being executed.
-    inference_trigger_step: 4
+    inference_trigger_step: 8
 
     # Chunk transition blend steps: blend joints (not base velocity) from
     # the previous chunk's last executed action to the new chunk's trajectory
@@ -72,7 +79,7 @@
     # 0 = disabled (rate-limited interpolator handles smoothing instead).
     chunk_blend_steps: 0
     # Real-Time Chunking: send the committed future with each observation so the
-    # server (started with --rtc, >= 4 denoising steps) inpaints the new chunk to
+    # server (started with --rtc, 2 or 4 denoising steps) inpaints the new chunk to
     # agree with it. Frozen steps = latency_skip (+1 if chunk_blend_steps > 0).
     rtc_enabled: true
     rtc_overlap_steps: 6  # frozen 2 + 4 ramp steps; must exceed the frozen count
@@ -115,16 +122,21 @@
     # Inspired by G1 WholeBodyControl's InterpolationPolicy.
     rate_limit_enabled: true
 
+    # Matched to VR teleop, which recorded the training data: 4 rad/s software
+    # rate limit on arm/gripper/head targets, servo speed/accel 0 (= unlimited,
+    # the software limit is the only one), no deadband. Before 2026-11-12 the
+    # client used 2 rad/s + servo accel 5 rad/s^2 + a 0.05 rad deadband, so the
+    # arm responded about half as briskly as in the demonstrations.
     # Per-body-part max speeds (rad/s for joints, m/s for back).
     # Software limit should be at or below hardware servo speed for
     # predictable behavior. Rate limiter is the active constraint;
     # hardware servo speed is the safety backstop.
     rate_limit_back: 0.3            # m/s — slow, heavy linear actuator
-    rate_limit_left_arm: 2.0        # rad/s — fast for manipulation
-    rate_limit_left_gripper: 3.0    # rad/s — quick open/close
-    rate_limit_right_arm: 2.0       # rad/s
-    rate_limit_right_gripper: 3.0   # rad/s
-    rate_limit_head: 1.0            # rad/s — slow, smooth tracking
+    rate_limit_left_arm: 4.0  # = VR teleop (2026-11-12)
+    rate_limit_left_gripper: 4.0  # = VR teleop (2026-11-12)
+    rate_limit_right_arm: 4.0  # = VR teleop (2026-11-12)
+    rate_limit_right_gripper: 4.0  # = VR teleop (2026-11-12)
+    rate_limit_head: 4.0  # = VR teleop (2026-11-12)
 
     # ==========================================================================
     # Per-Joint Deadband Filter
@@ -134,11 +146,11 @@
     # Base velocity: snap to zero if |vel| < deadband.
     # 0.0 = disabled (default). See DEADBAND_ANALYSIS.md for tuning rationale.
     deadband_back: 0.0              # m — back position deadband
-    deadband_left_arm: 0.05          # rad — left arm joint deadband
-    deadband_left_gripper: 0.05      # rad — left gripper deadband
-    deadband_right_arm: 0.05         # rad — right arm joint deadband
-    deadband_right_gripper: 0.05     # rad — right gripper deadband
-    deadband_head: 0.05              # rad — head joint deadband
+    deadband_left_arm: 0.0  # = VR teleop (2026-11-12)
+    deadband_left_gripper: 0.0  # = VR teleop (2026-11-12)
+    deadband_right_arm: 0.0  # = VR teleop (2026-11-12)
+    deadband_right_gripper: 0.0  # = VR teleop (2026-11-12)
+    deadband_head: 0.0  # = VR teleop (2026-11-12)
     deadband_base_linear: 0.0       # m/s — base linear velocity deadband
     deadband_base_angular: 0.0      # rad/s — base angular velocity deadband
 
@@ -161,12 +173,12 @@
     # Hardware servo speed/acceleration/torque per body-part group.
     # The servo firmware velocity-limits to these values as a safety backstop.
     # Software rate limiter (above) should be the active constraint.
-    servo_speed_arms: 2.0          # rad/s
-    servo_speed_grippers: 3.0      # rad/s
-    servo_speed_head: 1.0          # rad/s
-    servo_accel_arms: 5.0          # rad/s²
-    servo_accel_grippers: 8.0      # rad/s²
-    servo_accel_head: 3.0          # rad/s²
+    servo_speed_arms: 0.0  # = VR teleop (2026-11-12)
+    servo_speed_grippers: 0.0  # = VR teleop (2026-11-12)
+    servo_speed_head: 0.0  # = VR teleop (2026-11-12)
+    servo_accel_arms: 0.0  # = VR teleop (2026-11-12)
+    servo_accel_grippers: 0.0  # = VR teleop (2026-11-12)
+    servo_accel_head: 0.0  # = VR teleop (2026-11-12)
     # Torque limit, 0-1 fraction of max (scaled to the 0..1000 servo register).
     # Grippers must stay well under the servo's 0.8 overload threshold so a
     # squeeze holds instead of tripping auto e-stop; command_mux also caps them.
@@ -177,10 +189,8 @@
     # ==========================================================================
     # Real-Time Chunking (RTC)
     # ==========================================================================
-    # RTC is a server-side feature — NOT configured here. Enable it by
-    # starting the inference server with --rtc:
-    #   python3 groot_inference_server.py --rtc ...
-    # The client automatically sends prev_actions when RTC is active.
+    # RTC needs both sides: rtc_enabled (above) makes the client send
+    # prev_actions, and the server must run with --rtc to use them.
     # RTC freeze+inpaints the action prefix during denoising for smooth
     # chunk transitions. See SMOOTHIT.md for benchmark results.
 
@@ -189,8 +199,12 @@
     # ==========================================================================
     # When enabled, inference runs continuously (always churning) and chunks
     # are combined via temporal ensembling in a rolling ChunkBuffer.
-    # When disabled (default), uses classic overlapped execution model.
-    continuous_inference: true
+    # When disabled (default), uses classic overlapped execution model:
+    # execute actions[latency_skip:latency_skip+n_action_steps], then promote
+    # the next chunk. Classic is the live mode for N1.7 + RTC (2026-11-12);
+    # continuous mode steps its EMA/Butterworth filters at 100 Hz (twice per
+    # tick) instead of once per action step, so they barely filter.
+    continuous_inference: false
 
     # Temporal ensembling strategy for combining overlapping chunk predictions:
     #   'latest'    — only use most recent chunk (baseline, matches classic behavior)
@@ -237,7 +251,7 @@
     # Height (meters) to move the back to on startup (0.0 to 0.350).
     # Waits for robot_init (bringup) to calibrate the back first; never calibrates itself.
     # Set to -1.0 to disable back initialization entirely.
-    back_init_height: 0.1
+    back_init_height: 0.34  # = robot_init back_height; CleanTheRoom episodes start at 0.34
 
     # ==========================================================================
     # Debug Settings
