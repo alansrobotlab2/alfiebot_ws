@@ -64,6 +64,12 @@ def generate_launch_description():
             'max_duration': LaunchConfiguration('max_duration'),
         }],
         emulate_tty=True,
+        # Restart when killed, so `kill <pid>` picks up a new build. A stop
+        # mid-episode waits up to 15s for rosbag2 to close the bag, so allow
+        # that before escalating to SIGTERM / SIGKILL.
+        respawn=True,
+        sigterm_timeout='20',
+        sigkill_timeout='25',
     )
 
     return LaunchDescription([

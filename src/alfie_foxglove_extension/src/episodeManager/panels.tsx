@@ -29,6 +29,13 @@ function RecorderPill({ status }: { status: string }): ReactElement {
       </span>
     );
   }
+  if (status.startsWith("STARTING")) {
+    return (
+      <span className="pill" title="rosbag2 is subscribing; not recording yet">
+        recorder starting {status.split(":").slice(1).join(":")}
+      </span>
+    );
+  }
   return <span className="pill">recorder idle</span>;
 }
 

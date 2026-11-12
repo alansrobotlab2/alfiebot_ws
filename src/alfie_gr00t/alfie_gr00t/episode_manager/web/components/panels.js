@@ -7,6 +7,9 @@ function RecorderPill({ status }) {
   if (status.startsWith('RECORDING')) {
     return html`<span class="pill rec"><i class="rec-dot"></i>recording ${status.split(':').slice(1).join(':')}</span>`;
   }
+  if (status.startsWith('STARTING')) {
+    return html`<span class="pill" title="rosbag2 is subscribing; not recording yet">recorder starting ${status.split(':').slice(1).join(':')}</span>`;
+  }
   return html`<span class="pill">recorder idle</span>`;
 }
 
