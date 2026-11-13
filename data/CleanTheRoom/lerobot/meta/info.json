@@ -1,15 +1,15 @@
 {
     "codebase_version": "v2.1",
     "robot_type": "alfiebot_CleanTheRoom",
-    "total_episodes": 164,
-    "total_frames": 57705,
+    "total_episodes": 218,
+    "total_frames": 85632,
     "total_tasks": 2,
-    "total_videos": 656,
+    "total_videos": 872,
     "total_chunks": 1,
     "chunks_size": 1000,
     "fps": 15,
     "splits": {
-        "train": "0:164"
+        "train": "0:218"
     },
     "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
     "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
