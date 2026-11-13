@@ -65,7 +65,9 @@
     # With skip=2 and n_action_steps=8 the execution window is actions[2:10].
     # RTT must stay under skip * 66.7 ms: use 3 when the server runs 8 denoising
     # steps through the per-step engines (~155 ms RTT); 2 is enough under ~133 ms.
-    latency_skip: 2
+    # 3 = groot_server.yaml's denoising_steps 8 (fused 8-step head, 115-135 ms
+    # GPU + transport; 2026-11-13 trials). Launch latency_skip:=2 for a 4-step server.
+    latency_skip: 3
 
     # Inference trigger step: fire inference at this step within the execution
     # window. Equal to n_action_steps = fire at exhaust; overflow actions [10:16]

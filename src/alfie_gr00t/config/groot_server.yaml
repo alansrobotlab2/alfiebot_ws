@@ -1,64 +1,54 @@
-# GR00T N1.6 Server Configuration
-# Configuration for the GR00T inference server node
+# GR00T N1.7 inference server configuration (launch/groot_server.launch.py)
+#
+# The server is scripts/groot_inference_server.py run as a plain process from
+# the Isaac-GR00T venv (torch/TensorRT are not in system python, and the TRT
+# engines are tied to that venv's TensorRT version). The launch file turns each
+# key below into the matching --flag, so this file is the single source of
+# truth for how the server is started. Launch args override a key for one run.
+#
+# Current deployment (2026-11-13 robot trials, ~/gr00t_ab/2026-11-13):
+# checkpoint-26000 + its INT8 RTC full-pipeline engines, fused 8-step action
+# head (~115-135 ms GPU per chunk -> client latency_skip 3), native N1.7 RTC.
 
 groot_server:
-  ros__parameters:
-    # ==========================================================================
-    # Transport Configuration
-    # ==========================================================================
-    # Transport type: "ipc" for on-device, "tcp" for remote server
-    #   - ipc: ~1ms latency, use for on-device inference (recommended)
-    #   - tcp: ~2-5ms latency, use for remote PC server
-    transport: "tcp"
+  # Isaac-GR00T checkout and its venv interpreter. The server runs with this
+  # as its working directory.
+  isaac_groot_dir: "/home/alfie/Isaac-GR00T"
+  python: "/home/alfie/Isaac-GR00T/.venv/bin/python"
 
-    # TCP settings (only used when transport: "tcp")
-    # Use "*" to bind to all interfaces
-    bind_host: "*"
-    bind_port: 5555
+  # Model. The checkpoint's processor_config.json (not alfiebot_config.py)
+  # sets the horizon: checkpoint-26000 new_embodiment action delta_indices
+  # 0..15 = 16 steps, matching groot_client.yaml action_chunk_size.
+  checkpoint: "/home/alfie/Isaac-GR00T/checkpoints/alfie/checkpoint-26000"
+  embodiment: "NEW_EMBODIMENT"
+  device: "cuda:0"
 
-    # IPC settings (only used when transport: "ipc")
-    # Socket path for Unix domain socket
-    ipc_path: "/tmp/groot_inference.sock"
+  # TensorRT full-pipeline engines built for THIS checkpoint (ViT + LLM +
+  # fused action head). Empty = PyTorch (~390 ms, too slow for the client).
+  # alfie26k_int8_rtc has fused 4- and 8-step heads; other step counts fall
+  # back to per-step engines.
+  trt_engine_dir: "/home/alfie/Isaac-GR00T/gr00t_trt_deployment/alfie26k_int8_rtc/engines"
 
-    # ==========================================================================
-    # Async ZMQ (PUSH/PULL) — for live robot inference
-    # ==========================================================================
-    # Async sockets run alongside REQ/REP. No toggle needed — they
-    # activate automatically when a client connects.
-    async_pull_port: 5556    # server PULL ← client observations
-    async_push_port: 5557    # server PUSH → client actions
+  # Flow-matching denoising steps (0 = checkpoint default, 4). 8 keeps the
+  # head scan and full-rate base turns that 4 averages away (2026-11-12).
+  denoising_steps: 8
 
-    # ==========================================================================
-    # Model Configuration
-    # ==========================================================================
-    # Path to trained GR00T model checkpoint
-    # Leave empty to use mock mode for testing
-    model_checkpoint: "/home/alfie/cando"
+  # Run the VLM image preprocessing on the GPU (~10 ms less CPU per request).
+  gpu_image_preprocessing: true
 
-    # Use TensorRT for accelerated inference (requires model to be built for TensorRT)
-    use_tensorrt: false
+  # Network. 127.0.0.1 keeps the server off the robot's network; the client
+  # runs on the same Orin.
+  host: "127.0.0.1"
+  port: 5555               # REQ/REP (ping, sync inference)
+  async_pull_port: 5556    # server PULL <- client observations
+  async_push_port: 5557    # server PUSH -> client actions
 
-    # Mock mode - returns dummy actions for testing without GPU/model
-    # Useful for testing communication and control pipeline
-    mock_mode: false
+  # Real-Time Chunking (N1.7 native inpainting). The client sends the prefix
+  # when groot_client.yaml rtc_enabled is true; frozen/overlap come from the
+  # client unless overridden here (-1 / 0 = as sent).
+  rtc: true
+  rtc_frozen_steps: -1
+  rtc_overlap_steps: 0
+  rtc_ramp_rate: 3.0
 
-    # Action horizon length (number of future steps to predict)
-    action_horizon: 16
-
-    # Device to use for inference ("cuda:0", "cuda:1", etc.)
-    device: "cuda:0"
-
-    # ==========================================================================
-    # Replay Mode Configuration
-    # ==========================================================================
-    # Path to LeRobot-format dataset for episode replay
-    # When set, server ignores model and replays recorded actions
-    # Leave empty for normal inference mode
-    dataset_path: ""
-
-    # Episode index to replay (0-based)
-    episode_index: 0
-
-    # Path to stats.json for normalizing replay actions
-    # Leave empty to auto-detect from {dataset_path}/meta/stats.json
-    stats_path: ""
+  verbose: false

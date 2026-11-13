@@ -70,13 +70,22 @@ def generate_launch_description():
             'launch_init', default_value='true',
             description='Run robot_init at startup (head zero, arm tuck, back calibration)'),
 
-        # GR00T client is opt-in: once robot_init has calibrated the back it
-        # moves it to back_init_height on startup, and needs the inference server (run
-        # separately in the Isaac-GR00T container, see alfie_gr00t/ORIN_AGX_SERVER.md)
-        # plus a fine-tuned checkpoint. Enable with launch_groot:=true.
+        # GR00T inference server (alfie_gr00t groot_server.launch.py): runs
+        # groot_inference_server.py from the Isaac-GR00T venv with the settings
+        # in alfie_gr00t/config/groot_server.yaml (checkpoint, TRT engines,
+        # denoising steps, RTC). Takes 1-4 min to load; skips itself if a server
+        # is already on port 5555. Disable with launch_groot_server:=false.
         DeclareLaunchArgument(
-            'launch_groot', default_value='false',
-            description='Start the GR00T inference client (alfie_gr00t)'),
+            'launch_groot_server', default_value='true',
+            description='Start the GR00T inference server (alfie_gr00t groot_server)'),
+
+        # GR00T client: idles until /alfie/groot_client/activate, then drives
+        # the robot from the server's action chunks. Once robot_init has
+        # calibrated the back it moves the back to back_init_height on startup.
+        # Settings come from alfie_gr00t/config/groot_client.yaml.
+        DeclareLaunchArgument(
+            'launch_groot', default_value='true',
+            description='Start the GR00T inference client (alfie_gr00t groot_client)'),
 
         # Episode recorder idles until the VR right thumbstick toggles
         # /alfie/recording/start|stop, then runs ros2 bag record.
@@ -206,11 +215,17 @@ def generate_launch_description():
             respawn=True
         ),
 
-        # GR00T inference client (off by default, see launch_groot above).
-        # All parameters come from alfie_gr00t/config/groot_client.yaml.
+        # GR00T inference server (see launch_groot_server above).
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(PathJoinSubstitution([
+                FindPackageShare('alfie_gr00t'), 'launch', 'groot_server.launch.py'])),
+            condition=IfCondition(LaunchConfiguration('launch_groot_server')),
+        ),
+
+        # GR00T inference client (see launch_groot above).
         IncludeLaunchDescription(
             # FindPackageShare resolves only if the include runs, so bringup
-            # still works when alfie_gr00t isn't built and launch_groot is false.
+            # still works when alfie_gr00t isn't built and both GR00T args are false.
             PythonLaunchDescriptionSource(PathJoinSubstitution([
                 FindPackageShare('alfie_gr00t'), 'launch', 'groot_inference.launch.py'])),
             condition=IfCondition(LaunchConfiguration('launch_groot')),

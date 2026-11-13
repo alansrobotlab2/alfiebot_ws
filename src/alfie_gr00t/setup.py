@@ -16,6 +16,7 @@ setup(
             'launch/data_collection.launch.py',
             'launch/capture_training.py',
             'launch/groot_inference.launch.py',
+            'launch/groot_server.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/groot_client.yaml',

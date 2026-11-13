@@ -1,6 +1,35 @@
 
 
-## Current Environment setup
+## Launching the server (normal use)
+
+`alfie_bringup` starts the server (`launch_groot_server:=true`, the default)
+and the client (`launch_groot:=true`). To run the server on its own:
+
+```bash
+ros2 launch alfie_gr00t groot_server.launch.py
+```
+
+`groot_server.launch.py` runs `groot_inference_server.py` with the Isaac-GR00T
+venv python from `~/Isaac-GR00T`, with the venv's TensorRT/CUDA libraries on
+`LD_LIBRARY_PATH`. Every flag comes from `config/groot_server.yaml`, which is
+the current deployment: checkpoint-26000, the `alfie26k_int8_rtc` engines,
+8 denoising steps (fused head), `--rtc`, bound to 127.0.0.1. Any yaml key can
+be overridden for one run, e.g. `denoising_steps:=4` (then start the client
+with `latency_skip:=2`). If something is already listening on port 5555 (a
+server started by hand), the launch logs that and starts nothing. Loading
+takes 1-4 minutes; the client idles until activated, so it can start first.
+
+The equivalent manual command, from `~/Isaac-GR00T` with the venv active:
+
+```bash
+python ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
+  --host 127.0.0.1 --embodiment NEW_EMBODIMENT \
+  --checkpoint checkpoints/alfie/checkpoint-26000 \
+  --trt-engine-dir ~/Isaac-GR00T/gr00t_trt_deployment/alfie26k_int8_rtc/engines \
+  --denoising-steps 8 --rtc
+```
+
+## Container setup (legacy)
 
 The inference server and the ROS2 client both run on the Orin; there is no
 separate GPU workstation. The client reaches the server over localhost TCP
