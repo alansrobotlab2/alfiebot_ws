@@ -56,6 +56,11 @@ OVERRIDABLE_ARGS = {
     # RTC (server must run --rtc for the prefix to be used)
     'rtc_enabled': 'Send the committed-action prefix (prev_actions) for RTC',
     'rtc_overlap_steps': 'RTC prefix length in steps (must exceed the frozen count)',
+    # Target deadband (rad): keep the old target when the new one is closer than this
+    'deadband_back': 'Back target deadband, m (0 = off)',
+    'deadband_left_arm': 'Left arm target deadband, rad (0 = off)',
+    'deadband_right_arm': 'Right arm target deadband, rad (0 = off)',
+    'deadband_head': 'Head target deadband, rad (0 = off)',
     # Diagnostics
     'csv_log_path': 'Base path for the step CSVs and the per-chunk JSONL log',
 }

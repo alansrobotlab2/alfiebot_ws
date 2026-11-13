@@ -91,6 +91,16 @@
     # Language instruction sent to the model for conditioning
     task_description: "find the can and pick it up"
 
+    # End the pick task in the client once the grasp is confirmed (right gripper
+    # stalled on the can + back lifted for pick_done_hold_s): hold pose, stop the
+    # base, pause inference. Demos hold the can at gripper 0.38-0.43 (open 0,
+    # closed empty ~0.78) with the back at 0.34 m. pick_done_task "" = off.
+    pick_done_task: "find the can and pick it up"
+    pick_done_gripper_min: 0.30
+    pick_done_gripper_max: 0.55
+    pick_done_back_height: 0.33
+    pick_done_hold_s: 0.5
+
     # ==========================================================================
     # Safety Settings
     # ==========================================================================

@@ -107,6 +107,13 @@ class GrootClientNode(Node):
         self.action_step_period = 1.0 / self.training_fps
         self.n_action_steps = self.get_parameter('n_action_steps').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
+        self.pick_done_task = self.get_parameter('pick_done_task').value
+        self.pick_done_gripper_min = self.get_parameter('pick_done_gripper_min').value
+        self.pick_done_gripper_max = self.get_parameter('pick_done_gripper_max').value
+        self.pick_done_back_height = self.get_parameter('pick_done_back_height').value
+        self.pick_done_hold_s = self.get_parameter('pick_done_hold_s').value
+        self._task_done_hold = None    # frozen action published once the task is done
+        self._pick_done_since = None   # when the grasp-confirmed condition became true
 
         self.latency_skip = self.get_parameter('latency_skip').value
         self.inference_trigger_step = self.get_parameter('inference_trigger_step').value
@@ -618,6 +625,18 @@ class GrootClientNode(Node):
         self.declare_parameter('rtc_enabled', False)
         self.declare_parameter('rtc_overlap_steps', 6)
 
+        # End the pick task in the client once the grasp is confirmed: the task
+        # text is a weak condition, so the model does not hold after a pick and
+        # runs on into the trash motion. Confirmed = right gripper stalled on
+        # the can (state inside the band; open reads 0, closed-empty ~0.78,
+        # holding 0.38-0.43 in the demos) and back lifted, for pick_done_hold_s.
+        # Only applies while task_description == pick_done_task ('' = off).
+        self.declare_parameter('pick_done_task', 'find the can and pick it up')
+        self.declare_parameter('pick_done_gripper_min', 0.30)
+        self.declare_parameter('pick_done_gripper_max', 0.55)
+        self.declare_parameter('pick_done_back_height', 0.33)
+        self.declare_parameter('pick_done_hold_s', 0.5)
+
         # Debug: save observation images to /tmp/groot_debug_images/
         self.declare_parameter('debug_save_images', False)
 
@@ -703,6 +722,9 @@ class GrootClientNode(Node):
     def _task_callback(self, msg: String):
         """Handle dynamic task description updates."""
         self.task_description = msg.data
+        # A new task releases the hold left by a finished one
+        self._task_done_hold = None
+        self._pick_done_since = None
         self.get_logger().info(f'Task updated: "{self.task_description}"')
 
     def _activate(self):
@@ -728,6 +750,8 @@ class GrootClientNode(Node):
             self._state = ClientState.ACTIVE
             self._active = True
             self._activation_time = time.monotonic()
+            self._task_done_hold = None
+            self._pick_done_since = None
             if self._chunk_buffer is not None:
                 self._chunk_buffer.reset()
             self.get_logger().info(
@@ -848,7 +872,8 @@ class GrootClientNode(Node):
         trigger_time = self.inference_trigger_step * self.action_step_period
 
         while self._running:
-            if not self._active or self._state != ClientState.ACTIVE:
+            if (not self._active or self._state != ClientState.ACTIVE
+                    or self._task_done_hold is not None):
                 time.sleep(0.05)
                 continue
 
@@ -1422,6 +1447,21 @@ class GrootClientNode(Node):
 
         now = time.monotonic()
 
+        # Task finished: keep publishing the frozen action (base stopped)
+        if self._task_done_hold is not None:
+            obs = self.observation_bridge.get_latest_observation()
+            self.action_publisher.publish_action(
+                action=self._task_done_hold,
+                current_state=obs.state if obs is not None else None,
+                apply_smoothing=True,
+                # Inference is paused, so the no-inference watchdog must not
+                # cut the hold; E-stop still ends it (clears _active).
+                apply_safety=False,
+                chunk_id=self._total_chunks,
+                action_idx=-1,
+            )
+            return
+
         with self._action_lock:
             chunk = self._action_chunk
             timestamp = self._chunk_timestamp
@@ -1541,6 +1581,18 @@ class GrootClientNode(Node):
         self._log_action_step(
             self._total_chunks, abs_idx, chunk[abs_idx], current_state)
 
+        if self._pick_done(now, current_state):
+            hold = np.array(action, dtype=np.float32).copy()
+            hold[0:6] = 0.0  # stop the base
+            self._task_done_hold = hold
+            with self._action_lock:
+                self._pending_chunk = None
+            self.get_logger().info(
+                f'[task] pick done: gripper {current_state[18]:.2f}, back '
+                f'{current_state[6]:.3f} m, {now - self._activation_time:.1f} s after '
+                f'activation; holding pose, inference paused')
+            action = hold
+
         # Publish action to robot at 100 Hz
         # apply_smoothing=True triggers base velocity limiting in ActionPublisher
         self.action_publisher.publish_action(
@@ -1551,6 +1603,21 @@ class GrootClientNode(Node):
             chunk_id=self._total_chunks,
             action_idx=abs_idx,
         )
+
+    def _pick_done(self, now: float, state) -> bool:
+        """True once the pick task's grasp is confirmed (see pick_done_* params)."""
+        if (not self.pick_done_task or state is None
+                or self.task_description != self.pick_done_task):
+            self._pick_done_since = None
+            return False
+        holding = (self.pick_done_gripper_min <= state[18] <= self.pick_done_gripper_max
+                   and state[6] >= self.pick_done_back_height)
+        if not holding:
+            self._pick_done_since = None
+            return False
+        if self._pick_done_since is None:
+            self._pick_done_since = now
+        return now - self._pick_done_since >= self.pick_done_hold_s
 
     def _extract_action_chunk(self, response: dict) -> Optional[np.ndarray]:
         """Extract action chunk from server response.
@@ -1587,6 +1654,7 @@ class GrootClientNode(Node):
             'state': self._state.name,
             'active': self._active,
             'task': self.task_description,
+            'task_done': self._task_done_hold is not None,
             'zmq': zmq_stats,
             'observation': obs_stats,
             'action': action_stats,
