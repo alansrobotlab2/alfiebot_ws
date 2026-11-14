@@ -166,6 +166,12 @@ class AgentNode(Node):
         # `agent` head source, and the GR00T task run cap.
         head_enabled = bool(self.declare_parameter('head_enabled', True).value)
         task_max_s = float(self.declare_parameter('task_max_s', 120.0).value)
+        # Clean the room (body.clean_room): cans per run, per-stage time limits
+        # (demos: pick max 56 s, trash max 33 s), pick tries per can.
+        self.clean_room_rounds = int(self.declare_parameter('clean_room_rounds', 3).value)
+        pick_max_s = float(self.declare_parameter('pick_max_s', 90.0).value)
+        trash_max_s = float(self.declare_parameter('trash_max_s', 60.0).value)
+        pick_attempts = int(self.declare_parameter('pick_attempts', 2).value)
         # Outside services: weather (Open-Meteo) and lloyd's agent API (over the
         # tailnet; '' disables ask_lloyd).
         weather_location = self.declare_parameter('weather_location', '').value
@@ -208,7 +214,9 @@ class AgentNode(Node):
         self._announcements = []
         self.body = Body(self, announce=self._announce,
                          estopped=lambda: self._estopped,
-                         task_max_s=task_max_s, head_enabled=head_enabled)
+                         task_max_s=task_max_s, head_enabled=head_enabled,
+                         pick_max_s=pick_max_s, trash_max_s=trash_max_s,
+                         pick_attempts=pick_attempts)
 
         # --- brain: tools, system prompt, LLM client ---
         tools.configure(self.vault_root, qmd_url=qmd_url,
@@ -450,8 +458,9 @@ class AgentNode(Node):
 
         # 0. Hard-wired stop: while the body is moving (a GR00T task, a head
         # motion), a stop word halts it at once — no wake word, no LLM.
-        if convo.is_motion_stop(text) and \
-                (self.body.task_running() or self.body.head_moving()):
+        if convo.is_motion_stop(text) and (self.body.task_running()
+                                           or self.body.groot_active()
+                                           or self.body.head_moving()):
             stopped = self.body.stop_all()
             self.get_logger().warn(f'Motion stop ({", ".join(stopped)}): {text!r}')
             self.tts_stop_pub.publish(Empty())
@@ -511,8 +520,19 @@ class AgentNode(Node):
             self.get_logger().info(f'Ignoring wake utterance: {command}')
             return
 
-        # 4. Conversation words.
+        # 3b. The contest command: start the sequence directly, no LLM.
         busy = self._turn_running or self._speaking
+        if convo.is_clean_room(command):
+            if busy:
+                self.tts_stop_pub.publish(Empty())
+                self._cancel_active('clean the room')
+            res = self.body.clean_room(self.clean_room_rounds)
+            self.get_logger().warn(f'Clean the room: {res}')
+            self._announce("Cleaning the room." if res.get("ok")
+                           else f"I can't clean the room: {res.get('error')}.")
+            return
+
+        # 4. Conversation words.
         if convo.is_closer(command) or (busy and convo.is_stopper(command)):
             self.get_logger().info(f'Closer: {command}')
             if busy:

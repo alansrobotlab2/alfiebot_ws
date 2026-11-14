@@ -184,3 +184,131 @@ def test_learn_voice_tool():
     voice.call_tool("learn_voice", {"name": " Alan ", "forget": True})
     assert got == [("Alan", True)]
     assert "name" in voice.call_tool("learn_voice", {})["error"]
+
+
+# --- clean the room ----------------------------------------------------------------
+
+class FakeClient:
+    """Plays groot_client: ACTIVE once activated, task_done ``done_after`` s
+    after each task text, status at 5 Hz."""
+
+    def __init__(self, node, body, done_after=2.6):
+        import threading
+        self.node, self.body, self.done_after = node, body, done_after
+        self.texts = []
+        self.stop = threading.Event()
+        self.t = threading.Thread(target=self._run, daemon=True)
+        self.t.start()
+
+    def _run(self):
+        from std_msgs.msg import String
+        seen, since = 0, time.monotonic()
+        while not self.stop.wait(0.2):
+            tasks = self.node.pubs["groot_client/task_description"].msgs
+            acts = self.node.pubs["groot_client/activate"].msgs
+            if len(tasks) != seen:
+                seen, since = len(tasks), time.monotonic()
+                self.texts.append(tasks[-1].data)
+            active = bool(acts) and acts[-1].data
+            done = active and time.monotonic() - since > self.done_after
+            self.node.subs["groot_client/status"](String(data=str({
+                "state": "ACTIVE" if active else "IDLE", "active": active,
+                "task": tasks[-1].data if tasks else "", "task_done": done})))
+
+
+def _idle(node):
+    from std_msgs.msg import String
+    node.subs["groot_client/status"](String(data=str({"state": "IDLE", "active": False})))
+
+
+def _wait(pred, timeout):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if pred():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_clean_room_runs_pick_then_trash_without_deactivating():
+    from alfie_agent.body import PICK_TASK, TRASH_TASK
+    b, node, said = _make(pose_timeout_s=0.1)
+    _idle(node)
+    assert b.clean_room(1)["ok"]
+    assert "already doing" in b.clean_room(1)["error"]
+    client = FakeClient(node, b)
+    try:
+        assert _wait(lambda: not b.task_running(), 15.0)
+    finally:
+        client.stop.set()
+    assert client.texts == [PICK_TASK, TRASH_TASK]
+    acts = [m.data for m in node.pubs["groot_client/activate"].msgs]
+    # pose reset deactivates, one activation for the whole chain, off at the end
+    assert acts == [False, True, False]
+    assert node.pubs["cmd/head/groot"].msgs, "start pose was not held"
+    assert "1 cans in the trash" in said[-1]
+
+
+def test_stop_cancels_clean_room_at_once():
+    b, node, said = _make(pose_timeout_s=0.1)
+    _idle(node)
+    assert b.clean_room(3)["ok"]
+    client = FakeClient(node, b, done_after=100)
+    try:
+        assert _wait(lambda: node.pubs["groot_client/task_description"].msgs, 3.0)
+        assert b.stop_all() == ["task"]
+        assert not b.task_running()
+        n_task = len(node.pubs["groot_client/task_description"].msgs)
+        n_act = len(node.pubs["groot_client/activate"].msgs)
+        n_pose = len(node.pubs["cmd/head/groot"].msgs)
+        time.sleep(0.5)
+        # nothing published after the stop but its own deactivate
+        assert node.pubs["groot_client/activate"].msgs[n_act - 1].data is False
+        assert len(node.pubs["groot_client/activate"].msgs) == n_act
+        assert len(node.pubs["groot_client/task_description"].msgs) == n_task
+        assert len(node.pubs["cmd/head/groot"].msgs) == n_pose
+        assert said == []
+    finally:
+        client.stop.set()
+
+
+def test_stop_deactivates_a_run_the_agent_did_not_start():
+    from std_msgs.msg import String
+    b, node, _ = _make()
+    node.subs["groot_client/status"](String(data=str({"state": "ACTIVE", "active": True})))
+    assert b.stop_all() == ["policy"]
+    assert node.pubs["groot_client/activate"].msgs[-1].data is False
+
+
+def test_clean_room_gives_up_after_pick_timeouts():
+    b, node, said = _make(pose_timeout_s=0.1, pick_max_s=0.5, pick_attempts=2)
+    _idle(node)
+    assert b.clean_room(2)["ok"]
+    client = FakeClient(node, b, done_after=100)
+    try:
+        assert _wait(lambda: not b.task_running(), 10.0)
+    finally:
+        client.stop.set()
+    assert "couldn't find" in said[-1]
+    assert node.pubs["groot_client/activate"].msgs[-1].data is False
+
+
+def test_task_clean_room_action():
+    calls = []
+    fb = type("B", (), {"clean_room": lambda self, n: calls.append(n) or {"ok": True}})()
+    robot.configure(body=fb)
+    try:
+        robot.call_tool("task", {"action": "clean_room"})
+        robot.call_tool("task", {"action": "clean_room", "rounds": 2})
+    finally:
+        robot.configure()
+    assert calls == [3, 2]
+
+
+def test_clean_room_and_stop_phrases():
+    from alfie_agent import conversation as convo
+    assert convo.is_clean_room("clean the room")
+    assert convo.is_clean_room("Alfie, please clean up this room.")
+    assert not convo.is_clean_room("the room is clean")
+    assert convo.is_motion_stop("cancel that")
+    assert convo.is_motion_stop("Alfie stop")

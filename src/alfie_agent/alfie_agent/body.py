@@ -17,6 +17,14 @@ never spins.
     ``groot_client/task_description`` (String) then ``groot_client/activate``
     (Bool), and reads ``groot_client/status``. A run is capped at
     ``task_max_s``; ``stop_all`` (the hard-wired stop path) deactivates it.
+  * **Clean the room** — ``clean_room(rounds)`` chains the two trained tasks
+    on a worker thread: start pose, then ``rounds`` x (pick -> trash). Each
+    stage ends on the client's ``task_done`` (it holds pose once its done
+    condition is met); the next stage is a task-text switch with the client
+    left ACTIVE, because deactivating disables the servos and would drop the
+    can. The demos chain the same way (a pick ends at the trash start pose
+    and a trash at the pick start pose). ``stop_all`` cancels it at once: the
+    worker only publishes under ``_lock`` after checking the cancel flag.
   * **Timers** — ``timer`` tool countdowns; ``announce(text)`` speaks when one
     fires.
 """
@@ -29,22 +37,47 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy)
 from std_msgs.msg import Bool, String
 
-from alfie_msgs.msg import HeadCmd, HeadState, JetsonState, RobotLowState, ServoCmd
+from alfie_msgs.msg import (ArmCmd, HeadCmd, HeadState, JetsonState, RobotLowState,
+                            ServoCmd)
 
 from alfie_agent import head_motion as hm
 
 HEAD_HZ = 20.0
 STATE_STALE_S = 3.0
 
+# The two trained GR00T tasks (meta/tasks.jsonl); groot_client's pick_done_task
+# and trash_done_task must match them exactly.
+PICK_TASK = "find the can and pick it up"
+TRASH_TASK = "put the can in the trash can"
+
+# Training start pose (median at pick-episode start; same as ab_trial.py), rad.
+# Arm order: shoulder_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll, gripper
+LEFT_START = (0.00, 0.10, -1.48, -0.14, 0.00, 0.00)
+RIGHT_START = (0.00, 0.12, -1.48, -0.14, 0.00, 0.00)
+HEAD_START = (0.009, 0.071, -0.012)
+POSE_TOL = 0.05
+# (speed rad/s, accel rad/s^2, torque raw), as ab_trial.py
+ARM_CFG, GRIP_CFG, HEAD_CFG = (0.8, 3.0, 1000.0), (2.0, 8.0, 200.0), (1.0, 3.0, 500.0)
+
+# Right gripper (robotlowstate servo 11): holding the can reads 0.30-0.55
+# (groot_client pick_done band), open ~0.
+GRIP_HOLD = (0.30, 0.55)
+GRIP_OPEN_MAX = 0.15
+
 
 class Body:
     def __init__(self, node, *, announce, estopped, task_max_s=120.0,
-                 head_enabled=True):
+                 head_enabled=True, pick_max_s=90.0, trash_max_s=60.0,
+                 pick_attempts=2, pose_timeout_s=8.0):
         """``announce(text)`` speaks outside a turn; ``estopped()`` -> bool|None."""
         self.node = node
         self._announce = announce
         self._estopped = estopped
         self.task_max_s = float(task_max_s)
+        self.pick_max_s = float(pick_max_s)
+        self.trash_max_s = float(trash_max_s)
+        self.pick_attempts = max(1, int(pick_attempts))
+        self.pose_timeout_s = float(pose_timeout_s)
         self.head_enabled = head_enabled
         self._lock = threading.Lock()
 
@@ -70,8 +103,14 @@ class Body:
         self.activate_pub = node.create_publisher(Bool, 'groot_client/activate', ctl_qos)
         node.create_subscription(String, 'groot_client/status', self._on_groot, ctl_qos)
         self._groot = None            # (monotonic, status dict)
-        self._task = None             # {"description", "t0"} while the agent runs one
+        self._task = None             # {"description", "t0", ...} while the agent runs one
         node.create_timer(1.0, self._task_tick)
+        # Start pose for clean_room, through GR00T's own mux inputs (as ab_trial.py)
+        self.pose_pubs = [
+            node.create_publisher(ArmCmd, 'cmd/left_arm/groot', state_qos),
+            node.create_publisher(ArmCmd, 'cmd/right_arm/groot', state_qos),
+            node.create_publisher(HeadCmd, 'cmd/head/groot', state_qos),
+        ]
 
         # --- timers ---
         self._timers = {}             # label -> monotonic deadline
@@ -218,7 +257,7 @@ class Body:
     def _on_groot(self, msg):
         try:
             data = ast.literal_eval(msg.data)   # groot_client publishes str(dict)
-        except (ValueError, SyntaxError):
+        except (ValueError, SyntaxError, MemoryError, RecursionError):
             return
         if isinstance(data, dict):
             with self._lock:
@@ -228,10 +267,8 @@ class Body:
         with self._lock:
             return self._task is not None
 
-    def task_start(self, description):
-        description = " ".join((description or "").split())
-        if not description:
-            return {"error": "say what the task is, e.g. 'pick up the soda can'"}
+    def _start_refusal(self):
+        """Why a task can't start now, as an error dict, or None."""
         if self._estopped():
             return {"error": "the e-stop is engaged; it has to be cleared first"}
         with self._lock:
@@ -244,6 +281,14 @@ class Body:
             return {"error": f"already doing a task: {running['description']}"}
         if groot.get("state") not in ("IDLE",):
             return {"error": f"the policy client is {groot.get('state')}, not idle"}
+        return None
+
+    def task_start(self, description):
+        description = " ".join((description or "").split())
+        if not description:
+            return {"error": "say what the task is, e.g. 'pick up the soda can'"}
+        if (refusal := self._start_refusal()):
+            return refusal
         self.stop_head()
         self.task_pub.publish(String(data=description))
         self.activate_pub.publish(Bool(data=True))
@@ -256,6 +301,8 @@ class Body:
     def task_stop(self, why="stopped"):
         with self._lock:
             task, self._task = self._task, None
+            if task is not None and "cancel" in task:
+                task["cancel"].set()   # under the lock: the worker publishes nothing after
         self.activate_pub.publish(Bool(data=False))
         if task is None:
             return {"ok": True, "result": "no task was running"}
@@ -273,7 +320,10 @@ class Body:
         if task is not None:
             out["task"] = task["description"]
             out["elapsed_s"] = round(time.monotonic() - task["t0"])
-            out["limit_s"] = round(self.task_max_s)
+            out["limit_s"] = round(task.get("limit_s", self.task_max_s))
+            if "stage" in task:
+                out["stage"] = task["stage"]
+                out["cans_done"] = task["done"]
         return out
 
     def _task_tick(self):
@@ -281,19 +331,238 @@ class Body:
             task = self._task
         if task is None:
             return
-        if time.monotonic() - task["t0"] > self.task_max_s:
+        limit = task.get("limit_s", self.task_max_s)
+        if time.monotonic() - task["t0"] > limit:
             self.task_stop("timed out")
             self._announce(f"I stopped {task['description']}; it took longer than "
-                           f"{round(self.task_max_s)} seconds.")
+                           f"{round(limit)} seconds.")
         elif self._estopped():
             self.task_stop("e-stopped")
 
+    # --- clean the room (pick -> trash, repeated) ----------------------------------
+
+    def clean_room(self, rounds=3):
+        """Start the clean-the-room sequence on a worker thread."""
+        rounds = int(rounds)
+        if not 1 <= rounds <= 10:
+            return {"error": "rounds must be 1 to 10"}
+        if (refusal := self._start_refusal()):
+            return refusal
+        task = {"description": "clean the room", "t0": time.monotonic(),
+                "limit_s": rounds * (self.pick_max_s * self.pick_attempts
+                                     + self.trash_max_s + self.pose_timeout_s) + 30.0,
+                "cancel": threading.Event(), "stage": "start pose",
+                "rounds": rounds, "done": 0}
+        with self._lock:
+            if self._task is not None:
+                return {"error": f"already doing a task: {self._task['description']}"}
+            self._task = task
+        self.stop_head()
+        threading.Thread(target=self._mission, args=(task,), name="clean_room",
+                         daemon=True).start()
+        self.node.get_logger().warn(f'clean the room: {rounds} rounds started')
+        return {"ok": True, "started": f"clean the room: {rounds} x (find and pick "
+                "up a can, put it in the trash)", "limit_s": round(task["limit_s"])}
+
+    def _live(self, task, pub, msg):
+        """Publish for the mission only while it is still the running task."""
+        with self._lock:
+            if task["cancel"].is_set() or self._task is not task:
+                return False
+            pub.publish(msg)
+        return True
+
+    def _stage(self, task, name):
+        with self._lock:
+            task["stage"] = name
+        self.node.get_logger().warn(f'clean the room: {name}')
+
+    def _right_gripper(self):
+        with self._lock:
+            low = self._low_state[1] if self._fresh(self._low_state) else None
+        return None if low is None else float(low.servo_state[11].current_location)
+
+    def _pose_msgs(self):
+        def arm(targets):
+            a = ArmCmd()
+            a.joint_cmd = [self._servo_cfg(t, GRIP_CFG if i == 5 else ARM_CFG)
+                           for i, t in enumerate(targets)]
+            return a
+        head = HeadCmd()
+        head.servos = [self._servo_cfg(t, HEAD_CFG) for t in HEAD_START]
+        head.eye_pwm = [0, 0]
+        return [arm(LEFT_START), arm(RIGHT_START), head]
+
+    @staticmethod
+    def _servo_cfg(target, cfg):
+        s = ServoCmd()
+        s.enabled = True
+        s.target_location = float(target)
+        s.target_speed, s.target_acceleration, s.target_torque = (float(v) for v in cfg)
+        return s
+
+    def _hold_pose(self, task, seconds, until_settled):
+        """Publish the start pose at 50 Hz; False if cancelled."""
+        msgs = self._pose_msgs()
+        target = list(LEFT_START) + list(RIGHT_START) + list(HEAD_START)
+        tol = [0.1 if i in (5, 11) else POSE_TOL for i in range(15)]
+        end = time.monotonic() + seconds
+        settled = None
+        while time.monotonic() < end:
+            for pub, msg in zip(self.pose_pubs, msgs):
+                if not self._live(task, pub, msg):
+                    return False
+            if until_settled:
+                with self._lock:
+                    low = self._low_state[1] if self._fresh(self._low_state) else None
+                if low is not None and all(
+                        abs(low.servo_state[i].current_location - target[i]) < tol[i]
+                        for i in range(15)):
+                    settled = settled or time.monotonic()
+                    if time.monotonic() - settled > 0.3:
+                        return True
+                else:
+                    settled = None
+            task["cancel"].wait(0.02)
+        return not task["cancel"].is_set()
+
+    def _pose_reset(self, task):
+        """Deactivate the client and move arms + head to the training start pose."""
+        self._stage(task, "start pose")
+        if not self._live(task, self.activate_pub, Bool(data=False)):
+            return False
+        task["cancel"].wait(0.3)
+        return self._hold_pose(task, self.pose_timeout_s, until_settled=True)
+
+    def _run_stage(self, task, text, limit_s, activate):
+        """Run one GR00T task until the client reports it done.
+
+        Returns "done", "timeout", "cancelled", or a failure reason."""
+        t0 = time.monotonic()
+        if not self._live(task, self.task_pub, String(data=text)):
+            return "cancelled"
+        if activate:
+            if not self._live(task, self.activate_pub, Bool(data=True)):
+                return "cancelled"
+            # Keep holding the start pose until the client publishes its own
+            if not self._hold_pose(task, 0.3, until_settled=False):
+                return "cancelled"
+        while True:
+            if task["cancel"].wait(0.1):
+                return "cancelled"
+            if self._estopped():
+                return "the e-stop engaged"
+            el = time.monotonic() - t0
+            with self._lock:
+                entry = self._groot if self._fresh(self._groot) else None
+            if entry is None:
+                if el > STATE_STALE_S:
+                    return "the policy client stopped reporting"
+            else:
+                recv, g = entry
+                state = g.get("state")
+                if el > 3.0 and state != "ACTIVE":
+                    return f"the policy client went {str(state).lower()}"
+                # Only a status sent after the switch counts (it is published at 1 Hz)
+                if (el > 2.0 and recv > t0 + 1.5 and state == "ACTIVE"
+                        and g.get("task") == text and g.get("task_done")):
+                    return "done"
+            if el > limit_s:
+                return "timeout"
+
+    def _mission(self, task):
+        try:
+            msg = self._run_mission(task)
+        except Exception as e:   # noqa: BLE001 - never leave the client running
+            self.node.get_logger().error(f'clean the room crashed: {e!r}')
+            msg = "Something went wrong, so I stopped cleaning."
+        if msg is None:          # cancelled: task_stop already deactivated
+            return
+        with self._lock:
+            if self._task is not task or task["cancel"].is_set():
+                return
+            task["cancel"].set()
+            self._task = None
+            self.activate_pub.publish(Bool(data=False))
+        self.node.get_logger().warn(f'clean the room ended: {msg}')
+        self._announce(msg)
+
+    def _run_mission(self, task):
+        """The sequence; returns what to announce, or None if cancelled."""
+        log = self.node.get_logger()
+        rounds = task["rounds"]
+        if not self._pose_reset(task):
+            return None
+        active = False
+        for rnd in range(1, rounds + 1):
+            # --- pick ---
+            for attempt in range(1, self.pick_attempts + 1):
+                self._stage(task, f"can {rnd} of {rounds}: find and pick up "
+                                  f"(attempt {attempt})")
+                res = self._run_stage(task, PICK_TASK, self.pick_max_s,
+                                      activate=not active)
+                active = True
+                if res == "cancelled":
+                    return None
+                if res == "done":
+                    break
+                grip = self._right_gripper()
+                if res == "timeout" and grip is not None and \
+                        GRIP_HOLD[0] <= grip <= GRIP_HOLD[1]:
+                    log.warn(f'pick timed out but the gripper holds the can ({grip:.2f})')
+                    break
+                if res != "timeout":
+                    return f"I stopped cleaning: {res}."
+                if attempt == self.pick_attempts:
+                    return (f"I couldn't find and pick up can {rnd}, so I stopped. "
+                            f"I put {task['done']} in the trash.")
+                log.warn(f'pick timed out (gripper {grip}); resetting and retrying')
+                if not self._pose_reset(task):
+                    return None
+                active = False
+            # --- trash ---
+            self._stage(task, f"can {rnd} of {rounds}: put it in the trash")
+            res = self._run_stage(task, TRASH_TASK, self.trash_max_s, activate=False)
+            if res == "cancelled":
+                return None
+            if res not in ("done", "timeout"):
+                return f"I stopped cleaning: {res}."
+            if res == "timeout":
+                grip = self._right_gripper()
+                if grip is None or grip > GRIP_OPEN_MAX:
+                    return (f"I couldn't get can {rnd} into the trash, so I stopped. "
+                            f"I put {task['done']} in the trash.")
+                log.warn(f'trash timed out with the gripper open ({grip:.2f}); '
+                         'counting it and resetting the pose')
+                with self._lock:
+                    task["done"] += 1
+                if rnd < rounds and not self._pose_reset(task):
+                    return None
+                active = False
+                continue
+            with self._lock:
+                task["done"] += 1
+            if rnd < rounds:
+                self._announce(f"That's {task['done']}.")
+        return f"Done. I put {task['done']} cans in the trash. The room is clean."
+
+    def groot_active(self):
+        """The policy client is running, whoever started it."""
+        with self._lock:
+            groot = self._groot[1] if self._fresh(self._groot) else None
+        return bool(groot) and (bool(groot.get("active"))
+                                or groot.get("state") in ("ACTIVE", "CONNECTING"))
+
     def stop_all(self):
-        """The hard-wired stop path: stop the task and any head motion. No LLM."""
+        """The hard-wired stop path: stop the task, any GR00T run and any head
+        motion. No LLM."""
         stopped = []
         if self.task_running():
             self.task_stop("stopped by voice")
             stopped.append("task")
+        elif self.groot_active():
+            self.activate_pub.publish(Bool(data=False))
+            stopped.append("policy")
         if self.stop_head():
             stopped.append("head")
         return stopped

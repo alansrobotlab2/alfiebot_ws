@@ -165,14 +165,23 @@ def is_closer(text: str) -> bool:
     return bool(core) and core != n and core in CLOSERS
 
 
-_MOTION_STOP_RE = re.compile(r"\b(stop|halt|freeze|abort|let go)\b", re.I)
+_MOTION_STOP_RE = re.compile(r"\b(stop|halt|freeze|abort|cancel|let go)\b", re.I)
 
 
 def is_motion_stop(text: str) -> bool:
     """A transcript that should halt robot motion: any stopper, or "stop" /
-    "halt" / "freeze" / "abort" / "let go" anywhere in it. Deliberately looser
+    "halt" / "freeze" / "abort" / "cancel" / "let go" anywhere in it. Deliberately looser
     than ``is_stopper`` — a missed stop moves the arms, a false one only pauses."""
     return is_stopper(text) or bool(_MOTION_STOP_RE.search(text or ""))
+
+
+_CLEAN_ROOM_RE = re.compile(r"\bclean(ing)?\s+(up\s+)?(the|this|your|my)\s+room\b", re.I)
+
+
+def is_clean_room(text: str) -> bool:
+    """The contest command ("clean the room", "clean up this room"), routed
+    straight to the clean-room sequence without the LLM."""
+    return bool(_CLEAN_ROOM_RE.search(text or ""))
 
 
 def is_stopper(text: str) -> bool:

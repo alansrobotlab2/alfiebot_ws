@@ -116,7 +116,9 @@ def _task(params):
         return _body.task_stop()
     if action == "status":
         return _body.task_status()
-    return _err("action must be start, status or stop")
+    if action == "clean_room":
+        return _body.clean_room(int(params.get("rounds") or 3))
+    return _err("action must be start, clean_room, status or stop")
 
 
 # --- MCP-shaped module interface ---
@@ -165,13 +167,16 @@ _TOOLS = [
     {
         "name": "task",
         "description": "Physical tasks with your arms via your learned policy: "
-                       "action start (description, e.g. 'pick up the soda can'), "
+                       "action start (description, e.g. 'find the can and pick it "
+                       "up'), clean_room (find, pick up and trash cans, rounds = "
+                       "how many, default 3; for 'clean the room' / 'clean up'), "
                        "status, or stop. Start ONLY when the user explicitly asks "
                        "you to do a physical task.",
         "parameters": {
             "type": "object",
             "properties": {"action": {"type": "string"},
-                           "description": {"type": "string"}},
+                           "description": {"type": "string"},
+                           "rounds": {"type": "integer"}},
             "required": ["action"],
         },
     },
