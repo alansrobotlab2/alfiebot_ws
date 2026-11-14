@@ -61,6 +61,7 @@ OVERRIDABLE_ARGS = {
     'deadband_left_arm': 'Left arm target deadband, rad (0 = off)',
     'deadband_right_arm': 'Right arm target deadband, rad (0 = off)',
     'deadband_head': 'Head target deadband, rad (0 = off)',
+    'back_max_height': 'Cap on the back target, m (0.0 = off)',
     # Diagnostics
     'csv_log_path': 'Base path for the step CSVs and the per-chunk JSONL log',
 }
@@ -93,6 +94,10 @@ def _launch_client(context):
         output='screen',
         emulate_tty=True,
         parameters=[client_config_file, overrides] if overrides else [client_config_file],
+        # Come back by itself after a crash; the agent refuses tasks while the
+        # client isn't reporting, so a dead client means nothing can start.
+        respawn=True,
+        respawn_delay=2.0,
     ))
     return actions
 

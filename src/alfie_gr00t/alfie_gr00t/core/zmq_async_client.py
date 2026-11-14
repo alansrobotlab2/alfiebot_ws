@@ -104,7 +104,16 @@ class ZMQAsyncClient:
         return sum(self._latency_history) / len(self._latency_history)
 
     def connect(self) -> bool:
-        """Connect PUSH and PULL sockets and start receiver thread."""
+        """Connect PUSH and PULL sockets and start receiver thread.
+
+        Safe to call again (every activation does): the previous receiver
+        thread is stopped and its sockets closed first. Replacing them while
+        that thread was still polling crashed the client with SIGSEGV on the
+        second activation (2026-11-13).
+        """
+        self._teardown_sockets()
+        with self._result_lock:
+            self._latest_result = None
         try:
             if self._context is None:
                 self._context = zmq.Context()
@@ -144,14 +153,24 @@ class ZMQAsyncClient:
             self._connected = False
             return False
 
-    def close(self):
-        """Stop receiver thread and close all sockets."""
+    def _teardown_sockets(self):
+        """Stop the receiver thread, then close both sockets (context kept)."""
         self._running = False
         self._connected = False
 
-        if self._receiver_thread is not None and self._receiver_thread.is_alive():
-            self._receiver_thread.join(timeout=2.0)
-            self._receiver_thread = None
+        thread = self._receiver_thread
+        if thread is not None and thread.is_alive() \
+                and thread is not threading.current_thread():
+            # recv() wakes at least every RCVTIMEO to see _running go False
+            thread.join(timeout=max(2.0, 2.0 * self._timeout_ms / 1000.0))
+            if thread.is_alive():
+                # Never close a socket another thread is still blocked on
+                self._log('Async receiver did not stop; keeping its sockets open')
+                self._receiver_thread = None
+                self._push_socket = None
+                self._pull_socket = None
+                return
+        self._receiver_thread = None
 
         if self._push_socket is not None:
             self._push_socket.close(linger=0)
@@ -160,6 +179,10 @@ class ZMQAsyncClient:
         if self._pull_socket is not None:
             self._pull_socket.close(linger=0)
             self._pull_socket = None
+
+    def close(self):
+        """Stop receiver thread and close all sockets."""
+        self._teardown_sockets()
 
         if self._context is not None:
             self._context.term()
@@ -259,9 +282,10 @@ class ZMQAsyncClient:
 
     def _receiver_loop(self):
         """Background thread: poll PULL socket, store latest result."""
+        sock = self._pull_socket   # this thread's socket; never re-read
         while self._running:
             try:
-                packed = self._pull_socket.recv()
+                packed = sock.recv()
                 response = msg_from_bytes(packed)
                 now = time.monotonic()
 

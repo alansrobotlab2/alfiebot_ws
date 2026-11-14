@@ -107,13 +107,22 @@ class GrootClientNode(Node):
         self.action_step_period = 1.0 / self.training_fps
         self.n_action_steps = self.get_parameter('n_action_steps').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
+        self.back_max_height = self.get_parameter('back_max_height').value
         self.pick_done_task = self.get_parameter('pick_done_task').value
         self.pick_done_gripper_min = self.get_parameter('pick_done_gripper_min').value
         self.pick_done_gripper_max = self.get_parameter('pick_done_gripper_max').value
         self.pick_done_back_height = self.get_parameter('pick_done_back_height').value
         self.pick_done_hold_s = self.get_parameter('pick_done_hold_s').value
+        self.trash_done_task = self.get_parameter('trash_done_task').value
+        self.trash_done_gripper_max = self.get_parameter('trash_done_gripper_max').value
+        self.trash_done_right_arm_pose = np.array(
+            self.get_parameter('trash_done_right_arm_pose').value, dtype=np.float64)
+        self.trash_done_arm_tol = self.get_parameter('trash_done_arm_tol').value
+        self.trash_done_hold_s = self.get_parameter('trash_done_hold_s').value
         self._task_done_hold = None    # frozen action published once the task is done
-        self._pick_done_since = None   # when the grasp-confirmed condition became true
+        self._task_gen = 0             # bumped per task text; tags async observations
+        self._pick_done_since = None   # when the current task's done condition became true
+        self._can_seen_held = False    # trash task: gripper was seen holding the can
 
         self.latency_skip = self.get_parameter('latency_skip').value
         self.inference_trigger_step = self.get_parameter('inference_trigger_step').value
@@ -625,6 +634,11 @@ class GrootClientNode(Node):
         self.declare_parameter('rtc_enabled', False)
         self.declare_parameter('rtc_overlap_steps', 6)
 
+        # Cap on the back target, m (0.0 = off). Demonstrations never command
+        # above 0.3407 and the model drifts up to ~0.351, but capping at 0.34
+        # made the robot slow to look down and start (2026-11-13), so off.
+        self.declare_parameter('back_max_height', 0.0)
+
         # End the pick task in the client once the grasp is confirmed: the task
         # text is a weak condition, so the model does not hold after a pick and
         # runs on into the trash motion. Confirmed = right gripper stalled on
@@ -634,8 +648,20 @@ class GrootClientNode(Node):
         self.declare_parameter('pick_done_task', 'find the can and pick it up')
         self.declare_parameter('pick_done_gripper_min', 0.30)
         self.declare_parameter('pick_done_gripper_max', 0.55)
-        self.declare_parameter('pick_done_back_height', 0.33)
+        self.declare_parameter('pick_done_back_height', 0.30)
         self.declare_parameter('pick_done_hold_s', 0.5)
+
+        # End the trash task once the can is released and the right arm is
+        # back at the tucked start pose (how all 108 trash demos end): the
+        # can must first have been seen held (pick_done gripper band) during
+        # this task, then gripper open and every right-arm joint within
+        # trash_done_arm_tol of trash_done_right_arm_pose for trash_done_hold_s.
+        # Only applies while task_description == trash_done_task ('' = off).
+        self.declare_parameter('trash_done_task', 'put the can in the trash can')
+        self.declare_parameter('trash_done_gripper_max', 0.1)
+        self.declare_parameter('trash_done_right_arm_pose', [0.0, 0.12, -1.48, -0.14, 0.0])
+        self.declare_parameter('trash_done_arm_tol', 0.1)
+        self.declare_parameter('trash_done_hold_s', 0.5)
 
         # Debug: save observation images to /tmp/groot_debug_images/
         self.declare_parameter('debug_save_images', False)
@@ -722,9 +748,18 @@ class GrootClientNode(Node):
     def _task_callback(self, msg: String):
         """Handle dynamic task description updates."""
         self.task_description = msg.data
-        # A new task releases the hold left by a finished one
+        # A new task releases the hold left by a finished one; drop the stale
+        # chunk so the next inference starts fresh (no RTC prefix from it)
+        if self._task_done_hold is not None:
+            with self._action_lock:
+                self._action_chunk = None
+                self._pending_chunk = None
+            if self._chunk_buffer is not None:
+                self._chunk_buffer.reset()
         self._task_done_hold = None
         self._pick_done_since = None
+        self._can_seen_held = False
+        self._task_gen += 1   # results still in flight for the old task are dropped
         self.get_logger().info(f'Task updated: "{self.task_description}"')
 
     def _activate(self):
@@ -752,6 +787,8 @@ class GrootClientNode(Node):
             self._activation_time = time.monotonic()
             self._task_done_hold = None
             self._pick_done_since = None
+            self._can_seen_held = False
+            self._task_gen += 1   # drop results pushed before this activation
             if self._chunk_buffer is not None:
                 self._chunk_buffer.reset()
             self.get_logger().info(
@@ -999,7 +1036,9 @@ class GrootClientNode(Node):
         """
         trigger_time = self.inference_trigger_step * self.action_step_period
         awaiting_result = False  # True after push, until result received
-        push_info: dict[int, tuple[float, bool]] = {}  # obs_id -> (push time, RTC prefix sent)
+        awaiting_since = 0.0
+        # obs_id -> (push time, RTC prefix sent, task generation)
+        push_info: dict[int, tuple[float, bool, int]] = {}
 
         while self._running:
             if not self._active or self._state != ClientState.ACTIVE:
@@ -1011,13 +1050,20 @@ class GrootClientNode(Node):
             if result is not None:
                 awaiting_result = False
                 self.safety.update_inference_time()
+                obs_id = result.get('obs_id', -1)
+                now = time.monotonic()
+                push_t, rtc_sent, gen = push_info.pop(
+                    obs_id, (now, False, self._task_gen))
+                if gen != self._task_gen or self._task_done_hold is not None:
+                    # Computed for a finished or replaced task: never execute it
+                    self.get_logger().info(
+                        f'[async] dropped result obs_id={obs_id} '
+                        f'({"task changed" if gen != self._task_gen else "task done"})')
+                    continue
 
                 chunk = self._extract_action_chunk(result)
                 if chunk is not None:
-                    obs_id = result.get('obs_id', -1)
                     latency_ms = result.get('latency_ms', 0)
-                    now = time.monotonic()
-                    push_t, rtc_sent = push_info.pop(obs_id, (now, False))
                     self._log_chunk(chunk, push_t, now, rtc_sent, latency_ms)
 
                     with self._action_lock:
@@ -1045,11 +1091,21 @@ class GrootClientNode(Node):
                         else:
                             self._pending_chunk = chunk
 
+            # Task finished: hold pose, push nothing until the task changes
+            if self._task_done_hold is not None:
+                time.sleep(0.02)
+                continue
+
             # Decide whether to push a new observation
             with self._action_lock:
                 has_chunk = self._action_chunk is not None
                 has_pending = self._pending_chunk is not None
                 chunk_ts = self._chunk_timestamp
+
+            # A result lost across a deactivate/reconnect must not stall pushing
+            if awaiting_result and time.monotonic() - awaiting_since > 2.0:
+                self.get_logger().warn('[async] no result for 2 s; pushing again')
+                awaiting_result = False
 
             # Don't push if we already have a pending chunk or are awaiting a result
             if has_pending or awaiting_result:
@@ -1070,6 +1126,7 @@ class GrootClientNode(Node):
                 continue
 
             push_t = time.monotonic()
+            gen = self._task_gen
             prefix, frozen = self._rtc_prefix(push_t)
             obs_id = self.async_client.push_observation(
                 images=obs.images,
@@ -1081,7 +1138,8 @@ class GrootClientNode(Node):
 
             if obs_id >= 0:
                 awaiting_result = True
-                push_info[obs_id] = (push_t, prefix is not None)
+                awaiting_since = push_t
+                push_info[obs_id] = (push_t, prefix is not None, gen)
                 if len(push_info) > 50:
                     del push_info[min(push_info)]
             else:
@@ -1581,16 +1639,19 @@ class GrootClientNode(Node):
         self._log_action_step(
             self._total_chunks, abs_idx, chunk[abs_idx], current_state)
 
-        if self._pick_done(now, current_state):
+        done = self._task_done(now, current_state)
+        if done is not None:
             hold = np.array(action, dtype=np.float32).copy()
             hold[0:6] = 0.0  # stop the base
             self._task_done_hold = hold
             with self._action_lock:
                 self._pending_chunk = None
             self.get_logger().info(
-                f'[task] pick done: gripper {current_state[18]:.2f}, back '
-                f'{current_state[6]:.3f} m, {now - self._activation_time:.1f} s after '
-                f'activation; holding pose, inference paused')
+                f'[task] {done} done: gripper {current_state[18]:.2f}, back '
+                f'{current_state[6]:.3f} m, right arm '
+                f'{np.round(current_state[13:18], 2).tolist()}, '
+                f'{now - self._activation_time:.1f} s after activation; '
+                f'holding pose, inference paused')
             action = hold
 
         # Publish action to robot at 100 Hz
@@ -1604,20 +1665,36 @@ class GrootClientNode(Node):
             action_idx=abs_idx,
         )
 
-    def _pick_done(self, now: float, state) -> bool:
-        """True once the pick task's grasp is confirmed (see pick_done_* params)."""
-        if (not self.pick_done_task or state is None
-                or self.task_description != self.pick_done_task):
+    def _task_done(self, now: float, state) -> Optional[str]:
+        """Name of the task ('pick' / 'trash') once its end condition has held
+        long enough, else None (see pick_done_* / trash_done_* params)."""
+        if state is None:
             self._pick_done_since = None
-            return False
-        holding = (self.pick_done_gripper_min <= state[18] <= self.pick_done_gripper_max
-                   and state[6] >= self.pick_done_back_height)
-        if not holding:
+            return None
+        gripper, back = state[18], state[6]
+        holding_can = (self.pick_done_gripper_min <= gripper
+                       <= self.pick_done_gripper_max)
+
+        if self.pick_done_task and self.task_description == self.pick_done_task:
+            name, hold_s = 'pick', self.pick_done_hold_s
+            met = holding_can and back >= self.pick_done_back_height
+        elif self.trash_done_task and self.task_description == self.trash_done_task:
+            name, hold_s = 'trash', self.trash_done_hold_s
+            if holding_can:
+                self._can_seen_held = True
+            arm_err = np.abs(np.asarray(state[13:18]) - self.trash_done_right_arm_pose)
+            met = (self._can_seen_held
+                   and gripper <= self.trash_done_gripper_max
+                   and float(arm_err.max()) <= self.trash_done_arm_tol)
+        else:
+            name, hold_s, met = '', 0.0, False
+
+        if not met:
             self._pick_done_since = None
-            return False
+            return None
         if self._pick_done_since is None:
             self._pick_done_since = now
-        return now - self._pick_done_since >= self.pick_done_hold_s
+        return name if now - self._pick_done_since >= hold_s else None
 
     def _extract_action_chunk(self, response: dict) -> Optional[np.ndarray]:
         """Extract action chunk from server response.
@@ -1641,7 +1718,12 @@ class GrootClientNode(Node):
             return None
 
         n = min(self.action_chunk_size, len(actions))
-        return np.array(actions[:n], dtype=np.float32)
+        chunk = np.array(actions[:n], dtype=np.float32)
+        # The back action is relative to the measured height, so small positive
+        # outputs at the top push it above anything in the training data.
+        if self.back_max_height > 0.0:
+            np.minimum(chunk[:, 6], self.back_max_height, out=chunk[:, 6])
+        return chunk
 
     def _publish_status(self):
         """Publish current status."""
