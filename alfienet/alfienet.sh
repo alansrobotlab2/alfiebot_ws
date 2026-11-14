@@ -4,6 +4,8 @@ sudo nmcli device disconnect wlP1p1s0
 
 sudo nmcli device set wlP1p1s0 managed no
 
+sudo pkill dnsmasq
+
 sudo ./lnxrouter \
      -n \
      --ap wlP1p1s0 alfienet \
