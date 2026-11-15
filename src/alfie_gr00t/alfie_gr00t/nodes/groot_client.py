@@ -444,6 +444,52 @@ class GrootClientNode(Node):
         )
         self._inference_thread.start()
 
+        # Bringup readiness: latched True on ~/ready once the server answers a
+        # ping. The server binds its REQ/REP port only after loading and warming
+        # up the model, so a pong means it can serve. robot_init waits for this
+        # before playing the startup sound. Published once; not a liveness signal.
+        self.ready_pub = self.create_publisher(
+            Bool,
+            '~/ready',
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+            ),
+        )
+        self.ready_pub.publish(Bool(data=False))
+        self._ready_thread = threading.Thread(
+            target=self._wait_for_server,
+            name='groot_ready',
+            daemon=True,
+        )
+        self._ready_thread.start()
+
+    def _wait_for_server(self, period_s: float = 2.0):
+        """Ping the server until it answers, then latch ~/ready True.
+
+        Uses its own REQ socket so it never interleaves with inference requests.
+        """
+        probe = ZMQClient(
+            server_address=self.server_address,
+            timeout_ms=int(period_s * 1000),
+            logger=lambda msg: None,  # a timeout per period while the model loads
+        )
+        t0 = time.monotonic()
+        self.get_logger().info(f'Waiting for the GR00T server at {self.server_address}...')
+        try:
+            while self._running:
+                if (probe._connected or probe.connect()) and probe.ping(
+                        timeout_ms=int(period_s * 1000)):
+                    self.get_logger().info(
+                        f'GR00T server ready ({time.monotonic() - t0:.0f}s); client ready')
+                    self.ready_pub.publish(Bool(data=True))
+                    return
+                time.sleep(period_s)
+        finally:
+            probe.close()
+
     def _log_parameters(self):
         """Log all parameter values on startup."""
         exec_ms = self.n_action_steps * self.action_step_period * 1000

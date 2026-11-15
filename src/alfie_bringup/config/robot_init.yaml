@@ -55,6 +55,11 @@
     # Latch the command_mux e-stop on any failure (holds everything in place).
     estop_on_failure: true
 
+    # GR00T: with wait_for_groot (set by alfie_bringup from launch_groot) the
+    # startup sound waits for groot_client/ready, i.e. the server has loaded and
+    # answers. Loading takes 1-4 min; counted from the end of the motion.
+    groot_timeout: 300.0         # s; then error_sound, exit 1 (no e-stop)
+
     # Played on success / on failure (paplay, default sink = reSpeaker).
     # Relative paths are under share/alfie_bringup/resource; '' disables.
     startup_sound: 'freesound_community-start-computeraif-14572.mp3'

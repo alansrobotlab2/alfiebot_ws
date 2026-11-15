@@ -28,9 +28,16 @@ failed calibration, a board going silent, or the e-stop engaging. On failure the
 mux e-stop is latched (estop_on_failure) so everything holds where it stopped,
 error_sound plays, and the node exits non-zero. The back is never calibrated after an arm failure.
 
-On success the node stops publishing, plays startup_sound and exits 0: the head
-falls back to the idle behavior, and the arm boards' 500 ms watchdog lets the arms
-go limp in the tuck.
+On success the node stops publishing: the head falls back to the idle behavior,
+and the arm boards' 500 ms watchdog lets the arms go limp in the tuck. With
+wait_for_groot it then waits (groot_timeout) for groot_client/ready, which the
+GR00T client latches once the inference server has loaded and answers a ping,
+so startup_sound means the whole robot, GR00T included, is ready. Then it plays
+startup_sound and exits 0. If GR00T never comes up it logs which part is
+missing, plays error_sound and exits 1, without the e-stop (nothing moved).
+
+Progress is latched on bringup/state (String) for the LED ring and the eyes:
+initializing -> waiting_groot (only with wait_for_groot) -> ready | failed.
 
 Config: alfie_bringup/config/robot_init.yaml
 """
@@ -51,7 +58,7 @@ from rclpy.qos import (QoSProfile, ReliabilityPolicy, DurabilityPolicy,
 
 from alfie_msgs.msg import ArmCmd, ArmState, BackCmd, BackState, HeadCmd, HeadState, ServoCmd
 from alfie_msgs.srv import BackRequestCalibration
-from std_msgs.msg import Bool, Empty
+from std_msgs.msg import Bool, Empty, String
 
 
 SOURCE = 'init'
@@ -129,6 +136,10 @@ class RobotInitNode(Node):
         self.declare_parameter('back_tolerance', 0.005)    # m
         self.declare_parameter('back_timeout_margin', 10.0)  # s on top of height / speed
         self.declare_parameter('estop_on_failure', True)
+        # Hold the startup sound until the GR00T client reports the server ready.
+        # The launch file sets this from launch_groot.
+        self.declare_parameter('wait_for_groot', False)
+        self.declare_parameter('groot_timeout', 300.0)     # s after the motion sequence
         # Played on success / failure through the default sound server sink (the
         # reSpeaker, which TTS selects). Relative = under share/alfie_bringup/resource;
         # '' = off.
@@ -156,6 +167,8 @@ class RobotInitNode(Node):
         self.back_tol = float(g('back_tolerance'))
         self.back_timeout_margin = float(g('back_timeout_margin'))
         self.estop_on_failure = bool(g('estop_on_failure'))
+        self.wait_for_groot = bool(g('wait_for_groot'))
+        self.groot_timeout = float(g('groot_timeout'))
         self.startup_sound = str(g('startup_sound'))
         self.error_sound = str(g('error_sound'))
 
@@ -176,6 +189,7 @@ class RobotInitNode(Node):
         self.back_stamp = 0.0
         self.back_target: Optional[BackCmd] = None
         self.estopped: Optional[bool] = None  # None until the mux reports
+        self.groot_ready: Optional[bool] = None  # None until the client publishes
 
         qos_be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         qos_latched = QoSProfile(
@@ -191,6 +205,7 @@ class RobotInitNode(Node):
                                  lambda m: self._on_arm('right_arm', m), qos_be)
         self.create_subscription(BackState, 'low/backstate', self._on_back, qos_be)
         self.create_subscription(Bool, 'estop_state', self._on_estop_state, qos_latched)
+        self.create_subscription(Bool, 'groot_client/ready', self._on_groot_ready, qos_latched)
 
         self.pubs = {
             'head': self.create_publisher(HeadCmd, f'cmd/head/{SOURCE}', qos_be),
@@ -199,6 +214,7 @@ class RobotInitNode(Node):
             'back': self.create_publisher(BackCmd, f'cmd/back/{SOURCE}', qos_be),
         }
         self.estop_pub = self.create_publisher(Empty, 'estop', qos_latched)
+        self.state_pub = self.create_publisher(String, 'bringup/state', qos_latched)
         self.calibrate_cli = self.create_client(BackRequestCalibration, 'low/calibrate_back')
 
         self.create_timer(1.0 / self.rate, self._publish)
@@ -222,6 +238,13 @@ class RobotInitNode(Node):
 
     def _on_estop_state(self, msg: Bool) -> None:
         self.estopped = bool(msg.data)
+
+    def set_state(self, state: str) -> None:
+        """Latch bringup progress: initializing, waiting_groot, ready, failed."""
+        self.state_pub.publish(String(data=state))
+
+    def _on_groot_ready(self, msg: Bool) -> None:
+        self.groot_ready = bool(msg.data)
 
     def _publish(self) -> None:
         for name, m in self.modules.items():
@@ -255,6 +278,7 @@ class RobotInitNode(Node):
     # ------------------------------------------------------------------
 
     def run(self) -> None:
+        self.set_state('initializing')
         self._wait_ready()
         # Torque on, holding wherever each joint is now.
         for m in self.modules.values():
@@ -433,9 +457,27 @@ class RobotInitNode(Node):
             time.sleep(0.02)
         self.get_logger().info(f'Back at {self.back.current_position:.3f} m')
 
+    def wait_groot(self) -> None:
+        """Wait for the GR00T client to latch ready (server loaded and answering)."""
+        if not self.wait_for_groot:
+            return
+        self.set_state('waiting_groot')
+        self.get_logger().info(
+            f'Robot init motion done; waiting up to {self.groot_timeout:.0f}s for '
+            'GR00T (server loading, client ready)...')
+        t0 = time.monotonic()
+        while not self.groot_ready:
+            if time.monotonic() - t0 > self.groot_timeout:
+                what = ('groot_client never started' if self.groot_ready is None
+                        else 'groot_client is up but the GR00T server never answered')
+                raise InitError(f'GR00T not ready after {self.groot_timeout:.0f}s: {what}')
+            time.sleep(0.2)
+        self.get_logger().info(f'GR00T ready ({time.monotonic() - t0:.0f}s after motion)')
+
     def fail(self, err: InitError) -> None:
         """Stop where everything is now and (optionally) latch the e-stop."""
         self.get_logger().error(f'Robot init FAILED: {err}')
+        self.set_state('failed')
         for m in self.modules.values():
             if m.setpoint is not None and m.servos is not None:
                 m.setpoint = m.positions()
@@ -477,15 +519,28 @@ def main(args=None):
 
     code = 0
     try:
-        node.run()
-        node.get_logger().info('Robot init complete')
-        node.release()
-        node.play_sound(node.startup_sound)
-    except InitError as e:
-        node.fail(e)
-        code = 1
-        time.sleep(0.5)  # let the hold / e-stop go out before exiting
-        node.play_sound(node.error_sound)
+        try:
+            node.run()
+        except InitError as e:
+            node.fail(e)
+            time.sleep(0.5)  # let the hold / e-stop go out before exiting
+            node.play_sound(node.error_sound)
+            code = 1
+        else:
+            # Motion done: let go (head to idle, arms limp in the tuck) before
+            # waiting on GR00T, which can take minutes to load.
+            node.release()
+            try:
+                node.wait_groot()
+                node.get_logger().info('Robot init complete')
+                node.set_state('ready')
+                node.play_sound(node.startup_sound)
+            except InitError as e:
+                # Nothing is moving, so no hold or e-stop: just report it.
+                node.get_logger().error(f'Robot init FAILED: {e}')
+                node.set_state('failed')
+                node.play_sound(node.error_sound)
+                code = 1
     except KeyboardInterrupt:
         code = 130
     finally:

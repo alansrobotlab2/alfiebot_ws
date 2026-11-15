@@ -166,8 +166,9 @@ def generate_launch_description():
         # One-shot startup sequence, as mux source "init" (outranks everything):
         # head servos -> 0, tuck each arm in stages at reduced torque, THEN
         # calibrate the back down onto its limit switch and raise it. A stuck
-        # joint aborts before the back moves and latches the e-stop. Exits when
-        # done, so no respawn. Skip with launch_init:=false.
+        # joint aborts before the back moves and latches the e-stop. The startup
+        # sound waits for the GR00T server + client (launch_groot) to be ready.
+        # Exits when done, so no respawn. Skip with launch_init:=false.
         Node(
             package='alfie_bringup',
             namespace='alfie',
@@ -175,7 +176,10 @@ def generate_launch_description():
             name='robot_init_node',
             parameters=[os.path.join(
                 get_package_share_directory('alfie_bringup'),
-                'config', 'robot_init.yaml')],
+                'config', 'robot_init.yaml'),
+                # Startup sound only once the GR00T client reports the server
+                # ready, when the client is part of this bringup.
+                {'wait_for_groot': LaunchConfiguration('launch_groot')}],
             condition=IfCondition(LaunchConfiguration('launch_init')),
             output='screen',
             emulate_tty=True,

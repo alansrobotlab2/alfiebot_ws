@@ -11,6 +11,9 @@ State priority (highest first):
   ESTOP     (command_mux latched) -> solid red, overrides everything
   SPEAKING  (tts is talking)      -> cyan amplitude pulse
   THINKING  (llm is generating)   -> animated cyan<->green crossfade breath
+  BOOT_INIT (robot_init moving)   -> amber breath
+  BOOT_GROOT (GR00T loading)      -> magenta breath, slower
+  BOOT_FAILED (robot_init failed) -> solid orange, until robot_init is rerun
   LISTENING (resting/default)     -> DOA follow (ring points at the speaker)
   IDLE      (no activity for a while) -> dim solid
 
@@ -19,7 +22,12 @@ time (no per-pixel control on the XVF3800), so we stream LED_COLOR at FRAME_HZ t
 crossfade the whole ring cyan<->green. respeaker_control only issues a USB write
 for the field that changed, so this costs ~one transfer per frame.
 
-Inputs: `speaking` (Speaking) from TTS, `generating` (Bool) from the agent.
+The BOOT states come from robot_init's latched `bringup/state`; 'ready' ends
+them with a green flash. With no robot_init (launch_init:=false) nothing is
+published and the ring starts straight in LISTENING.
+
+Inputs: `speaking` (Speaking) from TTS, `generating` (Bool) from the agent,
+`bringup/state` (String) from robot_init.
 Output: `respeaker/led_command` (LedCommand) to respeaker_control. Static states
 publish on change (plus a periodic refresh); THINKING publishes every frame.
 """
@@ -66,6 +74,17 @@ SPK_GAIN = 4.0                    # RMS -> 0..1 (speech RMS is small)
 SPK_RELEASE = 0.08                # envelope decay per frame (~0.4 s fall at 30 Hz)
 SPK_LEVEL_TIMEOUT_S = 0.3         # treat level as 0 if no update for this long
 
+# --- Bringup (robot_init's bringup/state): breath while starting, flash when ready ---
+BOOT_INIT_COLOR = (255, 110, 0)   # amber: head, arms and back homing
+BOOT_INIT_PERIOD_S = 2.0
+BOOT_GROOT_COLOR = (200, 0, 255)  # magenta: motion done, GR00T server loading
+BOOT_GROOT_PERIOD_S = 3.0
+BOOT_MIN_BRIGHT = 15              # breath floor
+BOOT_MAX_BRIGHT = LED_MAX         # breath peak
+BOOT_FAILED_COLOR = (255, 50, 0)  # orange (e-stop red still wins when latched)
+READY_FLASH_COLOR = (0, 255, 0)   # green: everything is up
+READY_FLASH_S = 1.0
+
 # --- ESTOP: solid red while the command_mux is latched, above every other state ---
 ESTOP_COLOR = (255, 0, 0)
 ESTOP_BRIGHTNESS = 255
@@ -82,7 +101,11 @@ STATE_LED = {
     'ESTOP':     (EFFECT_SOLID, ESTOP_BRIGHTNESS, 0, _pack(ESTOP_COLOR)),
     'LISTENING': (EFFECT_DOA,   40, 0, 0x0000FF),   # ring follows the speaker
     'IDLE':      (EFFECT_SOLID,  10, 0, 0x101010),  # dim resting glow
+    'BOOT_FAILED': (EFFECT_SOLID, 255, 0, _pack(BOOT_FAILED_COLOR)),
 }
+# bringup/state value -> ring state while it is the latest one
+BOOT_STATES = {'initializing': 'BOOT_INIT', 'waiting_groot': 'BOOT_GROOT',
+               'failed': 'BOOT_FAILED'}
 
 
 class LedBehavior(Node):
@@ -108,6 +131,9 @@ class LedBehavior(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST)
         self.create_subscription(Bool, 'estop_state', self.on_estop_state, estop_qos)
+        # robot_init latches its progress (same QoS as estop_state).
+        self.create_subscription(String, 'bringup/state', self.on_bringup_state, estop_qos)
+        self.boot_state = None  # BOOT_* ring state, None once ready / without robot_init
 
         self.estopped = False
         self.speaking = False
@@ -156,6 +182,15 @@ class LedBehavior(Node):
                 f'{"-> red" if msg.data else "released"}')
         self.estopped = msg.data
 
+    def on_bringup_state(self, msg):
+        state = (msg.data or '').strip()
+        self.get_logger().info(f'bringup state: {state}')
+        if state == 'ready' and self.boot_state is not None:
+            self._flash_color = READY_FLASH_COLOR
+            self._flash_until = time.monotonic() + READY_FLASH_S
+        self.boot_state = BOOT_STATES.get(state)
+        self._mark_active()  # LISTENING after boot, not IDLE
+
     def _mark_active(self):
         self._last_activity = self.get_clock().now()
 
@@ -166,6 +201,8 @@ class LedBehavior(Node):
             return 'SPEAKING'
         if self.generating:
             return 'THINKING'
+        if self.boot_state is not None:
+            return self.boot_state
         idle_for = (self.get_clock().now() - self._last_activity).nanoseconds / 1e9
         if idle_for > IDLE_TIMEOUT_S:
             return 'IDLE'
@@ -194,6 +231,10 @@ class LedBehavior(Node):
             self._animate_thinking()
         elif state == 'SPEAKING':
             self._animate_speaking()
+        elif state == 'BOOT_INIT':
+            self._animate_breath(BOOT_INIT_COLOR, BOOT_INIT_PERIOD_S)
+        elif state == 'BOOT_GROOT':
+            self._animate_breath(BOOT_GROOT_COLOR, BOOT_GROOT_PERIOD_S)
         else:
             # Static state: publish on change or periodic refresh only.
             stale = (self._last_publish is None or
@@ -210,6 +251,14 @@ class LedBehavior(Node):
         rgb = tuple(int((a + (b - a) * p) * s)
                     for a, b in zip(THINK_COLOR_A, THINK_COLOR_B))
         self._publish(EFFECT_SOLID, 255, 0, _pack(rgb))
+
+    def _animate_breath(self, color, period):
+        # Whole ring in one colour, brightness easing BOOT_MIN..BOOT_MAX..BOOT_MIN.
+        t = time.monotonic() - self._anim_t0
+        p = (1 - math.cos(2 * math.pi * t / period)) / 2
+        bright = BOOT_MIN_BRIGHT + (BOOT_MAX_BRIGHT - BOOT_MIN_BRIGHT) * p
+        s = bright / (max(color) or 1)
+        self._publish(EFFECT_SOLID, 255, 0, _pack(tuple(int(c * s) for c in color)))
 
     def _animate_speaking(self):
         # Envelope follower over the live TTS level: instant attack, slow release.

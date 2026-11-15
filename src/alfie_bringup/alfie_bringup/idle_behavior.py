@@ -6,7 +6,11 @@ Publishes gentle idle motion to the command_mux at the lowest motion priority
 outranks it, so this only shows through when nothing else owns the head/eyes.
 
     cmd/eyes/idle  (EyeCmd)  — constant dim glow; blinks off for `eye_ack_sec`
-                               to acknowledge a wake word or an interrupt
+                               to acknowledge a wake word or an interrupt.
+                               While robot_init's latched `bringup/state` is
+                               initializing / waiting_groot the eyes breathe
+                               (eye_idle_pwm..eye_boot_pwm); on ready they
+                               flash twice, then settle to the glow.
     cmd/head/idle  (HeadCmd) — head behavior, chosen by `head_mode`:
 
       wander  — small open-loop sinusoidal look-around.
@@ -42,7 +46,7 @@ import math
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rcl_interfaces.msg import SetParametersResult
 
 from std_msgs.msg import Bool, Empty, Float32, String
@@ -76,6 +80,12 @@ class IdleBehaviorNode(Node):
         self.declare_parameter('eyes_enabled', True)
         self.declare_parameter('eye_idle_pwm', 1)
         self.declare_parameter('eye_ack_sec', 0.333)  # eyes-off blink on wake / barge-in
+        # Bringup (robot_init bringup/state): breathe up to eye_boot_pwm while
+        # starting, then eye_ready_blinks flashes of eye_ready_blink_sec on/off.
+        self.declare_parameter('eye_boot_pwm', 4)  # idle glow is 1; these LEDs are bright
+        self.declare_parameter('eye_boot_period_sec', 2.0)
+        self.declare_parameter('eye_ready_blinks', 2)
+        self.declare_parameter('eye_ready_blink_sec', 0.15)
         self.declare_parameter('head_enabled', True)
         self.declare_parameter('head_mode', 'attend')  # 'attend' | 'wander'
         # wander
@@ -182,6 +192,10 @@ class IdleBehaviorNode(Node):
         self.eyes_enabled = bool(g('eyes_enabled').value)
         self.eye_idle_pwm = max(0, min(4095, int(g('eye_idle_pwm').value)))
         self.eye_ack_sec = float(g('eye_ack_sec').value)
+        self.eye_boot_pwm = max(0, min(4095, int(g('eye_boot_pwm').value)))
+        self.eye_boot_period = max(0.2, float(g('eye_boot_period_sec').value))
+        self.eye_ready_blinks = max(0, int(g('eye_ready_blinks').value))
+        self.eye_ready_blink = max(0.02, float(g('eye_ready_blink_sec').value))
         self.head_enabled = bool(g('head_enabled').value)
         self.head_mode = str(g('head_mode').value)
         self.head_yaw_amp = float(g('head_yaw_amp_rad').value)
@@ -272,6 +286,15 @@ class IdleBehaviorNode(Node):
             self.create_subscription(Empty, 'barge_in', lambda _m: self._eye_ack(), qos)
             self.create_subscription(Empty, 'barge_in/soft', lambda _m: self._eye_ack(), qos)
         self.head_pub = self.create_publisher(HeadCmd, 'cmd/head/idle', qos)
+        self.booting = False         # robot_init initializing / waiting_groot
+        self.boot_t0 = 0.0
+        self.eye_ready_t0 = None     # start of the ready flashes
+        if self.eyes_enabled:
+            latched = QoSProfile(
+                depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST)
+            self.create_subscription(String, 'bringup/state', self._on_bringup_state, latched)
 
         # ---- Attend state ---------------------------------------------------
         self.cur = None             # [yaw, pitch] from low/headstate
@@ -868,8 +891,30 @@ class IdleBehaviorNode(Node):
         self.eye_ack_until = 0.0
         self._publish_eyes()  # back on exactly at the end of the blink
 
+    def _on_bringup_state(self, msg: String) -> None:
+        state = msg.data.strip()
+        booting = state in ('initializing', 'waiting_groot')
+        if booting and not self.booting:
+            self.boot_t0 = self._now()
+        if state == 'ready' and self.booting:
+            self.eye_ready_t0 = self._now()
+        self.booting = booting
+
+    def _eye_pwm(self, now: float) -> int:
+        if now < self.eye_ack_until:
+            return 0
+        if self.booting:
+            p = (1.0 - math.cos(2.0 * math.pi * (now - self.boot_t0) / self.eye_boot_period)) / 2.0
+            return int(round(self.eye_idle_pwm + (self.eye_boot_pwm - self.eye_idle_pwm) * p))
+        if self.eye_ready_t0 is not None:
+            phase = int((now - self.eye_ready_t0) / self.eye_ready_blink)  # on, off, on, off...
+            if phase < 2 * self.eye_ready_blinks:
+                return self.eye_boot_pwm if phase % 2 == 0 else 0
+            self.eye_ready_t0 = None
+        return self.eye_idle_pwm
+
     def _publish_eyes(self) -> None:
-        pwm = 0 if self._now() < self.eye_ack_until else self.eye_idle_pwm
+        pwm = self._eye_pwm(self._now())
         eyes = EyeCmd()
         eyes.eye_pwm = [pwm, pwm]
         self.eyes_pub.publish(eyes)
