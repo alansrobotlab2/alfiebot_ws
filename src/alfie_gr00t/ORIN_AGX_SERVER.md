@@ -12,10 +12,13 @@ ros2 launch alfie_gr00t groot_server.launch.py
 `groot_server.launch.py` runs `groot_inference_server.py` with the Isaac-GR00T
 venv python from `~/Isaac-GR00T`, with the venv's TensorRT/CUDA libraries on
 `LD_LIBRARY_PATH`. Every flag comes from `config/groot_server.yaml`, which is
-the current deployment: checkpoint-26000, the `alfie26k_int8_rtc` engines,
+the current deployment: checkpoint-40000, the `alfie40k_int8_rtc` engines,
 8 denoising steps (fused head), `--rtc`, bound to 127.0.0.1. Any yaml key can
-be overridden for one run, e.g. `denoising_steps:=4` (then start the client
-with `latency_skip:=2`). If something is already listening on port 5555 (a
+be overridden for one run. The 40k engine build has only the fused 8-step
+action head; for a fused 4-step run go back to the 26k pair:
+`checkpoint:=/home/alfie/Isaac-GR00T/checkpoints/alfie/checkpoint-26000
+trt_engine_dir:=/home/alfie/Isaac-GR00T/gr00t_trt_deployment/alfie26k_int8_rtc/engines
+denoising_steps:=4` (then start the client with `latency_skip:=2`). If something is already listening on port 5555 (a
 server started by hand), the launch logs that and starts nothing. Loading
 takes 1-4 minutes; the client idles until activated, so it can start first.
 
@@ -24,8 +27,8 @@ The equivalent manual command, from `~/Isaac-GR00T` with the venv active:
 ```bash
 python ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
   --host 127.0.0.1 --embodiment NEW_EMBODIMENT \
-  --checkpoint checkpoints/alfie/checkpoint-26000 \
-  --trt-engine-dir ~/Isaac-GR00T/gr00t_trt_deployment/alfie26k_int8_rtc/engines \
+  --checkpoint checkpoints/alfie/checkpoint-40000 \
+  --trt-engine-dir ~/Isaac-GR00T/gr00t_trt_deployment/alfie40k_int8_rtc/engines \
   --denoising-steps 8 --rtc
 ```
 

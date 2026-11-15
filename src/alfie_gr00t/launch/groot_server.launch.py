@@ -16,10 +16,10 @@ the bind.
 
 Usage:
     ros2 launch alfie_gr00t groot_server.launch.py
-    ros2 launch alfie_gr00t groot_server.launch.py denoising_steps:=4
-    ros2 launch alfie_gr00t groot_server.launch.py \\
-        checkpoint:=/home/alfie/Isaac-GR00T/checkpoints/alfie/checkpoint-20000 \\
-        trt_engine_dir:=/home/alfie/Isaac-GR00T/gr00t_trt_deployment/alfie_int8_rtc/engines
+    # fused 4-step head: only the 26k engine build has one (the 40k build is 8-step only)
+    ros2 launch alfie_gr00t groot_server.launch.py denoising_steps:=4 \\
+        checkpoint:=/home/alfie/Isaac-GR00T/checkpoints/alfie/checkpoint-26000 \\
+        trt_engine_dir:=/home/alfie/Isaac-GR00T/gr00t_trt_deployment/alfie26k_int8_rtc/engines
 """
 
 import glob
