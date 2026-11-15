@@ -659,7 +659,7 @@ def create_health_checks() -> Dict[str, HealthCheck]:
     
     health_checks['jetson_ram'] = ThresholdMonitor(
         name='Jetson RAM',
-        warn_percent=85.0,
+        warn_percent=90.0,
         critical_percent=95.0
     )
     
