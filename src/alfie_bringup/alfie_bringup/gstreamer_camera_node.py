@@ -9,6 +9,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage, CameraInfo
 from std_msgs.msg import Int32
+from rcl_interfaces.msg import SetParametersResult
 import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
@@ -46,6 +47,9 @@ class GStreamerCameraNode(Node):
         super().__init__('gstreamer_camera')
         
         # Declare parameters
+        # Log auto gain back-offs, pipeline details etc. at INFO (debugging);
+        # off = only start-up summary, warnings and errors. Settable at runtime.
+        self.verbose = bool(self.declare_parameter('verbose', False).value)
         self.declare_parameter('device', '/dev/video0')
         self.declare_parameter('source_width', 3200)  # Capture at max resolution
         self.declare_parameter('source_height', 1200)  # Capture at max resolution
@@ -156,13 +160,13 @@ class GStreamerCameraNode(Node):
         self._jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
         
         # Check for hardware acceleration support
-        self.get_logger().info(f'Hardware acceleration requested: {self.use_hardware_accel}')
+        self._detail(f'Hardware acceleration requested: {self.use_hardware_accel}')
         self.hardware_available = self._check_hardware_support()
         if self.use_hardware_accel and not self.hardware_available:
             self.get_logger().warning('⚠️  Hardware acceleration requested but not available, falling back to CPU')
             self.use_hardware_accel = False
         elif self.use_hardware_accel and self.hardware_available:
-            self.get_logger().info('🚀 Using hardware acceleration')
+            self._detail('🚀 Using hardware acceleration')
         
         # Build GStreamer pipeline
         self.pipeline = self._create_pipeline()
@@ -172,9 +176,9 @@ class GStreamerCameraNode(Node):
         self.pipeline_thread.start()
 
         self.get_logger().info(f'GStreamer stereo camera started: {self.device} @ {self.source_width}x{self.source_height} {self.framerate}fps')
-        self.get_logger().info(f'Publishing 4 streams: wide ({self.output_width}x{self.output_height}, full FOV) + center ({self.output_width}x{self.output_height}, cropped FOV)')
+        self._detail(f'Publishing 4 streams: wide ({self.output_width}x{self.output_height}, full FOV) + center ({self.output_width}x{self.output_height}, cropped FOV)')
         if self.flip_vertical:
-            self.get_logger().info('Vertical flip enabled')
+            self._detail('Vertical flip enabled')
 
         # Pre-create camera info templates (only header.stamp changes per frame)
         # Wide: downsampled 2x, so focal_length_factor=0.5
@@ -208,6 +212,13 @@ class GStreamerCameraNode(Node):
 
         # Add parameter callback to handle runtime changes
         self.add_on_set_parameters_callback(self._parameter_callback)
+
+    def _detail(self, msg: str) -> None:
+        """Diagnostic messages: INFO when the verbose parameter is on, else DEBUG."""
+        if self.verbose:
+            self.get_logger().info(msg)
+        else:
+            self.get_logger().debug(msg)
 
     def _get_ctrl(self, cid):
         ctrl = _V4L2Control(cid, 0)
@@ -266,7 +277,7 @@ class GStreamerCameraNode(Node):
             if (self._gain_f > gain0 * self._WINDUP_GAIN_RISE
                     and self._luma_f < luma0 * self._WINDUP_LUMA_RISE):
                 if now >= self._windup_until:
-                    self.get_logger().info(
+                    self._detail(
                         f'auto gain: onboard AE absorbing gain ({gain0:.0f}->{self._gain_f:.0f}, '
                         f'luma {luma0:.0f}->{self._luma_f:.0f}); backing off')
                 self._windup_until = now + self._WINDUP_HOLD_SEC
@@ -293,12 +304,12 @@ class GStreamerCameraNode(Node):
 
     def _parameter_callback(self, params):
         """Handle parameter changes at runtime"""
-        from rcl_interfaces.msg import SetParametersResult
-
         needs_restart = False
 
         for param in params:
-            if param.name == 'framerate':
+            if param.name == 'verbose':
+                self.verbose = bool(param.value)
+            elif param.name == 'framerate':
                 new_framerate = param.value
                 if new_framerate != self.framerate:
                     self.get_logger().info(f'Framerate change requested: {self.framerate} -> {new_framerate}')
@@ -404,7 +415,7 @@ class GStreamerCameraNode(Node):
                 self.get_logger().warning(f'Missing GStreamer element: {elem_name}')
                 return False
         
-        self.get_logger().info('✅ Hardware acceleration elements available')
+        self._detail('✅ Hardware acceleration elements available')
         return True
     
     def _wide_crop(self, eye_width, eye_height):
@@ -448,8 +459,8 @@ class GStreamerCameraNode(Node):
             f'appsink name=sink emit-signals=true max-buffers=1 drop=true sync=false'
         )
 
-        self.get_logger().info(f'🖥️  CPU Pipeline: {pipeline_str}')
-        self.get_logger().info(f'   Will decode once and produce 4 streams in software')
+        self._detail(f'🖥️  CPU Pipeline: {pipeline_str}')
+        self._detail(f'   Will decode once and produce 4 streams in software')
 
         pipeline = Gst.parse_launch(pipeline_str)
         appsink = pipeline.get_by_name('sink')
@@ -533,10 +544,10 @@ class GStreamerCameraNode(Node):
         )
 
         flip_str = "Flip→" if self.flip_vertical else ""
-        self.get_logger().info(f'🚀 Hardware Pipeline: {self.source_width}x{self.source_height}@{self.framerate}fps → 4 streams (2×wide + 2×center) all {self.output_width}x{self.output_height}')
-        self.get_logger().info(f'   Full GPU: Decode→Tee→{flip_str}Crop/Scale→Encode')
-        self.get_logger().info(f'   Wide crop per eye: {wide_w}x{wide_h} at ({wide_x},{wide_y})')
-        self.get_logger().info(f'   Center crop coordinates: Left[{left_center_x_start}:{left_center_x_end}, {center_y_start}:{center_y_end}], Right[{right_center_x_start}:{right_center_x_end}, {center_y_start}:{center_y_end}]')
+        self._detail(f'🚀 Hardware Pipeline: {self.source_width}x{self.source_height}@{self.framerate}fps → 4 streams (2×wide + 2×center) all {self.output_width}x{self.output_height}')
+        self._detail(f'   Full GPU: Decode→Tee→{flip_str}Crop/Scale→Encode')
+        self._detail(f'   Wide crop per eye: {wide_w}x{wide_h} at ({wide_x},{wide_y})')
+        self._detail(f'   Center crop coordinates: Left[{left_center_x_start}:{left_center_x_end}, {center_y_start}:{center_y_end}], Right[{right_center_x_start}:{right_center_x_end}, {center_y_start}:{center_y_end}]')
         self.get_logger().debug(f'Pipeline: {pipeline_str}')
 
         try:
@@ -795,7 +806,7 @@ class GStreamerCameraNode(Node):
             self.get_logger().error(f'GStreamer error: {err}, {debug}')
             loop.quit()
         elif t == Gst.MessageType.EOS:
-            self.get_logger().info('End of stream')
+            self._detail('End of stream')
             loop.quit()
         elif t == Gst.MessageType.WARNING:
             err, debug = message.parse_warning()
