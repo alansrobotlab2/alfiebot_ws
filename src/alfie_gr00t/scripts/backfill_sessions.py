@@ -12,7 +12,7 @@ legacy_episode_index.
 The source dataset is only read. Convert the sessions afterwards, compare, and
 remove the old bags by hand:
 
-    backfill_sessions.py --source ~/alfiebot_ws/data/CleanTheRoom --hw hw2
+    backfill_sessions.py --source ~/old_data/SomeDataset --hw hw2
     rosbag_to_groot.py --dataset 2026-11-10_s01_hw2 --num-threads 4
 
 Only the compressed bag (.mcap.zstd) and metadata.yaml are copied; the .mcap

@@ -24,7 +24,7 @@ Usage (Isaac-GR00T venv or any python with pandas + pyarrow):
     python rtc_ab_analysis.py \\
         A=/tmp/ab/A_off4_t1.csv,/tmp/ab/A_off4_t2.csv \\
         B=/tmp/ab/B_rtc4_t1.csv C=/tmp/ab/C_rtc2_t1.csv \\
-        --dataset ~/alfiebot_ws/data/CleanTheRoom/lerobot
+        --dataset ~/alfie_data/raw/2026-11-11_s01_hw2/lerobot
 A label's runs are pooled (seams/steps summed over runs).
 """
 

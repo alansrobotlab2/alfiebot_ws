@@ -107,7 +107,7 @@ cd ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts
   A=$(ls $AB/A_t*.csv | grep -v _actions | paste -sd,) \
   B=$(ls $AB/B_t*.csv | grep -v _actions | paste -sd,) \
   C=$(ls $AB/C_t*.csv | grep -v _actions | paste -sd,) \
-  --dataset ~/alfiebot_ws/data/CleanTheRoom/lerobot --out $AB/summary.json
+  --dataset ~/alfie_data/raw/2026-11-11_s01_hw2/lerobot --out $AB/summary.json
 ```
 
 The script reports, per condition:

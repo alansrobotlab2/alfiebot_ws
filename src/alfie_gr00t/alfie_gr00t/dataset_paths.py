@@ -20,11 +20,10 @@ data root (``~/alfie_data/raw``):
 (``closed`` set in session.json) nothing on the recording side changes it.
 
 A folder with any other name is a plain dataset with the same two sub-folders
-and no session.json. The recordings made before sessions existed
-(CleanTheRoom) were copied into sessions by scripts/backfill_sessions.py; the
-set checkpoint-40000 was trained on stays, converted only, in
-~/alfiebot_ws/data/CleanTheRoom/lerobot. The recorder, the converter and the episode manager all
-derive their paths from here. ``ALFIE_DATA_ROOT`` and ``ALFIE_DATASET``
+and no session.json; scripts/backfill_sessions.py copies one into sessions
+(the 218 recordings made before sessions existed are the three sessions of
+2026-11-10 to 2026-11-12). The recorder, the converter and the episode manager
+all derive their paths from here. ``ALFIE_DATA_ROOT`` and ``ALFIE_DATASET``
 override the defaults for scripts run outside ROS launch.
 """
 

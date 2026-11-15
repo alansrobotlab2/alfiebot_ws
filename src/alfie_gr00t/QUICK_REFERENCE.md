@@ -59,13 +59,13 @@ ros2 run alfie_gr00t episode_manager --ros-args -p dataset:=2026-11-12_s01_hw2  
 ## Playback
 
 ```bash
-ros2 bag play ~/alfiebot_ws/data/<dataset>/demonstrations/demo_YYYYMMDD_HHMMSS
+ros2 bag play ~/alfie_data/raw/<session>/demonstrations/demo_YYYYMMDD_HHMMSS
 ```
 
 ## Inspection
 
 ```bash
-ros2 bag info ~/alfiebot_ws/data/<dataset>/demonstrations/demo_YYYYMMDD_HHMMSS
+ros2 bag info ~/alfie_data/raw/<session>/demonstrations/demo_YYYYMMDD_HHMMSS
 ```
 
 ## Open-Loop Evaluation
@@ -76,7 +76,7 @@ communication diagnostics. No ROS2 required.
 
 ```bash
 python ./src/alfie_gr00t/alfie_gr00t/scripts/groot_open_loop_eval.py \
-    --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \
+    --dataset-path /home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot \
     --episode-index 0 \
     --host 127.0.0.1 --port 5555 \
     --save-plot /tmp/groot_eval/episode_000.png \
@@ -115,7 +115,7 @@ python src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
 
 # Replay mode (no GPU needed)
 python src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
-    --dataset-path ~/alfiebot_ws/data/CleanTheRoom/lerobot \
+    --dataset-path ~/alfie_data/raw/2026-11-11_s01_hw2/lerobot \
     --episode-index 0 --transport tcp --port 5555
 
 # Mock mode (testing)
@@ -125,8 +125,8 @@ python src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
 
 ## Storage Location
 
-Default: `~/alfiebot_ws/data/<dataset>/demonstrations/` (bags) and
-`~/alfiebot_ws/data/<dataset>/lerobot/` (converted). Pick the dataset with
+Default: `~/alfie_data/raw/<session>/demonstrations/` (bags) and
+`~/alfie_data/raw/<session>/lerobot/` (converted). Pick the dataset with
 `dataset:=NAME` on bringup, `--dataset NAME` on the scripts, or
 `ros2 param set /alfie/data_recorder dataset NAME` while running.
 

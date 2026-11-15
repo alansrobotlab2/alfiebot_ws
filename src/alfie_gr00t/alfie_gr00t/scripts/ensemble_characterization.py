@@ -15,7 +15,7 @@ No ROS2 dependency — runs standalone against the ZMQ inference server.
 
 Usage:
     python ensemble_characterization.py \
-        --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \
+        --dataset-path /home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot \
         --episode-index 3 \
         --host 127.0.0.1 --port 5555 \
         --duration-sec 4

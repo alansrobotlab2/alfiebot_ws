@@ -1558,8 +1558,7 @@ Layout:  <data-root>/<dataset>/demonstrations/  (input bags)
 
 Arguments:
   --dataset NAME        Session folder name (default: $ALFIE_DATASET or 'default')
-  --data-root DIR       Data root (default: $ALFIE_DATA_ROOT or ~/alfie_data/raw;
-                        the datasets from before sessions are in ~/alfiebot_ws/data)
+  --data-root DIR       Data root (default: $ALFIE_DATA_ROOT or ~/alfie_data/raw)
   --demos-dir DIR       Override input directory containing demo_* folders
   --output-dir DIR      Override output directory for GR00T format data
   --task-id ID          Registry task for new bags recorded without one

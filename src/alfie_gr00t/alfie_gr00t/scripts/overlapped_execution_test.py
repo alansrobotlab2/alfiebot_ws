@@ -17,7 +17,7 @@ No ROS2 dependency — runs standalone against the ZMQ inference server.
 
 Usage:
     python overlapped_execution_test.py \
-        --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \
+        --dataset-path /home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot \
         --episode-index 3 \
         --host 127.0.0.1 --port 5555 \
         --save-dir /tmp/overlapped_test/
@@ -1052,15 +1052,15 @@ def parse_args():
         epilog="""
 examples:
   # Single episode
-  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \\
+  %(prog)s --dataset-path /home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot \\
            --episode-index 320 --host 127.0.0.1
 
   # Multiple episodes for statistical robustness
-  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \\
+  %(prog)s --dataset-path /home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot \\
            --episode-indices 317,318,319,320,321,322 --host 127.0.0.1
 
   # Reuse cached horizons from previous run
-  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \\
+  %(prog)s --dataset-path /home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot \\
            --episode-indices 317,318,319,320,321,322 --load-horizons
 """,
     )

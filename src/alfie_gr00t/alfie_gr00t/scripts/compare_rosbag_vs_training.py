@@ -227,12 +227,12 @@ def main():
     )
     parser.add_argument(
         '--rosbag',
-        default='/home/alfie/alfie_data/raw/2026-11-10_s01_hw2/demonstrations/demo_20261110_163035/demo_20261110_163035_0.mcap',
+        default='/home/alfie/alfie_data/raw/2026-11-11_s01_hw2/demonstrations/demo_20261111_105812/demo_20261111_105812_0.mcap',
         help='Path to .mcap or .mcap.zstd rosbag file'
     )
     parser.add_argument(
         '--video',
-        default='/home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot/videos/chunk-000/observation.images.left_wide/episode_000000.mp4',
+        default='/home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot/videos/chunk-000/observation.images.left_wide/episode_000000.mp4',
         help='Path to training episode MP4 video'
     )
     parser.add_argument(

@@ -8,7 +8,7 @@ the corresponding parquet files to have the correct task_index value.
 Usage:
     python3 update_task_index.py [--data-dir PATH] [--dry-run]
 
-python3 ./src/alfie_gr00t/scripts/update_task_index.py --dataset CleanTheRoom
+python3 ./src/alfie_gr00t/scripts/update_task_index.py --dataset 2026-11-11_s01_hw2
 
 """
 
@@ -91,7 +91,7 @@ def main():
     )
     parser.add_argument(
         '--data-root',
-        default=os.environ.get('ALFIE_DATA_ROOT', '~/alfiebot_ws/data'),
+        default=os.environ.get('ALFIE_DATA_ROOT', '~/alfie_data/raw'),
         help='Root folder holding one sub-folder per dataset (default: %(default)s)'
     )
     parser.add_argument(

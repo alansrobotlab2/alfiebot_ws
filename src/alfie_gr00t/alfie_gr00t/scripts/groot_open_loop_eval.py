@@ -10,13 +10,13 @@ No ROS2 dependency — runs standalone.
 
 Usage:
     python groot_open_loop_eval.py \
-        --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \
+        --dataset-path /home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot \
         --episode-index 3 \
         --host 127.0.0.1 --port 5555
 
     # With custom stats and save path
     python groot_open_loop_eval.py \
-        --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \
+        --dataset-path /home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot \
         --episode-index 0 \
         --host 127.0.0.1 --port 5555 \
         --save-plot /tmp/eval_episode_0.png \
@@ -793,11 +793,11 @@ def parse_args():
         epilog="""
 examples:
   # Eval episode 0 against remote server
-  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \\
+  %(prog)s --dataset-path /home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot \\
            --episode-index 0 --host 127.0.0.1 --port 5555
 
   # Eval with custom save path
-  %(prog)s --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \\
+  %(prog)s --dataset-path /home/alfie/alfie_data/raw/2026-11-11_s01_hw2/lerobot \\
            --episode-index 3 --host 127.0.0.1 --port 5555 \\
            --save-plot /tmp/eval_ep3.png
 """,

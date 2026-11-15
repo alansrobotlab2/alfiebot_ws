@@ -8,7 +8,7 @@ Runs in the Isaac-GR00T environment (no ROS, no robot):
         --embodiment oxe_droid_relative_eef_relative_joint
 
 With an Alfie checkpoint: --checkpoint alfie-gr00t/checkpoint-N \
-    --dataset ~/alfiebot_ws/data/<dataset>/lerobot --embodiment new_embodiment
+    --dataset ~/alfie_data/raw/<session>/lerobot --embodiment new_embodiment
 
 Step 0 -> chunk A. Pretend `--executed` steps were executed; observe there;
 commit the next `--overlap` actions of A as the prefix with `--frozen` frozen

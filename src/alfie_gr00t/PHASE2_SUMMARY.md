@@ -82,7 +82,7 @@ ros2 run alfie_gr00t episode_manager --ros-args -p dataset:=<dataset>
 
 ## Data Format
 
-**Storage:** `~/alfiebot_ws/data/<dataset>/demonstrations/`
+**Storage:** `~/alfie_data/raw/<session>/demonstrations/`
 
 **Format:** MCAP with zstd compression
 

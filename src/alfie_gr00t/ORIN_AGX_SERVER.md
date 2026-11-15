@@ -95,7 +95,7 @@ communication diagnostics. No ROS2 required.
 
 ```bash
 python ./alfiebot_ws/src/alfie_gr00t/alfie_gr00t/scripts/groot_open_loop_eval.py \
-    --dataset-path ./alfiebot_ws/data/CleanTheRoom/lerobot \
+    --dataset-path ~/alfie_data/raw/2026-11-11_s01_hw2/lerobot \
     --episode-index 0 \
     --host 127.0.0.1 --port 5555
 ```
