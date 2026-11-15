@@ -100,25 +100,10 @@
     # took 16-33 s, all 11 uncapped runs under 10 s; 2026-11-13).
     back_max_height: 0.0
 
-    # End the pick task in the client once the grasp is confirmed (right gripper
-    # stalled on the can + back lifted for pick_done_hold_s): hold pose, stop the
-    # base, pause inference. Demos hold the can at gripper 0.38-0.43 (open 0,
-    # closed empty ~0.78) with the back at 0.34 m. pick_done_task "" = off.
-    pick_done_task: "find the can and pick it up"
-    pick_done_gripper_min: 0.30
-    pick_done_gripper_max: 0.55
-    # 0.30, not 0.34: live lifts settle at 0.32-0.35 m (2026-11-13 runs)
-    pick_done_back_height: 0.30
-    pick_done_hold_s: 0.5
-
-    # End the trash task once the can has been released and the right arm is
-    # back at the tucked start pose (how every trash demo ends). The can must
-    # first be seen held during the task. trash_done_task "" = off.
-    trash_done_task: "put the can in the trash can"
-    trash_done_gripper_max: 0.1
-    trash_done_right_arm_pose: [0.0, 0.12, -1.48, -0.14, 0.0]
-    trash_done_arm_tol: 0.1
-    trash_done_hold_s: 0.5
+    # Tasks end in the client (hold pose, base stopped, inference paused) once
+    # their `done` condition in config/tasks.yaml holds. tasks_file "" = that
+    # installed file.
+    tasks_file: ""
 
     # ==========================================================================
     # Safety Settings

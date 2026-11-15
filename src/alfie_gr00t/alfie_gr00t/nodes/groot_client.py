@@ -46,6 +46,7 @@ from ..core.rate_limited_interpolator import RateLimitedInterpolator
 from ..core.rtc_prefix import buffer_prefix, classic_prefix, frozen_steps
 from ..core.zmq_async_client import ZMQAsyncClient
 from ..core.zmq_client import ZMQClient, build_server_address, DEFAULT_IPC_PATH
+from .. import task_registry
 from ..utils.safety import SafetyMonitor
 
 
@@ -110,21 +111,16 @@ class GrootClientNode(Node):
         self.n_action_steps = self.get_parameter('n_action_steps').value
         self.csv_log_path = self.get_parameter('csv_log_path').value
         self.back_max_height = self.get_parameter('back_max_height').value
-        self.pick_done_task = self.get_parameter('pick_done_task').value
-        self.pick_done_gripper_min = self.get_parameter('pick_done_gripper_min').value
-        self.pick_done_gripper_max = self.get_parameter('pick_done_gripper_max').value
-        self.pick_done_back_height = self.get_parameter('pick_done_back_height').value
-        self.pick_done_hold_s = self.get_parameter('pick_done_hold_s').value
-        self.trash_done_task = self.get_parameter('trash_done_task').value
-        self.trash_done_gripper_max = self.get_parameter('trash_done_gripper_max').value
-        self.trash_done_right_arm_pose = np.array(
-            self.get_parameter('trash_done_right_arm_pose').value, dtype=np.float64)
-        self.trash_done_arm_tol = self.get_parameter('trash_done_arm_tol').value
-        self.trash_done_hold_s = self.get_parameter('trash_done_hold_s').value
         self._task_done_hold = None    # frozen action published once the task is done
         self._task_gen = 0             # bumped per task text; tags async observations
-        self._pick_done_since = None   # when the current task's done condition became true
-        self._can_seen_held = False    # trash task: gripper was seen holding the can
+        # Task registry (config/tasks.yaml): done conditions and start poses,
+        # looked up by the task text. A bad file stops the node at startup.
+        self._tasks = task_registry.load(self.get_parameter('tasks_file').value or None)
+        self.get_logger().info(
+            f'Task registry: {len(self._tasks.tasks)} tasks from {self._tasks.source}')
+        self._done_tracker = None      # DoneTracker of the current task, if registered
+        self._unregistered_warned = set()
+        self._set_done_tracker()
 
         self.latency_skip = self.get_parameter('latency_skip').value
         self.inference_trigger_step = self.get_parameter('inference_trigger_step').value
@@ -657,29 +653,11 @@ class GrootClientNode(Node):
         # made the robot slow to look down and start (2026-11-13), so off.
         self.declare_parameter('back_max_height', 0.0)
 
-        # End the pick task in the client once the grasp is confirmed: the task
-        # text is a weak condition, so the model does not hold after a pick and
-        # runs on into the trash motion. Confirmed = right gripper stalled on
-        # the can (state inside the band; open reads 0, closed-empty ~0.78,
-        # holding 0.38-0.43 in the demos) and back lifted, for pick_done_hold_s.
-        # Only applies while task_description == pick_done_task ('' = off).
-        self.declare_parameter('pick_done_task', 'find the can and pick it up')
-        self.declare_parameter('pick_done_gripper_min', 0.30)
-        self.declare_parameter('pick_done_gripper_max', 0.55)
-        self.declare_parameter('pick_done_back_height', 0.30)
-        self.declare_parameter('pick_done_hold_s', 0.5)
-
-        # End the trash task once the can is released and the right arm is
-        # back at the tucked start pose (how all 108 trash demos end): the
-        # can must first have been seen held (pick_done gripper band) during
-        # this task, then gripper open and every right-arm joint within
-        # trash_done_arm_tol of trash_done_right_arm_pose for trash_done_hold_s.
-        # Only applies while task_description == trash_done_task ('' = off).
-        self.declare_parameter('trash_done_task', 'put the can in the trash can')
-        self.declare_parameter('trash_done_gripper_max', 0.1)
-        self.declare_parameter('trash_done_right_arm_pose', [0.0, 0.12, -1.48, -0.14, 0.0])
-        self.declare_parameter('trash_done_arm_tol', 0.1)
-        self.declare_parameter('trash_done_hold_s', 0.5)
+        # Task registry file; '' = the installed config/tasks.yaml. A task ends
+        # in the client (hold pose, base stopped, inference paused) once its
+        # `done` condition there holds: the task text is a weak condition, so
+        # the model does not stop by itself and runs on into the next motion.
+        self.declare_parameter('tasks_file', '')
 
         # Debug: save observation images to /tmp/groot_debug_images/
         self.declare_parameter('debug_save_images', False)
@@ -782,8 +760,7 @@ class GrootClientNode(Node):
             if self._chunk_buffer is not None:
                 self._chunk_buffer.reset()
         self._task_done_hold = None
-        self._pick_done_since = None
-        self._can_seen_held = False
+        self._set_done_tracker()
         self._task_gen += 1   # results still in flight for the old task are dropped
         self.get_logger().info(f'Task updated: "{self.task_description}"')
 
@@ -811,8 +788,7 @@ class GrootClientNode(Node):
             self._active = True
             self._activation_time = time.monotonic()
             self._task_done_hold = None
-            self._pick_done_since = None
-            self._can_seen_held = False
+            self._set_done_tracker()
             self._task_gen += 1   # drop results pushed before this activation
             self._last_stop = None
             if self._chunk_buffer is not None:
@@ -889,14 +865,27 @@ class GrootClientNode(Node):
             self._rate_limiter.reset()
         self.action_publisher.reset_smoothing()
 
+    def _set_done_tracker(self):
+        """Point the done tracker at the current task text (fresh latch/timer)."""
+        task = self._tasks.by_text(self.task_description)
+        self._done_tracker = task_registry.DoneTracker(task) if task else None
+        if task is None and self.task_description not in self._unregistered_warned:
+            self._unregistered_warned.add(self.task_description)
+            self.get_logger().warn(
+                f'Task "{self.task_description}" is not in {self._tasks.source}: '
+                f'it will run but never report done')
+
     def _check_starting_pose(self):
         """Check if robot starting pose is within training data distribution."""
-        # Medians at episode start, CleanTheRoom (2026-11-12)
+        task = self._tasks.by_text(self.task_description)
+        if task is None:
+            return
+        pose = self._tasks.start_pose(task)
         EXPECTED_START = {
-            6:  ('back_joint', 0.340, 0.02),
-            19: ('head_yaw', 0.009, 0.2),
-            20: ('head_pitch', 0.071, 0.2),
-            21: ('head_roll', -0.012, 0.15),
+            6:  ('back_joint', pose['back'], 0.02),
+            19: ('head_yaw', pose['head'][0], 0.2),
+            20: ('head_pitch', pose['head'][1], 0.2),
+            21: ('head_roll', pose['head'][2], 0.15),
         }
 
         obs = self.observation_bridge.get_latest_observation()
@@ -1698,35 +1687,13 @@ class GrootClientNode(Node):
         )
 
     def _task_done(self, now: float, state) -> Optional[str]:
-        """Name of the task ('pick' / 'trash') once its end condition has held
-        long enough, else None (see pick_done_* / trash_done_* params)."""
-        if state is None:
-            self._pick_done_since = None
+        """Id of the current task once its registry `done` condition has held
+        long enough, else None (also for a task that is not registered)."""
+        tracker = self._done_tracker
+        if tracker is None:
             return None
-        gripper, back = state[18], state[6]
-        holding_can = (self.pick_done_gripper_min <= gripper
-                       <= self.pick_done_gripper_max)
-
-        if self.pick_done_task and self.task_description == self.pick_done_task:
-            name, hold_s = 'pick', self.pick_done_hold_s
-            met = holding_can and back >= self.pick_done_back_height
-        elif self.trash_done_task and self.task_description == self.trash_done_task:
-            name, hold_s = 'trash', self.trash_done_hold_s
-            if holding_can:
-                self._can_seen_held = True
-            arm_err = np.abs(np.asarray(state[13:18]) - self.trash_done_right_arm_pose)
-            met = (self._can_seen_held
-                   and gripper <= self.trash_done_gripper_max
-                   and float(arm_err.max()) <= self.trash_done_arm_tol)
-        else:
-            name, hold_s, met = '', 0.0, False
-
-        if not met:
-            self._pick_done_since = None
-            return None
-        if self._pick_done_since is None:
-            self._pick_done_since = now
-        return name if now - self._pick_done_since >= hold_s else None
+        get = task_registry.state_getter(state) if state is not None else None
+        return tracker.task['id'] if tracker.update(now, get) else None
 
     def _extract_action_chunk(self, response: dict) -> Optional[np.ndarray]:
         """Extract action chunk from server response.

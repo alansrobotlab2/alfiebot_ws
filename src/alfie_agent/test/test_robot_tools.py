@@ -25,8 +25,16 @@ class FakeBody:
         self.calls.append(("timer", secs, label))
         return {"ok": True}
 
-    def task_start(self, d):
-        self.calls.append(("start", d))
+    def run_skill(self, plan):
+        self.calls.append(("skill", plan["name"], plan["rounds"],
+                           [s["id"] for s in plan["steps"]]))
+        return {"ok": True}
+
+    def task_status(self):
+        return {"state": "idle"}
+
+    def task_stop(self):
+        self.calls.append(("stop",))
         return {"ok": True}
 
 
@@ -78,8 +86,9 @@ def test_timer_minutes_and_seconds(body):
 
 
 def test_task_actions(body):
-    robot.call_tool("task", {"action": "start", "description": "pick up the can"})
-    assert body.calls[-1] == ("start", "pick up the can")
+    assert "action must be" in robot.call_tool(
+        "task", {"action": "start", "description": "pick up the can"})["error"]
+    assert body.calls == []
     assert "action must be" in robot.call_tool("task", {"action": "dance"})["error"]
 
 
@@ -145,19 +154,25 @@ def test_body_plays_plan_then_goes_quiet():
     assert len(msgs) == 1 and not b.head_moving()
 
 
+def _plan(name="clean_room", **args):
+    from alfie_agent.skills import SkillRegistry
+    return SkillRegistry().resolve(name, args)["plan"]
+
+
 def test_body_task_lifecycle_and_stop_all():
-    from std_msgs.msg import String
-    b, node, said = _make(task_max_s=0.0)
-    assert "isn't running" in b.task_start("pick up the can")["error"]
-    node.subs["groot_client/status"](String(data=str({"state": "IDLE", "active": False})))
-    assert b.task_start("pick up the can")["ok"]
-    assert node.pubs["groot_client/task_description"].msgs[-1].data == "pick up the can"
-    assert node.pubs["groot_client/activate"].msgs[-1].data is True
-    assert "already doing" in b.task_start("again")["error"]
+    b, node, said = _make(pose_timeout_s=0.1)
+    assert "isn't running" in b.run_skill(_plan("pick_can"))["error"]
+    _idle(node)
+    started = b.run_skill(_plan("pick_can"))
+    assert started["ok"] and started["started"] == "pick can"
+    assert "already doing" in b.run_skill(_plan("pick_can"))["error"]
+    assert b.task_status()["task"] == "pick can"
     assert b.stop_all() == ["task"]
     assert node.pubs["groot_client/activate"].msgs[-1].data is False
+    assert b.task_status()["last"]["result"] == "stopped by voice"
     # The run cap stops it and announces why.
-    b.task_start("pick up the can")
+    b.run_skill(_plan("pick_can"))
+    b._task["limit_s"] = 0.0
     time.sleep(0.01)
     node.timers[1]()
     assert not b.task_running() and "stopped" in said[-1]
@@ -230,12 +245,14 @@ def _wait(pred, timeout):
     return False
 
 
+PICK_TASK, TRASH_TASK = "find the can and pick it up", "put the can in the trash can"
+
+
 def test_clean_room_runs_pick_then_trash_without_deactivating():
-    from alfie_agent.body import PICK_TASK, TRASH_TASK
     b, node, said = _make(pose_timeout_s=0.1)
     _idle(node)
-    assert b.clean_room(1)["ok"]
-    assert "already doing" in b.clean_room(1)["error"]
+    assert b.run_skill(_plan(rounds=1))["ok"]
+    assert "already doing" in b.run_skill(_plan(rounds=1))["error"]
     client = FakeClient(node, b)
     try:
         assert _wait(lambda: not b.task_running(), 15.0)
@@ -246,13 +263,15 @@ def test_clean_room_runs_pick_then_trash_without_deactivating():
     # pose reset deactivates, one activation for the whole chain, off at the end
     assert acts == [False, True, False]
     assert node.pubs["cmd/head/groot"].msgs, "start pose was not held"
+    assert node.pubs["cmd/back/groot"].msgs[-1].position == pytest.approx(0.34)
     assert "1 cans in the trash" in said[-1]
+    assert "1 cans in the trash" in b.task_status()["last"]["result"]
 
 
 def test_stop_cancels_clean_room_at_once():
     b, node, said = _make(pose_timeout_s=0.1)
     _idle(node)
-    assert b.clean_room(3)["ok"]
+    assert b.run_skill(_plan(rounds=3))["ok"]
     client = FakeClient(node, b, done_after=100)
     try:
         assert _wait(lambda: node.pubs["groot_client/task_description"].msgs, 3.0)
@@ -280,35 +299,99 @@ def test_stop_deactivates_a_run_the_agent_did_not_start():
     assert node.pubs["groot_client/activate"].msgs[-1].data is False
 
 
+def _short(plan, max_s=0.5):
+    for step in plan["steps"]:
+        step["max_s"] = max_s
+    return plan
+
+
 def test_clean_room_gives_up_after_pick_timeouts():
-    b, node, said = _make(pose_timeout_s=0.1, pick_max_s=0.5, pick_attempts=2)
+    b, node, said = _make(pose_timeout_s=0.1)
     _idle(node)
-    assert b.clean_room(2)["ok"]
+    assert b.run_skill(_short(_plan(rounds=2)))["ok"]
     client = FakeClient(node, b, done_after=100)
     try:
         assert _wait(lambda: not b.task_running(), 10.0)
     finally:
         client.stop.set()
-    assert "couldn't find" in said[-1]
+    assert client.texts == [PICK_TASK, PICK_TASK]      # two attempts, then gave up
+    assert said[-1] == ("I couldn't find and pick up can 1, so I stopped. "
+                        "I put 0 in the trash.")
     assert node.pubs["groot_client/activate"].msgs[-1].data is False
 
 
-def test_task_clean_room_action():
-    calls = []
-    fb = type("B", (), {"clean_room": lambda self, n: calls.append(n) or {"ok": True}})()
-    robot.configure(body=fb)
+def _low_state(right_gripper):
+    from alfie_msgs.msg import RobotLowState
+    m = RobotLowState()
+    m.servo_state[11].current_location = right_gripper
+    return m
+
+
+def test_timeout_counts_when_the_gripper_already_holds_the_can():
+    b, node, said = _make(pose_timeout_s=0.1)
+    _idle(node)
+    node.subs["robotlowstate"](_low_state(0.40))
+    assert b._accepts_timeout(_plan()["steps"][0])       # pick: holding
+    assert not b._accepts_timeout(_plan()["steps"][1])   # trash: not released
+    assert b.run_skill(_short(_plan(rounds=1)))["ok"]
+    client = FakeClient(node, b, done_after=100)
     try:
-        robot.call_tool("task", {"action": "clean_room"})
-        robot.call_tool("task", {"action": "clean_room", "rounds": 2})
+        assert _wait(lambda: not b.task_running(), 10.0)
     finally:
-        robot.configure()
-    assert calls == [3, 2]
+        client.stop.set()
+    # The pick timeout was accepted (one attempt, client left active), then
+    # the trash step timed out with the can still in the gripper.
+    assert client.texts == [PICK_TASK, TRASH_TASK]
+    assert [m.data for m in node.pubs["groot_client/activate"].msgs] == [False, True, False]
+    assert "couldn't get can 1 into the trash" in said[-1]
 
 
-def test_clean_room_and_stop_phrases():
+@pytest.fixture
+def skill_tools(body):
+    from alfie_agent.skills import SkillRegistry
+    robot.configure(body=body, detect=None, skills=SkillRegistry())
+    return body
+
+
+def test_skill_tool_runs_registered_skills_only(skill_tools):
+    assert robot.call_tool("skill", {"name": "clean_room"})["ok"]
+    assert robot.call_tool("skill", {"name": "clean_room", "args": {"rounds": 2}})["ok"]
+    assert robot.call_tool("skill", {"name": "clean_room", "rounds": 4})["ok"]
+    assert robot.call_tool("skill", {"name": "pick_can"})["ok"]
+    assert skill_tools.calls == [
+        ("skill", "clean_room", 3, ["pick_can", "trash_can"]),
+        ("skill", "clean_room", 2, ["pick_can", "trash_can"]),
+        ("skill", "clean_room", 4, ["pick_can", "trash_can"]),
+        ("skill", "pick_can", 1, ["pick_can"])]
+    res = robot.call_tool("skill", {"name": "do a backflip"})
+    assert "no skill named" in res["error"]
+    assert robot.call_tool("skill", {"name": "clean_rooms"})["did_you_mean"] == ["clean_room"]
+    assert "1 to 10" in robot.call_tool("skill", {"name": "clean_room",
+                                                  "args": {"rounds": 99}})["error"]
+    assert len(skill_tools.calls) == 4
+
+
+def test_task_tool_no_longer_starts_anything(skill_tools):
+    assert "status or stop" in robot.call_tool(
+        "task", {"action": "start", "description": "wave"})["error"]
+    assert "status or stop" in robot.call_tool("task", {"action": "clean_room"})["error"]
+    assert robot.call_tool("task", {"action": "status"}) == {"state": "idle"}
+    assert robot.call_tool("task", {"action": "stop"})["ok"]
+    assert skill_tools.calls == [("stop",)]
+
+
+def test_skill_list_tool(skill_tools):
+    listed = robot.call_tool("skill_list", {})
+    assert listed["total"] == 3 and len(listed["skills"]) == 3
+    found = robot.call_tool("skill_list", {"query": "tidy up"})["skills"]
+    assert len(found) == 1 and found[0].startswith("clean_room(rounds?:int)")
+    robot.configure()
+    assert "aren't loaded" in robot.call_tool("skill", {"name": "clean_room"})["error"]
+
+
+def test_skill_is_a_motion_tool_and_stop_phrases():
     from alfie_agent import conversation as convo
-    assert convo.is_clean_room("clean the room")
-    assert convo.is_clean_room("Alfie, please clean up this room.")
-    assert not convo.is_clean_room("the room is clean")
+    assert "skill" in robot.MOTION_TOOLS
+    assert not hasattr(convo, "is_clean_room")
     assert convo.is_motion_stop("cancel that")
     assert convo.is_motion_stop("Alfie stop")

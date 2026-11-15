@@ -1,0 +1,20 @@
+# "Clean the room": the contest sequence. Steps are task ids from
+# alfie_gr00t/config/tasks.yaml; the policy stays active between them.
+name: clean_room
+title: clean the room
+kind: sequence
+description: >-
+  Find soda cans, pick each one up and put it in the trash can.
+  For "clean the room", "clean up" or "tidy up".
+triggers: [clean, tidy, room, trash, cans]
+params:
+  rounds: {type: integer, default: 3, min: 1, max: 10, description: how many cans}
+repeat: rounds
+steps:
+  - task: pick_can
+    failed: "I couldn't find and pick up can {round}, so I stopped. I put {count} in the trash."
+  - task: trash_can
+    failed: "I couldn't get can {round} into the trash, so I stopped. I put {count} in the trash."
+say:
+  progress: "That's {count}."
+  done: "Done. I put {count} cans in the trash. The room is clean."

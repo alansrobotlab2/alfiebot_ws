@@ -148,3 +148,59 @@ def test_unrecognized_voice_suppresses_primary_user(v):
     assert "Diet Coke" not in block
     block, _ = p.build("what soda do I like best", speaker="")
     assert "Diet Coke" in block
+
+
+# --- skills leg ---------------------------------------------------------------------
+
+@pytest.fixture
+def sp(v):
+    from alfie_agent.skills import SkillRegistry
+    return prefetch.Prefetcher(skills=SkillRegistry())
+
+
+def test_skills_leg_injects_matching_skills_first(sp):
+    facts.add_facts("Alan", "preference", ["Alan likes a clean room."])
+    block, st = sp.build("alan wants you to clean the room")
+    assert st["skills"] == 1 and st["facts"] == 1
+    assert "only if asked to do it now" in block
+    assert "- clean_room(rounds?:int) — Find soda cans" in block
+    assert block.index("clean_room(") < block.index("Known facts:")
+
+
+def test_skills_leg_runs_for_short_messages(sp):
+    block, st = sp.build("clean up")
+    assert st["skipped"] and st["skills"] == 1 and "clean_room(" in block
+    sp.reset()
+    block, st = sp.build("stop")
+    assert block == "" and st["skills"] == 0
+
+
+def test_skills_leg_no_match_and_no_registry(sp, v):
+    block, st = sp.build("what is the capital of france")
+    assert st["skills"] == 0 and "Skills you have" not in block
+    block, st = prefetch.Prefetcher().build("clean the room please")
+    assert st["skills"] == 0 and "clean_room" not in block
+
+
+def test_skills_leg_follows_the_episode_focus(sp):
+    sp.build("clean the room")
+    block, st = sp.build("do that again")
+    assert st["skills"] == 1 and "clean_room(" in block
+    # A new subject with its own keywords does not drag the skill along.
+    block, st = sp.build("what is the weather in portland tomorrow")
+    assert st["skills"] == 0
+    sp.reset()
+    block, st = sp.build("do that again")
+    assert st["skills"] == 0
+
+
+def test_skills_leg_caps_at_three_and_survives_the_char_cap(v):
+    class Many:
+        def search(self, words, limit=3):
+            return [{"name": f"s{i}", "params": {}, "description": "d" * 40}
+                    for i in range(10)][:limit]
+    p = prefetch.Prefetcher(skills=Many(), max_chars=400)
+    facts.add_facts("Alan", "preference", ["Alan " + "x" * 300 + "."])
+    block, st = p.build("what does alan like to juggle")
+    assert st["skills"] == 3 and block.count("\n- s") == 3 and len(block) <= 400
+    assert "Known facts:" not in block        # the fact row did not fit; skills did

@@ -44,7 +44,8 @@ The server can run as either:
  - `core/zmq_client.py` — ZMQ REQ/REP client for communicating with the server.
  - `scripts/groot_inference_server.py` — Standalone inference server. Loads the GR00T checkpoint, receives JPEG images + state via ZMQ msgpack, runs inference, returns raw unnormalized actions.
  - `scripts/hybrid_image_test.py` — Diagnostic tool that sends saved images through ZMQ to isolate visual domain gap issues.
- - `scripts/ab_trial.py` — Runs one robot trial: moves arms + head to the pick-task start pose through the groot mux inputs, activates the client, deactivates after `--duration`.
+ - `scripts/ab_trial.py` — Runs one robot trial: moves arms + head to the start pose of `--task` (default `pick_can`) through the groot mux inputs, sets that task's text, activates the client, deactivates after `--duration`.
+ - `task_registry.py` + `config/tasks.yaml` — The trained tasks: exact task string, start pose, time cap, attempts and done condition per task. The client reads done conditions and the start-pose check from it; `alfie_agent` builds its skills from it.
  - `scripts/rtc_ab_analysis.py` — Compares live runs on raw policy output (seam jump, jerk vs demonstrations, RTT, late %, hold %) from the client's CSV + `_chunks.jsonl` logs.
 
 ## Communication Protocol (ZMQ msgpack)
@@ -54,7 +55,8 @@ Ping: Client sends `{'ping': True}`, server returns `{'pong': True}`.
 
 ## Config Files
  - `config/groot_client.yaml` — Client ROS2 parameters: transport, server address, inference FPS, action chunking, smoothing, safety limits, task description, debug settings.
- - `config/groot_server.yaml` — Standalone server settings (checkpoint, TRT engine dir, denoising steps, RTC, ports, venv python); `launch/groot_server.launch.py` turns them into `groot_inference_server.py` flags. Current: checkpoint-26000, `alfie26k_int8_rtc` engines, 8 steps, RTC (client `latency_skip` 3).
+ - `config/groot_server.yaml` — Standalone server settings (checkpoint, TRT engine dir, denoising steps, RTC, ports, venv python); `launch/groot_server.launch.py` turns them into `groot_inference_server.py` flags. Current: checkpoint-40000, `alfie40k_int8_rtc` engines (fused 8-step head only; the 26k pair `checkpoint-26000` + `alfie26k_int8_rtc` also has a fused 4-step head), 8 steps, RTC (client `latency_skip` 3).
+ - `config/tasks.yaml` — Task registry (see Key Components). A task whose text is not listed still runs but never reports done.
  - `launch/groot_server.launch.py` — Runs the server from the Isaac-GR00T venv; skips if port 5555 is taken. `alfie_bringup` includes it (`launch_groot_server`) and the client launch (`launch_groot`), both default on.
  - `launch/groot_inference.launch.py` — Launches the client only. All parameters come from `groot_client.yaml`; a launch arg overrides the yaml only when passed.
 
@@ -151,6 +153,7 @@ Set `debug_save_images: true` in `config/groot_client.yaml` to save observation 
  - **Backend.** The old N1.6 single-file TRT bf16 DiT caused catastrophic noise in flow matching denoising and is no longer supported. The Isaac-GR00T full-pipeline INT8 engines (`--trt-engine-dir`) pass Test 7 and match PyTorch open-loop; PyTorch (~390 ms) is too slow for the current client timing. Run the Test 7 consistency check after any engine rebuild.
  - **Client runs on system python**, which needs `python3-zmq` and `python3-msgpack` (apt). `av` is only imported when `h264_conditioning` is on.
  - **Don't judge the policy from an off-distribution start.** Trials must start from the training start pose (back 0.34 m, arms tucked, head centred); 75 of 83 pick demos begin with a head scan and a large base turn, and only 8 have the can already in view.
+ - **Done conditions live in `config/tasks.yaml`**, keyed by the exact task string, not in `groot_client.yaml` (the old `pick_done_*` / `trash_done_*` parameters are gone). Restart the client after editing it. The agent starts tasks only through its skills (`alfie_agent/skills/`, README "Skills"); there is no phrase shortcut and no free-text task start.
  - **Config lives in the checkpoint**, not `alfiebot_config.py`. Always check `processor_config.json` in the checkpoint directory to know actual action representations and normalization stats.
 
 # ROS2 ---

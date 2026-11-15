@@ -43,14 +43,15 @@ _dispatch = {}
 def configure(vault_root, qmd_url=None, qmd_skip_rerank=False, room_url=None,
               see_detect=None, estop_reset=None, memory_max_bytes=1500,
               body=None, weather_location="", weather_units="fahrenheit",
-              lloyd_url="", lloyd_timeout=90.0, enroll_voice=None):
+              lloyd_url="", lloyd_timeout=90.0, enroll_voice=None, skills=None):
     """Configure the underlying tool modules (vault root, QMD + room service URLs,
     the on-demand vision `detect` callback for `look`/`turn_head`, the
     `estop_reset` callback for `clear_estop`, the MEMORY.md byte cap, the
-    ROS-side `body` for the robot tools, weather defaults and lloyd's URL)."""
+    ROS-side `body` and the `skills` registry for the robot tools, weather
+    defaults and lloyd's URL)."""
     vault.configure(vault_root)
     memory_tools.configure(memory_max_bytes)
-    robot.configure(body=body, detect=see_detect)
+    robot.configure(body=body, detect=see_detect, skills=skills)
     weather.configure(home=weather_location, units=weather_units)
     lloyd.configure(url=lloyd_url, timeout=lloyd_timeout)
     voice.configure(enroll=enroll_voice)

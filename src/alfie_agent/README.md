@@ -40,6 +40,8 @@ asrresult ─▶ agent_node ─▶ prefetch.py ─(<context> on the user msg)─
 - **`memory.py`** — the memory subsystem (context management; see below).
 - **`prefetch.py`** — per-turn automatic context injection (lloyd's
   "subliminal", slimmed down; see below).
+- **`skills/`** — the skill registry and its YAML files: what the `skill` tool
+  can run (see [Skills](#skills)).
 - **`tools/`** — in-process tool modules behind lloyd's `list_tools()` /
   `call_tool()` interface (so they can be lifted behind an MCP server later):
   - `vault.py` — `vault_read`, `vault_write` (path-escape-guarded, audited).
@@ -49,8 +51,9 @@ asrresult ─▶ agent_node ─▶ prefetch.py ─(<context> on the user msg)─
   - `facts.py` — lloyd-format fact files and the read-only `fact_get`.
   - `clock.py`, `calc.py`, `room.py`, `see.py`, `estop.py` — `current_datetime`,
     `calculate`, `identify_room`/`learn_room`, `look`, `clear_estop`.
-  - `robot.py` — `robot_status`, `turn_head`, `gesture`, `timer`, `task`, backed
-    by **`body.py`** (see [Body tools](#body-tools)).
+  - `robot.py` — `robot_status`, `turn_head`, `gesture`, `timer`, `skill`,
+    `skill_list`, `task`, backed by **`body.py`** and **`skills/`** (see
+    [Body tools](#body-tools) and [Skills](#skills)).
   - `weather.py` — `weather` via Open-Meteo (no key).
   - `web.py` — `web_search` (DuckDuckGo via `ddgs`) and `web_fetch`
     (trafilatura), voice-sized (see [Web and lloyd](#web-and-lloyd)).
@@ -101,7 +104,8 @@ asrresult ─▶ agent_node ─▶ prefetch.py ─(<context> on the user msg)─
 | `prefetch_budget_ms` | `150` | hard wall for the prefetch legs; late legs are abandoned (a late vault hit rides the next turn) |
 | `prefetch_max_chars` | `1200` | cap on the injected `<context>` block (prefill latency) |
 | `head_enabled` | `true` | allow `turn_head` / `gesture` to move the head |
-| `task_max_s` | `120.0` | a GR00T task started by the agent is stopped after this long |
+| `skills_dir` | `''` | folder of skill YAML files; `''` = the packaged `alfie_agent/skills/` |
+| `tasks_file` | `''` | GR00T task registry; `''` = the installed `alfie_gr00t` `config/tasks.yaml` |
 | `weather_location` | `''` | default place for `weather` (e.g. `Portland, Oregon`) |
 | `weather_units` | `fahrenheit` | or `celsius` |
 | `lloyd_url` | `''` | lloyd's API over the tailnet, e.g. `http://<lloyd-host>:8080`; `''` disables `ask_lloyd` |
@@ -174,7 +178,8 @@ Alfie has no "new chat" button, so context is managed automatically as
 - **Per-turn prefetch (`prefetch.py`).** Before each turn, three CPU-only legs run
   in parallel under `prefetch_budget_ms`, and what finishes is rendered into a
   `<context>` block (≤ `prefetch_max_chars`) prepended to the *model's copy* of
-  the user message (history keeps what was said):
+  the user message (history keeps what was said). A fourth, the in-memory
+  **skills** leg, runs inline and is listed first (see [Skills](#skills)):
   - **facts** — entities named in the message (`Alfie` for "you/your";
     `primary_user` + `User` for "I/my") → up to 2 entities × 3 facts;
   - **vault** — one OR-mode BM25 qmd query over the message's content words plus
@@ -219,14 +224,54 @@ half. Safety checks live in `Body`, next to the state they read.
 - **`timer(action, minutes?, seconds?, label?)`** — `set` / `list` / `cancel`.
   When one ends Alfie says so (announcements wait until he is idle, then open a
   follow-up window).
-- **`task(action, description?)`** — drives the GR00T client's existing control
-  topics: `task_description`, then `activate`. `start` needs the client running
-  and idle and the e-stop clear; a run is stopped after `task_max_s`, or when the
-  e-stop engages. `status` / `stop` as named.
+- **`skill(name, args?)`** — runs a registered skill (see [Skills](#skills)).
+  Needs the GR00T client running and idle and the e-stop clear. There is no
+  free-text way to start the policy: it only knows its trained task strings.
+- **`skill_list(query?)`** — the skills Alfie has, optionally filtered.
+- **`task(action)`** — `status` (stage, rounds done, and the result of the last
+  run, so "how did it go?" has an answer after it ended) or `stop`.
 - **Hard-wired stop.** While a task or head motion runs, any transcript with a
   stop word (`stop`, `halt`, `freeze`, `abort`, `let go`, or any stopper) stops
   both at once: no wake word, no LLM call (`conversation.is_motion_stop`). A
   hard `barge_in` stops them too.
+
+## Skills
+
+A skill is something Alfie can be asked to do, described as data. The LLM
+decides whether a request is one: there is no phrase matching, so "clean the
+room" runs the skill and "how did the clean the room challenge go?" is answered.
+
+Three kinds:
+
+| kind | what it is | how it runs |
+|---|---|---|
+| task | one trained GR00T task | generated from every entry of `alfie_gr00t/config/tasks.yaml` that has a `description` (`pick_can`, `trash_can`) |
+| `sequence` | task steps in order, optionally repeated (`clean_room`) | `Body.run_skill` on a worker thread |
+| `prompt` | instructions returned to the LLM, to carry out with its other tools | the tool result; moves nothing itself |
+
+- **Where they live.** One YAML file per skill in `alfie_agent/skills/` (format
+  in `skills/__init__.py`). What a GR00T task needs — exact training string,
+  start pose, time cap, attempts, done condition — lives in the task registry
+  on the gr00t side, where the policy client also reads it.
+- **How the LLM learns about them.** Not through the system prompt, which is
+  pinned in the LLM server and would grow with every skill. The prefetch's
+  skills leg injects the up to three skills whose name, description or
+  `triggers` share a word with the request, as `name(args) — description`, and
+  `skill_list` covers anything it missed. With `prefetch_enabled: false` only
+  `skill_list` remains.
+- **Adding one.** A new trained task: add it to `tasks.yaml` with a
+  `description`. A routine: add a YAML file here. Files are re-read when they
+  change, so the agent needs no restart; the gr00t client does, to pick up a
+  new task's done condition.
+- **What a sequence does.** Start pose, then `rounds` x the steps. A step ends
+  when the client reports its task done; the next is a task-text switch with
+  the client left active, so whatever is held is not dropped. A step that times
+  out is retried from the start pose up to its `attempts`, unless its
+  `accept_on_timeout` condition holds (the gripper already has the can). The
+  hard-wired stop cancels it at once.
+- **Checking the model's judgement.** `eval/tool_choice_eval.py` runs spoken
+  requests through the real prompt, prefetch and LLM with faked tools; it
+  includes commands that must start a skill and questions that must not.
 
 ## Web and lloyd
 
@@ -244,7 +289,7 @@ half. Safety checks live in `Body`, next to the state they read.
   lloyd only serves `/api` to its trusted networks (Tailscale `100.64.0.0/10` by
   default), so the Orin reaches it over the tailnet.
 - **Untrusted-content guard.** Once `web_search`, `web_fetch` or `ask_lloyd` has
-  returned in a turn, the harness refuses `turn_head`, `gesture` and `task` for
+  returned in a turn, the harness refuses `turn_head`, `gesture`, `skill` and `task` for
   the rest of that turn (`harness.run_turn(taint_tools=, motion_tools=)`). A page
   that says "start the task" can't move the robot; the user just asks again.
 
@@ -439,7 +484,7 @@ fact pipeline (entity resolution, contradiction handling, typed graph edges) and
 read access to lloyd's `kg.sqlite` — that needs the vault shared between the two
 machines (it is not today: `~/obsidian` here is Alfie's own), and a WAL-mode
 SQLite file should arrive as a backup-API snapshot, not a file-sync copy; plus
-skills, autonomy/workers, and inner voice (email, calendar and Discord go
+autonomy/workers, and inner voice (email, calendar and Discord go
 through `ask_lloyd`). Body: base motion (needs an `agent` source on the base in
 the mux), stereo distance for `look`, and a scene-describing vision model. The tool-module
 interface is kept MCP-shaped so these can be added incrementally.

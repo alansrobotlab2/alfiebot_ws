@@ -5,10 +5,11 @@ The idle/agent nodes steer the head between trials (e.g. toward sounds), so a
 trial would otherwise start with the head wherever idle left it. Training
 episodes start with the head centred, so this holds the head at the training
 start pose through GR00T's own mux input (priority above idle/agent), then
-activates the client, which takes over the same input, and deactivates it
-after --duration seconds.
+sets the task text, activates the client, which takes over the same input, and
+deactivates it after --duration seconds. The start pose and task text come from
+the task registry (config/tasks.yaml).
 
-    python3 ab_trial.py --duration 45
+    python3 ab_trial.py --duration 45 [--task pick_can]
 """
 
 import argparse
@@ -16,15 +17,11 @@ import time
 
 import rclpy
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
+from alfie_gr00t import task_registry
 from alfie_msgs.msg import ArmCmd, HeadCmd, RobotLowState, ServoCmd
 
-# Median pose at the start of the pick episodes, CleanTheRoom (83 episodes), rad.
-# Arm order: shoulder_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll, gripper
-LEFT_START = (0.00, 0.10, -1.48, -0.14, 0.00, 0.00)
-RIGHT_START = (0.00, 0.12, -1.48, -0.14, 0.00, 0.00)
-HEAD_START = (0.009, 0.071, -0.012)
 TOL = 0.05
 # (speed rad/s, accel rad/s^2, torque raw) - gentler than the client's arm speed
 ARM_CFG, GRIP_CFG, HEAD_CFG = (0.8, 3.0, 1000.0), (2.0, 8.0, 200.0), (1.0, 3.0, 500.0)
@@ -34,7 +31,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--duration', type=float, default=45.0)
     ap.add_argument('--settle-timeout', type=float, default=8.0)
+    ap.add_argument('--task', default='pick_can', help='task id in config/tasks.yaml')
     args = ap.parse_args()
+
+    tasks = task_registry.load()
+    task = tasks.by_id(args.task)
+    if task is None:
+        ap.error(f'unknown task {args.task!r}; known: {", ".join(tasks.tasks)}')
+    start = tasks.start_pose(task)
+    LEFT_START, RIGHT_START, HEAD_START = start['left_arm'], start['right_arm'], start['head']
 
     rclpy.init()
     node = rclpy.create_node('ab_trial')
@@ -46,6 +51,7 @@ def main():
     left_pub = node.create_publisher(ArmCmd, '/alfie/cmd/left_arm/groot', best_effort)
     right_pub = node.create_publisher(ArmCmd, '/alfie/cmd/right_arm/groot', best_effort)
     act_pub = node.create_publisher(Bool, '/alfie/groot_client/activate', control)
+    task_pub = node.create_publisher(String, '/alfie/groot_client/task_description', control)
     pose = [None]
     node.create_subscription(
         RobotLowState, '/alfie/robotlowstate',
@@ -101,7 +107,9 @@ def main():
     else:
         print('pose before activation: no robotlowstate received', flush=True)
 
+    task_pub.publish(String(data=task['text']))
     act_pub.publish(Bool(data=True))
+    print(f'task: {task["text"]}', flush=True)
     print(f'ACTIVATED {time.strftime("%T")}', flush=True)
     # Keep holding the pose until the client publishes its own (~1 chunk)
     t1 = time.monotonic()

@@ -1,10 +1,13 @@
 """
 robot — tools that read or move Alfie's body: robot_status, turn_head, gesture,
-timer, task.
+timer, skill, skill_list, task.
 
-agent_node wires this module via ``configure(body=..., detect=...)``: ``body`` is
-the ROS-side ``alfie_agent.body.Body``; ``detect(prompt)`` is the same nanoowl
-call the `look` tool uses, so ``turn_head`` can turn toward a named object. All
+agent_node wires this module via ``configure(body=..., detect=..., skills=...)``:
+``body`` is the ROS-side ``alfie_agent.body.Body``; ``detect(prompt)`` is the
+same nanoowl call the `look` tool uses, so ``turn_head`` can turn toward a named
+object; ``skills`` is the ``alfie_agent.skills.SkillRegistry``. ``skill`` runs
+only what that registry holds: the policy knows its trained task strings and
+nothing else, so there is no free-text way to start it. All
 safety checks (e-stop, a running task owning the head, travel limits) live in
 Body, next to the state they read, so the model can't talk its way past them.
 
@@ -15,8 +18,9 @@ from alfie_agent import head_motion as hm
 
 _body = None
 _detect = None
+_skills = None
 
-MOTION_TOOLS = frozenset({"turn_head", "gesture", "task"})
+MOTION_TOOLS = frozenset({"turn_head", "gesture", "task", "skill"})
 
 # Horizontal FOV per detector camera stream. left_wide is idle_behavior's
 # measured 104 deg; left_center is a 1:1 352-px crop of the 800-px eye, so
@@ -24,10 +28,11 @@ MOTION_TOOLS = frozenset({"turn_head", "gesture", "task"})
 _HFOV = {"wide": 104.0, "center": 58.9}
 
 
-def configure(body=None, detect=None):
-    global _body, _detect
+def configure(body=None, detect=None, skills=None):
+    global _body, _detect, _skills
     _body = body
     _detect = detect
+    _skills = skills
 
 
 def _err(msg):
@@ -110,15 +115,32 @@ def _task(params):
     if (e := _need_body()):
         return e
     action = str(params.get("action") or "").lower()
-    if action == "start":
-        return _body.task_start(params.get("description"))
     if action == "stop":
         return _body.task_stop()
     if action == "status":
         return _body.task_status()
-    if action == "clean_room":
-        return _body.clean_room(int(params.get("rounds") or 3))
-    return _err("action must be start, clean_room, status or stop")
+    return _err("action must be status or stop (start one with the skill tool)")
+
+
+def _skill(params):
+    if _skills is None:
+        return _err("my skills aren't loaded right now.")
+    # Tolerate arguments given beside the name instead of inside args.
+    args = params.get("args")
+    if not isinstance(args, dict):
+        args = {k: v for k, v in params.items() if k not in ("name", "args")}
+    res = _skills.resolve(params.get("name"), args)
+    if "plan" not in res:
+        return res              # an error, or a prompt skill's instructions
+    if (e := _need_body()):
+        return e
+    return _body.run_skill(res["plan"])
+
+
+def _skill_list(params):
+    if _skills is None:
+        return _err("my skills aren't loaded right now.")
+    return _skills.listing(str(params.get("query") or ""))
 
 
 # --- MCP-shaped module interface ---
@@ -165,25 +187,46 @@ _TOOLS = [
         },
     },
     {
-        "name": "task",
-        "description": "Physical tasks with your arms via your learned policy: "
-                       "action start (description, e.g. 'find the can and pick it "
-                       "up'), clean_room (find, pick up and trash cans, rounds = "
-                       "how many, default 3; for 'clean the room' / 'clean up'), "
-                       "status, or stop. Start ONLY when the user explicitly asks "
-                       "you to do a physical task.",
+        "name": "skill",
+        "description": "Run one of your skills by name (physical tasks such as "
+                       "picking things up or cleaning the room; args as that "
+                       "skill lists them). Skills that fit a request are shown "
+                       "to you with it; skill_list finds others. Run one ONLY "
+                       "when the user asks you to do it now. A question about a "
+                       "skill, or about a run that already happened, is NOT a "
+                       "request: answer it (task status has the last result).",
         "parameters": {
             "type": "object",
-            "properties": {"action": {"type": "string"},
-                           "description": {"type": "string"},
-                           "rounds": {"type": "integer"}},
+            "properties": {"name": {"type": "string"},
+                           "args": {"type": "object"}},
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "skill_list",
+        "description": "List the skills you have, optionally only those matching "
+                       "query. For 'what can you do?' or when no shown skill fits.",
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "task",
+        "description": "The skill that is running or last ran: action status "
+                       "(stage, rounds done, the last result) or stop.",
+        "parameters": {
+            "type": "object",
+            "properties": {"action": {"type": "string"}},
             "required": ["action"],
         },
     },
 ]
 
 _HANDLERS = {"robot_status": _robot_status, "turn_head": _turn_head,
-             "gesture": _gesture, "timer": _timer, "task": _task}
+             "gesture": _gesture, "timer": _timer, "skill": _skill,
+             "skill_list": _skill_list, "task": _task}
 
 
 def list_tools():

@@ -65,6 +65,7 @@ from alfie_agent import conversation as convo
 from alfie_agent import harness, memory, prompt_builder, tools
 from alfie_agent.body import Body
 from alfie_agent.prefetch import Prefetcher
+from alfie_agent.skills import SkillRegistry
 from alfie_agent.llm_client import LLMClient
 from alfie_agent.speakable import ClauseStream
 from alfie_agent.tools import lloyd as lloyd_tool
@@ -163,15 +164,16 @@ class AgentNode(Node):
         self.compaction_enabled = bool(
             self.declare_parameter('compaction_enabled', True).value)
         # Body tools (body.py / tools/robot.py): agent head motion on the mux's
-        # `agent` head source, and the GR00T task run cap.
+        # `agent` head source.
         head_enabled = bool(self.declare_parameter('head_enabled', True).value)
-        task_max_s = float(self.declare_parameter('task_max_s', 120.0).value)
-        # Clean the room (body.clean_room): cans per run, per-stage time limits
-        # (demos: pick max 56 s, trash max 33 s), pick tries per can.
-        self.clean_room_rounds = int(self.declare_parameter('clean_room_rounds', 3).value)
-        pick_max_s = float(self.declare_parameter('pick_max_s', 90.0).value)
-        trash_max_s = float(self.declare_parameter('trash_max_s', 60.0).value)
-        pick_attempts = int(self.declare_parameter('pick_attempts', 2).value)
+        # Skills (skills/): what the `skill` tool can run. '' = the packaged
+        # skill files and the installed alfie_gr00t task registry, which holds
+        # each task's time cap, attempts and done condition.
+        self.skills = SkillRegistry(
+            skill_dir=self.declare_parameter('skills_dir', '').value or None,
+            tasks_path=self.declare_parameter('tasks_file', '').value or None,
+            log=lambda text: self.get_logger().error(f'skills: {text}'))
+        self.get_logger().info(f'Skills: {", ".join(self.skills.names()) or "none"}')
         # Outside services: weather (Open-Meteo) and lloyd's agent API (over the
         # tailnet; '' disables ask_lloyd).
         weather_location = self.declare_parameter('weather_location', '').value
@@ -191,7 +193,8 @@ class AgentNode(Node):
             recent_window_min=self.recent_window_min,
             # Whose facts a first-person question ("what's my favorite...")
             # loads; '' = only the generic `User` entity.
-            primary_user=self.declare_parameter('primary_user', '').value)
+            primary_user=self.declare_parameter('primary_user', '').value,
+            skills=self.skills)
 
         # On-demand vision: a service client for the nanoowl detector. Created
         # before tools.configure so the `look` tool can be wired to it.
@@ -214,9 +217,7 @@ class AgentNode(Node):
         self._announcements = []
         self.body = Body(self, announce=self._announce,
                          estopped=lambda: self._estopped,
-                         task_max_s=task_max_s, head_enabled=head_enabled,
-                         pick_max_s=pick_max_s, trash_max_s=trash_max_s,
-                         pick_attempts=pick_attempts)
+                         head_enabled=head_enabled)
 
         # --- brain: tools, system prompt, LLM client ---
         tools.configure(self.vault_root, qmd_url=qmd_url,
@@ -224,7 +225,7 @@ class AgentNode(Node):
                         see_detect=self._nanoowl_detect,
                         estop_reset=self._estop_reset,
                         memory_max_bytes=memory_max_bytes,
-                        body=self.body,
+                        body=self.body, skills=self.skills,
                         weather_location=weather_location,
                         weather_units=weather_units,
                         lloyd_url=lloyd_url, lloyd_timeout=lloyd_timeout,
@@ -520,17 +521,7 @@ class AgentNode(Node):
             self.get_logger().info(f'Ignoring wake utterance: {command}')
             return
 
-        # 3b. The contest command: start the sequence directly, no LLM.
         busy = self._turn_running or self._speaking
-        if convo.is_clean_room(command):
-            if busy:
-                self.tts_stop_pub.publish(Empty())
-                self._cancel_active('clean the room')
-            res = self.body.clean_room(self.clean_room_rounds)
-            self.get_logger().warn(f'Clean the room: {res}')
-            self._announce("Cleaning the room." if res.get("ok")
-                           else f"I can't clean the room: {res.get('error')}.")
-            return
 
         # 4. Conversation words.
         if convo.is_closer(command) or (busy and convo.is_stopper(command)):
@@ -775,10 +766,11 @@ class AgentNode(Node):
         if self.prefetch_enabled:
             try:
                 context, st = self.prefetcher.build(text, speaker=speaker)
-                if not st.get('skipped'):
+                if not st.get('skipped') or st['skills']:
                     late = f", late={','.join(st['late'])}" if st['late'] else ''
                     self.get_logger().info(
-                        f"prefetch {st['ms']}ms: facts={st['facts']} "
+                        f"prefetch {st['ms']}ms: skills={st['skills']} "
+                        f"facts={st['facts']} "
                         f"vault={st['vault']} earlier={st['earlier']} "
                         f"carried={st['carried']}{late} -> {st['chars']} chars")
             except Exception as e:  # prefetch is best-effort; never block a turn

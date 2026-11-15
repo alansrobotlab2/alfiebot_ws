@@ -9,6 +9,15 @@ prefix (agent_node._pin_base_prefix) is untouched. History keeps exactly what wa
 said, as with the interruption note.
 
 Legs (all CPU, no LLM call — the Orin has one LLM slot and the turn needs it):
+  * **skills**  — the skills (alfie_agent.skills) whose name, description or
+                  trigger words share a word with the message, top 3, as
+                  ``name(args) — description``. This is how the model learns a
+                  skill exists: they are not in the system prompt. In-memory, so
+                  it runs inline and is never late; unlike the other legs it
+                  also runs for short messages ("clean up"). With no match on
+                  the message itself, a message of at most two keywords
+                  falls back to the episode's focus keywords, so "do it
+                  again" still carries its skill.
   * **facts**   — entities named in the message (plus the recognized speaker,
                   else ``primary_user``, and ``User`` for first-person
                   questions) → up to 2 entities × 3 facts from memory/facts/.
@@ -25,7 +34,7 @@ Legs (all CPU, no LLM call — the Orin has one LLM slot and the turn needs it):
 Kept from lloyd: the budget (``budget_ms``; late legs are abandoned, not awaited),
 ``SessionFocus``-style keyword weights decaying per turn (so "what about the
 other one?" keeps its topic), carrying a late vault result to the next turn, and
-skipping short messages. Dropped: skills/backlog/ambient legs, the per-N-turn
+skipping short messages. Dropped: backlog/ambient legs, the per-N-turn
 topic-extraction LLM call, and the 2–8 KB block size — every injected token is
 prefill latency here, so the block is capped at ``max_chars``.
 """
@@ -49,6 +58,10 @@ FACTS_PER_ENTITY = 3
 MAX_ENTITIES = 2
 EARLIER_MAX = 3
 EARLIER_DAYS = 3
+SKILLS_MAX = 3
+# The focus fallback of the skills leg is for follow-ups that name nothing
+# themselves ("do it again", "three of them"), not for a change of subject.
+FOCUS_SKILL_MAX_KWS = 2
 
 # Files the system prompt already carries, or that the facts leg covers.
 _VAULT_SKIP = ("memory/facts/", "alfie/MEMORY.md", "alfie/SOUL.md")
@@ -127,7 +140,8 @@ class Prefetcher:
     """Builds the per-turn ``<context>`` block. One instance per agent node."""
 
     def __init__(self, *, budget_ms=150, max_chars=1200, recent_window_min=30,
-                 primary_user=""):
+                 primary_user="", skills=None):
+        self.skills = skills      # alfie_agent.skills.SkillRegistry, or None
         self.primary_user = primary_user.strip()
         self.budget_s = budget_ms / 1000.0
         self.max_chars = max_chars
@@ -226,6 +240,16 @@ class Prefetcher:
                 rows.append(f"{local.strftime('%a %H:%M')}: {e['summary'].strip()}")
         return rows[-EARLIER_MAX:]
 
+    def _skills_leg(self, text):
+        if self.skills is None:
+            return []
+        found = self.skills.search(stems(text), limit=SKILLS_MAX)
+        if not found and len(keywords(text)) <= FOCUS_SKILL_MAX_KWS:
+            focus = self.focus.top(exclude=set(keywords(text)))
+            found = self.skills.search({stem(w) for w in focus}, limit=SKILLS_MAX)
+        from alfie_agent import skills as skill_mod   # (skills imports this module)
+        return [skill_mod.line(s) for s in found]
+
     # --- public API -------------------------------------------------------------
 
     def build(self, text, speaker=""):
@@ -242,9 +266,17 @@ class Prefetcher:
         t0 = time.monotonic()
         self.focus.update(text)
         kws = keywords(text)
-        stats = {"facts": 0, "vault": 0, "earlier": 0, "late": [], "carried": 0}
+        stats = {"skills": 0, "facts": 0, "vault": 0, "earlier": 0, "late": [],
+                 "carried": 0}
+        try:
+            skill_rows = self._skills_leg(text)
+        except Exception:  # a broken leg never breaks a turn
+            skill_rows = []
+        stats["skills"] = len(skill_rows)
         if len((text or "").strip()) < MIN_CHARS or not kws:
-            return "", {**stats, "skipped": True, "ms": 0}
+            block = render({"skills": skill_rows}, self.max_chars)
+            return block, {**stats, "skipped": True, "chars": len(block),
+                           "ms": round((time.monotonic() - t0) * 1000)}
 
         query = " ".join(kws + self.focus.top(exclude=set(kws)))
         futs = {
@@ -255,7 +287,7 @@ class Prefetcher:
         remaining = max(0.0, self.budget_s - (time.monotonic() - t0))
         wait(futs.values(), timeout=remaining)
 
-        sections = {"facts": [], "vault": [], "earlier": []}
+        sections = {"skills": skill_rows, "facts": [], "vault": [], "earlier": []}
         for name, fut in futs.items():
             if not fut.done():
                 stats["late"].append(name)
@@ -310,14 +342,16 @@ def _recent_episode(path, cutoff):
     return ts >= cutoff
 
 
-_HEADINGS = {"facts": "Known facts:", "vault": "Notes:",
+_HEADINGS = {"skills": "Skills you have that may relate to this (run one with the "
+                       "skill tool only if asked to do it now):",
+             "facts": "Known facts:", "vault": "Notes:",
              "earlier": "Earlier conversations:"}
 
 
 def render(sections, max_chars):
     """Render the legs into a ``<context>`` block of at most ``max_chars``.
 
-    Sections are filled in priority order (facts, notes, earlier) and a row that
+    Sections are filled in priority order (skills, facts, notes, earlier) and a row that
     would cross the cap is dropped whole, never cut mid-sentence.
     """
     head = ("<context>\nRetrieved automatically from your memory for this "
@@ -325,7 +359,7 @@ def render(sections, max_chars):
     tail = "\n</context>"
     out = [head]
     used = len(head) + len(tail)
-    for name in ("facts", "vault", "earlier"):
+    for name in ("skills", "facts", "vault", "earlier"):
         rows = sections.get(name) or []
         if not rows:
             continue

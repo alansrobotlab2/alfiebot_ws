@@ -1,0 +1,78 @@
+# The GR00T tasks the deployed policy was trained on: one entry per task string.
+#
+# Read by groot_client (done conditions, start-pose check), ab_trial.py (start
+# pose) and alfie_agent (skills; every task with a `description` is offered to
+# the LLM as a skill). Loader + condition evaluator: alfie_gr00t/task_registry.py.
+#
+# Task fields
+#   text               exact training string (meta/tasks.jsonl); the policy is
+#                      conditioned on it, so it must match character for character
+#   dataset            which dataset / checkpoint family knows this string
+#   description        one line for the agent's skill list (omit = not offered)
+#   start_pose         name under `poses`; where a run of this task begins
+#   max_s              time cap for one attempt
+#   attempts           tries before giving up (pose reset between tries)
+#   holds_object       true = the robot ends holding something, so the policy
+#                      must stay active afterwards (no pose reset, no deactivate)
+#   done               the client ends the task (hold pose, base stopped,
+#                      inference paused) once every `all` clause has held for
+#                      `hold_s`. `after` clauses must each have been true at
+#                      some earlier moment of this task (latched).
+#   accept_on_timeout  clauses that turn a timeout into a success
+#
+# Clauses, on the measured 22D state (rad, m):
+#   {joint: NAME, min: X, max: Y}          either bound may be omitted
+#   {joints: GROUP, near: [..], tol: T}    every joint within T of the target
+# Names: back, left_gripper, right_gripper, <side>_shoulder_yaw,
+#   <side>_shoulder_pitch, <side>_elbow_pitch, <side>_wrist_pitch,
+#   <side>_wrist_roll, head_yaw, head_pitch, head_roll.
+# Groups: left_arm, right_arm (5 joints, no gripper), head (3).
+
+poses:
+  # Median pose at the start of the CleanTheRoom pick episodes (83 episodes).
+  # Arm order: shoulder_yaw, shoulder_pitch, elbow_pitch, wrist_pitch,
+  # wrist_roll, gripper.
+  tucked:
+    left_arm: [0.00, 0.10, -1.48, -0.14, 0.00, 0.00]
+    right_arm: [0.00, 0.12, -1.48, -0.14, 0.00, 0.00]
+    head: [0.009, 0.071, -0.012]
+    back: 0.34
+
+tasks:
+  pick_can:
+    text: "find the can and pick it up"
+    dataset: CleanTheRoom
+    description: Find a soda can and pick it up.
+    start_pose: tucked
+    max_s: 90
+    attempts: 2
+    holds_object: true
+    # Grasp confirmed: right gripper stalled on the can (open reads 0,
+    # closed-empty ~0.78, holding 0.38-0.43 in the demos) and the back lifted.
+    # 0.30 m, not 0.34: live lifts settle at 0.32-0.35 m (2026-11-13 runs).
+    # Without this the model runs on into the trash motion.
+    done:
+      hold_s: 0.5
+      all:
+        - {joint: right_gripper, min: 0.30, max: 0.55}
+        - {joint: back, min: 0.30}
+    accept_on_timeout:
+      - {joint: right_gripper, min: 0.30, max: 0.55}
+
+  trash_can:
+    text: "put the can in the trash can"
+    dataset: CleanTheRoom
+    description: Put the can you are holding in the trash can.
+    start_pose: tucked
+    max_s: 60
+    # Can released and the right arm back at the tucked pose (how all 108
+    # trash demos end); the can must first have been seen held.
+    done:
+      hold_s: 0.5
+      after:
+        - {joint: right_gripper, min: 0.30, max: 0.55}
+      all:
+        - {joint: right_gripper, max: 0.1}
+        - {joints: right_arm, near: [0.0, 0.12, -1.48, -0.14, 0.0], tol: 0.1}
+    accept_on_timeout:
+      - {joint: right_gripper, max: 0.15}
