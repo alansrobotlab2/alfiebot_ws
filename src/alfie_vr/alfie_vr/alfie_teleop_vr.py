@@ -114,7 +114,12 @@ class AlfieTeleopVRNode(Node):
         self.max_joint_speed = param(
             'max_joint_speed', 4.0, 'Rate limit on published arm/head joint targets (rad/s)')
         self.head_yaw_limit = param('head_yaw_limit', math.pi, 'Head yaw command limit (rad)')
-        self.head_pitch_limit = param('head_pitch_limit', 1.0472, 'Head pitch command limit (rad)')
+        # Servo +pitch looks down. Down limit = neck tilt servo max angle limit
+        # 2850 counts: (2850 - 2048) * 2pi / 4096 = 1.230 rad (70.5 deg).
+        self.head_pitch_down_limit = param(
+            'head_pitch_down_limit', 1.230, 'Head pitch command limit looking down (rad, +pitch)')
+        self.head_pitch_up_limit = param(
+            'head_pitch_up_limit', 1.0472, 'Head pitch command limit looking up (rad, -pitch)')
         self.head_roll_limit = param('head_roll_limit', 0.35, 'Head roll command limit (rad)')
         # Head tracking multipliers (headset rotation -> robot head rotation)
         self.head_yaw_multiplier = param('head_yaw_multiplier', 2.0, 'Headset yaw gain')
@@ -134,7 +139,7 @@ class AlfieTeleopVRNode(Node):
             'with a left stick click (freeze + record a correction episode)'))
         self.tunable_params = {
             'link_timeout', 'hold_timeout', 'base_stop_sec', 'max_joint_speed',
-            'head_yaw_limit', 'head_pitch_limit', 'head_roll_limit',
+            'head_yaw_limit', 'head_pitch_down_limit', 'head_pitch_up_limit', 'head_roll_limit',
             'head_yaw_multiplier', 'head_pitch_multiplier', 'head_roll_multiplier',
             'head_yaw_sign', 'head_pitch_sign', 'head_roll_sign',
             'max_linear_vel', 'max_angular_vel'}
@@ -679,7 +684,7 @@ class AlfieTeleopVRNode(Node):
             self.desired[HEAD_YAW] = _clamp(
                 mapped[0] + offset[0], -self.head_yaw_limit, self.head_yaw_limit)
         self.desired[HEAD_PITCH] = _clamp(
-            mapped[1] + offset[1], -self.head_pitch_limit, self.head_pitch_limit)
+            mapped[1] + offset[1], -self.head_pitch_up_limit, self.head_pitch_down_limit)
         self.desired[HEAD_ROLL] = _clamp(
             mapped[2] + offset[2], -self.head_roll_limit, self.head_roll_limit)
 
