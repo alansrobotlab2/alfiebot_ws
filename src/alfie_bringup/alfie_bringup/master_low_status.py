@@ -2,6 +2,7 @@ import math
 from typing import Dict, List, Optional
 import rclpy
 from rclpy.node import Node
+from rcl_interfaces.msg import SetParametersResult
 from alfie_msgs.msg import (RobotLowState, ArmState, HeadState, BackState, JetsonState,
                             MecanumState)
 from alfie_msgs.msg import ServoState, SpeechRequest
@@ -49,6 +50,18 @@ GRIPPER_SERVO_INDEX = 5  # in each arm module's servo list
 # protective.
 AUTO_ESTOP_TEMP_WARN_SEC = 2.0
 AUTO_ESTOP_TEMP_SEC = 10.0
+
+# Tilt auto-estop from the back board's BNO085. Tilt is the angle between the
+# torso's up axis and gravity, taken from the fused quaternion (both the game
+# and the mag rotation vector are gravity-referenced, so the compass decouple
+# does not move it). The fused quaternion rides through base accel/braking far
+# better than the raw accelerometer. Standing on the lab floor it reads
+# 1.68 +/- 0.02 deg (2026-11-15), mount and floor combined.
+AUTO_ESTOP_TILT_DEG = 5.0
+AUTO_ESTOP_TILT_WARN_DEG = 4.0
+# Tilt must persist this long (~5 messages at 50 Hz) before tripping; rejects a
+# single corrupt sample without meaningfully delaying a real tip.
+AUTO_ESTOP_TILT_SEC = 0.1
 
 
 # ============================================================================
@@ -104,6 +117,16 @@ MODULE_JOINT_NAMES = {
     'right_arm': RIGHT_ARM_JOINT_NAMES,
     'head': HEAD_JOINT_NAMES,
 }
+
+
+def tilt_from_quaternion(x: float, y: float, z: float, w: float) -> Optional[float]:
+    """Angle (deg) between the body z axis and world up, or None for a
+    degenerate quaternion (all-zero / uninitialized telemetry)."""
+    n = x * x + y * y + z * z + w * w
+    if n < 0.5 or n > 1.5:
+        return None
+    cos_tilt = 1.0 - 2.0 * (x * x + y * y) / n  # world-z component of body z
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos_tilt))))
 
 
 def _spoken_joint(module: str, index: int) -> str:
@@ -202,6 +225,22 @@ class MasterLowStatusNode(Node):
         # Per-module {servo_index: time the filtered temp first reached critical (s)}
         self._hot_since: Dict[str, Dict[int, float]] = {
             'left_arm': {}, 'right_arm': {}, 'head': {}}
+        # ---- Tilt auto-estop (BNO085 on the back board) ----------------------
+        # Settable at runtime, e.g. to drive a robot off a ramp after a trip:
+        #   ros2 param set /alfie/master_low_status_node auto_estop_tilt_enabled false
+        self.declare_parameter('auto_estop_tilt_enabled', True)
+        self.declare_parameter('auto_estop_tilt_deg', AUTO_ESTOP_TILT_DEG)
+        self.declare_parameter('auto_estop_tilt_warn_deg', AUTO_ESTOP_TILT_WARN_DEG)
+        self.declare_parameter('auto_estop_tilt_sec', AUTO_ESTOP_TILT_SEC)
+        self._load_tilt_params()
+        self.add_on_set_parameters_callback(self._on_set_params)
+        self._tilt_since: Optional[float] = None   # first time tilt >= trip angle
+        self._tilt_warned = False
+        # Set when we publish estop for tilt; cleared when the tilt goes away or
+        # the mux latch is reset, so a reset while still tilted trips again.
+        self._tilt_tripped = False
+        self.tilt_deg: Optional[float] = None       # latest reading, for logs
+
         qos_latched = QoSProfile(
             depth=1, reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -277,6 +316,7 @@ class MasterLowStatusNode(Node):
             self._say(f'E-stop engaged. {reason}.' if reason else 'E-stop engaged.')
         else:
             self._say('E-stop cleared.')
+            self._tilt_tripped = False  # still tilted after a reset -> trip again
         self._estop_reason = None
 
     def _say(self, text: str) -> None:
@@ -312,6 +352,7 @@ class MasterLowStatusNode(Node):
         self.back_state = msg
         self.health_checks['back_rate'].update()
         self.health_checks['back_board_temp'].update(float(msg.board_temp))
+        self._check_tilt(msg)
 
     def mecanum_callback(self, msg: MecanumState) -> None:
         self.health_checks['mecanum_board_temp'].update(float(msg.board_temp))
@@ -503,6 +544,78 @@ class MasterLowStatusNode(Node):
             error_msg = check.check()
             if error_msg:
                 self.get_logger().error(error_msg)
+
+    # ========================================================================
+    # Auto-estop on tilt
+    # ========================================================================
+
+    def _load_tilt_params(self) -> None:
+        g = lambda n: self.get_parameter(n).value  # noqa: E731
+        self.auto_estop_tilt_enabled = bool(g('auto_estop_tilt_enabled'))
+        self.auto_estop_tilt_deg = float(g('auto_estop_tilt_deg'))
+        self.auto_estop_tilt_warn_deg = float(g('auto_estop_tilt_warn_deg'))
+        self.auto_estop_tilt_sec = float(g('auto_estop_tilt_sec'))
+
+    def _on_set_params(self, params) -> SetParametersResult:
+        tilt = [p for p in params if p.name.startswith('auto_estop_tilt_')]
+        if tilt:
+            # The callback runs before the new values are stored, so read them here
+            values = {p.name: p.value for p in tilt}
+            self.auto_estop_tilt_enabled = bool(values.get(
+                'auto_estop_tilt_enabled', self.auto_estop_tilt_enabled))
+            self.auto_estop_tilt_deg = float(values.get(
+                'auto_estop_tilt_deg', self.auto_estop_tilt_deg))
+            self.auto_estop_tilt_warn_deg = float(values.get(
+                'auto_estop_tilt_warn_deg', self.auto_estop_tilt_warn_deg))
+            self.auto_estop_tilt_sec = float(values.get(
+                'auto_estop_tilt_sec', self.auto_estop_tilt_sec))
+            self.get_logger().warn(
+                f'Tilt e-stop {"enabled" if self.auto_estop_tilt_enabled else "DISABLED"}: '
+                f'trip {self.auto_estop_tilt_deg:.1f} deg for {self.auto_estop_tilt_sec:.2f}s, '
+                f'warn {self.auto_estop_tilt_warn_deg:.1f} deg')
+        return SetParametersResult(successful=True)
+
+    def _check_tilt(self, msg: BackState) -> None:
+        """Trip the e-stop when the torso tilts past auto_estop_tilt_deg.
+
+        Runs on every back state message (~50 Hz). The tilt must hold for
+        auto_estop_tilt_sec before tripping. Unlike the servo faults, a reset
+        while the robot is still tilted trips again; disable the check at
+        runtime (auto_estop_tilt_enabled) to drive or carry it back to level.
+        """
+        q = msg.imu
+        tilt = tilt_from_quaternion(q.orientation_x, q.orientation_y,
+                                    q.orientation_z, q.orientation_w)
+        if tilt is None:
+            return
+        self.tilt_deg = tilt
+        if not self.auto_estop_tilt_enabled:
+            self._tilt_since = None
+            return
+
+        now = self.get_clock().now().nanoseconds / 1e9
+        if tilt >= self.auto_estop_tilt_warn_deg:
+            if not self._tilt_warned and not self._estopped:
+                self._tilt_warned = True
+                self.get_logger().warn(
+                    f'Tilt warning: {tilt:.1f} deg (e-stop at {self.auto_estop_tilt_deg:.1f})')
+        else:
+            self._tilt_warned = False
+
+        if tilt < self.auto_estop_tilt_deg:
+            self._tilt_since = None
+            self._tilt_tripped = False
+            return
+        if self._tilt_since is None:
+            self._tilt_since = now
+        if self._tilt_tripped or self._estopped or now - self._tilt_since < self.auto_estop_tilt_sec:
+            return
+        self._tilt_tripped = True
+        self._estop_reason = f'Tilted {tilt:.0f} degrees'
+        self.estop_pub.publish(Empty())
+        self.get_logger().error(
+            f'AUTO E-STOP: tilt {tilt:.1f} deg >= {self.auto_estop_tilt_deg:.1f} deg '
+            f'for {now - self._tilt_since:.2f}s')
 
     # ========================================================================
     # Auto-estop on servo faults
