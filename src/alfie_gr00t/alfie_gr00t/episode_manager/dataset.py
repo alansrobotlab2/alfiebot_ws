@@ -169,18 +169,25 @@ class Dataset:
         """
         info = self.info()
         tasks = self.tasks()
+
+        def entry(index, text, reg_task):
+            reg_task = reg_task or {}
+            return {'index': index, 'task': text, 'id': reg_task.get('id'),
+                    'number': reg_task.get('number'),
+                    'instruction': reg_task.get('instruction'),
+                    'description': reg_task.get('description')}
+
         task_list = []
         seen = set()
         for i, text in sorted(tasks.items()):
-            reg_task = registry.by_text(text) if registry else None
-            task_list.append({'index': i, 'task': text,
-                              'id': reg_task['id'] if reg_task else None,
-                              'instruction': reg_task.get('instruction') if reg_task else None})
+            task_list.append(entry(i, text, registry.by_text(text) if registry else None))
             seen.add(text)
         for reg_task in (registry.recordable() if registry else ()):
             if reg_task['text'] not in seen:
-                task_list.append({'index': None, 'task': reg_task['text'], 'id': reg_task['id'],
-                                  'instruction': reg_task.get('instruction')})
+                task_list.append(entry(None, reg_task['text'], reg_task))
+        # Ordered by task ID, so the list reads the same in every session;
+        # strings that are not registry tasks follow, by index.
+        task_list.sort(key=lambda t: (t['id'] is None, t['id'] or '', t['index'] or 0))
         session = self.session()
         demos = set(self.demo_names())
         episodes = []
@@ -188,9 +195,11 @@ class Dataset:
             index = int(ep['episode_index'])
             files = {key: path.is_file() for key, path in self._paths(info, index).items()}
             bag = episode_bag(ep)
+            task_index = ep.get('task_index')
             row = {
                 'index': index,
-                'task_index': ep.get('task_index'),
+                # None = unlabelled (the converter writes -1 until it is tagged)
+                'task_index': task_index if task_index is not None and task_index >= 0 else None,
                 'length': ep.get('length'),
                 'duration': ep.get('duration'),
                 'bag': bag,
@@ -221,6 +230,7 @@ class Dataset:
             'hw': (session or {}).get('hw'),
             'fps': info.get('fps'),
             'tasks': task_list,
+            'unlabelled': sum(1 for e in episodes if e['task_index'] is None),
             'episodes': episodes,
             'total_frames': sum(e['length'] or 0 for e in episodes),
             'pending': sorted(demos - sources),
@@ -275,15 +285,24 @@ class Dataset:
         log = [f'episode {index}: task {ep.get("task_index")} -> {task_index}'
                + (f' ({reg_task["id"]})' if reg_task else '')]
 
-        parquet = self._paths(self.info(), index)['parquet']
+        info = self.info()
+        parquet = self._paths(info, index)['parquet']
+        frames = None
         # Parquet first: if it fails, the metadata still matches the data.
         if parquet.is_file():
-            result = subprocess.run([python, str(SET_TASK_SCRIPT), str(parquet), str(task_index)],
-                                    capture_output=True, text=True, timeout=60)
+            cmd = [python, str(SET_TASK_SCRIPT), str(parquet), str(task_index)]
+            if reg_task is not None and info.get('fps'):
+                # The grasp and done frames depend on the task: recompute them.
+                cmd += [reg_task['id'], str(info['fps']), registry.source]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode != 0:
                 raise DatasetError(f'parquet update failed ({python}): '
                                    f'{(result.stderr or result.stdout).strip()}')
-            log.append(result.stdout.strip())
+            for line in result.stdout.strip().splitlines():
+                if line.startswith('FRAMES '):
+                    frames = json.loads(line[len('FRAMES '):])
+                else:
+                    log.append(line)
         else:
             log.append(f'{parquet.name} not found, metadata only')
 
@@ -296,6 +315,11 @@ class Dataset:
                       {'task_id': None, 'family': None, 'verb': None, 'object': None,
                        'destination': None, 'start_state': None, 'end_state': None})
             ep.update(fields)
+        if frames is not None:
+            ep.update(frames)
+            log.append(f'grasp frame {frames["close_frame"]}, done frame {frames["done_frame"]}')
+        elif 'bag' in ep:
+            ep.update(close_frame=None, done_frame=None)    # belonged to the old task
         self._write_episodes(episodes)
         log.append('episodes.jsonl written')
         return log
@@ -327,6 +351,11 @@ class Dataset:
             raise DatasetError(f'{self.name} is not a recording session')
         if info.get('closed'):
             raise DatasetError(f'session {self.name} is already closed')
+        unlabelled = [int(ep['episode_index']) for ep in self.episodes()
+                      if ep.get('task_index') is None or ep['task_index'] < 0]
+        if unlabelled:
+            raise DatasetError(f'{len(unlabelled)} episodes have no task yet; tag or delete '
+                               f'them before closing')
         info.update(extra)
         info['schema'] = self.schema()
         _write_atomic(self.root / 'session.json', json.dumps(info, indent=2) + '\n')

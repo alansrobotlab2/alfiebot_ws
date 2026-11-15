@@ -198,10 +198,11 @@ class EpisodeManager:
 
     def registry_info(self) -> Dict[str, Any]:
         reg = self.registry()
-        tasks = [{'id': t['id'], 'task': t['text'], 'instruction': t.get('instruction'),
+        tasks = [{'id': t['id'], 'number': t.get('number'), 'task': t['text'],
+                  'instruction': t.get('instruction'), 'description': t.get('description'),
                   'family': t.get('family'), 'status': t['status'],
                   'recordable': t['status'] in task_registry.RECORDABLE}
-                 for t in (reg.tasks.values() if reg else ())]
+                 for t in sorted(reg.tasks.values() if reg else (), key=lambda t: t['id'])]
         return {'source': reg.source if reg else None, 'tasks': tasks, 'hw': self._hw(),
                 'sources': list(SOURCES), 'qualities': list(QUALITIES),
                 'failure_modes': list(FAILURE_MODES)}
@@ -368,9 +369,9 @@ class EpisodeManager:
                 task_id: str = '') -> Dict[str, Any]:
         """Start rosbag_to_groot.py.
 
-        A bag recorded with a task (its episode.json) keeps it. ``task_id``
-        (registry) or ``task_index`` (tasks.jsonl) labels the bags that carry
-        none; with neither, those bags are reported as failed. ``task_name``
+        A bag recorded with a task (its episode.json) keeps it; one without
+        becomes an unlabelled episode to tag afterwards. ``task_id`` (registry)
+        or ``task_index`` (tasks.jsonl) labels such bags instead. ``task_name``
         registers (or renames) ``task_index`` in tasks.jsonl first, for tasks
         outside the registry.
         """

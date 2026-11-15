@@ -139,11 +139,12 @@ It records into today's open session and starts one (`..._s01_hw2`, then
 `s02`, ...) on the first recording of the day, or after the last one was closed.
 `dataset:=<session>` pins a folder instead.
 
-**Before recording, set the recording context** in the Foxglove Episode Manager
-panel ("Next recording"): the **task** (picked by ID from the registry), the
-**source**, the **correction round**, the **operator** and the surface. It
-applies to every episode until you change it and survives restarts. Without the
-panel:
+**Set the recording context** in the Foxglove Episode Manager panel ("Next
+recording"): the **source**, the **correction round**, the **operator** and the
+surface. It applies to every episode until you change it and survives restarts.
+The **task** is optional there: leave it "(not set)" to record whatever you
+like in any order and tag the episodes after converting, or set it to have the
+next episodes labelled as they are recorded. Without the panel:
 
 ```bash
 ros2 topic pub --once /alfie/recording/set_context std_msgs/msg/String \
@@ -151,8 +152,8 @@ ros2 topic pub --once /alfie/recording/set_context std_msgs/msg/String \
 ros2 topic echo --once /alfie/recording/context     # what the recorder will write
 ```
 
-An episode recorded with no task set is not lost: the converter asks for a task
-for such bags, and it can be relabelled in review.
+An episode recorded with no task set is converted as **unlabelled** and tagged
+in review.
 
 ### 3. Start/Stop recording
 
@@ -267,20 +268,27 @@ disk. Use it from the **Episode Manager panel in Foxglove**
   recorder at an open session you are looking at.
 - **Next recording**: the recording context (task, source, correction round,
   operator, surface) and where the next episode goes.
-- **Convert** runs `rosbag_to_groot.py` on the new bags and streams its output.
-  Bags recorded with a task keep it; choose a task for "bags recorded without a
-  task", or they are left unconverted and listed as failed.
+- **Convert** runs `rosbag_to_groot.py` on all the new bags and streams its
+  output. Bags recorded with a task keep it; the others become unlabelled
+  episodes. Nothing is guessed.
 - **Review** plays the four cameras in sync: <kbd>Space</kbd> play/pause,
   <kbd>←</kbd>/<kbd>→</kbd> one frame, <kbd>Shift</kbd> for one second, playback
   speed 0.25×–4×.
-- **Label** with the task buttons or <kbd>1</kbd>–<kbd>9</kbd>; it rewrites the
-  episode's row (task ID and structured fields) and its parquet `task_index`,
-  then moves to the next episode. <kbd>J</kbd>/<kbd>K</kbd> walk the list.
+- **Tag** with the task picker: click **Unlabelled** above the episode list,
+  then type a task's number (`number` in `tasks.yaml`) or a few words from its
+  ID or description and press <kbd>Enter</kbd>. The box clears and keeps the
+  focus, and the next episode is selected, so a batch goes `1` <kbd>Enter</kbd>
+  `2` <kbd>Enter</kbd> ... <kbd>T</kbd> puts the cursor in the picker,
+  <kbd>↑</kbd>/<kbd>↓</kbd> choose among several matches, <kbd>Esc</kbd> leaves
+  it. Tagging rewrites the episode's row (task ID, structured fields, grasp and
+  done frames) and its parquet `task_index`. The chip beside each episode is
+  the task's number. <kbd>J</kbd>/<kbd>K</kbd> walk the list.
 - **Quality** (`ok` / `marginal` / `bad`), **Why taken over** (corrections) and
   **Notes** are saved to the episode's row.
 - **Delete** removes the source bag, the parquet and videos, and the metadata row.
   Other episodes keep their indices.
-- **Close session…** when the review is done. It saves a copy of the task
+- **Close session…** when the review is done; it is unavailable while any
+  episode is still unlabelled. It saves a copy of the task
   registry, the git commits of the alfiebot workspace and Isaac-GR00T, and the
   data schema into the session, then freezes it. After that nothing can be
   relabelled, deleted or converted, and the recorder moves on to a new session.
@@ -427,9 +435,10 @@ python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
 ```
 
 Each bag is labelled with the task it was recorded for (`episode.json`), and
-`meta/tasks.jsonl` gets that task's `text` from the registry. Add
-`--task-id pick_up_soda_can` to label the bags recorded without a task. Episodes
-shorter than 16 frames are not converted.
+`meta/tasks.jsonl` gets that task's `text` from the registry. A bag recorded
+without a task becomes an unlabelled episode (`task_index` -1 in its row and
+parquet until it is tagged); `--task-id pick_up_soda_can` labels such bags
+instead. Episodes shorter than 16 frames are not converted.
 
 ### Where a pick ends
 

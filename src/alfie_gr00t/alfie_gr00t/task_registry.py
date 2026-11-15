@@ -31,7 +31,7 @@ _POSE_SIZES = {'left_arm': 6, 'right_arm': 6, 'head': 3}
 _TASK_KEYS = {'text', 'dataset', 'description', 'start_pose', 'max_s', 'attempts',
               'holds_object', 'done', 'accept_on_timeout', 'close',
               'family', 'status', 'verb', 'object', 'destination', 'start_state',
-              'end_state', 'instruction', 'paraphrases', 'former_ids', 'includes'}
+              'end_state', 'instruction', 'paraphrases', 'former_ids', 'includes', 'number'}
 
 STATUSES = ('proposed', 'collecting', 'active', 'retired')
 # Statuses the episode manager offers for recording.
@@ -233,6 +233,7 @@ class TaskRegistry:
         self.tasks = {}
         self._by_text = {}
         self._former = {}       # an ID a task used to have -> its current ID
+        self._by_number = {}
         for tid, raw in (data.get('tasks') or {}).items():
             task = self._validate(tid, raw)
             if task['text'] in self._by_text:
@@ -240,6 +241,14 @@ class TaskRegistry:
                 raise RegistryError(f'task {tid}: same text as task {other}')
             self.tasks[tid] = task
             self._by_text[task['text']] = task
+            number = task.get('number')
+            if number is not None:
+                if not isinstance(number, int) or number < 1:
+                    raise RegistryError(f'task {tid}: number must be an integer >= 1')
+                if number in self._by_number:
+                    raise RegistryError(f'task {tid}: number {number} is already task '
+                                        f'{self._by_number[number]}')
+                self._by_number[number] = tid
             for old in task.get('former_ids') or ():
                 if old in self._former:
                     raise RegistryError(f'task {tid}: former ID {old!r} also belongs to '
@@ -330,6 +339,32 @@ class TaskRegistry:
         fields = {'task_id': task['id']}
         fields.update({k: task.get(k) for k in EPISODE_TASK_FIELDS})
         return fields
+
+    def episode_frames(self, tid, states, dt):
+        """close_frame and done_frame of an episode of task ``tid``.
+
+        ``states`` are its 22D states, ``dt`` the frame period. close_frame is
+        the first frame of the grasp (the task's `close` condition), done_frame
+        the frame its `done` condition is confirmed, as the client would have
+        ended the task. Each is None when the task has no such condition or it
+        never holds.
+        """
+        task = self.by_id(tid) if tid else None
+        frames = {'close_frame': None, 'done_frame': None}
+        if task is None:
+            return frames
+        getters = [state_getter(s) for s in states]
+        close = task.get('close')
+        if close:
+            frames['close_frame'] = first_held(
+                close['all'], float(close.get('hold_s', 0.0)), getters, dt)
+        if task.get('done'):
+            tracker = DoneTracker(task)
+            for i, get in enumerate(getters):
+                if tracker.update(i * dt, get):
+                    frames['done_frame'] = i
+                    break
+        return frames
 
     def pose(self, name):
         return self.poses[name]

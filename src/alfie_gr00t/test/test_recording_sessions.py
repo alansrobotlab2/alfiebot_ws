@@ -71,3 +71,22 @@ def test_closed_session_refuses_edits(tmp_path):
                  lambda: ds.set_task(0, 0, 'python3')):
         with pytest.raises(DatasetError, match='closed'):
             edit()
+
+
+def test_session_with_unlabelled_episodes_cannot_be_closed(tmp_path):
+    name = dp.create_session(tmp_path, 'hw2', DAY)
+    ds = Dataset(tmp_path, name)
+    ds.meta.mkdir(parents=True)
+    rows = [{'episode_index': 0, 'task_index': 0, 'length': 20, 'bag': 'demo_a', 'source': 'demo'},
+            {'episode_index': 1, 'task_index': -1, 'length': 20, 'bag': 'demo_b', 'source': 'demo'}]
+    (ds.meta / 'episodes.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
+    (ds.meta / 'tasks.jsonl').write_text(json.dumps({'task_index': 0, 'task': 'x'}) + '\n')
+    summary = ds.summary()
+    assert summary['unlabelled'] == 1
+    assert {e['index']: e['task_index'] for e in summary['episodes']} == {0: 0, 1: None}
+    with pytest.raises(DatasetError, match='no task yet'):
+        ds.close({})
+    assert not ds.closed()
+    ds.delete(1)
+    ds.close({})
+    assert ds.closed()

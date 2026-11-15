@@ -17,8 +17,9 @@ A bag is labelled with the task it was recorded for (episode.json task_id,
 looked up in the task registry config/tasks.yaml). Its record-time facts and
 the task's structured fields go into its meta/episodes.jsonl row: episode_uid,
 task_id, family, source, round, policy_ckpt, run_id, hw, operator, quality, ...
-Bags without a task (recorded before episode.json, or with none chosen) need
---task-id, and are reported as failed without it.
+A bag without a task (none chosen when recording) becomes an unlabelled
+episode (task_index -1), to be tagged in the episode manager; --task-id labels
+such bags instead.
 
 Usage:
     python3 rosbag_to_groot.py --dataset SESSION [--task-id ID] [--fps N]
@@ -98,6 +99,10 @@ RECORD_KEYS = ('task_id', 'source', 'round', 'policy_ckpt', 'run_id', 'instructi
                'quality', 'notes', 'recorded_at', 'alfiebot_commit')
 RECORD_DEFAULTS = {'source': 'demo', 'round': 0, 'objects': [], 'surface': '',
                    'operator': '', 'quality': 'ok', 'notes': ''}
+# task_index of an episode that has not been given a task yet (parquet column
+# and episodes.jsonl). It is tagged in the episode manager; a session cannot
+# be closed while any remain.
+UNLABELLED = -1
 # Episodes shorter than one action chunk give training nothing.
 MIN_FRAMES = 16
 
@@ -404,30 +409,15 @@ class RosbagToGrootConverter:
             return {}
         return record if isinstance(record, dict) else {}
 
-    def done_frame(self, task_id: Optional[str], states: List[np.ndarray]) -> Optional[int]:
-        """Frame at which the task's done condition is confirmed, as the client
-        would have ended the task (for pick_up_soda_can that is the end of the lift,
-        not the grasp). None when it never holds or the task has none."""
-        task = self.registry.by_id(task_id) if self.registry and task_id else None
-        if task is None or not task.get('done'):
-            return None
-        tracker = _task_registry.DoneTracker(task)
-        for i, state in enumerate(states):
-            if tracker.update(i * self.target_dt, _task_registry.state_getter(state)):
-                return i
-        return None
+    def episode_frames(self, task_id: Optional[str], states: List[np.ndarray]) -> Dict:
+        """close_frame (the grasp) and done_frame of an episode; see
+        task_registry.TaskRegistry.episode_frames."""
+        if self.registry is None:
+            return {'close_frame': None, 'done_frame': None}
+        return self.registry.episode_frames(task_id, states, self.target_dt)
 
     def close_frame(self, task_id: Optional[str], states: List[np.ndarray]) -> Optional[int]:
-        """First frame of the grasp: the task's `close` condition (gripper
-        closed on the object, before the lift). None for a task without one,
-        and for an episode with no grasp that held (a miss)."""
-        task = self.registry.by_id(task_id) if self.registry and task_id else None
-        close = (task or {}).get('close')
-        if not close:
-            return None
-        return _task_registry.first_held(
-            close['all'], float(close.get('hold_s', 0.0)),
-            (_task_registry.state_getter(s) for s in states), self.target_dt)
+        return self.episode_frames(task_id, states)['close_frame']
 
     def trim_episode(self, episode: EpisodeData, task_id: Optional[str]) -> int:
         """Cut the episode `close.keep_s` after its close_frame (tasks.yaml).
@@ -1173,10 +1163,9 @@ class RosbagToGrootConverter:
         if text is not None:
             task_index = self.task_index_for(text)
         elif task_index is None or task_index not in self.tasks_map:
-            self._report_finished('Failed', demo_dir.name, total_demos, started,
-                                  'no task recorded with this bag; convert with a task '
-                                  'for unlabelled bags (--task-id)')
-            return None
+            # Nothing says what this is: converted unlabelled, tagged in review.
+            task_index = UNLABELLED
+            record['task_id'] = None
         elif self.registry is not None:
             # Labelled by index: recover the task ID from the string.
             task = self.registry.by_text(self.tasks_map[task_index])
@@ -1191,6 +1180,8 @@ class RosbagToGrootConverter:
                       f"({len(episode.states)} kept)")
             if episode.takeover is not None:
                 print(f"  VR takeover episode (task {task_index})")
+            if task_index == UNLABELLED:
+                print(f"  {demo_dir.name} has no task: converted unlabelled")
         if removed and len(episode.states) < MIN_FRAMES:
             self._report_finished('Failed', demo_dir.name, total_demos, started,
                                   f'only {len(episode.states)} frames up to the trim point')
@@ -1226,8 +1217,7 @@ class RosbagToGrootConverter:
         task_id = record.get('task_id')
         if self.registry is not None and self.registry.by_id(task_id or '') is not None:
             metadata.update(self.registry.episode_fields(task_id))
-        metadata['close_frame'] = self.close_frame(task_id, episode.states)
-        metadata['done_frame'] = self.done_frame(task_id, episode.states)
+        metadata.update(self.episode_frames(task_id, episode.states))
         # Frames recorded before the cut after the grasp (None = not trimmed).
         # A bag that was trimmed too no longer shows it, so keep the first value.
         metadata['untrimmed_length'] = ((previous or {}).get('untrimmed_length')
@@ -1569,6 +1559,7 @@ Arguments:
   --demos-dir DIR       Override input directory containing demo_* folders
   --output-dir DIR      Override output directory for GR00T format data
   --task-id ID          Registry task for new bags recorded without one
+                        (default: they are converted unlabelled)
   --tasks-yaml FILE     Task registry (default: installed config/tasks.yaml)
   --task-index N        Like --task-id, by index in meta/tasks.jsonl, for
                         tasks that are not in the registry
@@ -1766,7 +1757,8 @@ examples:
     print(f"Demos directory: {demos_dir}")
     print(f"Output directory: {output_dir}")
     if args.task_index is None:
-        print("Unlabelled bags: not converted (no --task-id / --task-index)")
+        print("Bags recorded without a task: converted unlabelled, tag them in the "
+              "episode manager")
     else:
         print(f"Unlabelled bags: task {args.task_index} "
               f"('{converter.tasks_map[args.task_index]}')")

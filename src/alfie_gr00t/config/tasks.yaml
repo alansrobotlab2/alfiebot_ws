@@ -29,6 +29,8 @@
 #                      verb's template filled in. NOT what the policy hears
 #                      today - that is `text`
 #   paraphrases        other wordings of `instruction`
+#   number             a short number for picking the task quickly in the
+#                      episode manager. Unique, never reused or renumbered
 #   former_ids         IDs this task used to have. Episodes recorded under one
 #                      still resolve to this task. Never reuse an ID for a
 #                      different task: retire it and add a new one
@@ -104,6 +106,7 @@ poses:
 
 tasks:
   pick_up_soda_can:
+    number: 1
     former_ids: [pick_can]
     family: pick_place
     status: active
@@ -148,6 +151,7 @@ tasks:
   # Starts with the can already in hand: there are no demos of this from the
   # table yet, so the client sequences pick_up_soda_can then put_soda_can_in_trash.
   put_soda_can_in_trash:
+    number: 2
     former_ids: [trash_can]
     family: pick_place
     status: active

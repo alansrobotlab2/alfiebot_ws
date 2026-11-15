@@ -513,9 +513,7 @@ class DataRecorder(Node):
             self.episode_record = self._new_episode_record(bag_name)
             self._apply_takeover()
             if not self.episode_record['task_id']:
-                self.get_logger().warn(
-                    'No task chosen for this episode; pick one in the episode manager '
-                    '(it can be labelled after conversion)')
+                self._detail('No task set: the episode is tagged after conversion')
 
             # Publish initial metadata
             metadata = String()

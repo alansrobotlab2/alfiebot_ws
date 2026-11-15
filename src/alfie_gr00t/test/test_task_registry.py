@@ -187,3 +187,14 @@ def test_pick_keeps_the_lift_and_ends_in_the_carry_pose(reg):
     s = [0.0] * 22
     s[6], s[13:19] = carry['back'], carry['right_arm']
     assert tr.check(pick['done']['all'], tr.state_getter(s))
+
+
+def test_task_numbers_are_unique(reg):
+    numbers = [t['number'] for t in reg.tasks.values()]
+    assert numbers == [1, 2]
+    data = {'poses': {'p': {'left_arm': [0] * 6, 'right_arm': [0] * 6, 'head': [0] * 3,
+                            'back': 0.3}},
+            'tasks': {'a': {'text': 'x', 'start_pose': 'p', 'max_s': 1, 'number': 3},
+                      'b': {'text': 'y', 'start_pose': 'p', 'max_s': 1, 'number': 3}}}
+    with pytest.raises(tr.RegistryError, match='already task'):
+        tr.TaskRegistry(data)
