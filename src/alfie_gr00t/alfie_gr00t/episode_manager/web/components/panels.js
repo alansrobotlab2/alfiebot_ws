@@ -107,7 +107,7 @@ export function Details({ episode, tasks, fps }) {
     ['Task', task ? `${task.index}: ${task.task}` : `${episode.task_index} (not in tasks.jsonl)`],
     ['Frames', episode.length],
     ['Duration', `${fmtDuration(episode.duration)} at ${fps ?? '?'} fps`],
-    ['Source bag', html`${episode.source}${episode.has_source ? null
+    ['Source bag', html`${episode.bag}${episode.has_source ? null
       : html` <span class="warn">(not in demonstrations/)</span>`}`],
     ['Recorded', episode.recorded || '--'],
   ];

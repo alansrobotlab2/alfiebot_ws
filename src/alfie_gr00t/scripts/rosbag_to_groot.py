@@ -8,17 +8,22 @@ LeRobot v2 format (Isaac-GR00T getting_started/data_preparation.md):
 - MP4 videos for camera observations
 - Meta files (info.json, modality.json, episodes.jsonl, tasks.jsonl)
 
-Datasets live under one data root, one folder per dataset:
-    <data_root>/<dataset>/demonstrations/   raw bags from data_recorder
-    <data_root>/<dataset>/lerobot/          converted output (--dataset-path for GR00T)
+Recordings live under one data root, one folder per recording session:
+    <data_root>/<session>/demonstrations/   raw bags from data_recorder, each
+                                            with an episode.json of record-time facts
+    <data_root>/<session>/lerobot/          converted output (--dataset-path for GR00T)
+
+A bag is labelled with the task it was recorded for (episode.json task_id,
+looked up in the task registry config/tasks.yaml). Its record-time facts and
+the task's structured fields go into its meta/episodes.jsonl row: episode_uid,
+task_id, family, source, round, policy_ckpt, run_id, hw, operator, quality, ...
+Bags without a task (recorded before episode.json, or with none chosen) need
+--task-id, and are reported as failed without it.
 
 Usage:
-    python3 rosbag_to_groot.py --dataset NAME [--task-index N] [--task-name TEXT] [--fps N]
+    python3 rosbag_to_groot.py --dataset SESSION [--task-id ID] [--fps N]
 
-python3 rosbag_to_groot.py \
-    --dataset can_do_challenge \
-    --task-index 0 --task-name "find the can and pick it up" \
-    --num-threads 8
+python3 rosbag_to_groot.py --dataset 2026-11-20_s02_hw2 --num-threads 8
 
 After converting, generate normalization stats (required by the trainer):
     python gr00t/data/stats.py --dataset-path <data_root>/<dataset>/lerobot \
@@ -29,6 +34,8 @@ After converting, generate normalization stats (required by the trainer):
 import argparse
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,6 +52,7 @@ import cv2
 # ROS2 imports
 try:
     from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
+    from rosbag2_py import CompressionMode, CompressionOptions, SequentialCompressionWriter
     from rclpy.serialization import deserialize_message
     from sensor_msgs.msg import CompressedImage
     from geometry_msgs.msg import Twist
@@ -65,7 +73,7 @@ try:
         DEFAULT_DATA_ROOT, DEFAULT_DATASET, demos_dir as _demos_dir, lerobot_dir as _lerobot_dir,
     )
 except ImportError:
-    DEFAULT_DATA_ROOT = '~/alfiebot_ws/data'
+    DEFAULT_DATA_ROOT = '~/alfie_data/raw'
     DEFAULT_DATASET = 'default'
 
     def _demos_dir(dataset, root):
@@ -73,6 +81,34 @@ except ImportError:
 
     def _lerobot_dir(dataset, root):
         return Path(os.path.expanduser(root)) / dataset / 'lerobot'
+
+# The task registry (config/tasks.yaml) turns a recorded task_id into the
+# training string and the structured task fields. Without the package the
+# converter still runs, labelling by --task-index only.
+try:
+    from alfie_gr00t import task_registry as _task_registry
+except ImportError:
+    _task_registry = None
+
+# Record-time facts written by data_recorder into each bag folder.
+EPISODE_FILE = 'episode.json'
+# Keys copied from episode.json into the episodes.jsonl row.
+RECORD_KEYS = ('task_id', 'source', 'round', 'policy_ckpt', 'run_id', 'instruction_sent',
+               'takeover_s', 'failure_mode', 'objects', 'surface', 'hw', 'operator',
+               'quality', 'notes', 'recorded_at', 'alfiebot_commit')
+RECORD_DEFAULTS = {'source': 'demo', 'round': 0, 'objects': [], 'surface': '',
+                   'operator': '', 'quality': 'ok', 'notes': ''}
+# Episodes shorter than one action chunk give training nothing.
+MIN_FRAMES = 16
+
+
+def episode_bag(ep: Dict) -> str:
+    """Bag folder an episodes.jsonl row came from.
+
+    Rows written before recording sessions keep it under ``source``; since
+    then ``source`` is demo / correction / ... and the bag is under ``bag``.
+    """
+    return ep.get('bag') or ep.get('source', '')
 
 
 # Joint names in state/action vector order (matches modality.json below and
@@ -155,6 +191,8 @@ class EpisodeData:
     images: Dict[str, List[Tuple[float, np.ndarray]]] = field(default_factory=dict)
     # VR takeover of a GR00T run ({stamp_ns, task}) when the bag is a correction
     takeover: Optional[dict] = None
+    # Time of frame 0 (ns since epoch), for cutting the bag at a frame
+    start_ns: int = 0
 
     def __post_init__(self):
         # Initialize image lists for each camera
@@ -201,8 +239,19 @@ class RosbagToGrootConverter:
         use_gpu: bool = False,
         robot_type: str = 'alfiebot',
         rebuild_all: bool = False,
+        tasks_yaml: Optional[str] = None,
+        trim_bags: bool = False,
     ):
         self.rebuild_all = rebuild_all
+        self.trim_bags = trim_bags
+        self.registry = None
+        if _task_registry is not None:
+            try:
+                self.registry = _task_registry.load(tasks_yaml)
+            except Exception as e:   # noqa: BLE001
+                print(f"Warning: task registry not loaded ({e}); labelling by --task-index only")
+        else:
+            print("Warning: alfie_gr00t is not importable; labelling by --task-index only")
         self.demos_dir = Path(demos_dir)
         self.output_dir = Path(output_dir)
         self.fps = fps
@@ -228,7 +277,15 @@ class RosbagToGrootConverter:
         # Demo names that could not be converted (empty/short bags, missing topics).
         self.failed_demos = []
         self.print_lock = Lock()
+        self.tasks_lock = Lock()
         self.finished_count = 0   # episodes done or failed, under print_lock
+        # The session (or dataset) folder name: episode_uid is <session>/<index>.
+        self.session = self.output_dir.resolve().parent.name
+        try:
+            with open(self.output_dir.resolve().parent / 'session.json') as f:
+                self.session_hw = json.load(f).get('hw')
+        except (OSError, ValueError):
+            self.session_hw = None
 
         # Detect available GPU encoder
         self.gpu_encoder = None
@@ -328,6 +385,136 @@ class RosbagToGrootConverter:
                 f.write(json.dumps({'task_index': idx, 'task': self.tasks_map[idx]}) + '\n')
         print(f"Registered task {task_index}: '{task_name}'")
 
+    def task_index_for(self, text: str) -> int:
+        """Index of ``text`` in meta/tasks.jsonl, adding it when new (thread-safe)."""
+        with self.tasks_lock:
+            for idx, known in self.tasks_map.items():
+                if known == text:
+                    return idx
+            idx = max(self.tasks_map, default=-1) + 1
+            self.register_task(idx, text)
+            return idx
+
+    def read_episode_record(self, demo_dir: Path) -> Dict:
+        """episode.json of a bag ({} for bags recorded before it existed)."""
+        try:
+            with open(demo_dir / EPISODE_FILE) as f:
+                record = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        return record if isinstance(record, dict) else {}
+
+    def done_frame(self, task_id: Optional[str], states: List[np.ndarray]) -> Optional[int]:
+        """Frame at which the task's done condition is confirmed, as the client
+        would have ended the task (for pick_up_soda_can that is the end of the lift,
+        not the grasp). None when it never holds or the task has none."""
+        task = self.registry.by_id(task_id) if self.registry and task_id else None
+        if task is None or not task.get('done'):
+            return None
+        tracker = _task_registry.DoneTracker(task)
+        for i, state in enumerate(states):
+            if tracker.update(i * self.target_dt, _task_registry.state_getter(state)):
+                return i
+        return None
+
+    def close_frame(self, task_id: Optional[str], states: List[np.ndarray]) -> Optional[int]:
+        """First frame of the grasp: the task's `close` condition (gripper
+        closed on the object, before the lift). None for a task without one,
+        and for an episode with no grasp that held (a miss)."""
+        task = self.registry.by_id(task_id) if self.registry and task_id else None
+        close = (task or {}).get('close')
+        if not close:
+            return None
+        return _task_registry.first_held(
+            close['all'], float(close.get('hold_s', 0.0)),
+            (_task_registry.state_getter(s) for s in states), self.target_dt)
+
+    def trim_episode(self, episode: EpisodeData, task_id: Optional[str]) -> int:
+        """Cut the episode `close.keep_s` after its close_frame (tasks.yaml).
+
+        Returns the number of frames removed (0: the task does not trim, no
+        grasp was found, or the episode already ends there).
+        """
+        task = self.registry.by_id(task_id) if self.registry and task_id else None
+        keep_s = ((task or {}).get('close') or {}).get('keep_s')
+        if keep_s is None:
+            return 0
+        close = self.close_frame(task_id, episode.states)
+        if close is None:
+            print(f"  No grasp found (task {task_id}); episode not trimmed")
+            return 0
+        keep = close + round(keep_s * self.fps) + 1
+        removed = len(episode.states) - keep
+        if removed <= 0:
+            return 0
+        del episode.states[keep:], episode.actions[keep:], episode.timestamps[keep:]
+        for frames in episode.images.values():
+            del frames[keep:]
+        return removed
+
+    # Bag messages are stamped on receipt, a little after the header time the
+    # frames are cut by; keep this much past the last frame.
+    BAG_TRIM_MARGIN_NS = int(0.5e9)
+    UNTRIMMED_SUBDIR = 'demonstrations_untrimmed'
+
+    def trim_bag(self, demo_dir: Path, end_ns: int) -> Optional[str]:
+        """Rewrite a bag without the messages after ``end_ns``.
+
+        The original bag moves to <dataset>/demonstrations_untrimmed/<name>
+        (never deleted here). A bag whose original is already there is itself
+        a trimmed copy, and is replaced by the shorter one. Returns a one-line
+        result, or None when nothing was done.
+        """
+        keep_dir = demo_dir.parent.parent / self.UNTRIMMED_SUBDIR / demo_dir.name
+        mcap_files = list(demo_dir.glob('*.mcap')) or [
+            self.decompress_mcap(p) for p in demo_dir.glob('*.mcap.zstd')]
+        if not mcap_files:
+            return None
+        # Written under its final folder name, which rosbag2 also gives the file.
+        tmp_dir = demo_dir.parent / '.trim' / demo_dir.name
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        tmp_dir.parent.mkdir(exist_ok=True)
+        reader = SequentialReader()
+        reader.open(StorageOptions(uri=str(mcap_files[0]), storage_id='mcap'),
+                    ConverterOptions(input_serialization_format='cdr',
+                                     output_serialization_format='cdr'))
+        writer = SequentialCompressionWriter(CompressionOptions(
+            compression_format='zstd', compression_mode=CompressionMode.FILE))
+        writer.open(StorageOptions(uri=str(tmp_dir), storage_id='mcap'),
+                    ConverterOptions(input_serialization_format='cdr',
+                                     output_serialization_format='cdr'))
+        for topic in reader.get_all_topics_and_types():
+            writer.create_topic(topic)
+        kept = dropped = 0
+        while reader.has_next():
+            topic, data, stamp_ns = reader.read_next()
+            if stamp_ns <= end_ns:
+                writer.write(topic, data, stamp_ns)
+                kept += 1
+            else:
+                dropped += 1
+        del writer, reader          # closes the bag and writes metadata.yaml
+        if dropped == 0:
+            shutil.rmtree(tmp_dir)
+            return None
+        record = demo_dir / EPISODE_FILE
+        if record.exists():
+            shutil.copy2(record, tmp_dir / EPISODE_FILE)
+        if keep_dir.exists():
+            shutil.rmtree(demo_dir)         # an earlier trimmed copy; the original is kept
+            os.rename(tmp_dir, demo_dir)
+            return f"bag trimmed again: {dropped} of {kept + dropped} messages removed"
+        keep_dir.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(demo_dir, keep_dir)
+        os.rename(tmp_dir, demo_dir)
+        try:
+            tmp_dir.parent.rmdir()      # other threads may still be using it
+        except OSError:
+            pass
+        return (f"bag trimmed: {dropped} of {kept + dropped} messages removed; original in "
+                f"{self.UNTRIMMED_SUBDIR}/{demo_dir.name}")
+
     def _detect_gpu_encoder(self) -> Optional[str]:
         """Detect available GPU video encoder."""
         # Try to detect NVENC (NVIDIA)
@@ -390,7 +577,7 @@ class RosbagToGrootConverter:
                 if not line:
                     continue
                 ep = json.loads(line)
-                source = ep.get('source', '')
+                source = episode_bag(ep)
                 if source:
                     existing[source] = ep
 
@@ -529,7 +716,7 @@ class RosbagToGrootConverter:
             elif topic == self.TAKEOVER_TOPIC:
                 try:
                     event = json.loads(deserialize_message(data, String).data)
-                    takeovers.append({'stamp_ns': int(event['stamp_ns']),
+                    takeovers.append({**event, 'stamp_ns': int(event['stamp_ns']),
                                       'task': str(event.get('task') or '')})
                 except (ValueError, KeyError, TypeError):
                     print(f"  Warning: unreadable takeover event in {demo_dir.name}")
@@ -609,7 +796,7 @@ class RosbagToGrootConverter:
             target_times_ns.append(t)
             t += dt_ns
 
-        if len(target_times_ns) < 5:
+        if len(target_times_ns) < MIN_FRAMES:
             print(f"  Warning: Episode too short ({len(target_times_ns)} frames) in {demo_dir}")
             return None
 
@@ -638,6 +825,7 @@ class RosbagToGrootConverter:
 
         # Interpolate data to target timestamps
         reference_time_ns = target_times_ns[0]
+        episode.start_ns = reference_time_ns
 
         for ts_ns in target_times_ns:
             # Get nearest state
@@ -929,11 +1117,17 @@ class RosbagToGrootConverter:
         demo_number: int,
         total_demos: int,
         task_from_bag: bool = False,
+        previous: Optional[Dict] = None,
     ) -> Optional[Tuple[int, Dict]]:
         """Process a single episode (thread-safe).
 
-        task_from_bag: a takeover bag takes its task from the takeover event
-        (the GR00T run's task text) when that text is in meta/tasks.jsonl.
+        task_index: the label for a bag that carries no task of its own (None =
+        such a bag is not converted).
+        task_from_bag: a new bag takes its task from its episode.json task_id,
+        and a takeover bag without one from the takeover event (the GR00T
+        run's task text).
+        previous: the existing episodes.jsonl row when rebuilding; its
+        record-time fields and review edits are kept.
         """
         started = time.monotonic()
         with self.print_lock:
@@ -946,17 +1140,61 @@ class RosbagToGrootConverter:
                                   'not converted, see warning above')
             return None
 
-        with self.print_lock:
-            print(f"  Extracted {len(episode.states)} frames from {demo_dir.name}")
+        # Record-time facts: the existing row when rebuilding, else the bag's
+        # episode.json, else what the bag itself shows (a takeover event).
+        record = dict(RECORD_DEFAULTS)
+        if previous is not None and 'bag' in previous:
+            record.update({k: previous[k] for k in RECORD_KEYS if k in previous})
+        else:
+            sidecar = self.read_episode_record(demo_dir)
+            record.update({k: sidecar[k] for k in RECORD_KEYS if k in sidecar})
             if episode.takeover is not None:
-                text = episode.takeover['task']
-                match = [i for i, t in self.tasks_map.items() if t == text]
-                if task_from_bag and match:
-                    task_index = match[0]
-                elif task_from_bag:
-                    print(f"  Warning: takeover task '{text}' is not in tasks.jsonl; "
-                          f"using task {task_index}")
+                event = episode.takeover
+                record['source'] = 'correction'
+                record['round'] = record['round'] or 1
+                if not record.get('instruction_sent'):
+                    record['instruction_sent'] = event['task']
+                for key in ('policy_ckpt', 'run_id', 'takeover_s'):
+                    if record.get(key) is None:
+                        record[key] = event.get(key) or None
+        record.setdefault('hw', self.session_hw)
+
+        text = None
+        if task_from_bag and self.registry is not None:
+            task = self.registry.by_id(record.get('task_id') or '')
+            if task is None and episode.takeover is not None:
+                task = self.registry.by_text(episode.takeover['task'])
+            if task is not None:
+                record['task_id'] = task['id']
+                text = task['text']
+            elif record.get('task_id'):
+                print(f"  Warning: task '{record['task_id']}' of {demo_dir.name} is not "
+                      f"in the task registry")
+        if text is not None:
+            task_index = self.task_index_for(text)
+        elif task_index is None or task_index not in self.tasks_map:
+            self._report_finished('Failed', demo_dir.name, total_demos, started,
+                                  'no task recorded with this bag; convert with a task '
+                                  'for unlabelled bags (--task-id)')
+            return None
+        elif self.registry is not None:
+            # Labelled by index: recover the task ID from the string.
+            task = self.registry.by_text(self.tasks_map[task_index])
+            record['task_id'] = task['id'] if task else None
+
+        untrimmed = len(episode.states)
+        removed = self.trim_episode(episode, record.get('task_id'))
+        with self.print_lock:
+            print(f"  Extracted {untrimmed} frames from {demo_dir.name}")
+            if removed:
+                print(f"  Trimmed {removed} frames after the grasp from {demo_dir.name} "
+                      f"({len(episode.states)} kept)")
+            if episode.takeover is not None:
                 print(f"  VR takeover episode (task {task_index})")
+        if removed and len(episode.states) < MIN_FRAMES:
+            self._report_finished('Failed', demo_dir.name, total_demos, started,
+                                  f'only {len(episode.states)} frames up to the trim point')
+            return None
 
         # Save parquet
         parquet_path, num_frames = self.save_episode_parquet(
@@ -980,11 +1218,36 @@ class RosbagToGrootConverter:
             'tasks': [self.tasks_map[task_index]] if task_index in self.tasks_map else [],
             'length': num_frames,
             'duration': episode.timestamps[-1] if episode.timestamps else 0,
-            'source': demo_dir.name,
-            'origin': 'takeover' if episode.takeover is not None else 'demo',
+            'episode_uid': f'{self.session}/{episode_index:06d}',
+            'session': self.session,
+            'bag': demo_dir.name,
         }
-        if episode.takeover is not None:
-            metadata['takeover_task'] = episode.takeover['task']
+        metadata.update({k: record.get(k) for k in RECORD_KEYS})
+        task_id = record.get('task_id')
+        if self.registry is not None and self.registry.by_id(task_id or '') is not None:
+            metadata.update(self.registry.episode_fields(task_id))
+        metadata['close_frame'] = self.close_frame(task_id, episode.states)
+        metadata['done_frame'] = self.done_frame(task_id, episode.states)
+        # Frames recorded before the cut after the grasp (None = not trimmed).
+        # A bag that was trimmed too no longer shows it, so keep the first value.
+        metadata['untrimmed_length'] = ((previous or {}).get('untrimmed_length')
+                                        or (untrimmed if removed else None))
+        if self.trim_bags and removed:
+            try:
+                end_ns = (episode.start_ns + int(len(episode.states) * self.target_dt * 1e9)
+                          + self.BAG_TRIM_MARGIN_NS)
+                result = self.trim_bag(demo_dir, end_ns)
+            except Exception as e:   # noqa: BLE001 - the episode itself is converted
+                result = f"Warning: bag of {demo_dir.name} not trimmed: {e}"
+            if result:
+                with self.print_lock:
+                    print(f"  {demo_dir.name}: {result}")
+        if previous is not None:
+            # Anything else a row carries (e.g. legacy_episode_index) survives a rebuild.
+            for key, value in previous.items():
+                if key not in metadata and key not in ('source', 'origin', 'takeover_task',
+                                                       'grasp_frame'):
+                    metadata[key] = value
 
         return num_frames, metadata
 
@@ -997,7 +1260,7 @@ class RosbagToGrootConverter:
             print(f"{verb} {name}: {detail}, {time.monotonic() - started:.1f}s "
                   f"({self.finished_count}/{total} complete)")
 
-    def convert_all(self, task_index: int = 0) -> Tuple[int, int, int, int]:
+    def convert_all(self, task_index: Optional[int] = None) -> Tuple[int, int, int, int]:
         """Incrementally sync demonstrations to GR00T format.
 
         Compares source demos against existing episodes.jsonl to determine
@@ -1073,6 +1336,7 @@ class RosbagToGrootConverter:
             # been relabelled in the episode manager); new demos get
             # sequential indices and the task given on the command line.
             work_items = []
+            previous_rows = {}
             added_demos = sorted([demo_dir_map[n] for n in added_names], key=lambda d: d.name)
             new_idx_counter = next_idx
             for demo_dir in added_demos:
@@ -1080,6 +1344,7 @@ class RosbagToGrootConverter:
                     ep_meta = existing_episodes[demo_dir.name]
                     ep_idx = ep_meta['episode_index']
                     ep_task = int(ep_meta.get('task_index', task_index))
+                    previous_rows[demo_dir.name] = ep_meta
                 else:
                     ep_idx = new_idx_counter
                     new_idx_counter += 1
@@ -1095,6 +1360,7 @@ class RosbagToGrootConverter:
                     result = self.process_single_episode(
                         demo_dir, episode_index, ep_task, i + 1, total_to_process,
                         task_from_bag=not is_rebuild,
+                        previous=previous_rows.get(demo_dir.name),
                     )
                     if result is None:
                         self.failed_demos.append(demo_dir.name)
@@ -1120,6 +1386,7 @@ class RosbagToGrootConverter:
                             i + 1,
                             total_to_process,
                             demo_dir.name not in rebuild_names,
+                            previous_rows.get(demo_dir.name),
                         )
                         futures[future] = i
 
@@ -1296,12 +1563,15 @@ Layout:  <data-root>/<dataset>/demonstrations/  (input bags)
          <data-root>/<dataset>/lerobot/         (output dataset)
 
 Arguments:
-  --dataset NAME        Dataset name (default: $ALFIE_DATASET or 'default')
-  --data-root DIR       Data root (default: $ALFIE_DATA_ROOT or ~/alfiebot_ws/data)
+  --dataset NAME        Session folder name (default: $ALFIE_DATASET or 'default')
+  --data-root DIR       Data root (default: $ALFIE_DATA_ROOT or ~/alfie_data/raw;
+                        the datasets from before sessions are in ~/alfiebot_ws/data)
   --demos-dir DIR       Override input directory containing demo_* folders
   --output-dir DIR      Override output directory for GR00T format data
-  --task-index N        Task index to label the converted demos with
-                        (default: 0)
+  --task-id ID          Registry task for new bags recorded without one
+  --tasks-yaml FILE     Task registry (default: installed config/tasks.yaml)
+  --task-index N        Like --task-id, by index in meta/tasks.jsonl, for
+                        tasks that are not in the registry
   --task-name TEXT      Language instruction for --task-index; written to
                         meta/tasks.jsonl (required the first time an index is used)
   --fps N               Target frames per second for resampling; must match
@@ -1315,14 +1585,19 @@ Arguments:
                         data without converting anything
   --rebuild-all         Reconvert every existing episode from its bag, keeping
                         its episode index and task label
+  --trim-bags           Also cut the bag of every episode trimmed after the grasp
+                        (tasks.yaml close.keep_s); the original bag moves to
+                        <dataset>/demonstrations_untrimmed/
 
 Examples:
   # Check what demos and output data exist
   python3 rosbag_to_groot.py --report
 
-  # Convert all demos of a dataset
-  python3 rosbag_to_groot.py --dataset can_do_challenge \\
-      --task-index 0 --task-name "find the can and pick it up"
+  # Convert the new bags of a session
+  python3 rosbag_to_groot.py --dataset 2026-11-20_s02_hw2
+
+  # ...labelling the ones recorded without a task
+  python3 rosbag_to_groot.py --dataset 2026-11-20_s02_hw2 --task-id pick_up_soda_can
 
   # Convert with explicit paths and multithreading
   python3 rosbag_to_groot.py \\
@@ -1347,8 +1622,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  %(prog)s --dataset can_do_challenge --report
-  %(prog)s --dataset can_do_challenge --task-index 0 --task-name "find the can and pick it up"
+  %(prog)s --dataset 2026-11-20_s02_hw2 --report
+  %(prog)s --dataset 2026-11-20_s02_hw2 --task-id pick_up_soda_can
   %(prog)s --demos-dir /path/to/demos --output-dir /path/to/output
   %(prog)s --dataset can_do_challenge --start-episode 50 --num-threads 8 --use-gpu
 """
@@ -1378,10 +1653,24 @@ examples:
         help='Output directory for GR00T format data (default: <data-root>/<dataset>/lerobot)'
     )
     parser.add_argument(
+        '--task-id',
+        type=str,
+        default=None,
+        help='Registry task ID (config/tasks.yaml) for new bags that carry no '
+             'task of their own (recorded before episode.json, or with no task chosen)'
+    )
+    parser.add_argument(
+        '--tasks-yaml',
+        type=str,
+        default=None,
+        help='Task registry file (default: the installed alfie_gr00t config/tasks.yaml)'
+    )
+    parser.add_argument(
         '--task-index',
         type=int,
-        default=0,
-        help='Task index to label the converted demos with (default: %(default)s)'
+        default=None,
+        help='Like --task-id, by index in meta/tasks.jsonl (datasets whose tasks '
+             'are not in the registry)'
     )
     parser.add_argument(
         '--task-name',
@@ -1424,6 +1713,14 @@ examples:
              'index and task label (use after changing the converter)'
     )
 
+    parser.add_argument(
+        '--trim-bags',
+        action='store_true',
+        help='Also cut the source bag of every episode that is trimmed after the grasp '
+             '(tasks.yaml close.keep_s). The original bag is moved to '
+             '<dataset>/demonstrations_untrimmed/, not deleted'
+    )
+
     args = parser.parse_args()
 
     demos_dir = args.demos_dir or str(_demos_dir(args.dataset, args.data_root))
@@ -1435,17 +1732,29 @@ examples:
         fps=args.fps,
         num_threads=args.num_threads,
         use_gpu=args.use_gpu,
-        robot_type=f'alfiebot_{args.dataset}',
+        # Every recording session shares one robot_type, so their schemas compare equal.
+        robot_type=('alfiebot' if re.match(r'^\d{4}-\d{2}-\d{2}_s\d{2,}_hw\d+$', args.dataset)
+                    else f'alfiebot_{args.dataset}'),
         rebuild_all=args.rebuild_all,
+        tasks_yaml=args.tasks_yaml,
+        trim_bags=args.trim_bags,
     )
 
     if args.report:
         converter.report()
         return
 
-    if args.task_name:
+    if args.task_id:
+        task = converter.registry.by_id(args.task_id) if converter.registry else None
+        if task is None:
+            print(f"Error: task '{args.task_id}' is not in the task registry.")
+            sys.exit(1)
+        args.task_index = converter.task_index_for(task['text'])
+    elif args.task_name:
+        if args.task_index is None:
+            args.task_index = max(converter.tasks_map, default=-1) + 1
         converter.register_task(args.task_index, args.task_name)
-    elif args.task_index not in converter.tasks_map:
+    elif args.task_index is not None and args.task_index not in converter.tasks_map:
         print(f"Error: task_index {args.task_index} is not in {converter.meta_dir / 'tasks.jsonl'}.")
         print("       Pass --task-name \"<language instruction>\" to register it.")
         sys.exit(1)
@@ -1456,7 +1765,11 @@ examples:
     print(f"Dataset: {args.dataset}")
     print(f"Demos directory: {demos_dir}")
     print(f"Output directory: {output_dir}")
-    print(f"Task index: {args.task_index} ('{converter.tasks_map[args.task_index]}')")
+    if args.task_index is None:
+        print("Unlabelled bags: not converted (no --task-id / --task-index)")
+    else:
+        print(f"Unlabelled bags: task {args.task_index} "
+              f"('{converter.tasks_map[args.task_index]}')")
     print(f"Target FPS: {args.fps}")
     print(f"Number of threads: {args.num_threads}")
     print(f"GPU acceleration: {'Enabled' if args.use_gpu else 'Disabled'}")

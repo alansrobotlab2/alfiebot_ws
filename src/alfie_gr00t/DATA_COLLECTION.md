@@ -33,27 +33,87 @@ derives the 22D action vector from those command fields.
 
 > **Note:** The GR00T policy uses camera images + `/alfie/robotlowstate` as observations. The additional topics (`camera_info`, `tf`, `robot_description`, `rosout`) are recorded for dataset analysis and debugging.
 
-## Dataset Layout
+## Data Layout
 
-Every dataset (one challenge, one task family, one experiment) gets its own
-folder under `~/alfiebot_ws/data/`, selected by a short `dataset` name:
+Recordings are grouped by **recording session**, not by task: a session often
+mixes tasks, demos and corrections. Each session is one folder under
+`~/alfie_data/raw/`:
 
 ```
-~/alfiebot_ws/data/
-└── <dataset>/                  e.g. can_do_challenge
+~/alfie_data/raw/
+└── 2026-11-20_s02_hw2/         YYYY-MM-DD_sNN_hwN: date, session of that day, hardware version
+    ├── session.json            {session, hw, created, closed, ...}
     ├── demonstrations/         raw MCAP bags from the recorder
-    │   └── demo_20260102_195919/
-    └── lerobot/                GR00T LeRobot v2 output of rosbag_to_groot.py
-        ├── meta/               info.json, modality.json, tasks.jsonl, episodes.jsonl, stats.json
-        ├── data/chunk-000/
-        └── videos/chunk-000/
+    │   └── demo_20261120_143022/
+    │       ├── demo_20261120_143022_0.mcap.zstd
+    │       └── episode.json    facts known only at record time
+    ├── lerobot/                GR00T LeRobot v2.1 output of rosbag_to_groot.py
+    │   ├── meta/               info.json, modality.json, tasks.jsonl, episodes.jsonl
+    │   ├── data/chunk-000/
+    │   └── videos/chunk-000/
+    └── registry/               copy of the task registry, written when the session is closed
 ```
 
-The recorder, converter and episode manager all take
-`--dataset NAME` (or the `ALFIE_DATASET` environment variable) and derive the
-paths from `alfie_gr00t/dataset_paths.py`. `--data-root` / `ALFIE_DATA_ROOT`
-moves the whole tree (e.g. to an external drive). Pass `<dataset>/lerobot` as
-`--dataset-path` to Isaac-GR00T.
+- The hardware version comes from `config/hardware.yaml` (`current`).
+- A session is **open** while you record into it and review it. **Closing** it
+  (episode manager) makes it final: the recorder, the converter and the episode
+  manager refuse to change a closed session. Only closed sessions are synced to
+  the training machine.
+- The catalog (`catalog/episodes.parquet`), the held-out split and the training
+  folders (`views/`) are built on the training machine from the closed sessions
+  and the registry. Nothing on the robot writes them.
+
+The recorder, converter and episode manager derive their paths from
+`alfie_gr00t/dataset_paths.py`. `--data-root` / `ALFIE_DATA_ROOT` moves the
+tree. The datasets recorded before sessions (`CleanTheRoom`,
+`can_do_challenge`) stay in `~/alfiebot_ws/data/<dataset>/` with the same two
+sub-folders; the episode manager lists them after the sessions, and the
+converter reaches them with `--data-root ~/alfiebot_ws/data`.
+
+### Task registry
+
+`config/tasks.yaml` has one entry per task ID and is the only list of tasks:
+the episode manager's task picker, the converter, the inference client and the
+training-side export all read it. `config/objects.yaml` (object names) and
+`config/hardware.yaml` (hardware versions) sit beside it. Each task has
+
+- `text`: the string the deployed policy is trained on, and what recording
+  writes to `meta/tasks.jsonl` today;
+- `instruction`: the wording from the v6 training run on, generated from the
+  structured fields (`verb`, `object`, `destination`) by the templates at the
+  top of the file. The client and the datasets switch to it together;
+- `family`, `status`, `start_state`, `includes`, `end_state`.
+
+To add a task, add its entry with `status: collecting`, rebuild
+(`colcon build --packages-select alfie_gr00t`) and restart the episode manager
+and recorder.
+
+### What is stored with each episode
+
+Every row of a session's `meta/episodes.jsonl` carries, besides the LeRobot
+fields:
+
+| field | meaning |
+|---|---|
+| `episode_uid` | `<session>/<episode index>`, e.g. `2026-11-20_s02_hw2/000007` |
+| `task_id`, `family`, `verb`, `object`, `destination`, `start_state`, `end_state` | the task and its structured fields, from the registry |
+| `source` | `demo`, `correction`, `scripted_recovery` or `autonomous_success` |
+| `round` | correction round (0 for demos) |
+| `policy_ckpt`, `run_id`, `instruction_sent`, `takeover_s` | corrections: the checkpoint that was driving, the run it was taken from, the string the policy was running on, seconds into the run |
+| `failure_mode` | corrections: why the operator took over (set in review) |
+| `operator`, `objects`, `surface`, `hw`, `recorded_at` | who, what, where, on which hardware, when |
+| `quality` | `ok`, `marginal` or `bad` (set in review) |
+| `notes` | free text (set in review) |
+| `close_frame` | first frame of the grasp: the task's `close` condition in `tasks.yaml` (for `pick_up_soda_can`, right gripper stalled on the can for 2 s with the back still down). Null for a miss and for tasks without one |
+| `done_frame` | frame where the task's `done` condition is confirmed, as the client would end the task (for `pick_up_soda_can` the end of the lift, about 10 s after the grasp). Null when it never holds |
+| `untrimmed_length` | frames the episode had before a cut after the grasp (null = not cut; no task cuts today) |
+| `alfiebot_commit` | commit of `~/alfiebot_ws` when the episode was recorded |
+| `bag` | the source bag folder |
+
+The recorder writes the record-time part into `episode.json` in the bag folder;
+the converter copies it into the row and adds the registry fields. In the two
+older datasets `source` holds the bag name and corrections are marked
+`origin: takeover`; the tools read both forms.
 
 ## Quick Start
 
@@ -68,22 +128,31 @@ source install/setup.bash
 ### 2. Start the data recorder
 
 The recorder is started by `alfie_bringup.py` (`launch_recorder:=true` is the
-default, `dataset:=<name>` picks the dataset). To run it on its own:
+default). To run it on its own:
 
 **Terminal 1: Launch data recorder**
 ```bash
-ros2 launch alfie_gr00t data_collection.launch.py dataset:=can_do_challenge
+ros2 launch alfie_gr00t data_collection.launch.py
 ```
 
-Or use the convenience script:
+It records into today's open session and starts one (`..._s01_hw2`, then
+`s02`, ...) on the first recording of the day, or after the last one was closed.
+`dataset:=<session>` pins a folder instead.
+
+**Before recording, set the recording context** in the Foxglove Episode Manager
+panel ("Next recording"): the **task** (picked by ID from the registry), the
+**source**, the **correction round**, the **operator** and the surface. It
+applies to every episode until you change it and survives restarts. Without the
+panel:
+
 ```bash
-./src/alfie_gr00t/scripts/record_demo.sh --dataset can_do_challenge
+ros2 topic pub --once /alfie/recording/set_context std_msgs/msg/String \
+  '{data: "{\"task_id\": \"pick_up_soda_can\", \"source\": \"demo\", \"operator\": \"alan\"}"}'
+ros2 topic echo --once /alfie/recording/context     # what the recorder will write
 ```
 
-Switch datasets between episodes without relaunching:
-```bash
-ros2 param set /alfie/data_recorder dataset soda_sort
-```
+An episode recorded with no task set is not lost: the converter asks for a task
+for such bags, and it can be relabelled in review.
 
 ### 3. Start/Stop recording
 
@@ -140,14 +209,15 @@ ros2 topic echo /alfie/recording/status      # RECORDING:<dataset>/demo_... or S
 Record a correction from where the policy is about to fail (HG-DAgger style).
 The episode starts mid-task and holds only frames where the operator is driving.
 
-1. Start the data recorder on the dataset the policy trains on (bringup default
-   `dataset:=CleanTheRoom`) and put on the headset.
+1. Start the data recorder (bringup does) and set the **correction round** and
+   **operator** in the episode manager. Put on the headset.
 2. Start the run with the agent ("pick up the can") or `ab_trial.py`. Once
    `groot_client` reports ACTIVE, the VR node goes into **observe**. It releases
    every subsystem so GR00T drives, and passthrough turns on.
 3. When the run is about to fail, **click the left stick**:
    - The robot freezes at its commanded pose, gripper included, and the base stops.
-   - The latched `/alfie/groot/takeover` event (`{stamp_ns, task}`) stops
+   - The latched `/alfie/groot/takeover` event (`{stamp_ns, task, run_id,
+     policy_ckpt, takeover_s}`) stops
      `groot_client` without disabling the servos, and cancels the agent's task
      or clean-the-room mission.
    - Recording starts and passthrough turns off.
@@ -161,17 +231,25 @@ The episode starts mid-task and holds only frames where the operator is driving.
 Set `groot_takeover:=false` on the VR node to turn this off. Without it, the
 headset takes the head and base from any GR00T run.
 
-Conversion is the same `rosbag_to_groot.py` run. A bag carrying the takeover
-event becomes an episode with:
-- the run's task when that text is in `meta/tasks.jsonl` (otherwise `--task-index`)
-- the frozen lead-in trimmed to 0.5 s before the first motion
-- `"origin": "takeover"` and `takeover_task` in `episodes.jsonl` (other new
-  episodes get `"origin": "demo"`)
+Conversion is the same `rosbag_to_groot.py` run. A takeover becomes an episode
+with:
+- `source: correction`, whatever source the recording context says
+- the run's task (the registry task whose `text` the policy was running on)
+- `run_id` (one per policy activation, so every correction taken from the same
+  run shares it and can be kept in the same split), `policy_ckpt` (the
+  checkpoint the server reports), `instruction_sent` and `takeover_s`
+- `round` from the recording context
+- only the operator's part: the frozen lead-in is trimmed to 0.5 s before the
+  first motion, and the full ending is kept
+- nothing at all if fewer than 16 frames remain (reported as failed; shorter
+  than one action chunk is no use to training)
 
-The episode manager marks takeover episodes `TO`.
+The episode manager marks corrections `C<round>`; tag why you took over
+("Why taken over") while reviewing.
 
 Training with takeovers:
-- They go into the same dataset as the demos.
+- They stay in the same raw session as the demos recorded with them; the
+  training-side export splits by `source` to weight them.
 - Hold a few takeover episodes out as an offline test (`groot_open_loop_eval.py`):
   does the model predict the correction from a bad spot?
 - Regenerate stats (below); the converter doesn't.
@@ -180,29 +258,45 @@ Training with takeovers:
 
 ## Reviewing Episodes
 
-The episode manager is a ROS node serving a browser UI for converting, reviewing
-and labelling a dataset:
+The episode manager is a ROS node (started by bringup) that owns the sessions on
+disk. Use it from the **Episode Manager panel in Foxglove**
+(`alfie_foxglove_extension`):
 
-```bash
-ros2 run alfie_gr00t episode_manager --ros-args -p dataset:=can_do_challenge
-```
-
-Open `http://alfiebot.local:7880/` (startup logs every URL that works). From there:
-
-- **Convert** runs `rosbag_to_groot.py` on any new bags in `demonstrations/` and
-  streams its output. Pick the task the new bags get, or `+ new task…` to name
-  one (the only way to give a fresh dataset its first task).
+- **Session**: pick a session to review. **New session** starts the next one of
+  today and points the recorder at it; **Record into this session** points the
+  recorder at an open session you are looking at.
+- **Next recording**: the recording context (task, source, correction round,
+  operator, surface) and where the next episode goes.
+- **Convert** runs `rosbag_to_groot.py` on the new bags and streams its output.
+  Bags recorded with a task keep it; choose a task for "bags recorded without a
+  task", or they are left unconverted and listed as failed.
 - **Review** plays the four cameras in sync: <kbd>Space</kbd> play/pause,
   <kbd>←</kbd>/<kbd>→</kbd> one frame, <kbd>Shift</kbd> for one second, playback
   speed 0.25×–4×.
-- **Label** with the task buttons or <kbd>1</kbd>–<kbd>9</kbd>; it rewrites
-  `episodes.jsonl` and the episode's parquet `task_index`, then moves to the
-  next episode. <kbd>J</kbd>/<kbd>K</kbd> walk the list.
+- **Label** with the task buttons or <kbd>1</kbd>–<kbd>9</kbd>; it rewrites the
+  episode's row (task ID and structured fields) and its parquet `task_index`,
+  then moves to the next episode. <kbd>J</kbd>/<kbd>K</kbd> walk the list.
+- **Quality** (`ok` / `marginal` / `bad`), **Why taken over** (corrections) and
+  **Notes** are saved to the episode's row.
 - **Delete** removes the source bag, the parquet and videos, and the metadata row.
   Other episodes keep their indices.
+- **Close session…** when the review is done. It saves a copy of the task
+  registry, the git commits of the alfiebot workspace and Isaac-GR00T, and the
+  data schema into the session, then freezes it. After that nothing can be
+  relabelled, deleted or converted, and the recorder moves on to a new session.
+  Close before syncing to the training machine.
 
-A banner appears when `meta/stats.json` is older than `episodes.jsonl`; regenerate
-it before training.
+The node also serves a plain web page at `http://alfiebot.local:7880/` (startup
+logs every URL that works). It plays, relabels by task index and deletes, but
+has no session, recording-context or quality controls.
+
+```bash
+ros2 run alfie_gr00t episode_manager        # opens the newest session
+```
+
+A banner appears when `meta/stats.json` is older than `episodes.jsonl`; stats are
+generated on the training machine for the merged training folders, so for a raw
+session it is only a reminder.
 
 **Convert refuses to run while episodes have no bag** in `demonstrations/` (e.g.
 the bags were moved off the robot) unless you confirm: the converter treats a
@@ -210,8 +304,11 @@ missing bag as a deleted demo and would drop those episodes.
 
 | parameter | default | meaning |
 |---|---|---|
-| `dataset` | `$ALFIE_DATASET` | dataset opened at startup; others are picked in the UI |
-| `data_root` | `$ALFIE_DATA_ROOT` or `~/alfiebot_ws/data` | folder of datasets |
+| `dataset` | `$ALFIE_DATASET`, else the newest session | session opened at startup; others are picked in the UI |
+| `data_root` | `$ALFIE_DATA_ROOT` or `~/alfie_data/raw` | folder of sessions |
+| `legacy_root` | `~/alfiebot_ws/data` | datasets from before sessions, listed after the sessions |
+| `tasks_yaml` | installed `config/tasks.yaml` | task registry |
+| `workspace_dir` / `isaac_groot_dir` | `~/alfiebot_ws` / `~/Isaac-GR00T` | git checkouts whose commits are saved when a session is closed |
 | `port` / `host` | `7880` / `0.0.0.0` | HTTP bind (no auth: keep it on a trusted network) |
 | `python` | `~/Isaac-GR00T/.venv/bin/python` | interpreter for the converter and parquet edits; needs pyarrow, pandas, zstandard |
 | `num_threads` / `use_gpu` | `8` / `false` | passed to `rosbag_to_groot.py` |
@@ -222,17 +319,17 @@ vendored under `alfie_gr00t/episode_manager/web/`, no build step).
 
 ## Data Storage
 
-**Default location:** `~/alfiebot_ws/data/<dataset>/demonstrations/`
+**Default location:** `~/alfie_data/raw/<session>/demonstrations/`
 
 Each recording creates a directory:
 ```
-<dataset>/demonstrations/
-├── demo_20250129_143022/
+<session>/demonstrations/
+├── demo_20261120_143022/
 │   ├── metadata.yaml
-│   └── demo_20250129_143022_0.mcap
-├── demo_20250129_143156/
-│   └── demo_20250129_143156_0.mcap
-└── manifest.json
+│   ├── episode.json
+│   └── demo_20261120_143022_0.mcap.zstd
+└── demo_20261120_143156/
+    └── ...
 ```
 
 **Storage format:** MCAP with zstd compression
@@ -316,23 +413,37 @@ brand-new dataset it also creates `meta/info.json`, `meta/modality.json` and
 Run with `--report` to see a summary of recorded demos and any existing converted output:
 
 ```bash
-python3 src/alfie_gr00t/scripts/rosbag_to_groot.py --dataset can_do_challenge --report
+python3 src/alfie_gr00t/scripts/rosbag_to_groot.py --dataset 2026-11-20_s02_hw2 --report
 ```
 
 ### Convert all demos
 
-The first time a task index is used, name it with `--task-name`; that string is
-the language instruction the model is trained on:
+The episode manager's Convert button runs this for you. By hand (ROS sourced,
+Isaac-GR00T venv python):
 
 ```bash
 python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
-    --dataset can_do_challenge \
-    --task-index 0 --task-name "find the can and pick it up" \
-    --num-threads 8
+    --dataset 2026-11-20_s02_hw2 --num-threads 8
 ```
 
-The converter is an incremental sync: re-running it adds new `demo_*` folders,
-rebuilds episodes whose output is missing, and removes episodes whose bag is gone.
+Each bag is labelled with the task it was recorded for (`episode.json`), and
+`meta/tasks.jsonl` gets that task's `text` from the registry. Add
+`--task-id pick_up_soda_can` to label the bags recorded without a task. Episodes
+shorter than 16 frames are not converted.
+
+### Where a pick ends
+
+A pick includes the lift: it ends with the item held in the `carry` pose
+(`tasks.yaml` poses), back all the way up, held still for 1-2 s. Every task
+that starts with the item in hand starts from that pose, so a pick from any
+surface can be followed by any of them. Each task's `includes` line lists the
+motions its episodes must contain.
+
+The converter can cut episodes a fixed time after the grasp (`close.keep_s` on
+a task; `--trim-bags` cuts the source bag at the same point and moves the
+original to `<session>/demonstrations_untrimmed/`). No task uses it: a policy
+trained on picks cut before the lift never raises the back, and nothing else
+demonstrates that motion.
 
 ### GPU-accelerated video encoding
 
@@ -340,7 +451,7 @@ On the Jetson, use `--use-gpu` to encode videos with NVENC instead of CPU libx26
 
 ```bash
 python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
-    --dataset can_do_challenge --task-index 0 --num-threads 8 --use-gpu
+    --dataset 2026-11-20_s02_hw2 --num-threads 8 --use-gpu
 ```
 
 ### Generate normalization statistics

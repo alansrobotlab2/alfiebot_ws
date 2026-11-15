@@ -5,13 +5,32 @@ running, because the converter rewrites episodes.jsonl and info.json when it
 finishes and would silently undo anything done in the meantime.
 """
 
+import json
 import re
+import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from alfie_gr00t import task_registry
+from alfie_gr00t.dataset_paths import LEGACY_DATA_ROOT, create_session
 from alfie_gr00t.episode_manager.dataset import ConvertJob, Dataset, DatasetError
+from alfie_gr00t.recording_context import (
+    FAILURE_MODES, QUALITIES, SOURCES, merge_context,
+)
+
+REGISTRY_FILES = ('tasks.yaml', 'objects.yaml', 'hardware.yaml')
+
+
+def _git(repo: Path, *args: str) -> Optional[str]:
+    try:
+        out = subprocess.run(['git', '-C', str(repo), *args], capture_output=True,
+                             text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout if out.returncode == 0 else None
 
 
 class ConvertProgressLog:
@@ -93,9 +112,25 @@ class ConvertProgressLog:
 class EpisodeManager:
 
     def __init__(self, data_root: str, dataset: str, python: str, converter: str,
-                 num_threads: int, use_gpu: bool, logger=None):
+                 num_threads: int, use_gpu: bool, logger=None,
+                 tasks_yaml: Optional[str] = None,
+                 legacy_root: str = LEGACY_DATA_ROOT,
+                 workspace_dir: str = '~/alfiebot_ws',
+                 isaac_groot_dir: str = '~/Isaac-GR00T'):
         self.data_root = Path(data_root).expanduser()
-        self.dataset = Dataset(self.data_root, dataset)
+        # Datasets recorded before sessions; listed after the sessions.
+        self.legacy_root = Path(legacy_root).expanduser() if legacy_root else None
+        self.tasks_yaml = tasks_yaml or None
+        self.workspace_dir = Path(workspace_dir).expanduser()
+        self.isaac_groot_dir = Path(isaac_groot_dir).expanduser()
+        # Recording context as data_recorder last published it (None = not seen),
+        # and how to send it an update (set by the node).
+        self.context: Optional[Dict[str, Any]] = None
+        self.send_context: Optional[Callable[[Dict[str, Any]], None]] = None
+        if not dataset:
+            names = self.sessions()
+            dataset = names[0] if names else ''
+        self.dataset = Dataset(self._root_of(dataset), dataset)
         self.python = python
         self.converter = converter
         self.num_threads = num_threads
@@ -124,17 +159,60 @@ class EpisodeManager:
 
     # -- reads -------------------------------------------------------------
 
-    def datasets(self) -> List[str]:
-        if not self.data_root.is_dir():
+    @staticmethod
+    def _folders(root: Optional[Path]) -> List[str]:
+        if root is None or not root.is_dir():
             return []
-        return sorted(d.name for d in self.data_root.iterdir()
+        return sorted(d.name for d in root.iterdir()
                       if d.is_dir() and not d.name.startswith('.'))
+
+    def sessions(self) -> List[str]:
+        """Folders under the data root, newest session first."""
+        return sorted(self._folders(self.data_root), reverse=True)
+
+    def datasets(self) -> List[str]:
+        """Sessions (newest first), then the datasets from before sessions."""
+        names = self.sessions()
+        return names + [n for n in self._folders(self.legacy_root) if n not in names]
+
+    def _root_of(self, name: str) -> Path:
+        if (self.legacy_root is not None and not (self.data_root / name).is_dir()
+                and (self.legacy_root / name).is_dir()):
+            return self.legacy_root
+        return self.data_root
+
+    def registry(self):
+        """The task registry, re-read each time so edits show up (None if broken)."""
+        try:
+            return task_registry.load(self.tasks_yaml)
+        except Exception as exc:   # noqa: BLE001
+            if self.logger is not None:
+                self.logger.error(f'cannot read the task registry: {exc}')
+            return None
+
+    def _hw(self) -> Optional[str]:
+        try:
+            return task_registry.current_hw(self.tasks_yaml)
+        except Exception:   # noqa: BLE001
+            return None
+
+    def registry_info(self) -> Dict[str, Any]:
+        reg = self.registry()
+        tasks = [{'id': t['id'], 'task': t['text'], 'instruction': t.get('instruction'),
+                  'family': t.get('family'), 'status': t['status'],
+                  'recordable': t['status'] in task_registry.RECORDABLE}
+                 for t in (reg.tasks.values() if reg else ())]
+        return {'source': reg.source if reg else None, 'tasks': tasks, 'hw': self._hw(),
+                'sources': list(SOURCES), 'qualities': list(QUALITIES),
+                'failure_modes': list(FAILURE_MODES)}
 
     def describe(self) -> Dict[str, Any]:
         return {
             'data_root': str(self.data_root),
             'datasets': self.datasets(),
-            'dataset': self.dataset.summary(),
+            'dataset': self.dataset.summary(self.registry()),
+            'registry': self.registry_info(),
+            'context': self.context,
             'python': self.python,
             'busy': self._busy(),
             'recorder': self.recorder_status,
@@ -143,9 +221,11 @@ class EpisodeManager:
     def status(self) -> Dict[str, Any]:
         """Cheap poll: enough for the UI to know when to reload the full summary."""
         ds = self.dataset
-        sources = {ep.get('source') for ep in ds.episodes()}
+        sources = {ep.get('bag') or ep.get('source') for ep in ds.episodes()}
         return {
             'dataset': ds.name,
+            'closed': ds.closed(),
+            'context': self.context,
             'busy': self._busy(),
             'recorder': self.recorder_status,
             'pending': sum(1 for name in ds.demo_names() if name not in sources),
@@ -175,30 +255,135 @@ class EpisodeManager:
         with self._lock:
             if self._busy():
                 return {'ok': False, 'error': 'a conversion is running; wait for it to finish'}
-            self.dataset = Dataset(self.data_root, name)
+            self.dataset = Dataset(self._root_of(name), name)
         self._log(f'opened dataset {name}')
         return {'ok': True}
 
-    def set_task(self, index: int, task_index: int) -> Dict[str, Any]:
+    def set_task(self, index: int, task_index: Optional[int] = None,
+                 task_id: Optional[str] = None) -> Dict[str, Any]:
         return self._edit(f'episode {index} task',
-                          lambda: self.dataset.set_task(index, task_index, self.python))
+                          lambda: self.dataset.set_task(index, task_index, self.python,
+                                                        self.registry(), task_id))
+
+    def set_fields(self, index: int, fields: Dict[str, Any]) -> Dict[str, Any]:
+        return self._edit(f'episode {index} review',
+                          lambda: self.dataset.set_fields(index, fields))
+
+    # -- recording context and sessions ------------------------------------
+
+    def set_context(self, update: Dict[str, Any]) -> Dict[str, Any]:
+        """Change what the recorder writes with the next episodes."""
+        if self.context is None or self.send_context is None:
+            return {'ok': False, 'error': 'the data recorder is not running '
+                                          '(no /alfie/recording/context yet)'}
+        reg = self.registry()
+        if 'session' in update:
+            name = str(update['session'] or '')
+            if name and (not (self.data_root / name).is_dir()
+                         or Dataset(self.data_root, name).closed()):
+                return {'ok': False, 'error': f'"{name}" is not an open session'}
+            if self._recording():
+                return {'ok': False, 'error': 'recording; stop before switching session'}
+        merged, error = merge_context(self.context, update, reg.tasks if reg else {})
+        if error:
+            return {'ok': False, 'error': error}
+        self.send_context(update)
+        # Shown at once; the recorder's own (latched) answer replaces it.
+        self.context = {**self.context, **merged,
+                        **({'session': str(update['session'] or '')}
+                           if 'session' in update else {})}
+        return {'ok': True, 'context': self.context}
+
+    def _recording(self) -> bool:
+        return not (self.recorder_status or 'STOPPED').startswith('STOPPED')
+
+    def new_session(self) -> Dict[str, Any]:
+        """Start the next session of today, open it and point the recorder at it."""
+        hw = self._hw()
+        if hw is None:
+            return {'ok': False, 'error': 'cannot read hardware.yaml for the hardware version'}
+        with self._lock:
+            if self._busy():
+                return {'ok': False, 'error': 'a conversion is running; wait for it to finish'}
+            if self._recording():
+                return {'ok': False, 'error': 'recording; stop before starting a session'}
+            try:
+                name = create_session(self.data_root, hw)
+            except OSError as exc:
+                return {'ok': False, 'error': f'cannot create a session: {exc}'}
+            self.dataset = Dataset(self.data_root, name)
+        self._log(f'new session {name}')
+        if self.context is not None and self.send_context is not None:
+            self.send_context({'session': name})
+            self.context = {**self.context, 'session': name}
+        return {'ok': True, 'session': name}
+
+    def _close_facts(self) -> Dict[str, Any]:
+        """Registry snapshot into the session, and the commits in use."""
+        ds = self.dataset
+        src = task_registry.default_path() if self.tasks_yaml is None else Path(self.tasks_yaml)
+        snapshot = ds.root / 'registry'
+        snapshot.mkdir(exist_ok=True)
+        dirty = False
+        for name in REGISTRY_FILES:
+            path = src.parent / name
+            if not path.is_file():
+                raise DatasetError(f'registry file {path} is missing')
+            shutil.copyfile(path, snapshot / name)
+            committed = _git(self.workspace_dir, 'show', f'HEAD:src/alfie_gr00t/config/{name}')
+            dirty = dirty or committed != path.read_text()
+        commit = (_git(self.workspace_dir, 'rev-parse', 'HEAD') or '').strip() or None
+        return {
+            # The registry copy in registry/ is what recording used; it equals
+            # this commit's unless registry_dirty.
+            'registry_commit': commit,
+            'registry_dirty': dirty,
+            'alfiebot_commit': commit,
+            'isaac_groot_commit': (_git(self.isaac_groot_dir, 'rev-parse', 'HEAD') or '').strip()
+            or None,
+        }
+
+    def close_session(self, force: bool = False) -> Dict[str, Any]:
+        """Freeze the open session. Unconverted bags need ``force``."""
+        ds = self.dataset
+        if self._recording() and f':{ds.name}/' in self.recorder_status:
+            return {'ok': False, 'error': 'the recorder is writing into this session; stop it'}
+        summary = ds.summary()
+        if not summary['episodes']:
+            return {'ok': False, 'error': 'nothing converted in this session yet'}
+        if summary['pending'] and not force:
+            return {'ok': False, 'needs_force': True, 'pending': len(summary['pending']),
+                    'error': f'{len(summary["pending"])} bags are not converted'}
+        result = self._edit(f'close session {ds.name}', lambda: ds.close(self._close_facts()))
+        if (result['ok'] and self.context is not None and self.send_context is not None
+                and self.context.get('session') == ds.name):
+            self.send_context({'session': ''})   # the recorder moves on to a new session
+            self.context = {**self.context, 'session': ''}
+        return result
 
     def delete(self, index: int) -> Dict[str, Any]:
         return self._edit(f'delete episode {index}', lambda: self.dataset.delete(index))
 
-    def convert(self, task_index: int, force: bool, task_name: str = '') -> Dict[str, Any]:
-        """Start rosbag_to_groot.py; new bags get labelled ``task_index``.
+    def convert(self, task_index: Optional[int], force: bool, task_name: str = '',
+                task_id: str = '') -> Dict[str, Any]:
+        """Start rosbag_to_groot.py.
 
-        ``task_name`` registers (or renames) that task in tasks.jsonl first, which
-        is the only way to give a brand-new dataset its first task.
+        A bag recorded with a task (its episode.json) keeps it. ``task_id``
+        (registry) or ``task_index`` (tasks.jsonl) labels the bags that carry
+        none; with neither, those bags are reported as failed. ``task_name``
+        registers (or renames) ``task_index`` in tasks.jsonl first, for tasks
+        outside the registry.
         """
         task_name = task_name.strip()
         with self._lock:
             if self._busy():
                 return {'ok': False, 'error': 'a conversion is already running'}
             ds = self.dataset
+            if ds.closed():
+                return {'ok': False, 'error': f'session {ds.name} is closed'}
             summary = ds.summary()
-            if not task_name and task_index not in {t['index'] for t in summary['tasks']}:
+            if (not task_id and not task_name and task_index is not None
+                    and task_index not in {t['index'] for t in summary['tasks']}):
                 return {'ok': False, 'error': f'task {task_index} is not in tasks.jsonl; name it'}
             if summary['orphans'] and not force:
                 return {'ok': False, 'needs_force': True, 'orphans': summary['orphans'],
@@ -208,10 +393,15 @@ class EpisodeManager:
                    '--demos-dir', str(ds.demos),
                    '--output-dir', str(ds.lerobot),
                    '--dataset', ds.name,
-                   '--task-index', str(task_index),
                    '--num-threads', str(self.num_threads)]
-            if task_name:
-                cmd += ['--task-name', task_name]
+            if self.tasks_yaml:
+                cmd += ['--tasks-yaml', self.tasks_yaml]
+            if task_id:
+                cmd += ['--task-id', task_id]
+            elif task_index is not None:
+                cmd += ['--task-index', str(task_index)]
+                if task_name:
+                    cmd += ['--task-name', task_name]
             if self.use_gpu:
                 cmd.append('--use-gpu')
             try:

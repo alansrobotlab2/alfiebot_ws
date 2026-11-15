@@ -978,6 +978,16 @@ def main():
             port=args.port,
         )
 
+    # What is loaded, for the client: corrections recorded during a run are
+    # tagged with the checkpoint that was driving (policy_ckpt).
+    server_info = {
+        'checkpoint': str(args.checkpoint or ''),
+        'policy_ckpt': Path(args.checkpoint).name if args.checkpoint else '',
+        'trt_engine_dir': str(args.trt_engine_dir or ''),
+        'denoising_steps': int(args.denoising_steps),
+    }
+    server.register_endpoint('info', lambda: server_info, requires_input=False)
+
     server.socket.setsockopt(zmq.RCVTIMEO, 1000)  # 1s timeout for clean shutdown
     running = True
 

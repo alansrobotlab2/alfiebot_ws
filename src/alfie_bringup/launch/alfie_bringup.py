@@ -92,12 +92,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'launch_recorder', default_value='true',
             description='Start the GR00T episode recorder (alfie_gr00t data_recorder)'),
-        # Bags go to ~/alfiebot_ws/data/<dataset>/demonstrations. Switch later with
-        # `ros2 param set /alfie/data_recorder dataset <name>`.
+        # Bags go to ~/alfie_data/raw/<session>/demonstrations, one session
+        # folder (YYYY-MM-DD_sNN_hwN) per recording session. Empty = today's
+        # open session, started on the first recording; the Foxglove Episode
+        # Manager panel starts, switches and closes sessions.
         DeclareLaunchArgument(
-            'dataset', default_value='CleanTheRoom',
-            description='Dataset name the episode recorder writes into '
-                        '(~/alfiebot_ws/data/<dataset>/demonstrations)'),
+            'dataset', default_value='',
+            description='Session folder the episode recorder writes into '
+                        '(~/alfie_data/raw/<session>); empty = today\'s session'),
 
         # Episode manager serves the GR00T episode review/relabel API on :7880,
         # for its own web UI and the Foxglove Episode Manager panel (through the
@@ -244,7 +246,8 @@ def generate_launch_description():
         ),
 
         # GR00T episode manager (on by default, see launch_episode_manager above).
-        # Opens the dataset the recorder writes into; others can be picked in the UI.
+        # Opens the session the recorder writes into (empty = the newest); others,
+        # and the datasets from before sessions, can be picked in the UI.
         Node(
             package='alfie_gr00t',
             namespace='alfie',

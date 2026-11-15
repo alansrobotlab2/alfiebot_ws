@@ -201,6 +201,10 @@ class GrootClientNode(Node):
         # Continuous inference: ChunkBuffer for temporal ensembling
         self._chunk_buffer: Optional[ChunkBuffer] = None
         self._activation_time: Optional[float] = None  # monotonic ref for frame counting
+        # One ID per activation; takeover corrections of the run carry it, with
+        # the checkpoint the server reports (see _query_policy_ckpt).
+        self._run_id = ''
+        self._policy_ckpt = ''
         if self.continuous_inference:
             self._chunk_buffer = ChunkBuffer(
                 max_chunks=self.max_buffer_chunks,
@@ -489,6 +493,25 @@ class GrootClientNode(Node):
                 time.sleep(period_s)
         finally:
             probe.close()
+
+    def _query_policy_ckpt(self):
+        """Ask the server which checkpoint it loaded (its `info` endpoint).
+
+        Own REQ socket, so it never interleaves with inference requests. A
+        server without the endpoint leaves the checkpoint unknown ('').
+        """
+        probe = ZMQClient(server_address=self.server_address, timeout_ms=2000,
+                          logger=lambda msg: None)
+        try:
+            info = probe._call_endpoint(endpoint='info') if probe.connect() else None
+            ckpt = info.get('policy_ckpt', '') if isinstance(info, dict) else ''
+        except Exception:   # noqa: BLE001 - never let a metadata query hurt a run
+            ckpt = ''
+        finally:
+            probe.close()
+        if ckpt != self._policy_ckpt:
+            self._policy_ckpt = ckpt
+            self.get_logger().info(f'Policy checkpoint: {ckpt or "(server did not say)"}')
 
     def _log_parameters(self):
         """Log all parameter values on startup."""
@@ -833,6 +856,9 @@ class GrootClientNode(Node):
             self._state = ClientState.ACTIVE
             self._active = True
             self._activation_time = time.monotonic()
+            self._run_id = time.strftime('run_%Y%m%d_%H%M%S')
+            threading.Thread(target=self._query_policy_ckpt, name='groot_info',
+                             daemon=True).start()
             self._task_done_hold = None
             self._set_done_tracker()
             self._task_gen += 1   # drop results pushed before this activation
@@ -1781,6 +1807,10 @@ class GrootClientNode(Node):
             'state': self._state.name,
             'active': self._active,
             'task': self.task_description,
+            'run_id': self._run_id,
+            'run_s': (round(time.monotonic() - self._activation_time, 2)
+                      if self._active and self._activation_time is not None else None),
+            'policy_ckpt': self._policy_ckpt,
             'task_done': self._task_done_hold is not None,
             'last_stop': self._last_stop,
             'zmq': zmq_stats,

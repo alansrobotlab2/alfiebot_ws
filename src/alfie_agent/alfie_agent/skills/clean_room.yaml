@@ -11,9 +11,9 @@ params:
   rounds: {type: integer, default: 3, min: 1, max: 10, description: how many cans}
 repeat: rounds
 steps:
-  - task: pick_can
+  - task: pick_up_soda_can
     failed: "I couldn't find and pick up can {round}, so I stopped. I put {count} in the trash."
-  - task: trash_can
+  - task: put_soda_can_in_trash
     failed: "I couldn't get can {round} into the trash, so I stopped. I put {count} in the trash."
 say:
   progress: "That's {count}."

@@ -22,6 +22,8 @@ setup(
             'config/groot_client.yaml',
             'config/groot_server.yaml',
             'config/tasks.yaml',
+            'config/objects.yaml',
+            'config/hardware.yaml',
         ]),
         # The episode manager runs the converter from here.
         ('share/' + package_name + '/scripts', ['scripts/rosbag_to_groot.py']),

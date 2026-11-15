@@ -1,12 +1,46 @@
-# The GR00T tasks the deployed policy was trained on: one entry per task string.
+# The task registry: one entry per task ID. The single list of tasks for both
+# recording and inference, shared with the training machine through git
+# (objects.yaml and hardware.yaml sit beside it).
 #
 # Read by groot_client (done conditions, start-pose check), ab_trial.py (start
-# pose) and alfie_agent (skills; every task with a `description` is offered to
-# the LLM as a skill). Loader + condition evaluator: alfie_gr00t/task_registry.py.
+# pose), alfie_agent (skills; every task with a `description` is offered to
+# the LLM as a skill), data_recorder / episode_manager / rosbag_to_groot.py
+# (task picker, record-time episode fields) and the training-side export
+# script. Loader + condition evaluator: alfie_gr00t/task_registry.py.
 #
-# Task fields
-#   text               exact training string (meta/tasks.jsonl); the policy is
-#                      conditioned on it, so it must match character for character
+# Task fields - what an episode of the task is (recording and training)
+#   family             task family; training folders are family x source
+#   status             proposed | collecting | active | retired. The episode
+#                      manager offers collecting and active tasks for recording
+#   verb, object, destination
+#                      the instruction as structured fields; `verb` names a
+#                      template below, `object` / `destination` are IDs from
+#                      objects.yaml (the template is filled with their `name`).
+#                      Stored with every episode so instructions can be
+#                      regenerated when the wording changes
+#   start_state        what is true when an episode starts
+#   includes           the motions an episode must contain, in order, so that
+#                      no motion falls between two tasks
+#   end_state          the visible end condition; the episode ends there, held
+#                      still for 1-2 s. A task that ends holding something ends
+#                      in the `carry` pose, and every task that starts holding
+#                      something starts from it
+#   instruction        the wording from the v6 training run on. Must equal the
+#                      verb's template filled in. NOT what the policy hears
+#                      today - that is `text`
+#   paraphrases        other wordings of `instruction`
+#   former_ids         IDs this task used to have. Episodes recorded under one
+#                      still resolve to this task. Never reuse an ID for a
+#                      different task: retire it and add a new one
+#
+# Task fields - running the task on the robot
+#   text               exact training string of the deployed checkpoint
+#                      (meta/tasks.jsonl); the policy is conditioned on it, so
+#                      it must match character for character. Recording writes
+#                      this string too until the switch to `instruction` (v6 or
+#                      later; the client and the datasets change together).
+#                      Keep it after the switch: datasets from before task IDs
+#                      are matched to their task by this string
 #   dataset            which dataset / checkpoint family knows this string
 #   description        one line for the agent's skill list (omit = not offered)
 #   start_pose         name under `poses`; where a run of this task begins
@@ -19,6 +53,14 @@
 #                      `hold_s`. `after` clauses must each have been true at
 #                      some earlier moment of this task (latched).
 #   accept_on_timeout  clauses that turn a timeout into a success
+#   close              for tasks that grasp something: when the gripper has
+#                      closed on the object. Every `all` clause held for
+#                      `hold_s`; the converter stores the first frame of the
+#                      first such stretch with each episode as close_frame
+#                      (and the frame `done` is confirmed as done_frame).
+#                      Optional `keep_s`: cut the episode this long after
+#                      close_frame (and, asked to, the bag). No task uses it:
+#                      a pick includes the lift to the carry pose
 #
 # Clauses, on the measured 22D state (rad, m):
 #   {joint: NAME, min: X, max: Y}          either bound may be omitted
@@ -27,6 +69,14 @@
 #   <side>_shoulder_pitch, <side>_elbow_pitch, <side>_wrist_pitch,
 #   <side>_wrist_roll, head_yaw, head_pitch, head_roll.
 # Groups: left_arm, right_arm (5 joints, no gripper), head (3).
+
+# Instruction wording per verb. Verb first, one skill per instruction: every
+# instruction is one of these filled in, never written free-hand. Lowercase, no
+# punctuation, always "the". One phrase per motion (not "grab" here and "pick
+# up" there). Task IDs follow the same shape: <verb>_<object>[_<in/on>_<destination>].
+templates:
+  pick_up: "pick up the {object}"
+  put_in: "put the {object} in the {destination}"
 
 poses:
   # Median pose at the start of the CleanTheRoom pick episodes (83 episodes).
@@ -37,9 +87,33 @@ poses:
     right_arm: [0.00, 0.12, -1.48, -0.14, 0.00, 0.00]
     head: [0.009, 0.071, -0.012]
     back: 0.34
+  # Holding one item in the right gripper, back all the way up: where a pick
+  # ends and where every task that starts with the item in hand begins,
+  # whatever surface it was picked from. Medians of the first frame of the 108
+  # CleanTheRoom trash episodes (the last frame of the 110 picks agrees to
+  # 0.005). The demos vary around it: p10-p90 is shoulder yaw 0.20-0.42,
+  # shoulder pitch 0.42-1.01, elbow -1.38 to -1.06, wrist pitch -0.17 to 0.80,
+  # wrist roll -0.27 to 0.12. The gripper value is the soda can's (0.39-0.43).
+  # Not yet any task's start_pose: the agent and ab_trial.py drive the robot
+  # to a start_pose, and this one has not been driven to on the robot.
+  carry:
+    left_arm: [0.00, 0.10, -1.48, -0.14, 0.00, 0.00]
+    right_arm: [0.31, 0.86, -1.24, 0.27, -0.07, 0.41]
+    head: [0.0, 0.06, -0.02]
+    back: 0.34
 
 tasks:
-  pick_can:
+  pick_up_soda_can:
+    former_ids: [pick_can]
+    family: pick_place
+    status: active
+    verb: pick_up
+    object: soda_can
+    start_state: soda can upright on a surface within reach of a short drive, gripper empty, arms tucked
+    includes: [search, approach, grasp, lift to the carry pose]
+    end_state: soda can held in the right gripper in the carry pose, back all the way up
+    instruction: "pick up the soda can"
+    paraphrases: ["grab the soda can"]
     text: "find the can and pick it up"
     dataset: CleanTheRoom
     description: Find a soda can and pick it up.
@@ -58,11 +132,36 @@ tasks:
         - {joint: back, min: 0.30}
     accept_on_timeout:
       - {joint: right_gripper, min: 0.30, max: 0.55}
+    # The grasp itself, before the lift: gripper stalled on the can with the
+    # back still down. 2.0 s, because in the 110 CleanTheRoom pick demos the
+    # gripper crosses the band in about 0.3 s whenever it closes on nothing or
+    # opens, and one released attempt lasted 1.2 s, while every real grasp held
+    # 3.4 s or more. The back reads 0.025 m at most during those grasps.
+    # Only marks close_frame; the episode is not cut there. In those demos the
+    # back first moves up 2.27 s after the grasp at the earliest (3.7 s median).
+    close:
+      hold_s: 2.0
+      all:
+        - {joint: right_gripper, min: 0.30, max: 0.55}
+        - {joint: back, max: 0.05}
 
-  trash_can:
+  # Starts with the can already in hand: there are no demos of this from the
+  # table yet, so the client sequences pick_up_soda_can then put_soda_can_in_trash.
+  put_soda_can_in_trash:
+    former_ids: [trash_can]
+    family: pick_place
+    status: active
+    verb: put_in
+    object: soda_can
+    destination: trash
+    start_state: soda can held in the right gripper in the carry pose, back all the way up
+    includes: [carry to the trash, release, tuck the right arm]
+    end_state: soda can released into the trash, right arm back at the tucked pose
+    instruction: "put the soda can in the trash"
+    paraphrases: ["throw the soda can away"]
     text: "put the can in the trash can"
     dataset: CleanTheRoom
-    description: Put the can you are holding in the trash can.
+    description: Put the soda can you are holding in the trash.
     start_pose: tucked
     max_s: 60
     # Can released and the right arm back at the tucked pose (how all 108

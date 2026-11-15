@@ -26,7 +26,14 @@ async function post(path, body) {
 }
 
 export const api = {
-  dataset: () => get('/api/dataset'),
+  // This page labels by tasks.jsonl index only. Registry tasks the dataset has
+  // no episode of yet (index null) and the recording context, sessions and
+  // review fields are handled by the Foxglove Episode Manager panel.
+  dataset: async () => {
+    const info = await get('/api/dataset');
+    info.dataset.tasks = info.dataset.tasks.filter((t) => t.index != null);
+    return info;
+  },
   status: () => get('/api/status'),
   job: () => get('/api/job'),
   selectDataset: (name) => post('/api/select_dataset', { name }),

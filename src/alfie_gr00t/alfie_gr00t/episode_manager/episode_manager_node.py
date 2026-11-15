@@ -8,10 +8,16 @@ Then open http://<robot>:7880/.
 Parameters:
     host               bind address (default 0.0.0.0 - reachable on the LAN)
     port               HTTP port (default 7880; groot_server's visualizer has 7860)
-    data_root          folder holding one sub-folder per dataset
-                       (default $ALFIE_DATA_ROOT or ~/alfiebot_ws/data)
-    dataset            dataset opened at startup; others can be picked in the UI
-                       (default $ALFIE_DATASET or "default")
+    data_root          folder holding one sub-folder per recording session
+                       (default $ALFIE_DATA_ROOT or ~/alfie_data/raw)
+    dataset            session opened at startup; others can be picked in the UI
+                       (default $ALFIE_DATASET, else the newest session)
+    legacy_root        datasets from before sessions, listed after the sessions
+                       (default ~/alfiebot_ws/data; "" = none)
+    tasks_yaml         task registry file (default: the installed config/tasks.yaml)
+    workspace_dir      alfiebot git checkout, for the commit written into a
+                       session when it is closed (default ~/alfiebot_ws)
+    isaac_groot_dir    Isaac-GR00T checkout, likewise (default ~/Isaac-GR00T)
     python             interpreter for rosbag_to_groot.py and parquet edits. Needs
                        pyarrow, pandas and zstandard; system python has none of
                        them (default ~/Isaac-GR00T/.venv/bin/python if present)
@@ -44,7 +50,8 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.signals import SignalHandlerOptions
 from std_msgs.msg import String
 
-from alfie_gr00t.dataset_paths import data_root, dataset_name
+from alfie_gr00t.dataset_paths import LEGACY_DATA_ROOT, data_root
+from alfie_gr00t.recording_context import CONTEXT_TOPIC, SET_CONTEXT_TOPIC
 from alfie_gr00t.episode_manager.dataset import default_python
 from alfie_gr00t.episode_manager.http_server import EpisodeManagerServer
 from alfie_gr00t.episode_manager.manager import EpisodeManager
@@ -101,7 +108,11 @@ def main(args=None):
     host = node.declare_parameter('host', '0.0.0.0').value
     port = int(node.declare_parameter('port', 7880).value)
     root = node.declare_parameter('data_root', str(data_root())).value
-    dataset = node.declare_parameter('dataset', dataset_name()).value
+    dataset = node.declare_parameter('dataset', os.environ.get('ALFIE_DATASET', '')).value
+    legacy_root = node.declare_parameter('legacy_root', LEGACY_DATA_ROOT).value
+    tasks_yaml = node.declare_parameter('tasks_yaml', '').value
+    workspace_dir = node.declare_parameter('workspace_dir', '~/alfiebot_ws').value
+    isaac_groot_dir = node.declare_parameter('isaac_groot_dir', '~/Isaac-GR00T').value
     python = node.declare_parameter('python', default_python()).value
     converter = node.declare_parameter('converter_script', '').value or os.path.join(
         get_package_share_directory('alfie_gr00t'), 'scripts', 'rosbag_to_groot.py')
@@ -113,15 +124,33 @@ def main(args=None):
         'allowed_origins', ['https://app.foxglove.dev']).value)
     urls_topic = node.declare_parameter('urls_topic', '/alfie/episode_manager/urls').value
 
-    manager = EpisodeManager(root, dataset, python, converter, num_threads, use_gpu, logger)
-    if not manager.dataset.meta.is_dir():
-        logger.warn(f'{manager.dataset.lerobot} has no converted data yet; '
-                    f'record into {manager.dataset.demos} and press Convert')
+    manager = EpisodeManager(root, dataset, python, converter, num_threads, use_gpu, logger,
+                             tasks_yaml=tasks_yaml, legacy_root=legacy_root,
+                             workspace_dir=workspace_dir, isaac_groot_dir=isaac_groot_dir)
+    dataset = manager.dataset.name
+    if not dataset:
+        logger.info(f'no session under {root} yet; one is made on the first recording, '
+                    f'or with New session in the UI')
 
     def on_recorder_status(msg: String) -> None:
         manager.recorder_status = msg.data
 
     node.create_subscription(String, status_topic, on_recorder_status, 10)
+
+    # Recording context: data_recorder owns it. Its latched state comes in
+    # here; changes made in the UI go out as JSON updates.
+    latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
+    def on_context(msg: String) -> None:
+        try:
+            manager.context = json.loads(msg.data)
+        except ValueError:
+            logger.warn(f'unreadable recording context: {msg.data!r}')
+
+    node.create_subscription(String, CONTEXT_TOPIC, on_context, latched)
+    set_context_pub = node.create_publisher(String, SET_CONTEXT_TOPIC, 10)
+    manager.send_context = lambda update: set_context_pub.publish(
+        String(data=json.dumps(update)))
 
     executor = SingleThreadedExecutor()
     executor.add_node(node)
@@ -146,7 +175,7 @@ def main(args=None):
         sys.exit(1)
 
     urls = _urls(host, port)
-    logger.info(f'episode manager [{dataset}]: {"  ".join(urls)}')
+    logger.info(f'episode manager [{dataset or "no session yet"}]: {"  ".join(urls)}')
 
     # The Foxglove panel can't see which address Foxglove used to reach the
     # bridge, so the robot tells it, over the bridge. Latched for late joiners,

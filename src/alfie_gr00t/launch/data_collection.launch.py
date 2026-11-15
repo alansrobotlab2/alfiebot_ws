@@ -5,8 +5,11 @@ Data Collection Launch File
 Launches the data recorder node for collecting demonstration data.
 Use this during teleoperation to record training datasets.
 
-Bags are written to <data_root>/<dataset>/demonstrations/. Pick the dataset
-with dataset:=<name>; it can also be changed later without relaunching:
+Bags are written to <data_root>/<session>/demonstrations/, one session folder
+(YYYY-MM-DD_sNN_hwN) per recording session. With dataset:= left empty the
+recorder uses today's open session and starts one on the first recording.
+dataset:=<name> pins a folder; it can also be changed without relaunching,
+from the episode manager or with:
 
     ros2 param set /alfie/data_recorder dataset <name>
 """
@@ -21,14 +24,15 @@ def generate_launch_description():
     # Launch arguments
     data_root_arg = DeclareLaunchArgument(
         'data_root',
-        default_value='~/alfiebot_ws/data',
-        description='Root folder holding one sub-folder per dataset'
+        default_value='~/alfie_data/raw',
+        description='Root folder holding one sub-folder per recording session'
     )
 
     dataset_arg = DeclareLaunchArgument(
         'dataset',
-        default_value='default',
-        description='Dataset name; bags go to <data_root>/<dataset>/demonstrations'
+        default_value='',
+        description='Session folder; bags go to <data_root>/<dataset>/demonstrations. '
+                    'Empty = today\'s open session'
     )
 
     output_dir_arg = DeclareLaunchArgument(
@@ -79,7 +83,7 @@ def generate_launch_description():
         auto_start_arg,
         max_duration_arg,
         LogInfo(msg=['Data collection launch started']),
-        LogInfo(msg=['Dataset: ', LaunchConfiguration('dataset'),
+        LogInfo(msg=['Session: ', LaunchConfiguration('dataset'),
                      '  (data root: ', LaunchConfiguration('data_root'), ')']),
         data_recorder_node,
     ])

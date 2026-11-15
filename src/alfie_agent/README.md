@@ -245,7 +245,7 @@ Three kinds:
 
 | kind | what it is | how it runs |
 |---|---|---|
-| task | one trained GR00T task | generated from every entry of `alfie_gr00t/config/tasks.yaml` that has a `description` (`pick_can`, `trash_can`) |
+| task | one trained GR00T task | generated from every entry of `alfie_gr00t/config/tasks.yaml` that has a `description` (`pick_up_soda_can`, `put_soda_can_in_trash`) |
 | `sequence` | task steps in order, optionally repeated (`clean_room`) | `Body.run_skill` on a worker thread |
 | `prompt` | instructions returned to the LLM, to carry out with its other tools | the tool result; moves nothing itself |
 

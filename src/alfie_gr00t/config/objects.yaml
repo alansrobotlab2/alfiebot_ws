@@ -1,0 +1,20 @@
+# Objects that tasks act on (tasks.yaml `object` / `destination`, and the
+# `objects` recorded with each episode). Part of the task registry.
+#
+#   name      the words used in instructions. Unique across this file, and
+#             never contained in another object's name ("soda can" and "trash",
+#             not "can" and "trash can")
+#   aliases   other things people call it; never used in training instructions
+#   notes     which physical thing this is
+#   former_ids  IDs this object used to have (episodes recorded under them)
+
+objects:
+  soda_can:
+    former_ids: [can]
+    name: soda can
+    aliases: [can, coke can, pop can]
+    notes: 12 oz aluminium drink can, standing upright
+  trash:
+    name: trash
+    aliases: [trash can, bin, waste basket]
+    notes: open-top waste bin on the floor

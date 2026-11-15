@@ -60,7 +60,7 @@ function App() {
     const q = query.trim().toLowerCase();
     return summary.episodes.filter((ep) =>
       (filter === null || ep.task_index === filter) &&
-      (!q || String(ep.index).includes(q) || ep.source.toLowerCase().includes(q)));
+      (!q || String(ep.index).includes(q) || ep.bag.toLowerCase().includes(q)));
   }, [summary, filter, query]);
 
   const counts = useMemo(() => {
@@ -155,7 +155,7 @@ function App() {
       body: html`
         <p>This permanently removes:</p>
         <ul>
-          <li>the source bag <code>${ep.source}</code>${ep.has_source ? null : ' (already gone)'}</li>
+          <li>the source bag <code>${ep.bag}</code>${ep.has_source ? null : ' (already gone)'}</li>
           <li>its parquet and four camera videos</li>
           <li>its row in <code>episodes.jsonl</code></li>
         </ul>

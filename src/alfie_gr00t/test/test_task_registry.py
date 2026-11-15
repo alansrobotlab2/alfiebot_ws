@@ -20,12 +20,12 @@ def reg():
 
 
 def test_loads_shipped_tasks(reg):
-    assert reg.by_text('find the can and pick it up')['id'] == 'pick_can'
-    assert reg.by_id('trash_can')['text'] == 'put the can in the trash can'
+    assert reg.by_text('find the can and pick it up')['id'] == 'pick_up_soda_can'
+    assert reg.by_id('put_soda_can_in_trash')['text'] == 'put the can in the trash can'
     assert reg.by_text('do a backflip') is None
-    pick = reg.by_id('pick_can')
+    pick = reg.by_id('pick_up_soda_can')
     assert pick['attempts'] == 2 and pick['holds_object'] and pick['max_s'] == 90.0
-    assert reg.by_id('trash_can')['attempts'] == 1
+    assert reg.by_id('put_soda_can_in_trash')['attempts'] == 1
     assert reg.start_pose(pick)['back'] == 0.34
 
 
@@ -38,7 +38,7 @@ def test_state_getter_names():
 
 
 def test_pick_done_needs_hold(reg):
-    t = tr.DoneTracker(reg.by_id('pick_can'))
+    t = tr.DoneTracker(reg.by_id('pick_up_soda_can'))
     assert not t.update(0.0, state(gripper=0.0))
     assert not t.update(1.0, state(gripper=0.40))          # met, hold starts
     assert not t.update(1.4, state(gripper=0.40))
@@ -50,7 +50,7 @@ def test_pick_done_needs_hold(reg):
 
 
 def test_trash_done_needs_can_seen_first(reg):
-    t = tr.DoneTracker(reg.by_id('trash_can'))
+    t = tr.DoneTracker(reg.by_id('put_soda_can_in_trash'))
     # Open gripper at the tucked pose, but no can was ever held: not done.
     assert not t.update(0.0, state(gripper=0.0))
     assert not t.update(5.0, state(gripper=0.0))
@@ -64,16 +64,16 @@ def test_trash_done_needs_can_seen_first(reg):
 
 
 def test_no_state_or_no_done_block(reg):
-    t = tr.DoneTracker(reg.by_id('pick_can'))
+    t = tr.DoneTracker(reg.by_id('pick_up_soda_can'))
     assert not t.update(0.0, None)
     assert not tr.DoneTracker({'id': 'x'}).update(0.0, state(gripper=0.4))
 
 
 def test_accept_on_timeout(reg):
-    assert tr.check(reg.by_id('pick_can')['accept_on_timeout'], state(gripper=0.4))
-    assert not tr.check(reg.by_id('pick_can')['accept_on_timeout'], state(gripper=0.0))
-    assert tr.check(reg.by_id('trash_can')['accept_on_timeout'], state(gripper=0.12))
-    assert not tr.check(reg.by_id('trash_can')['accept_on_timeout'], state(gripper=0.4))
+    assert tr.check(reg.by_id('pick_up_soda_can')['accept_on_timeout'], state(gripper=0.4))
+    assert not tr.check(reg.by_id('pick_up_soda_can')['accept_on_timeout'], state(gripper=0.0))
+    assert tr.check(reg.by_id('put_soda_can_in_trash')['accept_on_timeout'], state(gripper=0.12))
+    assert not tr.check(reg.by_id('put_soda_can_in_trash')['accept_on_timeout'], state(gripper=0.4))
 
 
 POSE = {'p': {'left_arm': [0] * 6, 'right_arm': [0] * 6, 'head': [0] * 3, 'back': 0.3}}
@@ -109,3 +109,81 @@ def test_rejects_duplicate_text():
     data['tasks']['u'] = dict(data['tasks']['t'])
     with pytest.raises(tr.RegistryError):
         tr.TaskRegistry(data)
+
+
+def test_shipped_tasks_carry_record_fields(reg):
+    objects = tr.load_objects(TASKS_YAML)
+    for tid, task in reg.tasks.items():
+        fields = reg.episode_fields(tid)
+        assert fields['task_id'] == tid
+        for key in ('family', 'verb', 'object', 'start_state', 'end_state'):
+            assert fields[key], f'{tid}: {key}'
+        assert task['object'] in objects
+        assert task.get('destination') is None or task['destination'] in objects
+        assert task['instruction'] != task['text']      # wording switches in v6
+    assert reg.by_id('pick_up_soda_can')['instruction'] == 'pick up the soda can'
+    assert reg.by_id('put_soda_can_in_trash')['instruction'] == 'put the soda can in the trash'
+    # the strings the deployed policy hears are unchanged until v6
+    assert reg.by_id('pick_up_soda_can')['text'] == 'find the can and pick it up'
+    assert [t['id'] for t in reg.recordable()] == ['pick_up_soda_can', 'put_soda_can_in_trash']
+
+
+def test_instruction_must_match_template():
+    data = {'templates': {'pick_up': 'pick up the {object}'},
+            'poses': {'p': {'left_arm': [0] * 6, 'right_arm': [0] * 6, 'head': [0] * 3,
+                            'back': 0.3}},
+            'tasks': {'t': {'text': 'x', 'start_pose': 'p', 'max_s': 1, 'verb': 'pick_up',
+                            'object': 'can', 'instruction': 'grab the can'}}}
+    with pytest.raises(tr.RegistryError, match='template'):
+        tr.TaskRegistry(data)
+    data['tasks']['t']['instruction'] = 'pick up the can'
+    data['tasks']['t']['status'] = 'retired'
+    reg = tr.TaskRegistry(data)
+    assert reg.recordable() == []
+
+
+def test_hardware_and_objects():
+    hw = tr.load_hardware(TASKS_YAML)
+    assert hw['current'] == 'hw2' and 'hw1' in hw['versions']
+    names = [o['name'] for o in tr.load_objects(TASKS_YAML).values()]
+    assert len(names) == len(set(names))
+
+
+def test_close_frame_skips_sweeps_and_released_attempts(reg):
+    close = reg.by_id('pick_up_soda_can')['close']
+    dt = 1 / 15
+
+    def close_frame(spec):       # spec: [(gripper, back, n frames), ...]
+        frames = [state(gripper=g, back=b) for g, b, n in spec for _ in range(n)]
+        return tr.first_held(close['all'], close['hold_s'], frames, dt)
+
+    reach = (0.0, 0.0, 30)
+    # closing on nothing crosses the band in 0.3 s, then a real grasp and the lift
+    assert close_frame([reach, (0.4, 0.0, 5), (0.78, 0.0, 10), (0.0, 0.0, 20),
+                        (0.4, 0.0, 60), (0.4, 0.34, 30)]) == 65
+    # an attempt released after 1.2 s does not count either
+    assert close_frame([reach, (0.4, 0.0, 18), (0.0, 0.0, 20), (0.4, 0.0, 60)]) == 68
+    # a miss, and a gripper in the band only once the back is up: no grasp
+    assert close_frame([reach, (0.4, 0.0, 5), (0.78, 0.0, 40)]) is None
+    assert close_frame([reach, (0.4, 0.34, 60)]) is None
+    assert reg.by_id('put_soda_can_in_trash').get('close') is None
+
+
+def test_former_ids_still_resolve(reg):
+    assert reg.by_id('pick_can')['id'] == 'pick_up_soda_can'
+    assert reg.by_id('trash_can')['id'] == 'put_soda_can_in_trash'
+    assert 'pick_can' not in reg.tasks and reg.by_id('nope') is None
+    assert tr.load_objects(TASKS_YAML)['soda_can']['former_ids'] == ['can']
+    assert reg.episode_fields('pick_can')['task_id'] == 'pick_up_soda_can'
+
+
+def test_pick_keeps_the_lift_and_ends_in_the_carry_pose(reg):
+    pick = reg.by_id('pick_up_soda_can')
+    assert 'keep_s' not in pick['close']                 # episodes are not cut at the grasp
+    assert 'lift to the carry pose' in pick['includes']
+    carry = reg.pose('carry')
+    assert carry['back'] == reg.pose('tucked')['back'] == 0.34
+    # the carry pose satisfies the pick's own done condition
+    s = [0.0] * 22
+    s[6], s[13:19] = carry['back'], carry['right_arm']
+    assert tr.check(pick['done']['all'], tr.state_getter(s))

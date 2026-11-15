@@ -9,7 +9,7 @@ sets the task text, activates the client, which takes over the same input, and
 deactivates it after --duration seconds. The start pose and task text come from
 the task registry (config/tasks.yaml).
 
-    python3 ab_trial.py --duration 45 [--task pick_can]
+    python3 ab_trial.py --duration 45 [--task pick_up_soda_can]
 """
 
 import argparse
@@ -31,7 +31,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--duration', type=float, default=45.0)
     ap.add_argument('--settle-timeout', type=float, default=8.0)
-    ap.add_argument('--task', default='pick_can', help='task id in config/tasks.yaml')
+    ap.add_argument('--task', default='pick_up_soda_can', help='task id in config/tasks.yaml')
     args = ap.parse_args()
 
     tasks = task_registry.load()

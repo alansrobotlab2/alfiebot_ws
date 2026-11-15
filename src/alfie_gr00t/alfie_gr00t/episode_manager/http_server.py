@@ -149,10 +149,20 @@ class _Handler(BaseHTTPRequestHandler):
             return
         handler: Optional[Callable[[Dict[str, Any]], Any]] = {
             '/api/select_dataset': lambda p: self.manager.select_dataset(str(p.get('name'))),
-            '/api/set_task': lambda p: self.manager.set_task(int(p['episode']), int(p['task'])),
+            '/api/set_task': lambda p: self.manager.set_task(
+                int(p['episode']),
+                int(p['task']) if p.get('task') is not None else None,
+                str(p.get('task_id') or '') or None),
+            '/api/set_fields': lambda p: self.manager.set_fields(
+                int(p['episode']), dict(p['fields'])),
+            '/api/context': lambda p: self.manager.set_context(dict(p)),
+            '/api/new_session': lambda p: self.manager.new_session(),
+            '/api/close_session': lambda p: self.manager.close_session(bool(p.get('force'))),
             '/api/delete': lambda p: self.manager.delete(int(p['episode'])),
             '/api/convert': lambda p: self.manager.convert(
-                int(p.get('task', 0)), bool(p.get('force')), str(p.get('task_name') or '')),
+                int(p['task']) if p.get('task') is not None else None,
+                bool(p.get('force')), str(p.get('task_name') or ''),
+                str(p.get('task_id') or '')),
             '/api/cancel': lambda p: self.manager.cancel(),
         }.get(path)
 

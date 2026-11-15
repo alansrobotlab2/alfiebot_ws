@@ -4,8 +4,9 @@
 set -e
 
 # Default values
-DATA_ROOT="${ALFIE_DATA_ROOT:-${HOME}/alfiebot_ws/data}"
-DATASET="${ALFIE_DATASET:-default}"
+DATA_ROOT="${ALFIE_DATA_ROOT:-${HOME}/alfie_data/raw}"
+# Empty = today's open recording session (started on the first recording).
+DATASET="${ALFIE_DATASET:-}"
 OUTPUT_DIR=""
 DURATION=300
 
@@ -34,7 +35,7 @@ while [[ $# -gt 0 ]]; do
             echo "Bags are written to <data-root>/<dataset>/demonstrations/"
             echo ""
             echo "Options:"
-            echo "  -D, --dataset NAME    Dataset name (default: ${DATASET}, or \$ALFIE_DATASET)"
+            echo "  -D, --dataset NAME    Session folder (default: today's session, or \$ALFIE_DATASET)"
             echo "  -r, --data-root DIR   Data root (default: ${DATA_ROOT}, or \$ALFIE_DATA_ROOT)"
             echo "  -o, --output DIR      Explicit bag directory, overrides dataset layout"
             echo "  -d, --duration SECS   Max duration in seconds (default: 300)"
@@ -57,7 +58,7 @@ echo "================================================"
 echo "GR00T Data Collection - Demonstration Recording"
 echo "================================================"
 echo ""
-echo "Dataset:          $DATASET"
+echo "Session:          ${DATASET:-today, newest open}"
 echo "Data root:        $DATA_ROOT"
 if [[ -n "$OUTPUT_DIR" ]]; then
     echo "Output override:  $OUTPUT_DIR"

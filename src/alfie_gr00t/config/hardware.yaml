@@ -1,0 +1,26 @@
+# Hardware versions of Alfie, as far as training data is concerned. Part of the
+# task registry. A session folder is named for the version it was recorded on
+# (YYYY-MM-DD_sNN_hwN) and every episode carries it as `hw`.
+#
+# A new version is a change to what the policy sees or drives while joints and
+# the 22D state/action space stay the same: cameras (sensor, mount, crop,
+# resolution), grippers, arm geometry. It is not a new embodiment tag. Bump
+# `current` and add an entry when that happens; never edit an old entry.
+
+current: hw2
+
+versions:
+  hw1:
+    since: 2026-01
+    notes: >-
+      January 2026 build (Gen1, Jetson Orin NX 16GB). The can_do_challenge
+      recordings. Camera configuration differs from hw2.
+  hw2:
+    since: 2026-11
+    notes: Gen2, Jetson AGX Orin 64GB. The CleanTheRoom recordings onward.
+    cameras:
+      streams: [left_wide, right_wide, left_center, right_center]
+      image: 352x256
+      wide: 800x600 eye, centre-cropped to 800x582, scaled to 352x256
+      center: 1:1 352x256 crop of the eye centre
+    arms: two 6-DOF arms (5 joints + gripper each)

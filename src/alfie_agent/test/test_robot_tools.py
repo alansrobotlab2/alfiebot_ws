@@ -161,17 +161,17 @@ def _plan(name="clean_room", **args):
 
 def test_body_task_lifecycle_and_stop_all():
     b, node, said = _make(pose_timeout_s=0.1)
-    assert "isn't running" in b.run_skill(_plan("pick_can"))["error"]
+    assert "isn't running" in b.run_skill(_plan("pick_up_soda_can"))["error"]
     _idle(node)
-    started = b.run_skill(_plan("pick_can"))
-    assert started["ok"] and started["started"] == "pick can"
-    assert "already doing" in b.run_skill(_plan("pick_can"))["error"]
-    assert b.task_status()["task"] == "pick can"
+    started = b.run_skill(_plan("pick_up_soda_can"))
+    assert started["ok"] and started["started"] == "pick up soda can"
+    assert "already doing" in b.run_skill(_plan("pick_up_soda_can"))["error"]
+    assert b.task_status()["task"] == "pick up soda can"
     assert b.stop_all() == ["task"]
     assert node.pubs["groot_client/activate"].msgs[-1].data is False
     assert b.task_status()["last"]["result"] == "stopped by voice"
     # The run cap stops it and announces why.
-    b.run_skill(_plan("pick_can"))
+    b.run_skill(_plan("pick_up_soda_can"))
     b._task["limit_s"] = 0.0
     time.sleep(0.01)
     node.timers[1]()
@@ -357,12 +357,12 @@ def test_skill_tool_runs_registered_skills_only(skill_tools):
     assert robot.call_tool("skill", {"name": "clean_room"})["ok"]
     assert robot.call_tool("skill", {"name": "clean_room", "args": {"rounds": 2}})["ok"]
     assert robot.call_tool("skill", {"name": "clean_room", "rounds": 4})["ok"]
-    assert robot.call_tool("skill", {"name": "pick_can"})["ok"]
+    assert robot.call_tool("skill", {"name": "pick_up_soda_can"})["ok"]
     assert skill_tools.calls == [
-        ("skill", "clean_room", 3, ["pick_can", "trash_can"]),
-        ("skill", "clean_room", 2, ["pick_can", "trash_can"]),
-        ("skill", "clean_room", 4, ["pick_can", "trash_can"]),
-        ("skill", "pick_can", 1, ["pick_can"])]
+        ("skill", "clean_room", 3, ["pick_up_soda_can", "put_soda_can_in_trash"]),
+        ("skill", "clean_room", 2, ["pick_up_soda_can", "put_soda_can_in_trash"]),
+        ("skill", "clean_room", 4, ["pick_up_soda_can", "put_soda_can_in_trash"]),
+        ("skill", "pick_up_soda_can", 1, ["pick_up_soda_can"])]
     res = robot.call_tool("skill", {"name": "do a backflip"})
     assert "no skill named" in res["error"]
     assert robot.call_tool("skill", {"name": "clean_rooms"})["did_you_mean"] == ["clean_room"]

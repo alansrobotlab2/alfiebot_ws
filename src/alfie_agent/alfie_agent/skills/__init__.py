@@ -24,7 +24,7 @@ Skill files are YAML, one per skill, in this directory (or ``skills_dir``):
       rounds: {type: integer, default: 3, min: 1, max: 10}
     repeat: rounds              # sequence: a param name or a number (default 1)
     steps:                      # sequence: task ids, or {task:, failed:}
-      - pick_can
+      - pick_up_soda_can
     say:                        # sequence: spoken lines; {count} rounds finished,
       progress: "That's {count}."   # {round}, {rounds}, {step}
       done: "Done."

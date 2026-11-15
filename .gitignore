@@ -21,6 +21,7 @@ gerbers/
 picodriverboard-backups/
 # Per-dataset layout: data/<dataset>/{demonstrations,lerobot}; only lerobot/meta is tracked
 data/*/demonstrations/
+data/*/demonstrations_untrimmed/
 data/*/lerobot/videos/
 data/*/lerobot/data/
 data/datasets/*

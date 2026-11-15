@@ -464,9 +464,21 @@ class AlfieTeleopVRNode(Node):
         self.takeover_time = now
         self._set_passthrough(False)
 
-        task = (self.groot_status[1].get('task') if self.groot_status else '') or ''
+        # The run being corrected, as groot_client last reported it (1 Hz):
+        # the recorder and the converter store these with the episode.
+        status = self.groot_status[1] if self.groot_status else {}
+        task = status.get('task') or ''
+        run_s = status.get('run_s')
+        if run_s is not None:
+            run_s = round(run_s + (now - self.groot_status[0]), 2)
         event = String()
-        event.data = json.dumps({'stamp_ns': self.get_clock().now().nanoseconds, 'task': task})
+        event.data = json.dumps({
+            'stamp_ns': self.get_clock().now().nanoseconds,
+            'task': task,
+            'run_id': status.get('run_id') or '',
+            'policy_ckpt': status.get('policy_ckpt') or '',
+            'takeover_s': run_s,
+        })
         self.takeover_pub.publish(event)
         if not self.is_recording:
             self.recording_start_pub.publish(Bool(data=True))

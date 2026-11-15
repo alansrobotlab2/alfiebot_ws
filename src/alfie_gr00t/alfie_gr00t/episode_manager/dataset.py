@@ -7,8 +7,13 @@ interpreter the converter needs.
 
 Layout (see alfie_gr00t/dataset_paths.py):
 
-    <data_root>/<dataset>/demonstrations/demo_YYYYMMDD_HHMMSS/   raw bags
-    <data_root>/<dataset>/lerobot/{meta,data,videos}/            converter output
+    <data_root>/<session>/session.json                           recording sessions only
+    <data_root>/<session>/demonstrations/demo_YYYYMMDD_HHMMSS/   raw bags
+    <data_root>/<session>/lerobot/{meta,data,videos}/            converter output
+
+A recording session (YYYY-MM-DD_sNN_hwN) can be edited until it is closed;
+after that every edit here is refused. Plain datasets (recorded before
+sessions) have no session.json and are never closed.
 
 Episode indices are never renumbered. The converter leaves gaps when a source
 bag disappears, and deleting here does the same, so an episode's index (and
@@ -27,7 +32,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from alfie_gr00t.dataset_paths import DEMOS_SUBDIR, LEROBOT_SUBDIR
+from alfie_gr00t.dataset_paths import (
+    DEMOS_SUBDIR, LEROBOT_SUBDIR, close_session, session_info,
+)
+from alfie_gr00t.recording_context import FAILURE_MODES, QUALITIES
 
 CAMERAS = ['left_wide', 'right_wide', 'left_center', 'right_center']
 
@@ -69,6 +77,28 @@ def recorded_at(source: str) -> Optional[str]:
         return None
 
 
+def episode_bag(ep: Dict[str, Any]) -> str:
+    """Bag folder a row came from (``bag``; rows from before sessions use ``source``)."""
+    return ep.get('bag') or ep.get('source', '')
+
+
+def episode_source(ep: Dict[str, Any]) -> str:
+    """demo / correction / ... (rows from before sessions: ``origin: takeover``)."""
+    if 'bag' in ep:
+        return ep.get('source') or 'demo'
+    return 'correction' if ep.get('origin') == 'takeover' else 'demo'
+
+
+# Review-time fields the UI may set on an episode, with their allowed values
+# (None = free text).
+EDITABLE = {'quality': QUALITIES, 'failure_mode': FAILURE_MODES + (None,), 'notes': None}
+# Row fields passed through to the UI as they are.
+DETAIL_KEYS = ('episode_uid', 'task_id', 'family', 'round', 'policy_ckpt', 'run_id',
+               'instruction_sent', 'takeover_s', 'failure_mode', 'objects', 'surface',
+               'hw', 'operator', 'quality', 'notes', 'close_frame', 'done_frame',
+               'legacy_episode_index')
+
+
 class Dataset:
     """One dataset folder. Re-reads metadata on every call; it is small."""
 
@@ -78,6 +108,19 @@ class Dataset:
         self.lerobot = self.root / LEROBOT_SUBDIR
         self.meta = self.lerobot / 'meta'
         self.demos = self.root / DEMOS_SUBDIR
+
+    def session(self) -> Optional[Dict[str, Any]]:
+        """session.json, or None for a plain dataset."""
+        return session_info(self.root)
+
+    def closed(self) -> bool:
+        info = self.session()
+        return bool(info and info.get('closed'))
+
+    def _check_open(self) -> None:
+        if self.closed():
+            raise DatasetError(f'session {self.name} is closed; raw sessions are not '
+                               f'edited after closing')
 
     # -- reading -----------------------------------------------------------
 
@@ -116,29 +159,52 @@ class Dataset:
         return sorted(d.name for d in self.demos.iterdir()
                       if d.is_dir() and d.name.startswith('demo_'))
 
-    def summary(self) -> Dict[str, Any]:
-        """Everything the UI needs in one payload."""
+    def summary(self, registry=None) -> Dict[str, Any]:
+        """Everything the UI needs in one payload.
+
+        ``tasks`` lists the dataset's own tasks (meta/tasks.jsonl) with their
+        registry ID where the string is a registry task, followed by the
+        recordable registry tasks the dataset has no episodes of yet
+        (``index`` None).
+        """
         info = self.info()
         tasks = self.tasks()
+        task_list = []
+        seen = set()
+        for i, text in sorted(tasks.items()):
+            reg_task = registry.by_text(text) if registry else None
+            task_list.append({'index': i, 'task': text,
+                              'id': reg_task['id'] if reg_task else None,
+                              'instruction': reg_task.get('instruction') if reg_task else None})
+            seen.add(text)
+        for reg_task in (registry.recordable() if registry else ()):
+            if reg_task['text'] not in seen:
+                task_list.append({'index': None, 'task': reg_task['text'], 'id': reg_task['id'],
+                                  'instruction': reg_task.get('instruction')})
+        session = self.session()
         demos = set(self.demo_names())
         episodes = []
         for ep in self.episodes():
             index = int(ep['episode_index'])
             files = {key: path.is_file() for key, path in self._paths(info, index).items()}
-            source = ep.get('source', '')
-            episodes.append({
+            bag = episode_bag(ep)
+            row = {
                 'index': index,
                 'task_index': ep.get('task_index'),
                 'length': ep.get('length'),
                 'duration': ep.get('duration'),
-                'source': source,
-                'origin': ep.get('origin', 'demo'),
-                'recorded': recorded_at(source),
-                'has_source': source in demos,
+                'bag': bag,
+                'source': episode_source(ep),
+                'recorded': recorded_at(bag),
+                'has_source': bag in demos,
                 'files': files,
-            })
+            }
+            row.update({k: ep.get(k) for k in DETAIL_KEYS})
+            if row['quality'] is None:
+                row['quality'] = 'ok'
+            episodes.append(row)
         episodes.sort(key=lambda e: e['index'], reverse=True)
-        sources = {e['source'] for e in episodes}
+        sources = {e['bag'] for e in episodes}
 
         stats = self.meta / 'stats.json'
         episodes_file = self.meta / 'episodes.jsonl'
@@ -149,9 +215,12 @@ class Dataset:
             'name': self.name,
             'path': str(self.lerobot),
             'demos_path': str(self.demos),
-            'converted': self.meta.is_dir(),
+            'converted': (self.meta / 'info.json').is_file(),
+            'is_session': session is not None,
+            'closed': (session or {}).get('closed'),
+            'hw': (session or {}).get('hw'),
             'fps': info.get('fps'),
-            'tasks': [{'index': i, 'task': t} for i, t in sorted(tasks.items())],
+            'tasks': task_list,
             'episodes': episodes,
             'total_frames': sum(e['length'] or 0 for e in episodes),
             'pending': sorted(demos - sources),
@@ -174,14 +243,37 @@ class Dataset:
         _write_atomic(self.meta / 'episodes.jsonl',
                       ''.join(json.dumps(ep) + '\n' for ep in episodes))
 
-    def set_task(self, index: int, task_index: int, python: str) -> List[str]:
-        """Relabel an episode in episodes.jsonl and its parquet task_index column."""
+    def set_task(self, index: int, task_index: Optional[int], python: str,
+                 registry=None, task_id: Optional[str] = None) -> List[str]:
+        """Relabel an episode in episodes.jsonl and its parquet task_index column.
+
+        By registry ``task_id`` (added to tasks.jsonl when the dataset has no
+        episode of it yet), or by ``task_index`` for tasks outside the registry.
+        """
+        self._check_open()
         tasks = self.tasks()
-        if task_index not in tasks:
+        reg_task = None
+        if task_id:
+            reg_task = registry.by_id(task_id) if registry else None
+            if reg_task is None:
+                raise DatasetError(f'task "{task_id}" is not in the task registry')
+            match = [i for i, text in tasks.items() if text == reg_task['text']]
+            if match:
+                task_index = match[0]
+            else:
+                task_index = max(tasks, default=-1) + 1
+                tasks[task_index] = reg_task['text']
+                _write_atomic(self.meta / 'tasks.jsonl', ''.join(
+                    json.dumps({'task_index': i, 'task': tasks[i]}) + '\n'
+                    for i in sorted(tasks)))
+        elif task_index not in tasks:
             raise DatasetError(f'task {task_index} is not in tasks.jsonl')
+        elif registry is not None:
+            reg_task = registry.by_text(tasks[task_index])
         episodes = self.episodes()
         ep = self._find(episodes, index)
-        log = [f'episode {index}: task {ep.get("task_index")} -> {task_index}']
+        log = [f'episode {index}: task {ep.get("task_index")} -> {task_index}'
+               + (f' ({reg_task["id"]})' if reg_task else '')]
 
         parquet = self._paths(self.info(), index)['parquet']
         # Parquet first: if it fails, the metadata still matches the data.
@@ -198,21 +290,79 @@ class Dataset:
         ep['task_index'] = task_index
         if 'tasks' in ep:
             ep['tasks'] = [tasks[task_index]]
+        if 'bag' in ep or reg_task is not None:
+            # The structured task fields follow the task.
+            fields = (registry.episode_fields(reg_task['id']) if reg_task else
+                      {'task_id': None, 'family': None, 'verb': None, 'object': None,
+                       'destination': None, 'start_state': None, 'end_state': None})
+            ep.update(fields)
         self._write_episodes(episodes)
         log.append('episodes.jsonl written')
         return log
+
+    def set_fields(self, index: int, fields: Dict[str, Any]) -> List[str]:
+        """Set review fields (quality, failure_mode, notes) on an episode."""
+        self._check_open()
+        episodes = self.episodes()
+        ep = self._find(episodes, index)
+        log = []
+        for key, value in fields.items():
+            if key not in EDITABLE:
+                raise DatasetError(f'{key} cannot be edited')
+            allowed = EDITABLE[key]
+            if allowed is None:
+                value = str(value or '').strip()
+            elif value not in allowed:
+                raise DatasetError(f'{key} must be one of '
+                                   f'{", ".join(str(a) for a in allowed if a)}')
+            log.append(f'episode {index}: {key} {ep.get(key)!r} -> {value!r}')
+            ep[key] = value
+        self._write_episodes(episodes)
+        return log
+
+    def close(self, extra: Dict[str, Any]) -> List[str]:
+        """Close the session: record ``extra`` in session.json, then freeze it."""
+        info = self.session()
+        if info is None:
+            raise DatasetError(f'{self.name} is not a recording session')
+        if info.get('closed'):
+            raise DatasetError(f'session {self.name} is already closed')
+        info.update(extra)
+        info['schema'] = self.schema()
+        _write_atomic(self.root / 'session.json', json.dumps(info, indent=2) + '\n')
+        closed = close_session(self.root)
+        return [f'session {self.name} closed at {closed["closed"]}']
+
+    def schema(self) -> Dict[str, Any]:
+        """What the converted data looks like; training refuses a session
+        whose schema differs from its hardware version's."""
+        info = self.info()
+        features = info.get('features') or {}
+        videos = {k: f for k, f in features.items() if f.get('dtype') == 'video'}
+        shape = next(iter(videos.values()), {}).get('shape') or [None, None]
+        return {
+            'fps': info.get('fps'),
+            'codebase_version': info.get('codebase_version'),
+            'robot_type': info.get('robot_type'),
+            'features': {k: {'dtype': f.get('dtype'), 'shape': f.get('shape'),
+                             'names': f.get('names')}
+                         for k, f in features.items() if k not in videos},
+            'video_keys': sorted(videos),
+            'video_resolution': {'height': shape[0], 'width': shape[1]},
+        }
 
     def delete(self, index: int) -> List[str]:
         """Remove an episode: its source bag, its output files and its metadata row.
 
         The bag goes too, otherwise the next conversion would bring it back.
         """
+        self._check_open()
         info = self.info()
         episodes = self.episodes()
         ep = self._find(episodes, index)
         log = []
 
-        source = ep.get('source', '')
+        source = episode_bag(ep)
         source_dir = self.demos / source
         if source and source_dir.is_dir():
             shutil.rmtree(source_dir)
