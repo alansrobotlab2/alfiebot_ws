@@ -4,17 +4,84 @@
 // (alfie_gr00t/episode_manager/http_server.py). This panel is a second front
 // end for it; the node's own web UI keeps working alongside.
 
-export type Task = { index: number; task: string };
+/**
+ * A task of the open dataset. `index` is its row in meta/tasks.jsonl, or null
+ * for a registry task the dataset has no episode of yet. `id` is the task
+ * registry ID, or null for a string that is not in the registry.
+ */
+export type Task = {
+  index: number | null;
+  task: string;
+  id: string | null;
+  instruction: string | null;
+};
 
 export type Episode = {
   index: number;
   task_index: number | null;
   length: number | null;
   duration: number | null;
+  /** Source bag folder. */
+  bag: string;
+  /** demo | correction | scripted_recovery | autonomous_success */
   source: string;
   recorded: string | null;
   has_source: boolean;
   files: Record<string, boolean>;
+  episode_uid: string | null;
+  task_id: string | null;
+  family: string | null;
+  round: number | null;
+  policy_ckpt: string | null;
+  run_id: string | null;
+  instruction_sent: string | null;
+  takeover_s: number | null;
+  failure_mode: string | null;
+  objects: string[] | null;
+  surface: string | null;
+  hw: string | null;
+  operator: string | null;
+  quality: string;
+  notes: string | null;
+  /** First frame of the grasp (gripper closed on the object, before the lift). */
+  close_frame: number | null;
+  /** Frame the task's done condition is confirmed. */
+  done_frame: number | null;
+  legacy_episode_index: number | null;
+};
+
+/** Review fields that can be set on an episode. */
+export type EpisodeFields = { quality?: string; failure_mode?: string | null; notes?: string };
+
+export type RegistryTask = {
+  id: string;
+  task: string;
+  instruction: string | null;
+  family: string | null;
+  status: string;
+  recordable: boolean;
+};
+
+export type Registry = {
+  source: string | null;
+  tasks: RegistryTask[];
+  hw: string | null;
+  sources: string[];
+  qualities: string[];
+  failure_modes: string[];
+};
+
+/** What the recorder writes with the next episodes (data_recorder owns it). */
+export type RecordingContext = {
+  task_id: string;
+  source: string;
+  round: number;
+  operator: string;
+  objects: string[];
+  surface: string;
+  /** Session the recorder writes into; "" = today's, made on the first recording. */
+  session: string;
+  hw: string;
 };
 
 export type DatasetSummary = {
@@ -22,6 +89,11 @@ export type DatasetSummary = {
   path: string;
   demos_path: string;
   converted: boolean;
+  /** A recording session (YYYY-MM-DD_sNN_hwN), as opposed to an older dataset. */
+  is_session: boolean;
+  /** When the session was closed; closed sessions cannot be edited. */
+  closed: string | null;
+  hw: string | null;
   fps: number | null;
   tasks: Task[];
   episodes: Episode[];
@@ -35,12 +107,22 @@ export type DatasetInfo = {
   data_root: string;
   datasets: string[];
   dataset: DatasetSummary;
+  registry: Registry;
+  /** null until the data recorder has been seen. */
+  context: RecordingContext | null;
   python: string;
   busy: boolean;
   recorder: string;
 };
 
-export type Status = { dataset?: string; busy: boolean; recorder: string; pending: number };
+export type Status = {
+  dataset?: string;
+  closed?: boolean;
+  context?: RecordingContext | null;
+  busy: boolean;
+  recorder: string;
+  pending: number;
+};
 
 export type Job = {
   state: "idle" | "running" | "ok" | "failed" | "cancelled";
@@ -57,6 +139,8 @@ export type Result = {
   log?: string[];
   needs_force?: boolean;
   orphans?: number;
+  pending?: number;
+  session?: string;
 };
 
 export type Api = {
@@ -64,9 +148,15 @@ export type Api = {
   status: () => Promise<Status>;
   job: () => Promise<Job>;
   selectDataset: (name: string) => Promise<Result>;
-  setTask: (episode: number, task: number) => Promise<Result>;
+  /** Relabel by registry ID when the task has one, else by tasks.jsonl index. */
+  setTask: (episode: number, task: Task) => Promise<Result>;
+  setFields: (episode: number, fields: EpisodeFields) => Promise<Result>;
+  setContext: (update: Partial<RecordingContext>) => Promise<Result>;
+  newSession: () => Promise<Result>;
+  closeSession: (force: boolean) => Promise<Result>;
   remove: (episode: number) => Promise<Result>;
-  convert: (task: number, force: boolean, taskName: string) => Promise<Result>;
+  /** `fallback` labels the bags recorded without a task; undefined leaves them unconverted. */
+  convert: (fallback: Task | undefined, force: boolean) => Promise<Result>;
   cancel: () => Promise<Result>;
   videoUrl: (episode: number, camera: string, rev: number) => string;
 };
@@ -101,11 +191,24 @@ export function makeApi(base: string): Api {
     status: async () => await get<Status>("/api/status"),
     job: async () => await get<Job>("/api/job"),
     selectDataset: async (name: string) => await post("/api/select_dataset", { name }),
-    setTask: async (episode: number, task: number) =>
-      await post("/api/set_task", { episode, task }),
+    setTask: async (episode: number, task: Task) =>
+      await post(
+        "/api/set_task",
+        task.id != undefined ? { episode, task_id: task.id } : { episode, task: task.index },
+      ),
+    setFields: async (episode: number, fields: EpisodeFields) =>
+      await post("/api/set_fields", { episode, fields }),
+    setContext: async (update: Partial<RecordingContext>) => await post("/api/context", update),
+    newSession: async () => await post("/api/new_session"),
+    closeSession: async (force: boolean) => await post("/api/close_session", { force }),
     remove: async (episode: number) => await post("/api/delete", { episode }),
-    convert: async (task: number, force: boolean, taskName: string) =>
-      await post("/api/convert", { task, force, task_name: taskName }),
+    convert: async (fallback: Task | undefined, force: boolean) =>
+      await post(
+        "/api/convert",
+        fallback?.id != undefined
+          ? { force, task_id: fallback.id }
+          : { force, task: fallback?.index ?? null },
+      ),
     cancel: async () => await post("/api/cancel"),
     videoUrl: (episode: number, camera: string, rev: number) =>
       `${root}/api/video?episode=${episode}&camera=${camera}&rev=${rev}`,
@@ -138,3 +241,13 @@ export const taskTone = (index: number | null | undefined): string =>
   index == undefined ? "task-none" : `task-${index % TASK_TONES}`;
 
 export const filesOk = (episode: Episode): boolean => Object.values(episode.files).every(Boolean);
+
+/** Stable key for a task in pickers: its registry ID, else its tasks.jsonl index. */
+export const taskKey = (task: Task): string => task.id ?? `#${task.index ?? ""}`;
+
+export const SOURCE_LABELS: Record<string, string> = {
+  demo: "demo",
+  correction: "correction",
+  scripted_recovery: "scripted recovery",
+  autonomous_success: "autonomous success",
+};

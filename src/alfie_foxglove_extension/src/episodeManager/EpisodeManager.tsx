@@ -20,17 +20,19 @@ import {
 import { createPortal } from "react-dom";
 
 import { EpisodeList } from "./EpisodeList";
-import { Api, CAMERAS, DatasetInfo, Job, Status, episodeName } from "./api";
 import {
-  Confirm,
-  ConfirmProps,
-  Details,
-  Editor,
-  JobPanel,
-  NEW_TASK,
-  TopBar,
-  nextTaskIndex,
-} from "./panels";
+  Api,
+  CAMERAS,
+  DatasetInfo,
+  EpisodeFields,
+  Job,
+  RecordingContext,
+  Status,
+  Task,
+  episodeName,
+  taskKey,
+} from "./api";
+import { Confirm, ConfirmProps, Details, Editor, JobPanel, NO_FALLBACK, TopBar } from "./panels";
 import { Transport, VideoGrid, usePlayer } from "./player";
 
 const STATUS_MS = 2000;
@@ -79,8 +81,7 @@ export function EpisodeManager({
   const [job, setJob] = useState<Job | undefined>();
   const [confirm, setConfirm] = useState<ConfirmProps | undefined>();
   const [toast, setToast] = useState<{ msg: string; id: number } | undefined>();
-  const [convertTask, setConvertTask] = useState(0);
-  const [newTaskName, setNewTaskName] = useState("");
+  const [fallback, setFallback] = useState(NO_FALLBACK);
 
   const summary = info?.dataset;
   const { player, playing, setPlaying, rate } = usePlayer(summary?.fps);
@@ -131,7 +132,11 @@ export function EpisodeManager({
     return summary.episodes.filter(
       (ep) =>
         (filter == undefined || ep.task_index === filter) &&
-        (!q || String(ep.index).includes(q) || ep.source.toLowerCase().includes(q)),
+        (!q ||
+          String(ep.index).includes(q) ||
+          ep.bag.toLowerCase().includes(q) ||
+          ep.source.includes(q) ||
+          (ep.task_id ?? "").includes(q)),
     );
   }, [summary, filter, query]);
 
@@ -154,24 +159,16 @@ export function EpisodeManager({
     }
   }, [summary, visible, selected]);
 
-  // A dataset with no tasks yet can only be converted by naming one. Once a
-  // named task shows up in tasks.jsonl, switch the picker over to it.
+  // The task picked for unlabelled bags must exist in the dataset now open.
   useEffect(() => {
-    if (!summary) {
-      return;
+    if (
+      summary &&
+      fallback !== NO_FALLBACK &&
+      !summary.tasks.some((t) => taskKey(t) === fallback)
+    ) {
+      setFallback(NO_FALLBACK);
     }
-    if (convertTask === NEW_TASK) {
-      const made = summary.tasks.find((t) => t.task === newTaskName.trim());
-      if (made) {
-        setConvertTask(made.index);
-        setNewTaskName("");
-      }
-    } else if (!summary.tasks.some((t) => t.index === convertTask)) {
-      setConvertTask(summary.tasks[0]?.index ?? NEW_TASK);
-    }
-    // Only a new summary can make the picker stale.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [summary]);
+  }, [summary, fallback]);
 
   // A new episode starts playing on its own (the <video>s autoplay).
   useEffect(() => {
@@ -184,8 +181,22 @@ export function EpisodeManager({
     try {
       const s = await api.status();
       setStatus(s);
-      if (!summary || s.dataset !== summary.name || s.pending !== summary.pending.length) {
+      if (
+        !summary ||
+        s.dataset !== summary.name ||
+        s.pending !== summary.pending.length ||
+        (s.closed ?? false) !== (summary.closed != undefined)
+      ) {
         await load();
+      } else if ("context" in s) {
+        // The recorder's own view of the recording context (it may have moved
+        // to a new session, or been changed from another panel).
+        const context = s.context ?? null;
+        setInfo((prev) =>
+          prev && JSON.stringify(prev.context) !== JSON.stringify(context)
+            ? { ...prev, context }
+            : prev,
+        );
       }
       if (s.busy && !job) {
         setJob(await api.job());
@@ -222,12 +233,31 @@ export function EpisodeManager({
     setSelected(visible[next]?.index);
   };
 
-  const label = async (taskIndex: number) => {
-    if (!episode) {
+  const patchEpisode = (
+    index: number,
+    patch: Partial<DatasetInfo["dataset"]["episodes"][number]>,
+  ) => {
+    setInfo(
+      (prev) =>
+        prev && {
+          ...prev,
+          dataset: {
+            ...prev.dataset,
+            stats_stale: true,
+            episodes: prev.dataset.episodes.map((ep) =>
+              ep.index === index ? { ...ep, ...patch } : ep,
+            ),
+          },
+        },
+    );
+  };
+
+  const label = async (task: Task) => {
+    if (!episode || summary?.closed != undefined) {
       return;
     }
     const index = episode.index;
-    const res = await api.setTask(index, taskIndex);
+    const res = await api.setTask(index, task);
     if (!res.ok) {
       say(`relabel failed: ${res.error ?? "unknown error"}`);
       return;
@@ -237,20 +267,91 @@ export function EpisodeManager({
     if (autoAdvance) {
       move(1);
     }
-    setInfo(
-      (prev) =>
-        prev && {
-          ...prev,
-          dataset: {
-            ...prev.dataset,
-            stats_stale: true,
-            episodes: prev.dataset.episodes.map((ep) =>
-              ep.index === index ? { ...ep, task_index: taskIndex } : ep,
-            ),
-          },
-        },
+    if (task.index != undefined) {
+      patchEpisode(index, { task_index: task.index, task_id: task.id });
+    } else {
+      await load(); // the task is new to this dataset: tasks.jsonl got a row
+    }
+    say(`${episodeName(index)} → ${task.id ?? `task ${task.index ?? "?"}`}`);
+  };
+
+  const review = async (fields: EpisodeFields) => {
+    if (!episode) {
+      return;
+    }
+    const index = episode.index;
+    const res = await api.setFields(index, fields);
+    if (!res.ok) {
+      say(`not saved: ${res.error ?? "unknown error"}`);
+      return;
+    }
+    patchEpisode(index, fields);
+  };
+
+  const setContext = async (update: Partial<RecordingContext>) => {
+    const res = await api.setContext(update);
+    if (!res.ok) {
+      say(res.error ?? "recording context not changed");
+      return;
+    }
+    setInfo((prev) =>
+      prev?.context ? { ...prev, context: { ...prev.context, ...update } } : prev,
     );
-    say(`${episodeName(index)} → task ${taskIndex}`);
+  };
+
+  const newSession = async () => {
+    const res = await api.newSession();
+    if (!res.ok) {
+      say(res.error ?? "cannot start a session");
+      return;
+    }
+    setFilter(undefined);
+    setQuery("");
+    setSelected(undefined);
+    say(`recording into ${res.session ?? "the new session"}`);
+    await load();
+  };
+
+  const closeSession = (force: boolean, pending: number) => {
+    if (!summary) {
+      return;
+    }
+    const name = summary.name;
+    setConfirm({
+      title: `Close ${name}?`,
+      body: (
+        <>
+          <p>
+            A closed session is final: its <b>{summary.episodes.length}</b> episodes can no longer
+            be relabelled, re-rated, deleted or converted. Do this once the review is done.
+          </p>
+          {pending !== 0 && (
+            <p>
+              <b>
+                {pending} {pending === 1 ? "bag is" : "bags are"} not converted
+              </b>{" "}
+              and will stay out of the session for good.
+            </p>
+          )}
+          <p className="dim">
+            The task registry and the code versions in use are saved with it. The recorder moves on
+            to a new session.
+          </p>
+        </>
+      ),
+      confirm: pending !== 0 ? `Close without ${pending}` : "Close session",
+      danger: true,
+      onConfirm: async () => {
+        setConfirm(undefined);
+        const res = await api.closeSession(force || pending !== 0);
+        if (!res.ok) {
+          say(`not closed: ${res.error ?? "unknown error"}`);
+          return;
+        }
+        say(`${name} closed`);
+        await load();
+      },
+    });
   };
 
   const askDelete = () => {
@@ -265,7 +366,7 @@ export function EpisodeManager({
           <p>This permanently removes:</p>
           <ul>
             <li>
-              the source bag <code>{ep.source}</code>
+              the source bag <code>{ep.bag}</code>
               {!ep.has_source && " (already gone)"}
             </li>
             <li>its parquet and four camera videos</li>
@@ -302,11 +403,9 @@ export function EpisodeManager({
     if (!summary) {
       return;
     }
-    const naming = convertTask === NEW_TASK;
     const res = await api.convert(
-      naming ? nextTaskIndex(summary.tasks) : convertTask,
+      summary.tasks.find((t) => taskKey(t) === fallback),
       force,
-      naming ? newTaskName.trim() : "",
     );
     if (res.needs_force === true) {
       const orphans = res.orphans ?? 0;
@@ -380,6 +479,7 @@ export function EpisodeManager({
     const fps = player.fps();
     const k = e.key;
     const task = /^[1-9]$/.test(k) ? summary?.tasks[Number(k) - 1] : undefined;
+    const readOnly = summary?.closed != undefined;
     let handled = true;
     if (k === "j" || k === "ArrowDown") {
       move(1);
@@ -395,10 +495,10 @@ export function EpisodeManager({
       player.seek(0);
     } else if (k === "l") {
       onLoop(!loop);
-    } else if (k === "Delete" || k === "Backspace") {
+    } else if ((k === "Delete" || k === "Backspace") && !readOnly) {
       askDelete();
-    } else if (task) {
-      void label(task.index);
+    } else if (task && !readOnly) {
+      void label(task);
     } else {
       handled = false;
     }
@@ -444,12 +544,15 @@ export function EpisodeManager({
         busy={busy}
         recorder={status.recorder}
         pending={summary.pending.length}
-        convertTask={convertTask}
-        onConvertTask={setConvertTask}
-        newTaskName={newTaskName}
-        onNewTaskName={setNewTaskName}
+        fallback={fallback}
+        onFallback={setFallback}
         onDataset={(name) => void switchDataset(name)}
         onConvert={() => void startConvert(false)}
+        onNewSession={() => void newSession()}
+        onCloseSession={() => {
+          closeSession(false, summary.pending.length);
+        }}
+        onContext={(update) => void setContext(update)}
       />
 
       {loadError != undefined && (
@@ -461,8 +564,8 @@ export function EpisodeManager({
         <div className="banner">
           No converted data in <code>{summary.path}</code> yet.
           {summary.pending.length !== 0
-            ? ` ${summary.pending.length} ${summary.pending.length === 1 ? "bag is" : "bags are"} waiting; name the task and press Convert.`
-            : " Record some demonstrations first."}
+            ? ` ${summary.pending.length} ${summary.pending.length === 1 ? "bag is" : "bags are"} waiting; press Convert.`
+            : " Pick the task under Next recording, then record some demonstrations."}
         </div>
       )}
       {summary.converted && summary.stats_stale && (
@@ -515,10 +618,13 @@ export function EpisodeManager({
                 <Editor
                   episode={episode}
                   tasks={summary.tasks}
+                  registry={info.registry}
                   busy={busy}
+                  readOnly={summary.closed != undefined}
                   autoAdvance={autoAdvance}
                   onAutoAdvance={onAutoAdvance}
                   onTask={(task) => void label(task)}
+                  onFields={(fields) => void review(fields)}
                   onDelete={askDelete}
                 />
                 <Details episode={episode} tasks={summary.tasks} fps={summary.fps} />

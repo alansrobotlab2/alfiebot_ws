@@ -2,7 +2,7 @@
 
 import { ReactElement, useEffect, useRef } from "react";
 
-import { Episode, Task, episodeName, filesOk, fmtDuration, taskTone } from "./api";
+import { Episode, SOURCE_LABELS, Task, episodeName, filesOk, fmtDuration, taskTone } from "./api";
 
 export function EpisodeList({
   episodes,
@@ -45,25 +45,31 @@ export function EpisodeList({
         >
           All <b>{counts.get("all") ?? 0}</b>
         </button>
-        {tasks.map((t) => (
-          <button
-            type="button"
-            key={t.index}
-            className={`filter ${taskTone(t.index)}${filter === t.index ? " on" : ""}`}
-            title={t.task}
-            onClick={() => {
-              onFilter(t.index);
-            }}
-          >
-            <i className="dot"></i>
-            {t.index} <b>{counts.get(t.index) ?? 0}</b>
-          </button>
-        ))}
+        {tasks.map((t) => {
+          const index = t.index;
+          if (index == undefined) {
+            return undefined; // registry task with no episodes here yet
+          }
+          return (
+            <button
+              type="button"
+              key={index}
+              className={`filter ${taskTone(index)}${filter === index ? " on" : ""}`}
+              title={t.task}
+              onClick={() => {
+                onFilter(index);
+              }}
+            >
+              <i className="dot"></i>
+              {t.id ?? index} <b>{counts.get(index) ?? 0}</b>
+            </button>
+          );
+        })}
       </div>
       <input
         className="search"
         type="search"
-        placeholder="Search index or bag…"
+        placeholder="Search index, bag, task or source…"
         value={query}
         onChange={(e) => {
           onQuery(e.target.value);
@@ -80,6 +86,9 @@ export function EpisodeList({
           if (!ep.has_source) {
             problems.push("no source bag");
           }
+          if (ep.quality !== "ok") {
+            problems.push(`quality: ${ep.quality}`);
+          }
           return (
             <button
               type="button"
@@ -91,11 +100,39 @@ export function EpisodeList({
                 onSelect(ep.index);
               }}
             >
-              <span className="ep-name mono">{episodeName(ep.index)}</span>
-              <span className={`task-chip ${taskTone(ep.task_index)}`}>{ep.task_index ?? "?"}</span>
+              <span className="ep-name mono">
+                {episodeName(ep.index)}
+                {ep.source !== "demo" && (
+                  <span
+                    className="ep-source"
+                    title={`${SOURCE_LABELS[ep.source] ?? ep.source}, round ${ep.round ?? "?"}`}
+                  >
+                    {ep.source === "correction"
+                      ? `C${ep.round ?? ""}`
+                      : ep.source.slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+              </span>
+              <span
+                className={`task-chip ${taskTone(ep.task_index)}`}
+                title={ep.task_id ?? undefined}
+              >
+                {ep.task_index ?? "?"}
+              </span>
               <span className="ep-dur mono">{fmtDuration(ep.duration)}</span>
-              <span className={`ep-flag${!ok ? " bad" : ""}`} title={problems.join(", ")}>
-                {!ok ? "!" : !ep.has_source ? "·" : ""}
+              <span
+                className={`ep-flag${!ok || ep.quality === "bad" ? " bad" : ""}`}
+                title={problems.join(", ")}
+              >
+                {!ok
+                  ? "!"
+                  : ep.quality === "bad"
+                    ? "✗"
+                    : ep.quality === "marginal"
+                      ? "~"
+                      : !ep.has_source
+                        ? "·"
+                        : ""}
               </span>
             </button>
           );

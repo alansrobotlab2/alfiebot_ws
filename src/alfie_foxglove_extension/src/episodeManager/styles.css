@@ -422,3 +422,36 @@
   font-size: 13px;
   z-index: 30;
 }
+
+/* --- sessions, recording context, review ------------------------------------ */
+
+.em .ep-source {
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font: 600 10.5px/15px var(--mono);
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+}
+.em .recording {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  flex-basis: 100%;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.em .recording h2 { font-size: 12px; color: var(--text-dim); align-self: center; margin: 0 4px 0 0; }
+.em .recording .field input[type=text] { width: 130px; }
+.em .recording .field input[type=number] {
+  font: inherit; font-size: 13px; color: var(--text); background: var(--bg-sunken);
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; width: 60px;
+}
+.em .recording .target { align-self: center; margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.em .session-actions { display: flex; align-items: flex-end; gap: 8px; }
+.em .review { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin-top: 12px; }
+.em .review .field.notes { flex: 1 1 200px; }
+.em .review .field.notes input[type=text] { width: 100%; }
+.em .quality-buttons { display: flex; gap: 6px; }
+.em .quality-buttons .btn.current { border-color: var(--accent); color: var(--accent); }

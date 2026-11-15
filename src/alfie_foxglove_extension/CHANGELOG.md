@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Episode Manager: recording sessions and the task registry. Start, switch and
+  close sessions; set what the next recordings are (task by ID from the
+  registry, source, correction round, operator, surface); relabel by task ID;
+  rate episodes (ok / marginal / bad), tag why a correction was taken over, add
+  notes. A closed session is read-only. Needs the alfie_gr00t episode manager
+  and data recorder of the same change.
+
 ## 0.3.0
 
 - Servo Tool panel: a port of the servotool web UI (alfie_tools), talking to

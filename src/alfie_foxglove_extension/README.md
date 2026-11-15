@@ -44,8 +44,12 @@ The extension lives in the Foxglove app, not on the robot: connecting to
 
 ## Episode Manager panel
 
-A port of the episode manager's own web UI (`alfie_gr00t/episode_manager/web`)
-that talks to the same HTTP API, so both work side by side.
+The front end for recording and reviewing GR00T episodes: sessions, the
+recording context (task, source, correction round, operator), conversion,
+synced playback, labelling and quality review. It talks to the episode manager
+node's HTTP API; see `alfie_gr00t/DATA_COLLECTION.md` for the workflow. The
+node's own web page (`alfie_gr00t/episode_manager/web`) uses the same API but
+only plays, relabels and deletes.
 
 1. The node runs with bringup (`launch_episode_manager:=true`, the default), or
    by hand: `ros2 run alfie_gr00t episode_manager`.
