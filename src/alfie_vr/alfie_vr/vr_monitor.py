@@ -134,6 +134,36 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(500, "Internal server error")
 
 
+class _TLSThreadingHTTPServer(http.server.ThreadingHTTPServer):
+    """ThreadingHTTPServer that does the TLS handshake in the per-connection thread.
+
+    Wrapping the listening socket instead runs every handshake inside accept() on
+    the single serve thread with no timeout, so one client that stalls mid-handshake
+    (lossy WiFi, a speculative browser connection) hangs the server for everyone.
+    """
+
+    HANDSHAKE_TIMEOUT_S = 10.0
+    IO_TIMEOUT_S = 60.0
+
+    def __init__(self, server_address, handler_class, ssl_context):
+        self.ssl_context = ssl_context
+        super().__init__(server_address, handler_class)
+
+    def finish_request(self, request, client_address):
+        request.settimeout(self.HANDSHAKE_TIMEOUT_S)
+        try:
+            tls = self.ssl_context.wrap_socket(request, server_side=True)
+        except (OSError, ssl.SSLError):
+            return  # timed out, dropped, or the client rejected the cert
+        try:
+            tls.settimeout(self.IO_TIMEOUT_S)
+            self.RequestHandlerClass(tls, client_address, self)
+        except (OSError, ssl.SSLError):
+            pass
+        finally:
+            tls.close()
+
+
 class SimpleHTTPSServer:
     """Threaded HTTPS server for the web interface."""
 
@@ -144,12 +174,6 @@ class SimpleHTTPSServer:
 
     async def start(self):
         """Start the HTTPS server."""
-        self.httpd = http.server.ThreadingHTTPServer(
-            (self.config.host_ip, self.config.https_port), SimpleAPIHandler)
-        self.httpd.daemon_threads = True
-        self.httpd.web_root_path = self.config.web_root
-        self.httpd.meshes_path = _meshes_dir()
-
         # Setup SSL with mobile browser compatibility
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -160,7 +184,12 @@ class SimpleHTTPSServer:
             "ECDH+AESGCM:DH+AESGCM:ECDH+AES:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!eNULL:!MD5"
         )
         context.load_cert_chain(self.config.certfile, self.config.keyfile)
-        self.httpd.socket = context.wrap_socket(self.httpd.socket, server_side=True)
+
+        self.httpd = _TLSThreadingHTTPServer(
+            (self.config.host_ip, self.config.https_port), SimpleAPIHandler, context)
+        self.httpd.daemon_threads = True
+        self.httpd.web_root_path = self.config.web_root
+        self.httpd.meshes_path = _meshes_dir()
 
         self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.server_thread.start()
