@@ -55,7 +55,7 @@ Ping: Client sends `{'ping': True}`, server returns `{'pong': True}`.
 
 ## Config Files
  - `config/groot_client.yaml` — Client ROS2 parameters: transport, server address, inference FPS, action chunking, smoothing, safety limits, task description, debug settings.
- - `config/groot_server.yaml` — Standalone server settings (checkpoint, TRT engine dir, denoising steps, RTC, ports, venv python); `launch/groot_server.launch.py` turns them into `groot_inference_server.py` flags. Current: checkpoint-40000, `alfie40k_int8_rtc` engines (fused 8-step head only; the 26k pair `checkpoint-26000` + `alfie26k_int8_rtc` also has a fused 4-step head), 8 steps, RTC (client `latency_skip` 3).
+ - `config/groot_server.yaml` — Standalone server settings (checkpoint, TRT engine dir, denoising steps, RTC, ports, venv python); `launch/groot_server.launch.py` turns them into `groot_inference_server.py` flags. Current: checkpoint-40000, `alfie_v4_40k_int8_rtc` engines (fused 8-step head only; the 26k pair `checkpoint-26000` + `alfie_v2_26k_int8_rtc` also has a fused 4-step head), 8 steps, RTC (client `latency_skip` 3).
  - `config/tasks.yaml` — Task registry (see Key Components). A task whose text is not listed still runs but never reports done.
  - `launch/groot_server.launch.py` — Runs the server from the Isaac-GR00T venv; skips if port 5555 is taken. `alfie_bringup` includes it (`launch_groot_server`) and the client launch (`launch_groot`), both default on.
  - `launch/groot_inference.launch.py` — Launches the client only. All parameters come from `groot_client.yaml`; a launch arg overrides the yaml only when passed.

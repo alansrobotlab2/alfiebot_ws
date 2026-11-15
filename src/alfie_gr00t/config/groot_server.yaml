@@ -6,12 +6,12 @@
 # key below into the matching --flag, so this file is the single source of
 # truth for how the server is started. Launch args override a key for one run.
 #
-# Current deployment (2026-11-13): checkpoint-40000 + its INT8 RTC
+# Current deployment (2026-11-15): checkpoint-v4-40000 + its INT8 RTC
 # full-pipeline engines, fused 8-step action head (129 ms per inference
 # offline -> client latency_skip 3), native N1.7 RTC. Engines verified against
 # PyTorch offline (final-action cosine 0.99995); not yet run on the robot.
 # Previous deployment (robot trials in ~/gr00t_ab/2026-11-13): checkpoint-26000
-# with gr00t_trt_deployment/alfie26k_int8_rtc/engines.
+# with gr00t_trt_deployment/alfie_v2_26k_int8_rtc/engines.
 
 groot_server:
   # Isaac-GR00T checkout and its venv interpreter. The server runs with this
@@ -22,16 +22,16 @@ groot_server:
   # Model. The checkpoint's processor_config.json (not alfiebot_config.py)
   # sets the horizon: checkpoint-40000 new_embodiment action delta_indices
   # 0..15 = 16 steps, matching groot_client.yaml action_chunk_size.
-  checkpoint: "/home/alfie/Isaac-GR00T/checkpoints/alfie/checkpoint-40000"
+  checkpoint: "/home/alfie/Isaac-GR00T/checkpoints/alfie/checkpoint-v4-40000"
   embodiment: "NEW_EMBODIMENT"
   device: "cuda:0"
 
   # TensorRT full-pipeline engines built for THIS checkpoint (ViT + LLM +
   # fused action head). Empty = PyTorch (~390 ms, too slow for the client).
-  # alfie40k_int8_rtc has ONLY the fused 8-step head (no fused 4-step); for a
+  # alfie_v4_40k_int8_rtc has ONLY the fused 8-step head (no fused 4-step); for a
   # fused 4-step run, override checkpoint and trt_engine_dir back to the 26k
-  # pair (alfie26k_int8_rtc has fused 4- and 8-step heads).
-  trt_engine_dir: "/home/alfie/Isaac-GR00T/gr00t_trt_deployment/alfie40k_int8_rtc/engines"
+  # pair (alfie_v2_26k_int8_rtc has fused 4- and 8-step heads).
+  trt_engine_dir: "/home/alfie/Isaac-GR00T/gr00t_trt_deployment/alfie_v4_40k_int8_rtc/engines"
 
   # Flow-matching denoising steps (0 = checkpoint default, 4). 8 keeps the
   # head scan and full-rate base turns that 4 averages away (2026-11-12).
