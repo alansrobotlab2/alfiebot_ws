@@ -69,7 +69,7 @@ class GrootCmdPublisher:
         self.back_pub = node.create_publisher(BackCmd, topic('back'), qos)
         self.base_pub = node.create_publisher(Twist, topic('base'), qos)
 
-    def publish(self, msg: RobotLowCmd):
+    def publish(self, msg: RobotLowCmd, back: bool = True):
         left = ArmCmd()
         left.joint_cmd = list(msg.servo_cmd[0:6])
         right = ArmCmd()
@@ -79,7 +79,8 @@ class GrootCmdPublisher:
         self.left_arm_pub.publish(left)
         self.right_arm_pub.publish(right)
         self.head_pub.publish(head)
-        self.back_pub.publish(msg.back_cmd)
+        if back:
+            self.back_pub.publish(msg.back_cmd)
         self.base_pub.publish(msg.cmd_vel)
 
     def publish_back(self, back_cmd: BackCmd):
@@ -393,13 +394,13 @@ class ActionPublisher:
             servo_cmd.target_torque = 0.0
             msg.servo_cmd[i] = servo_cmd
 
-        # Zero back command
-        msg.back_cmd = BackCmd()
+        # No back command: an all-zero BackCmd is position 0.0, which drove
+        # the back to the bottom on every stop (2026-11-13). It holds instead.
 
         # Reset base velocity tracking
         self._last_base_vel = None
 
-        self.cmd_pub.publish(msg)
+        self.cmd_pub.publish(msg, back=False)
 
     def _build_servo_cmd(self, servo_idx: int, position: float) -> ServoCmd:
         """Build a ServoCmd with per-joint speed/accel/torque config."""

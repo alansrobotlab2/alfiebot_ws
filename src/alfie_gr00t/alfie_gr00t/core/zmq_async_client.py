@@ -161,8 +161,8 @@ class ZMQAsyncClient:
         thread = self._receiver_thread
         if thread is not None and thread.is_alive() \
                 and thread is not threading.current_thread():
-            # recv() wakes at least every RCVTIMEO to see _running go False
-            thread.join(timeout=max(2.0, 2.0 * self._timeout_ms / 1000.0))
+            # The receiver polls in 100 ms slices, so this returns quickly
+            thread.join(timeout=2.0)
             if thread.is_alive():
                 # Never close a socket another thread is still blocked on
                 self._log('Async receiver did not stop; keeping its sockets open')
@@ -285,7 +285,12 @@ class ZMQAsyncClient:
         sock = self._pull_socket   # this thread's socket; never re-read
         while self._running:
             try:
-                packed = sock.recv()
+                # Short poll, not a blocking recv on RCVTIMEO (inference_timeout_ms,
+                # 5 s): connect() joins this thread, and a long recv stalled the
+                # activate callback, and with it the client's status, for seconds.
+                if not sock.poll(100):
+                    continue
+                packed = sock.recv(zmq.NOBLOCK)
                 response = msg_from_bytes(packed)
                 now = time.monotonic()
 
