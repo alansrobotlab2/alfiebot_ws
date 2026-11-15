@@ -50,6 +50,7 @@ export type Episode = {
   close_frame: number | null;
   /** Frame the task's done condition is confirmed. */
   done_frame: number | null;
+  legacy_dataset?: string | null;
   legacy_episode_index: number | null;
 };
 

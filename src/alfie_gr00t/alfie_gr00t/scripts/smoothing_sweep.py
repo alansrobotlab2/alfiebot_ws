@@ -23,7 +23,7 @@ from pathlib import Path
 WORKSPACE = Path(__file__).resolve().parents[4]  # alfiebot_ws/
 REPLAY_EVAL = WORKSPACE / 'src/alfie_gr00t/alfie_gr00t/scripts/groot_replay_eval.py'
 CONFIG_YAML = WORKSPACE / 'src/alfie_gr00t/config/groot_client.yaml'
-DATASET_PATH = WORKSPACE / 'data' / os.environ.get('ALFIE_DATASET', 'can_do_challenge') / 'lerobot'
+DATASET_PATH = WORKSPACE / 'data' / os.environ.get('ALFIE_DATASET', 'CleanTheRoom') / 'lerobot'
 RESULTS_DIR = WORKSPACE / 'smoothing_sweep_results'
 
 # Focus joints for per-joint analysis

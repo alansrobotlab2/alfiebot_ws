@@ -97,6 +97,8 @@ EPISODE_FILE = 'episode.json'
 RECORD_KEYS = ('task_id', 'source', 'round', 'policy_ckpt', 'run_id', 'instruction_sent',
                'takeover_s', 'failure_mode', 'objects', 'surface', 'hw', 'operator',
                'quality', 'notes', 'recorded_at', 'alfiebot_commit')
+# Copied too when episode.json has them: where a backfilled episode came from.
+OPTIONAL_RECORD_KEYS = ('legacy_dataset', 'legacy_episode_index')
 RECORD_DEFAULTS = {'source': 'demo', 'round': 0, 'objects': [], 'surface': '',
                    'operator': '', 'quality': 'ok', 'notes': ''}
 # task_index of an episode that has not been given a task yet (parquet column
@@ -1137,7 +1139,8 @@ class RosbagToGrootConverter:
             record.update({k: previous[k] for k in RECORD_KEYS if k in previous})
         else:
             sidecar = self.read_episode_record(demo_dir)
-            record.update({k: sidecar[k] for k in RECORD_KEYS if k in sidecar})
+            record.update({k: sidecar[k] for k in RECORD_KEYS + OPTIONAL_RECORD_KEYS
+                           if k in sidecar})
             if episode.takeover is not None:
                 event = episode.takeover
                 record['source'] = 'correction'
@@ -1214,6 +1217,7 @@ class RosbagToGrootConverter:
             'bag': demo_dir.name,
         }
         metadata.update({k: record.get(k) for k in RECORD_KEYS})
+        metadata.update({k: record[k] for k in OPTIONAL_RECORD_KEYS if k in record})
         task_id = record.get('task_id')
         if self.registry is not None and self.registry.by_id(task_id or '') is not None:
             metadata.update(self.registry.episode_fields(task_id))
@@ -1616,7 +1620,7 @@ examples:
   %(prog)s --dataset 2026-11-20_s02_hw2 --report
   %(prog)s --dataset 2026-11-20_s02_hw2 --task-id pick_up_soda_can
   %(prog)s --demos-dir /path/to/demos --output-dir /path/to/output
-  %(prog)s --dataset can_do_challenge --start-episode 50 --num-threads 8 --use-gpu
+  %(prog)s --dataset 2026-11-20_s02_hw2 --num-threads 8 --use-gpu
 """
     )
     parser.add_argument(

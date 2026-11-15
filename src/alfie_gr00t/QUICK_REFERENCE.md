@@ -53,7 +53,7 @@ ros2 topic hz /alfie/robotlowstate
 ## Review / Relabel Episodes
 
 ```bash
-ros2 run alfie_gr00t episode_manager --ros-args -p dataset:=can_do_challenge   # http://alfiebot.local:7880/
+ros2 run alfie_gr00t episode_manager --ros-args -p dataset:=2026-11-12_s01_hw2   # http://alfiebot.local:7880/
 ```
 
 ## Playback
@@ -76,7 +76,7 @@ communication diagnostics. No ROS2 required.
 
 ```bash
 python ./src/alfie_gr00t/alfie_gr00t/scripts/groot_open_loop_eval.py \
-    --dataset-path /home/alfie/alfiebot_ws/data/can_do_challenge/lerobot \
+    --dataset-path /home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot \
     --episode-index 0 \
     --host 127.0.0.1 --port 5555 \
     --save-plot /tmp/groot_eval/episode_000.png \
@@ -115,7 +115,7 @@ python src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
 
 # Replay mode (no GPU needed)
 python src/alfie_gr00t/alfie_gr00t/scripts/groot_inference_server.py \
-    --dataset-path ~/alfiebot_ws/data/can_do_challenge/lerobot \
+    --dataset-path ~/alfiebot_ws/data/CleanTheRoom/lerobot \
     --episode-index 0 --transport tcp --port 5555
 
 # Mock mode (testing)

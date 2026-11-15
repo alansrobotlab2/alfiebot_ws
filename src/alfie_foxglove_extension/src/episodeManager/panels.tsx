@@ -595,10 +595,12 @@ export function Details({
     ],
     ["Recorded", episode.recorded ?? "--"],
     ...(episode.legacy_episode_index != undefined
-      ? ([["Was", `episode ${episode.legacy_episode_index} of CleanTheRoom`]] as [
-          string,
-          ReactNode,
-        ][])
+      ? ([
+          [
+            "Was",
+            `episode ${episode.legacy_episode_index} of ${episode.legacy_dataset ?? "an older dataset"}`,
+          ],
+        ] as [string, ReactNode][])
       : []),
   ];
   const files: [string, string][] = [

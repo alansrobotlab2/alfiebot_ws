@@ -65,10 +65,15 @@ mixes tasks, demos and corrections. Each session is one folder under
 
 The recorder, converter and episode manager derive their paths from
 `alfie_gr00t/dataset_paths.py`. `--data-root` / `ALFIE_DATA_ROOT` moves the
-tree. The datasets recorded before sessions (`CleanTheRoom`,
-`can_do_challenge`) stay in `~/alfiebot_ws/data/<dataset>/` with the same two
-sub-folders; the episode manager lists them after the sessions, and the
-converter reaches them with `--data-root ~/alfiebot_ws/data`.
+tree.
+
+The 218 `CleanTheRoom` recordings, made before sessions existed, were copied
+into the sessions of their three recording days (`2026-11-10_s01_hw2` to
+`2026-11-12_s01_hw2`) by `scripts/backfill_sessions.py`; each episode carries
+`legacy_dataset` and `legacy_episode_index`. The converted set that
+checkpoint-40000 was trained on stays in `~/alfiebot_ws/data/CleanTheRoom/lerobot`
+as a fixed reference for the diagnostic scripts. It has no bags and is not
+shown in the episode manager.
 
 ### Task registry
 
@@ -314,7 +319,6 @@ missing bag as a deleted demo and would drop those episodes.
 |---|---|---|
 | `dataset` | `$ALFIE_DATASET`, else the newest session | session opened at startup; others are picked in the UI |
 | `data_root` | `$ALFIE_DATA_ROOT` or `~/alfie_data/raw` | folder of sessions |
-| `legacy_root` | `~/alfiebot_ws/data` | datasets from before sessions, listed after the sessions |
 | `tasks_yaml` | installed `config/tasks.yaml` | task registry |
 | `workspace_dir` / `isaac_groot_dir` | `~/alfiebot_ws` / `~/Isaac-GR00T` | git checkouts whose commits are saved when a session is closed |
 | `port` / `host` | `7880` / `0.0.0.0` | HTTP bind (no auth: keep it on a trusted network) |
@@ -471,7 +475,7 @@ in `alfiebot_config.py` change. From the Isaac-GR00T checkout:
 
 ```bash
 python gr00t/data/stats.py \
-    --dataset-path ~/alfiebot_ws/data/can_do_challenge/lerobot \
+    --dataset-path ~/alfiebot_ws/data/CleanTheRoom/lerobot \
     --embodiment-tag NEW_EMBODIMENT \
     --modality-config-path ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/alfiebot_config.py
 ```
@@ -488,7 +492,7 @@ the 352x256 camera frames are used at native aspect:
 cd ~/Isaac-GR00T && source .venv/bin/activate && source scripts/activate_orin.sh
 python gr00t/experiment/launch_finetune.py \
     --base-model-path nvidia/GR00T-N1.7-3B \
-    --dataset-path ~/alfiebot_ws/data/can_do_challenge/lerobot \
+    --dataset-path ~/alfiebot_ws/data/CleanTheRoom/lerobot \
     --embodiment-tag NEW_EMBODIMENT \
     --modality-config-path ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/alfiebot_config.py \
     --shortest-image-edge 256 --crop-fraction 0.95 \
@@ -553,7 +557,7 @@ After collecting 500+ demonstrations:
 ```bash
 # Whole tree on another drive: <data_root>/<dataset>/demonstrations
 ros2 launch alfie_gr00t data_collection.launch.py \
-    data_root:=/mnt/ssd/alfie_data dataset:=can_do_challenge
+    data_root:=/mnt/ssd/alfie_data dataset:=2026-11-20_s02_hw2
 
 # Explicit bag directory, ignores the dataset layout
 ros2 launch alfie_gr00t data_collection.launch.py \

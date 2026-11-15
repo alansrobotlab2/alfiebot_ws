@@ -22,22 +22,22 @@ Usage:
     # Basic evaluation
     python src/alfie_gr00t/alfie_gr00t/scripts/groot_replay_eval.py \
         --config src/alfie_gr00t/config/groot_client.yaml \
-        --dataset-path data/can_do_challenge/lerobot \
+        --dataset-path data/CleanTheRoom/lerobot \
         --episode-index 0 \
         --host 127.0.0.1
 
     # Compare rate limiting on vs off
     python groot_replay_eval.py --config config/groot_client.yaml \\
-        --dataset-path data/can_do_challenge/lerobot --episode-index 0 \\
+        --dataset-path data/CleanTheRoom/lerobot --episode-index 0 \\
         --output-dir /tmp/eval_rl_on/
 
     python groot_replay_eval.py --config config/groot_client.yaml \\
-        --dataset-path data/can_do_challenge/lerobot --episode-index 0 \\
+        --dataset-path data/CleanTheRoom/lerobot --episode-index 0 \\
         --rate-limit-enabled false --output-dir /tmp/eval_rl_off/
 
     # Multiple episodes with CSV export
     python groot_replay_eval.py --config config/groot_client.yaml \\
-        --dataset-path data/can_do_challenge/lerobot \\
+        --dataset-path data/CleanTheRoom/lerobot \\
         --episode-indices 0,1,2,3,4 --save-csv
 
 Output Directory Structure:
@@ -1740,7 +1740,7 @@ Examples:
   # Basic evaluation with default config
   python groot_replay_eval.py \\
       --config config/groot_client.yaml \\
-      --dataset-path data/can_do_challenge/lerobot \\
+      --dataset-path data/CleanTheRoom/lerobot \\
       --episode-index 0 --host 127.0.0.1
 
   # Compare rate limiting on vs off

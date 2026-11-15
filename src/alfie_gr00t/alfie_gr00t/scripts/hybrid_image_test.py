@@ -248,12 +248,12 @@ def main():
     parser = argparse.ArgumentParser(description='Hybrid image test')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=5555)
-    parser.add_argument('--dataset-path', default='/home/alfie/alfiebot_ws/data/can_do_challenge/lerobot')
+    parser.add_argument('--dataset-path', default='/home/alfie/alfiebot_ws/data/CleanTheRoom/lerobot')
     parser.add_argument('--debug-dir', default='/tmp/groot_debug_images')
     parser.add_argument('--task', default='find the can and pick it up')
     parser.add_argument('--episode', type=int, default=0)
     parser.add_argument('--rosbag',
-                        default='/home/alfie/alfiebot_ws/data/can_do_challenge/demonstrations/demo_20260102_195919/demo_20260102_195919_0.mcap',
+                        default='/home/alfie/alfie_data/raw/2026-11-10_s01_hw2/demonstrations/demo_20261110_163035/demo_20261110_163035_0.mcap',
                         help='Path to .mcap or .mcap.zstd rosbag for episode 0 source demo')
     args = parser.parse_args()
 

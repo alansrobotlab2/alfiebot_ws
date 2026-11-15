@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from alfie_gr00t import task_registry
-from alfie_gr00t.dataset_paths import LEGACY_DATA_ROOT, create_session
+from alfie_gr00t.dataset_paths import create_session
 from alfie_gr00t.episode_manager.dataset import ConvertJob, Dataset, DatasetError
 from alfie_gr00t.recording_context import (
     FAILURE_MODES, QUALITIES, SOURCES, merge_context,
@@ -114,12 +114,9 @@ class EpisodeManager:
     def __init__(self, data_root: str, dataset: str, python: str, converter: str,
                  num_threads: int, use_gpu: bool, logger=None,
                  tasks_yaml: Optional[str] = None,
-                 legacy_root: str = LEGACY_DATA_ROOT,
                  workspace_dir: str = '~/alfiebot_ws',
                  isaac_groot_dir: str = '~/Isaac-GR00T'):
         self.data_root = Path(data_root).expanduser()
-        # Datasets recorded before sessions; listed after the sessions.
-        self.legacy_root = Path(legacy_root).expanduser() if legacy_root else None
         self.tasks_yaml = tasks_yaml or None
         self.workspace_dir = Path(workspace_dir).expanduser()
         self.isaac_groot_dir = Path(isaac_groot_dir).expanduser()
@@ -171,14 +168,10 @@ class EpisodeManager:
         return sorted(self._folders(self.data_root), reverse=True)
 
     def datasets(self) -> List[str]:
-        """Sessions (newest first), then the datasets from before sessions."""
-        names = self.sessions()
-        return names + [n for n in self._folders(self.legacy_root) if n not in names]
+        """Every folder under the data root, newest session first."""
+        return self.sessions()
 
     def _root_of(self, name: str) -> Path:
-        if (self.legacy_root is not None and not (self.data_root / name).is_dir()
-                and (self.legacy_root / name).is_dir()):
-            return self.legacy_root
         return self.data_root
 
     def registry(self):

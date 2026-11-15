@@ -96,7 +96,7 @@ EDITABLE = {'quality': QUALITIES, 'failure_mode': FAILURE_MODES + (None,), 'note
 DETAIL_KEYS = ('episode_uid', 'task_id', 'family', 'round', 'policy_ckpt', 'run_id',
                'instruction_sent', 'takeover_s', 'failure_mode', 'objects', 'surface',
                'hw', 'operator', 'quality', 'notes', 'close_frame', 'done_frame',
-               'legacy_episode_index')
+               'legacy_dataset', 'legacy_episode_index')
 
 
 class Dataset:

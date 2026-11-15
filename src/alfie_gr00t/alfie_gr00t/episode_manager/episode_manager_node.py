@@ -1,7 +1,7 @@
 """Episode manager - review, relabel and delete GR00T training episodes in a browser.
 
 Usage:
-    ros2 run alfie_gr00t episode_manager --ros-args -p dataset:=can_do_challenge
+    ros2 run alfie_gr00t episode_manager --ros-args -p dataset:=2026-11-20_s02_hw2
 
 Then open http://<robot>:7880/.
 
@@ -12,8 +12,6 @@ Parameters:
                        (default $ALFIE_DATA_ROOT or ~/alfie_data/raw)
     dataset            session opened at startup; others can be picked in the UI
                        (default $ALFIE_DATASET, else the newest session)
-    legacy_root        datasets from before sessions, listed after the sessions
-                       (default ~/alfiebot_ws/data; "" = none)
     tasks_yaml         task registry file (default: the installed config/tasks.yaml)
     workspace_dir      alfiebot git checkout, for the commit written into a
                        session when it is closed (default ~/alfiebot_ws)
@@ -50,7 +48,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.signals import SignalHandlerOptions
 from std_msgs.msg import String
 
-from alfie_gr00t.dataset_paths import LEGACY_DATA_ROOT, data_root
+from alfie_gr00t.dataset_paths import data_root
 from alfie_gr00t.recording_context import CONTEXT_TOPIC, SET_CONTEXT_TOPIC
 from alfie_gr00t.episode_manager.dataset import default_python
 from alfie_gr00t.episode_manager.http_server import EpisodeManagerServer
@@ -109,7 +107,6 @@ def main(args=None):
     port = int(node.declare_parameter('port', 7880).value)
     root = node.declare_parameter('data_root', str(data_root())).value
     dataset = node.declare_parameter('dataset', os.environ.get('ALFIE_DATASET', '')).value
-    legacy_root = node.declare_parameter('legacy_root', LEGACY_DATA_ROOT).value
     tasks_yaml = node.declare_parameter('tasks_yaml', '').value
     workspace_dir = node.declare_parameter('workspace_dir', '~/alfiebot_ws').value
     isaac_groot_dir = node.declare_parameter('isaac_groot_dir', '~/Isaac-GR00T').value
@@ -125,7 +122,7 @@ def main(args=None):
     urls_topic = node.declare_parameter('urls_topic', '/alfie/episode_manager/urls').value
 
     manager = EpisodeManager(root, dataset, python, converter, num_threads, use_gpu, logger,
-                             tasks_yaml=tasks_yaml, legacy_root=legacy_root,
+                             tasks_yaml=tasks_yaml,
                              workspace_dir=workspace_dir, isaac_groot_dir=isaac_groot_dir)
     dataset = manager.dataset.name
     if not dataset:

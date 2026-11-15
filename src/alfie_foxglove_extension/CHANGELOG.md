@@ -12,6 +12,8 @@
   recorded without a task becomes an unlabelled episode. An Unlabelled filter
   lists them, and the task picker tags them: type a task number or a few
   words, Enter. The number keys 1-9 no longer tag; T focuses the picker.
+- Episode Manager: an episode copied in from an older dataset shows which
+  dataset and episode number it was.
 
 ## 0.3.0
 
