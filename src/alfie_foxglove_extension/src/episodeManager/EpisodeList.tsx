@@ -2,7 +2,16 @@
 
 import { ReactElement, useEffect, useRef } from "react";
 
-import { Episode, SOURCE_LABELS, Task, episodeName, filesOk, fmtDuration, taskTone } from "./api";
+import {
+  Episode,
+  SOURCE_LABELS,
+  Task,
+  TaskFilter,
+  episodeName,
+  filesOk,
+  fmtDuration,
+  taskTone,
+} from "./api";
 
 export function EpisodeList({
   episodes,
@@ -17,15 +26,25 @@ export function EpisodeList({
 }: {
   episodes: Episode[];
   tasks: Task[];
-  counts: Map<number | "all", number>;
-  filter: number | undefined;
-  onFilter: (filter: number | undefined) => void;
+  counts: Map<number | "all" | "unlabelled", number>;
+  filter: TaskFilter;
+  onFilter: (filter: TaskFilter) => void;
   query: string;
   onQuery: (query: string) => void;
   selected: number | undefined;
   onSelect: (index: number) => void;
 }): ReactElement {
   const listRef = useRef<HTMLDivElement>(null);
+
+  // The chip shows the task's registry number, the one typed in the task
+  // picker; a string that is not a registry task shows its tasks.jsonl index.
+  const chip = (taskIndex: number | null): string => {
+    if (taskIndex == undefined) {
+      return "?";
+    }
+    const task = tasks.find((t) => t.index === taskIndex);
+    return task?.number != undefined ? String(task.number) : `#${taskIndex}`;
+  };
 
   // Keep the selected row in view as j/k walk the list.
   useEffect(() => {
@@ -45,6 +64,19 @@ export function EpisodeList({
         >
           All <b>{counts.get("all") ?? 0}</b>
         </button>
+        {(counts.get("unlabelled") ?? 0) !== 0 && (
+          <button
+            type="button"
+            className={`filter task-none${filter === "unlabelled" ? " on" : ""}`}
+            title="Converted without a task; tag them with the task picker"
+            onClick={() => {
+              onFilter("unlabelled");
+            }}
+          >
+            <i className="dot"></i>
+            Unlabelled <b>{counts.get("unlabelled") ?? 0}</b>
+          </button>
+        )}
         {tasks.map((t) => {
           const index = t.index;
           if (index == undefined) {
@@ -115,9 +147,9 @@ export function EpisodeList({
               </span>
               <span
                 className={`task-chip ${taskTone(ep.task_index)}`}
-                title={ep.task_id ?? undefined}
+                title={ep.task_id ?? (ep.task_index == undefined ? "unlabelled" : undefined)}
               >
-                {ep.task_index ?? "?"}
+                {chip(ep.task_index)}
               </span>
               <span className="ep-dur mono">{fmtDuration(ep.duration)}</span>
               <span

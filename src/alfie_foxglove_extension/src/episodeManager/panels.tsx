@@ -1,6 +1,6 @@
 // Top bar, episode editor, details table, converter log and the confirm dialog.
 
-import { ReactElement, ReactNode, useEffect, useRef, useState } from "react";
+import { ReactElement, ReactNode, RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   CAMERAS,
@@ -15,6 +15,7 @@ import {
   Task,
   episodeName,
   fmtDuration,
+  searchTasks,
   taskKey,
   taskTone,
 } from "./api";
@@ -44,8 +45,109 @@ function RecorderPill({ status }: { status: string }): ReactElement {
   return <span className="pill">recorder idle</span>;
 }
 
-/** "leave unconverted" in the picker for bags recorded without a task. */
-export const NO_FALLBACK = "";
+/** Rows the task picker shows before it scrolls. */
+const PICKER_ROWS = 6;
+
+/**
+ * Pick a task for an episode: type a task number or a few words, Enter takes
+ * the highlighted match. The box clears and keeps the focus, so a run of
+ * episodes can be tagged as "1 Enter 2 Enter 1 Enter".
+ */
+export function TaskPicker({
+  tasks,
+  episode,
+  disabled,
+  inputRef,
+  onPick,
+}: {
+  tasks: Task[];
+  episode: Episode;
+  disabled: boolean;
+  inputRef: RefObject<HTMLInputElement>;
+  onPick: (task: Task) => void;
+}): ReactElement {
+  const [query, setQuery] = useState("");
+  const [at, setAt] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const matches = useMemo(() => searchTasks(tasks, query), [tasks, query]);
+  const cursor = Math.min(at, Math.max(0, matches.length - 1));
+
+  useEffect(() => {
+    listRef.current?.querySelector(".pick-row.cursor")?.scrollIntoView({ block: "nearest" });
+  }, [cursor, matches]);
+
+  const pick = (task: Task | undefined) => {
+    if (task && !disabled) {
+      onPick(task);
+      setQuery("");
+      setAt(0);
+    }
+  };
+  const isCurrent = (t: Task) => (t.index != undefined ? episode.task_index === t.index : false);
+
+  return (
+    <div className="task-picker">
+      <input
+        ref={inputRef}
+        className="search"
+        type="search"
+        value={query}
+        disabled={disabled}
+        placeholder="Task number or words, Enter to tag…"
+        aria-label="Find a task"
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setAt(0);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") {
+            setAt(Math.min(cursor + 1, matches.length - 1));
+          } else if (e.key === "ArrowUp") {
+            setAt(Math.max(cursor - 1, 0));
+          } else if (e.key === "Enter") {
+            pick(matches[cursor]);
+          } else if (e.key === "Escape") {
+            setQuery("");
+            e.currentTarget.blur();
+          } else {
+            return;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      />
+      <div
+        className="pick-list"
+        ref={listRef}
+        role="listbox"
+        aria-label="Tasks"
+        style={{ maxHeight: `calc(${PICKER_ROWS} * var(--pick-row))` }}
+      >
+        {matches.length === 0 && <div className="empty">No task matches.</div>}
+        {matches.map((t, i) => (
+          <button
+            type="button"
+            key={taskKey(t)}
+            role="option"
+            aria-selected={isCurrent(t)}
+            disabled={disabled}
+            className={`pick-row ${taskTone(t.index)}${isCurrent(t) ? " current" : ""}${
+              i === cursor && query !== "" ? " cursor" : ""
+            }`}
+            title={t.description ?? undefined}
+            onClick={() => {
+              pick(t);
+            }}
+          >
+            <span className="pick-num mono">{t.number ?? "–"}</span>
+            <span className="pick-id mono">{t.id ?? `#${t.index ?? ""}`}</span>
+            <span className="pick-text">{t.description ?? t.instruction ?? t.task}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /** A text box that commits on blur or Enter, so typing doesn't post every key. */
 function CommitInput({
@@ -127,6 +229,7 @@ function RecordingBar({
           <option value="">(not set)</option>
           {tasks.map((t) => (
             <option key={t.id} value={t.id}>
+              {t.number != undefined ? `${t.number}  ` : ""}
               {t.id}: {t.task}
             </option>
           ))}
@@ -185,7 +288,7 @@ function RecordingBar({
       </label>
       <div className="target">
         <span className="pill" title="Where the recorder writes the next episode">
-          into <b>{ctx.session || "a new session"}</b> · {ctx.hw}
+          into <b>{ctx.session || "today's session"}</b> · {ctx.hw}
         </span>
         {canRecordHere && (
           <button
@@ -210,8 +313,6 @@ export function TopBar({
   busy,
   recorder,
   pending,
-  fallback,
-  onFallback,
   onDataset,
   onConvert,
   onNewSession,
@@ -223,9 +324,6 @@ export function TopBar({
   busy: boolean;
   recorder: string;
   pending: number;
-  /** taskKey of the task for bags recorded without one, or NO_FALLBACK. */
-  fallback: string;
-  onFallback: (key: string) => void;
   onDataset: (name: string) => void;
   onConvert: () => void;
   onNewSession: () => void;
@@ -233,6 +331,8 @@ export function TopBar({
   onContext: (update: Partial<RecordingContext>) => void;
 }): ReactElement {
   const closed = summary.closed != undefined;
+  // Counted here, not taken from the summary, so it follows tags made since the last reload.
+  const untagged = summary.episodes.filter((ep) => ep.task_index == undefined).length;
   return (
     <header className="topbar">
       <div className="brand">
@@ -276,9 +376,13 @@ export function TopBar({
           <button
             type="button"
             className="btn"
-            disabled={busy || summary.episodes.length === 0}
+            disabled={busy || summary.episodes.length === 0 || untagged !== 0}
             onClick={onCloseSession}
-            title="Freeze this session: no relabelling, deleting or converting afterwards"
+            title={
+              untagged !== 0
+                ? `${untagged} episodes have no task yet; tag or delete them first`
+                : "Freeze this session: no relabelling, deleting or converting afterwards"
+            }
           >
             Close session…
           </button>
@@ -303,29 +407,12 @@ export function TopBar({
       </div>
       {!closed && (
         <div className="convert">
-          <label className="field">
-            <span>Bags recorded without a task</span>
-            <select
-              value={fallback}
-              disabled={busy}
-              onChange={(e) => {
-                onFallback(e.target.value);
-              }}
-            >
-              <option value={NO_FALLBACK}>leave unconverted</option>
-              {summary.tasks.map((t) => (
-                <option key={taskKey(t)} value={taskKey(t)}>
-                  {t.id ?? t.index}: {t.task}
-                </option>
-              ))}
-            </select>
-          </label>
           <button
             type="button"
             className={`btn${pending !== 0 ? " primary" : ""}`}
             disabled={busy}
             onClick={onConvert}
-            title="Run rosbag_to_groot.py: add new bags, rebuild any with missing files"
+            title="Run rosbag_to_groot.py: add new bags, rebuild any with missing files. Bags recorded without a task become unlabelled episodes"
           >
             {busy ? "Converting…" : pending !== 0 ? `Convert ${pending} new` : "Convert"}
           </button>
@@ -344,6 +431,7 @@ export function Editor({
   readOnly,
   autoAdvance,
   onAutoAdvance,
+  pickerRef,
   onTask,
   onFields,
   onDelete,
@@ -356,6 +444,8 @@ export function Editor({
   readOnly: boolean;
   autoAdvance: boolean;
   onAutoAdvance: (on: boolean) => void;
+  /** The task picker's search box, so the panel can focus it from the keyboard. */
+  pickerRef: RefObject<HTMLInputElement>;
   onTask: (task: Task) => void;
   onFields: (fields: EpisodeFields) => void;
   onDelete: () => void;
@@ -376,28 +466,13 @@ export function Editor({
           next episode after labelling
         </label>
       </div>
-      <div className="task-buttons">
-        {tasks.map((t, i) => {
-          const current =
-            t.index != undefined ? episode.task_index === t.index : episode.task_id === t.id;
-          return (
-            <button
-              type="button"
-              key={taskKey(t)}
-              disabled={locked}
-              className={`task-btn ${taskTone(t.index)}${current ? " current" : ""}`}
-              title={t.instruction != undefined ? `From v6: "${t.instruction}"` : undefined}
-              onClick={() => {
-                onTask(t);
-              }}
-            >
-              {i < 9 && <kbd>{i + 1}</kbd>}
-              <span className="task-idx">{t.id ?? t.index}</span>
-              <span className="task-text">{t.task}</span>
-            </button>
-          );
-        })}
-      </div>
+      <TaskPicker
+        tasks={tasks}
+        episode={episode}
+        disabled={locked}
+        inputRef={pickerRef}
+        onPick={onTask}
+      />
       <div className="review">
         <div className="field">
           <span>Quality</span>
@@ -452,7 +527,8 @@ export function Editor({
           Delete episode…
         </button>
         <span className="dim keys">
-          <kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>Space</kbd> play · <kbd>←</kbd>
+          <kbd>T</kbd> task · <kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>Space</kbd> play ·{" "}
+          <kbd>←</kbd>
           <kbd>→</kbd> frame · <kbd>Shift</kbd>+<kbd>←</kbd>
           <kbd>→</kbd> 1 s · <kbd>Del</kbd> delete
         </span>
@@ -477,7 +553,9 @@ export function Details({
       "Task",
       task
         ? `${task.id ?? String(task.index)}: ${task.task}`
-        : `${episode.task_index ?? "?"} (not in tasks.jsonl)`,
+        : episode.task_index == undefined
+          ? "unlabelled"
+          : `${episode.task_index} (not in tasks.jsonl)`,
     ],
     [
       "Source",

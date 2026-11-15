@@ -29,10 +29,10 @@ import {
   RecordingContext,
   Status,
   Task,
+  TaskFilter,
   episodeName,
-  taskKey,
 } from "./api";
-import { Confirm, ConfirmProps, Details, Editor, JobPanel, NO_FALLBACK, TopBar } from "./panels";
+import { Confirm, ConfirmProps, Details, Editor, JobPanel, TopBar } from "./panels";
 import { Transport, VideoGrid, usePlayer } from "./player";
 
 const STATUS_MS = 2000;
@@ -75,13 +75,13 @@ export function EpisodeManager({
   const [loadError, setLoadError] = useState<string | undefined>();
   const [rev, setRev] = useState(0); // bumps video URLs after a conversion
   const [selected, setSelected] = useState<number | undefined>();
-  const [filter, setFilter] = useState<number | undefined>();
+  const [filter, setFilter] = useState<TaskFilter>();
+  const pickerRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<Status>({ busy: false, recorder: "", pending: 0 });
   const [job, setJob] = useState<Job | undefined>();
   const [confirm, setConfirm] = useState<ConfirmProps | undefined>();
   const [toast, setToast] = useState<{ msg: string; id: number } | undefined>();
-  const [fallback, setFallback] = useState(NO_FALLBACK);
 
   const summary = info?.dataset;
   const { player, playing, setPlaying, rate } = usePlayer(summary?.fps);
@@ -131,7 +131,8 @@ export function EpisodeManager({
     const q = query.trim().toLowerCase();
     return summary.episodes.filter(
       (ep) =>
-        (filter == undefined || ep.task_index === filter) &&
+        (filter == undefined ||
+          (filter === "unlabelled" ? ep.task_index == undefined : ep.task_index === filter)) &&
         (!q ||
           String(ep.index).includes(q) ||
           ep.bag.toLowerCase().includes(q) ||
@@ -141,11 +142,12 @@ export function EpisodeManager({
   }, [summary, filter, query]);
 
   const counts = useMemo(() => {
-    const c = new Map<number | "all", number>([["all", summary?.episodes.length ?? 0]]);
+    const c = new Map<number | "all" | "unlabelled", number>([
+      ["all", summary?.episodes.length ?? 0],
+    ]);
     for (const ep of summary?.episodes ?? []) {
-      if (ep.task_index != undefined) {
-        c.set(ep.task_index, (c.get(ep.task_index) ?? 0) + 1);
-      }
+      const key = ep.task_index ?? "unlabelled";
+      c.set(key, (c.get(key) ?? 0) + 1);
     }
     return c;
   }, [summary]);
@@ -159,16 +161,12 @@ export function EpisodeManager({
     }
   }, [summary, visible, selected]);
 
-  // The task picked for unlabelled bags must exist in the dataset now open.
+  // Nothing left to tag: drop the Unlabelled filter instead of showing an empty list.
   useEffect(() => {
-    if (
-      summary &&
-      fallback !== NO_FALLBACK &&
-      !summary.tasks.some((t) => taskKey(t) === fallback)
-    ) {
-      setFallback(NO_FALLBACK);
+    if (filter === "unlabelled" && summary && (counts.get("unlabelled") ?? 0) === 0) {
+      setFilter(undefined);
     }
-  }, [summary, fallback]);
+  }, [filter, summary, counts]);
 
   // A new episode starts playing on its own (the <video>s autoplay).
   useEffect(() => {
@@ -403,10 +401,7 @@ export function EpisodeManager({
     if (!summary) {
       return;
     }
-    const res = await api.convert(
-      summary.tasks.find((t) => taskKey(t) === fallback),
-      force,
-    );
+    const res = await api.convert(force);
     if (res.needs_force === true) {
       const orphans = res.orphans ?? 0;
       setConfirm({
@@ -478,7 +473,6 @@ export function EpisodeManager({
     }
     const fps = player.fps();
     const k = e.key;
-    const task = /^[1-9]$/.test(k) ? summary?.tasks[Number(k) - 1] : undefined;
     const readOnly = summary?.closed != undefined;
     let handled = true;
     if (k === "j" || k === "ArrowDown") {
@@ -497,8 +491,8 @@ export function EpisodeManager({
       onLoop(!loop);
     } else if ((k === "Delete" || k === "Backspace") && !readOnly) {
       askDelete();
-    } else if (task && !readOnly) {
-      void label(task);
+    } else if (k === "t" || k === "/") {
+      pickerRef.current?.focus();
     } else {
       handled = false;
     }
@@ -544,8 +538,6 @@ export function EpisodeManager({
         busy={busy}
         recorder={status.recorder}
         pending={summary.pending.length}
-        fallback={fallback}
-        onFallback={setFallback}
         onDataset={(name) => void switchDataset(name)}
         onConvert={() => void startConvert(false)}
         onNewSession={() => void newSession()}
@@ -568,7 +560,8 @@ export function EpisodeManager({
             : " Pick the task under Next recording, then record some demonstrations."}
         </div>
       )}
-      {summary.converted && summary.stats_stale && (
+      {/* Stats for sessions are made on the training machine, for the merged training folders. */}
+      {summary.converted && summary.stats_stale && !summary.is_session && (
         <div className="banner">
           <code>meta/stats.json</code> is older than <code>episodes.jsonl</code>. Regenerate it
           before training:
@@ -623,6 +616,7 @@ export function EpisodeManager({
                   readOnly={summary.closed != undefined}
                   autoAdvance={autoAdvance}
                   onAutoAdvance={onAutoAdvance}
+                  pickerRef={pickerRef}
                   onTask={(task) => void label(task)}
                   onFields={(fields) => void review(fields)}
                   onDelete={askDelete}

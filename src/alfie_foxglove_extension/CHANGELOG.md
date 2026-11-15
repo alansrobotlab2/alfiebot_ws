@@ -8,6 +8,10 @@
   rate episodes (ok / marginal / bad), tag why a correction was taken over, add
   notes. A closed session is read-only. Needs the alfie_gr00t episode manager
   and data recorder of the same change.
+- Episode Manager: record first, tag later. Convert takes every new bag; one
+  recorded without a task becomes an unlabelled episode. An Unlabelled filter
+  lists them, and the task picker tags them: type a task number or a few
+  words, Enter. The number keys 1-9 no longer tag; T focuses the picker.
 
 ## 0.3.0
 

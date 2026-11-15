@@ -13,7 +13,10 @@ export type Task = {
   index: number | null;
   task: string;
   id: string | null;
+  /** The registry's short number for the task, for picking it by number. */
+  number: number | null;
   instruction: string | null;
+  description: string | null;
 };
 
 export type Episode = {
@@ -55,8 +58,10 @@ export type EpisodeFields = { quality?: string; failure_mode?: string | null; no
 
 export type RegistryTask = {
   id: string;
+  number: number | null;
   task: string;
   instruction: string | null;
+  description: string | null;
   family: string | null;
   status: string;
   recordable: boolean;
@@ -95,7 +100,10 @@ export type DatasetSummary = {
   closed: string | null;
   hw: string | null;
   fps: number | null;
+  /** Ordered by task ID; strings that are not registry tasks follow. */
   tasks: Task[];
+  /** Episodes converted without a task, waiting to be tagged. */
+  unlabelled: number;
   episodes: Episode[];
   total_frames: number;
   pending: string[];
@@ -148,15 +156,15 @@ export type Api = {
   status: () => Promise<Status>;
   job: () => Promise<Job>;
   selectDataset: (name: string) => Promise<Result>;
-  /** Relabel by registry ID when the task has one, else by tasks.jsonl index. */
+  /** Tag an episode: by registry ID when the task has one, else by tasks.jsonl index. */
   setTask: (episode: number, task: Task) => Promise<Result>;
   setFields: (episode: number, fields: EpisodeFields) => Promise<Result>;
   setContext: (update: Partial<RecordingContext>) => Promise<Result>;
   newSession: () => Promise<Result>;
   closeSession: (force: boolean) => Promise<Result>;
   remove: (episode: number) => Promise<Result>;
-  /** `fallback` labels the bags recorded without a task; undefined leaves them unconverted. */
-  convert: (fallback: Task | undefined, force: boolean) => Promise<Result>;
+  /** Convert the new bags. One recorded without a task becomes an unlabelled episode. */
+  convert: (force: boolean) => Promise<Result>;
   cancel: () => Promise<Result>;
   videoUrl: (episode: number, camera: string, rev: number) => string;
 };
@@ -202,13 +210,7 @@ export function makeApi(base: string): Api {
     newSession: async () => await post("/api/new_session"),
     closeSession: async (force: boolean) => await post("/api/close_session", { force }),
     remove: async (episode: number) => await post("/api/delete", { episode }),
-    convert: async (fallback: Task | undefined, force: boolean) =>
-      await post(
-        "/api/convert",
-        fallback?.id != undefined
-          ? { force, task_id: fallback.id }
-          : { force, task: fallback?.index ?? null },
-      ),
+    convert: async (force: boolean) => await post("/api/convert", { force, task: null }),
     cancel: async () => await post("/api/cancel"),
     videoUrl: (episode: number, camera: string, rev: number) =>
       `${root}/api/video?episode=${episode}&camera=${camera}&rev=${rev}`,
@@ -244,6 +246,37 @@ export const filesOk = (episode: Episode): boolean => Object.values(episode.file
 
 /** Stable key for a task in pickers: its registry ID, else its tasks.jsonl index. */
 export const taskKey = (task: Task): string => task.id ?? `#${task.index ?? ""}`;
+
+/** Which episodes the list shows: all, one task (its tasks.jsonl index), or the untagged ones. */
+export type TaskFilter = number | "unlabelled" | undefined;
+
+/**
+ * Tasks matching what was typed in the task picker, best first. Every word
+ * must match: digits match the start of the task's number, anything else is
+ * looked for in its ID, instruction, training string and description.
+ */
+export function searchTasks(tasks: Task[], query: string): Task[] {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return tasks;
+  }
+  const scored: { task: Task; exact: boolean }[] = [];
+  for (const task of tasks) {
+    const number = task.number != undefined ? String(task.number) : "";
+    const text = [task.id, task.instruction, task.task, task.description]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    const idWords = (task.id ?? "").replace(/_/g, " ");
+    const hit = (w: string) =>
+      (/^\d+$/.test(w) && number.startsWith(w)) || text.includes(w) || idWords.includes(w);
+    if (words.every(hit)) {
+      scored.push({ task, exact: words.length === 1 && words[0] === number });
+    }
+  }
+  // "1" picks task 1, not 10-19: an exact number goes first; otherwise keep the ID order.
+  return [...scored.filter((s) => s.exact), ...scored.filter((s) => !s.exact)].map((s) => s.task);
+}
 
 export const SOURCE_LABELS: Record<string, string> = {
   demo: "demo",
