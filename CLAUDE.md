@@ -95,7 +95,7 @@ The client logs three files when `csv_log_path` is set (default: `/tmp/groot_cli
 4. **action_idx distribution**: Should be roughly uniform across the execution window (2-9), with a short tail into 10-11 while waiting for inference. If the tail reaches 15, inference is far slower than expected.
 5. **Head yaw consistency** (Test 7): Spread <0.05 rad is a healthy backend. Spread >0.1 rad means a noisy engine — rebuild or fall back to PyTorch.
 6. **Chunk cycle time**: Time between consecutive chunk_id transitions. Should be ~0.64s (533ms exec + ~100ms inference, bridged by overflow actions).
-9. **RTC seam**: with `rtc_enabled`, the first `latency_skip` actions of each new chunk must equal the old chunk's actions at the same frames (the server holds them). Client log `[rtc] prefix` and server log `RTC #n` confirm the prefix is flowing; if the server never logs it, the client is not sending `prev_actions`.
+9. **RTC seam**: with `rtc_enabled`, the first `latency_skip` actions of each new chunk must equal the old chunk's actions at the same frames (the server holds them). Client log `[rtc] prefix` and server log `RTC #1` (later `RTC #n` only with `verbose: true` in groot_server.yaml) confirm the prefix is flowing; if the server never logs it, the client is not sending `prev_actions`.
 7. **Arm tracking error**: `|action_right_shoulder_pitch - state_right_shoulder_pitch|` should be <0.1 rad. Persistent >0.2 rad means servos can't track.
 8. **Gripper**: Right gripper should show full range (0→close) during pick attempts. If stuck near 0, model isn't commanding a grasp.
 

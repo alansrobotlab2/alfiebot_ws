@@ -56,4 +56,7 @@ groot_server:
   rtc_overlap_steps: 0
   rtc_ramp_rate: 3.0
 
+  # false: bringup logs only milestones (loading, engines, RTC, warmup, ready)
+  # and problems. true: library INFO logs, warnings, progress bars and the
+  # per-request [input]/[output]/[timing]/[async-*] diagnostics.
   verbose: false

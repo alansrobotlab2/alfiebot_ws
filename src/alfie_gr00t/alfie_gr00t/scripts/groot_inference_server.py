@@ -17,7 +17,9 @@ Usage:
 """
 
 import argparse
+import contextlib
 import gc
+import io
 import logging
 import os
 import queue
@@ -41,6 +43,33 @@ os.environ.setdefault(
 # internet. Everything it needs is in ~/.cache/huggingface. Export
 # HF_HUB_OFFLINE=0 to allow a one-time download on a fresh machine.
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
+# Quiet by default: bringup shows only milestones (loading, engines, RTC, warmup,
+# ready) and problems. --verbose restores library INFO logs, warnings, progress
+# bars and the per-request [input]/[output]/[timing] diagnostics. Checked from
+# argv here because the env vars must be set before transformers is imported.
+VERBOSE = any(a in ('--verbose', '-v') for a in sys.argv[1:])
+if not VERBOSE:
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("TQDM_DISABLE", "1")
+    import warnings
+    for _category in (UserWarning, FutureWarning, DeprecationWarning):
+        warnings.filterwarnings("ignore", category=_category)
+
+# This script's own logger: INFO by default, DEBUG with --verbose. Library
+# loggers go through the root logger (WARNING by default, INFO with --verbose).
+log = logging.getLogger('groot_server')
+
+
+@contextlib.contextmanager
+def quiet_stdout():
+    """Swallow library print()s (DiT parameter count, PolicyServer banner) unless verbose."""
+    if VERBOSE:
+        yield
+        return
+    with contextlib.redirect_stdout(io.StringIO()):
+        yield
 
 import cv2
 import numpy as np
@@ -145,15 +174,15 @@ class JpegPolicyWrapper(BasePolicy):
         if rtc_enabled:
             model = getattr(policy, 'model', None)
             if model is None:
-                logging.warning('RTC requested but policy has no model (replay?); RTC off')
+                log.warning('RTC requested but policy has no model (replay?); RTC off')
                 self._rtc_enabled = False
             else:
                 steps = model.action_head.num_inference_timesteps
                 if steps < 2:
-                    logging.warning(
+                    log.warning(
                         f'RTC with {steps} denoising step: the denoiser has no later step '
                         f'to adapt around the frozen prefix; use >= 2')
-                logging.info(
+                log.info(
                     f'RTC enabled: frozen={"client" if rtc_frozen_steps < 0 else rtc_frozen_steps} '
                     f'overlap={"client" if rtc_overlap_steps <= 0 else rtc_overlap_steps} '
                     f'ramp={rtc_ramp_rate} denoising_steps={steps}')
@@ -241,7 +270,7 @@ class JpegPolicyWrapper(BasePolicy):
         if prev_arr.ndim == 1:
             prev_arr = prev_arr.reshape(-1, 22)
         if prev_arr.ndim != 2 or prev_arr.shape[1] != 22 or prev_arr.shape[0] == 0:
-            logging.warning(f'RTC: ignoring prev_actions with shape {prev_arr.shape}')
+            log.warning(f'RTC: ignoring prev_actions with shape {prev_arr.shape}')
             return None
         frozen = observation.get('rtc_frozen_steps', 0) or 0
         if self._rtc_frozen_steps >= 0:
@@ -251,11 +280,11 @@ class JpegPolicyWrapper(BasePolicy):
         try:
             seed, options = self._rtc_seed_from_groups(groups, raw_state, int(frozen))
         except Exception as e:
-            logging.warning(f'RTC: skipped for this request: {e}')
+            log.warning(f'RTC: skipped for this request: {e}')
             return None
         self._rtc_count += 1
         if self._rtc_count == 1 or self._rtc_count % 100 == 0:
-            logging.info(
+            (log.info if self._rtc_count == 1 else log.debug)(
                 f"RTC #{self._rtc_count}: overlap={options['rtc_overlap_steps']} "
                 f"frozen={options['rtc_frozen_steps']} ramp={options['rtc_ramp_rate']}")
         return seed, options
@@ -544,7 +573,7 @@ class JpegPolicyWrapper(BasePolicy):
 
         # Debug: trace prefetch state (first 5 requests)
         if self._request_count < 5:
-            logging.info(
+            log.debug(
                 f'[prefetch-debug] req={self._request_count} '
                 f'options_type={type(options).__name__} '
                 f'has_prefetch_obs={prefetch_obs is not None} '
@@ -566,7 +595,7 @@ class JpegPolicyWrapper(BasePolicy):
                 vla_prep_ms = cached['vla_prep_ms']
                 prefetch_hit = True
             except Exception as e:
-                logging.warning(f'[prefetch-debug] prefetch future failed: {e}')
+                log.warning(f'[prefetch-debug] prefetch future failed: {e}')
                 prefetch_hit = False
         # Discard stale prefetch
         if not prefetch_hit:
@@ -591,8 +620,7 @@ class JpegPolicyWrapper(BasePolicy):
                     f"r_arm=({state[13]:.3f},{state[14]:.3f},{state[15]:.3f},{state[16]:.3f},{state[17]:.3f}) "
                     f"r_grip={state[18]:.3f} back={state[6]:.3f} fwd={state[0]:.3f}"
                 )
-                logging.info(msg)
-                print(msg, flush=True)
+                log.debug(msg)
 
         # Kick off VLA prefetch for next frame before GPU inference
         if prefetch_obs is not None and prefetch_id is not None:
@@ -641,7 +669,7 @@ class JpegPolicyWrapper(BasePolicy):
                     # Don't clear prefetch_future — next request still needs it
                     # for the prefetch_hit check (.result() is idempotent)
             except Exception as e:
-                logging.warning(f'[backbone-pipeline] failed to start async backbone: {e}')
+                log.warning(f'[backbone-pipeline] failed to start async backbone: {e}')
 
         t_backbone_start = time.monotonic()
 
@@ -675,8 +703,7 @@ class JpegPolicyWrapper(BasePolicy):
                     f"r_arm=({a[13]:.3f},{a[14]:.3f},{a[15]:.3f},{a[16]:.3f},{a[17]:.3f}) "
                     f"r_grip={a[18]:.3f} back={a[6]:.3f} fwd={a[0]:.3f}"
                 )
-                logging.info(msg)
-                print(msg, flush=True)
+                log.debug(msg)
             t = server_timing
             pf = 'HIT' if prefetch_hit else 'MISS'
             bb = 'HIT' if backbone_hit else 'MISS'
@@ -688,8 +715,7 @@ class JpegPolicyWrapper(BasePolicy):
             )
             if backbone_hit:
                 msg += f" bwait={t['backbone_wait_ms']:.1f}ms dit={t['dit_ms']:.1f}ms"
-            logging.info(msg)
-            print(msg, flush=True)
+            log.debug(msg)
 
         self._request_count += 1
 
@@ -763,7 +789,7 @@ examples:
     parser.add_argument('--torch-compile', action='store_true',
                         help='Apply torch.compile to DiT (PyTorch mode only)')
     parser.add_argument('--verbose', '-v', action='store_true',
-                        help='Verbose logging')
+                        help='Verbose: library INFO logs, warnings and per-request diagnostics')
     parser.add_argument('--async-pull-port', type=int, default=5556,
                         help='PULL socket port for async observations (default: %(default)s)')
     parser.add_argument('--async-push-port', type=int, default=5557,
@@ -788,16 +814,16 @@ def main():
     args = parse_args()
 
     # Setup logging
-    log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
-        level=log_level,
+        level=logging.INFO if args.verbose else logging.WARNING,
         format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
     )
     for name in ('matplotlib', 'PIL', 'httpcore', 'httpx', 'urllib3', 'asyncio'):
         logging.getLogger(name).setLevel(logging.WARNING)
 
-    logger = logging.getLogger('groot_server')
+    logger = log
+    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
     # Parse embodiment tag
     try:
@@ -840,21 +866,22 @@ def main():
         device_idx = int(args.device.split(':')[-1]) if ':' in args.device else 0
 
         logger.info(f'Loading Gr00tPolicy from {checkpoint}...')
-        policy = Gr00tPolicy(
-            embodiment_tag=embodiment_tag,
-            model_path=str(checkpoint),
-            device=args.device,
-            strict=False,
-            gpu_image_preprocessing=args.gpu_image_preprocessing,
-        )
+        with quiet_stdout():
+            policy = Gr00tPolicy(
+                embodiment_tag=embodiment_tag,
+                model_path=str(checkpoint),
+                device=args.device,
+                strict=False,
+                gpu_image_preprocessing=args.gpu_image_preprocessing,
+            )
         if args.gpu_image_preprocessing:
-            logger.info('VLM image preprocessing on GPU')
+            logger.debug('VLM image preprocessing on GPU')
         if args.trt_engine_dir:
             logger.info(f'TensorRT mode: loading full-pipeline engines from {args.trt_engine_dir}')
             load_trt_pipeline(policy, args.trt_engine_dir)
             gc.collect()
             torch.cuda.empty_cache()
-            logger.info(
+            logger.debug(
                 f'GPU memory after TRT wiring: '
                 f'allocated={torch.cuda.memory_allocated() / 1024**3:.2f} GB, '
                 f'reserved={torch.cuda.memory_reserved() / 1024**3:.2f} GB')
@@ -904,7 +931,7 @@ def main():
             # Cap PyTorch's CUDA cache at 60% of total memory to leave headroom for
             # TensorRT internal buffers, numpy, OS, and other allocations on unified memory
             torch.cuda.set_per_process_memory_fraction(0.8)
-            logger.info('CUDA optimizations: cudnn.benchmark=True, memory cap=80%')
+            logger.debug('CUDA optimizations: cudnn.benchmark=True, memory cap=80%')
 
         logger.info(f'Model loaded (embodiment={embodiment_tag.value}, '
                      f'language_key={language_key})')
@@ -923,7 +950,7 @@ def main():
     # Warmup inference to trigger torch.compile and other first-call overhead
     if not args.dataset_path:
         import time
-        logger.info('Running warmup inference (triggers torch.compile if enabled)...')
+        logger.debug('Running warmup inference (triggers torch.compile if enabled)...')
         black_img = np.zeros((256, 352, 3), dtype=np.uint8)  # IMAGE_HEIGHT x IMAGE_WIDTH
         _, jpeg_bytes = cv2.imencode('.jpg', black_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
         jpeg_bytes = jpeg_bytes.tobytes()
@@ -938,17 +965,18 @@ def main():
         t0 = time.monotonic()
         for i in range(3):
             wrapped._get_action(warmup_obs)
-            logger.info(f'Warmup {i+1}/3 done ({time.monotonic() - t0:.1f}s elapsed)')
+            logger.debug(f'Warmup {i+1}/3 done ({time.monotonic() - t0:.1f}s elapsed)')
         elapsed = time.monotonic() - t0
         logger.info(f'Warmup complete in {elapsed:.1f}s')
 
     # Create server using NVIDIA's PolicyServer (sets up REQ/REP socket + endpoints)
-    logger.info(f'Starting PolicyServer on {args.host}:{args.port}')
-    server = PolicyServer(
-        policy=wrapped,
-        host=args.host,
-        port=args.port,
-    )
+    logger.debug(f'Starting PolicyServer on {args.host}:{args.port}')
+    with quiet_stdout():
+        server = PolicyServer(
+            policy=wrapped,
+            host=args.host,
+            port=args.port,
+        )
 
     server.socket.setsockopt(zmq.RCVTIMEO, 1000)  # 1s timeout for clean shutdown
     running = True
@@ -971,7 +999,7 @@ def main():
     pull_bind = f'tcp://{args.host}:{args.async_pull_port}'
     pull_socket.bind(pull_bind)
     pull_socket.setsockopt(zmq.RCVHWM, 1)  # single-slot — drop stale observations
-    logger.info(f'Async PULL socket bound: {pull_bind}')
+    logger.debug(f'Async PULL socket bound: {pull_bind}')
 
     # PUSH socket: send action results to client
     push_socket = async_ctx.socket(zmq.PUSH)
@@ -979,7 +1007,7 @@ def main():
     push_socket.bind(push_bind)
     push_socket.setsockopt(zmq.SNDHWM, 1)
     push_socket.setsockopt(zmq.LINGER, 0)
-    logger.info(f'Async PUSH socket bound: {push_bind}')
+    logger.debug(f'Async PUSH socket bound: {push_bind}')
 
     # Single-slot buffer for model-ready inputs (IO thread → GPU thread)
     class SingleSlotBuffer:
@@ -1012,7 +1040,7 @@ def main():
         nonlocal async_request_count
         poller = zmq.Poller()
         poller.register(pull_socket, zmq.POLLIN)
-        logger.info('Async IO thread started')
+        logger.debug('Async IO thread started')
 
         while running:
             events = dict(poller.poll(timeout=500))
@@ -1044,7 +1072,7 @@ def main():
                 async_request_count += 1
 
                 if async_request_count % 10 == 0:
-                    logger.info(
+                    logger.debug(
                         f'[async-io] obs_id={obs_id} '
                         f'preprocess={preprocess_ms:.1f}ms vla={vla_prep_ms:.1f}ms'
                     )
@@ -1055,11 +1083,11 @@ def main():
                 import traceback
                 traceback.print_exc()
 
-        logger.info('Async IO thread stopped')
+        logger.debug('Async IO thread stopped')
 
     # GPU thread: grab model-ready inputs → GPU inference only → push result
     def async_gpu_thread():
-        logger.info('Async GPU thread started')
+        logger.debug('Async GPU thread started')
 
         while running:
             item = preprocess_buffer.get(timeout=0.5)
@@ -1092,7 +1120,7 @@ def main():
                 push_socket.send(MsgSerializer.to_bytes(result))
 
                 if async_request_count % 10 == 0:
-                    logger.info(
+                    logger.debug(
                         f'[async-gpu] obs_id={obs_id} '
                         f'gpu={gpu_infer_ms:.1f}ms vla={vla_prep_ms:.1f}ms '
                         f'prep={preprocess_ms:.1f}ms'
@@ -1102,7 +1130,7 @@ def main():
                 import traceback
                 traceback.print_exc()
 
-        logger.info('Async GPU thread stopped')
+        logger.debug('Async GPU thread stopped')
 
     # Start async threads
     io_t = threading.Thread(target=async_io_thread, name='async_io', daemon=True)
