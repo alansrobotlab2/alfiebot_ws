@@ -32,7 +32,7 @@ from typing import Optional
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
 
 from alfie_msgs.msg import BackCmd, RobotLowState
@@ -51,6 +51,8 @@ from ..utils.safety import SafetyMonitor
 
 # Command publishing rate (Hz) - must match robot expectations
 COMMAND_RATE_HZ = 100
+# Published (latched) by alfie_teleop_vr when the VR operator takes over a run.
+TAKEOVER_TOPIC = '/alfie/groot/takeover'
 
 # Training data collection rate (Hz) - action horizon step period
 
@@ -390,6 +392,22 @@ class GrootClientNode(Node):
             '~/task_description',
             self._task_callback,
             qos_control,
+        )
+
+        # VR takeover (alfie_teleop_vr): the operator has frozen the robot and
+        # owns every subsystem at the mux, so stop without the servo-disable
+        # publish_stop (it would drop a held can if it won a mux race).
+        self._last_stop = None
+        self.takeover_sub = self.create_subscription(
+            String,
+            TAKEOVER_TOPIC,
+            self._takeover_callback,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+            ),
         )
 
         # Status publisher
@@ -738,6 +756,13 @@ class GrootClientNode(Node):
         else:
             self._deactivate()
 
+    def _takeover_callback(self, msg: String):
+        """VR operator took over: go silent, no servo-disable."""
+        if self._state != ClientState.ACTIVE:
+            return   # also ignores the latched event replayed on (re)subscribe
+        self.get_logger().warn(f'VR takeover: stopping inference ({msg.data})')
+        self._deactivate(send_stop=False, reason='takeover')
+
     def _estop_callback(self, msg: Bool):
         """Handle E-stop signals."""
         if msg.data:
@@ -789,6 +814,7 @@ class GrootClientNode(Node):
             self._pick_done_since = None
             self._can_seen_held = False
             self._task_gen += 1   # drop results pushed before this activation
+            self._last_stop = None
             if self._chunk_buffer is not None:
                 self._chunk_buffer.reset()
             self.get_logger().info(
@@ -800,12 +826,17 @@ class GrootClientNode(Node):
             self._state = ClientState.ERROR
             self.get_logger().error('Failed to connect to inference server')
 
-    def _deactivate(self):
-        """Deactivate inference loop."""
+    def _deactivate(self, send_stop: bool = True, reason: str = 'deactivate'):
+        """Deactivate inference loop.
+
+        send_stop=False skips publish_stop (servo disable): the groot mux input
+        just goes stale, leaving the robot to whichever source holds it.
+        """
         if self._state == ClientState.IDLE:
             return
 
-        self.get_logger().info('Deactivating GR00T inference...')
+        self.get_logger().info(f'Deactivating GR00T inference ({reason})...')
+        self._last_stop = reason
         self._active = False
         self._state = ClientState.IDLE
 
@@ -818,7 +849,8 @@ class GrootClientNode(Node):
         if self._rate_limiter is not None:
             self._rate_limiter.reset()
 
-        self.action_publisher.publish_stop()
+        if send_stop:
+            self.action_publisher.publish_stop()
         self.action_publisher.reset_smoothing()
 
     def _trigger_estop(self):
@@ -1737,6 +1769,7 @@ class GrootClientNode(Node):
             'active': self._active,
             'task': self.task_description,
             'task_done': self._task_done_hold is not None,
+            'last_stop': self._last_stop,
             'zmq': zmq_stats,
             'observation': obs_stats,
             'action': action_stats,

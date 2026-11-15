@@ -77,8 +77,14 @@ class SimpleTeleopArm:
         if self.debug_logs:
             print(msg)
 
+    # Gripper catch-up: after hold_gripper the trigger takes over only once it
+    # comes within this of the held value or crosses it (rad).
+    GRIPPER_CATCH = 0.05
+
     def _set_targets(self, joints):
         """Set all targets (clamped) and derive the Cartesian/pitch state from them."""
+        self._gripper_hold = None     # any reseed/reset ends a gripper hold
+        self._gripper_above = None
         self.target_positions = {
             j: _clamp(float(joints[j]), *ARM_JOINT_LIMITS[j]) for j in ARM_JOINTS
         }
@@ -96,6 +102,20 @@ class SimpleTeleopArm:
         self._set_targets({
             j: servos[self.offset + i].current_location for i, j in enumerate(ARM_JOINTS)
         })
+
+    def seed_targets(self, joints):
+        """Set targets to the given joint positions (dict by ARM_JOINTS name), no motion."""
+        self._set_targets(joints)
+
+    def hold_gripper(self, value):
+        """Hold the gripper at value until the trigger catches up with it.
+
+        The trigger is an absolute gripper command, so taking over an arm that
+        holds something would otherwise open the hand on the first grip press.
+        """
+        self.target_positions["gripper"] = _clamp(float(value), *ARM_JOINT_LIMITS["gripper"])
+        self._gripper_hold = self.target_positions["gripper"]
+        self._gripper_above = None
 
     def move_to_zero_position(self):
         """Set targets to the zero position (the node rate-limits the motion)."""
@@ -131,8 +151,18 @@ class SimpleTeleopArm:
 
         # Gripper follows the analog trigger: 0.0-1.0 -> open..closed
         trigger_value = _clamp(float(vr_goal.metadata.get('trigger', 0) or 0), 0.0, 1.0)
-        self.target_positions["gripper"] = _clamp(
+        gripper = _clamp(
             trigger_value * ARM_JOINT_LIMITS["gripper"][1], *ARM_JOINT_LIMITS["gripper"])
+        if self._gripper_hold is not None:
+            above = gripper > self._gripper_hold
+            if (abs(gripper - self._gripper_hold) < self.GRIPPER_CATCH
+                    or (self._gripper_above is not None and above != self._gripper_above)):
+                self._gripper_hold = None
+                self.debug_print(f"[{self.prefix}] gripper caught up with the trigger")
+            else:
+                self._gripper_above = above
+        if self._gripper_hold is None:
+            self.target_positions["gripper"] = gripper
 
     def _apply_goal_deltas(self, vr_goal):
         """Accumulate controller motion since the previous goal into the targets."""

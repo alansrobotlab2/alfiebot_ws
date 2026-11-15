@@ -135,6 +135,49 @@ ros2 topic echo /alfie/recording/status      # RECORDING:<dataset>/demo_... or S
   - E-stop triggers
   - Hardware failures
 
+## Takeover Episodes (correcting a GR00T run)
+
+Record a correction from where the policy is about to fail (HG-DAgger style).
+The episode starts mid-task and holds only frames where the operator is driving.
+
+1. Start the data recorder on the dataset the policy trains on (bringup default
+   `dataset:=CleanTheRoom`) and put on the headset.
+2. Start the run with the agent ("pick up the can") or `ab_trial.py`. Once
+   `groot_client` reports ACTIVE, the VR node goes into **observe**. It releases
+   every subsystem so GR00T drives, and passthrough turns on.
+3. When the run is about to fail, **click the left stick**:
+   - The robot freezes at its commanded pose, gripper included, and the base stops.
+   - The latched `/alfie/groot/takeover` event (`{stamp_ns, task}`) stops
+     `groot_client` without disabling the servos, and cancels the agent's task
+     or clean-the-room mission.
+   - Recording starts and passthrough turns off.
+4. Wait for the recording indicator, then correct the task:
+   - Grip moves an arm.
+   - Each gripper stays where it was until its trigger reaches the held value.
+   - The head follows headset motion from the frozen pose.
+   - Sticks drive the base, A/B move the back.
+5. **Right stick click** ends the episode. VR then stays in normal teleop.
+
+Set `groot_takeover:=false` on the VR node to turn this off. Without it, the
+headset takes the head and base from any GR00T run.
+
+Conversion is the same `rosbag_to_groot.py` run. A bag carrying the takeover
+event becomes an episode with:
+- the run's task when that text is in `meta/tasks.jsonl` (otherwise `--task-index`)
+- the frozen lead-in trimmed to 0.5 s before the first motion
+- `"origin": "takeover"` and `takeover_task` in `episodes.jsonl` (other new
+  episodes get `"origin": "demo"`)
+
+The episode manager marks takeover episodes `TO`.
+
+Training with takeovers:
+- They go into the same dataset as the demos.
+- Hold a few takeover episodes out as an offline test (`groot_open_loop_eval.py`):
+  does the model predict the correction from a bad spot?
+- Regenerate stats (below); the converter doesn't.
+- Retrain from the base model on demos and takeovers together, rather than
+  continuing from the last checkpoint on new data alone.
+
 ## Reviewing Episodes
 
 The episode manager is a ROS node serving a browser UI for converting, reviewing

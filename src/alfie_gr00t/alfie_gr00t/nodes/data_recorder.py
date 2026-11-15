@@ -102,6 +102,11 @@ class DataRecorder(Node):
 
             # Metadata
             '/alfie/recording/metadata',
+
+            # VR takeover of a GR00T run (latched JSON {stamp_ns, task}); a bag
+            # started by the takeover gets it on subscribe. The converter
+            # tags such episodes origin=takeover and takes their task from it.
+            '/alfie/groot/takeover',
         ]
 
         # QoS profile for real-time data

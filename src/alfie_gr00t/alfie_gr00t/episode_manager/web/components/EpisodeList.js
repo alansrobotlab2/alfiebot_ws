@@ -40,7 +40,8 @@ export function EpisodeList({ episodes, tasks, counts, filter, onFilter, query, 
                     aria-selected=${ep.index === selected ? 'true' : 'false'}
                     class=${`ep-row${ep.index === selected ? ' selected' : ''}`}
                     onClick=${() => onSelect(ep.index)}>
-              <span class="ep-name mono">${episodeName(ep.index)}</span>
+              <span class="ep-name mono">${episodeName(ep.index)}${ep.origin === 'takeover'
+                ? html`<span class="origin-tag" title="VR takeover correction">TO</span>` : null}</span>
               <span class=${`task-chip ${taskTone(ep.task_index)}`}>${ep.task_index ?? '?'}</span>
               <span class="ep-dur mono">${fmtDuration(ep.duration)}</span>
               <span class=${`ep-flag${!filesOk(ep) ? ' bad' : ''}`} title=${problems.join(', ')}>

@@ -132,6 +132,7 @@ class Dataset:
                 'length': ep.get('length'),
                 'duration': ep.get('duration'),
                 'source': source,
+                'origin': ep.get('origin', 'demo'),
                 'recorded': recorded_at(source),
                 'has_source': source in demos,
                 'files': files,

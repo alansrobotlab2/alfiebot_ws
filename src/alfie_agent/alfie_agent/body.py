@@ -105,6 +105,14 @@ class Body:
         self._groot = None            # (monotonic, status dict)
         self._task = None             # {"description", "t0", ...} while the agent runs one
         node.create_timer(1.0, self._task_tick)
+        # VR operator took over a run (alfie_teleop_vr, latched): the client
+        # already stopped itself; cancel the task so a mission doesn't drive
+        # the start pose or activate the next stage under the operator.
+        node.create_subscription(
+            String, 'groot/takeover', self._on_takeover,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       history=HistoryPolicy.KEEP_LAST,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
         # Start pose for clean_room, through GR00T's own mux inputs (as ab_trial.py)
         self.pose_pubs = [
             node.create_publisher(ArmCmd, 'cmd/left_arm/groot', state_qos),
@@ -308,6 +316,15 @@ class Body:
             return {"ok": True, "result": "no task was running"}
         self.node.get_logger().warn(f'task {why}: "{task["description"]}"')
         return {"ok": True, "result": f"stopped: {task['description']}"}
+
+    def _on_takeover(self, msg):
+        with self._lock:
+            task, self._task = self._task, None
+            if task is not None and "cancel" in task:
+                task["cancel"].set()
+        if task is not None:
+            self.node.get_logger().warn(
+                f'task handed to the VR operator: "{task["description"]}"')
 
     def task_status(self):
         with self._lock:

@@ -16,9 +16,23 @@ hand control to other sources (GR00T, idle, joy) the rest of the time:
             (hold_timeout)
 Published joint targets are rate-limited (max_joint_speed), so no claim, reset
 or IK jump can snap a joint.
+
+GR00T takeover (groot_takeover, default on) - recording corrections of a policy run:
+  OBSERVE   while groot_client reports ACTIVE, VR releases every claim and
+            ignores all input but the left stick; passthrough turns on so
+            the operator watches the room
+  TAKEOVER  left stick click in OBSERVE: freeze - every subsystem is claimed
+            at the commanded pose (gripper included) and the base stops; the
+            latched /alfie/groot/takeover event stops groot_client and the
+            agent's task, recording starts, passthrough turns off. The head
+            then follows headset motion relative to the freeze; each gripper
+            holds until its trigger catches up. Right stick click ends the
+            episode as usual, after which VR is back in normal teleop.
 """
 
+import ast
 import asyncio
+import json
 import math
 import os
 import signal
@@ -33,7 +47,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPo
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from alfie_msgs.msg import RobotLowState, ServoCmd, BackCmd, ArmCmd, HeadCmd
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from scipy.spatial.transform import Rotation as R
 
 from alfie_vr.vr_monitor import VRMonitor
@@ -51,6 +65,15 @@ BACK_PRESET_TOL = 0.01   # within this of a preset counts as at it
 
 # Headset yaw beyond this (deg) is ambiguous (operator turned around); hold yaw.
 HEAD_YAW_WRAP_GUARD_DEG = 150.0
+
+# GR00T takeover
+TAKEOVER_TOPIC = '/alfie/groot/takeover'
+GROOT_STATUS_STALE_S = 3.0     # groot_client status is 1 Hz
+GROOT_RUNNING = ('ACTIVE', 'CONNECTING')
+# TAKEOVER lasts at least this long, so a status sent before the client saw
+# the takeover (still ACTIVE) can't count, then until groot is idle and the
+# recording has stopped.
+TAKEOVER_MIN_S = 3.0
 
 
 def _clamp(v, lo, hi):
@@ -105,6 +128,10 @@ class AlfieTeleopVRNode(Node):
         # Joystick velocity scaling (acceleration limiting is done by command_mux)
         self.max_linear_vel = param('max_linear_vel', 0.15, 'Max joystick linear speed (m/s)')
         self.max_angular_vel = param('max_angular_vel', 0.5, 'Max joystick rotation speed (rad/s)')
+        self.groot_takeover = bool(param(
+            'groot_takeover', True,
+            'While a GR00T run is active, release VR control (observe) and take over '
+            'with a left stick click (freeze + record a correction episode)'))
         self.tunable_params = {
             'link_timeout', 'hold_timeout', 'base_stop_sec', 'max_joint_speed',
             'head_yaw_limit', 'head_pitch_limit', 'head_roll_limit',
@@ -139,6 +166,18 @@ class AlfieTeleopVRNode(Node):
             Bool, '/alfie/estop_state', self.estop_state_callback, qos_latched,
             callback_group=self.state_callback_group)
 
+        # GR00T takeover: client status (str(dict), 1 Hz), recorder status, and
+        # the latched takeover event.
+        self.groot_status = None        # (monotonic, dict)
+        self.create_subscription(
+            String, '/alfie/groot_client/status', self._groot_status_callback,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
+            callback_group=self.state_callback_group)
+        self.create_subscription(
+            String, '/alfie/recording/status', self._recording_status_callback, 10,
+            callback_group=self.state_callback_group)
+        self.takeover_pub = self.create_publisher(String, TAKEOVER_TOPIC, qos_latched)
+
         self.robot_state = None
         self.robot_state_lock = threading.Lock()
         # Guards everything below that both the control timer and the
@@ -165,7 +204,15 @@ class AlfieTeleopVRNode(Node):
         self.last_release_count = 0
         self.last_tick = None
 
+        # GR00T takeover mode: TELEOP (normal), OBSERVE, TAKEOVER (see module doc)
+        self.mode = 'TELEOP'
+        self.takeover_time = 0.0
+        # Head follows headset motion relative to the pose at takeover
+        self.head_relative = False
+        self.head_offset = None         # [yaw, pitch, roll] added to the mapped headset
+
         # Edge detection
+        self.left_click_edge = False
         self.passthrough_mode_active = False
         self.left_thumbstick_pressed = False
         self.left_y_button_pressed = False
@@ -317,9 +364,114 @@ class AlfieTeleopVRNode(Node):
 
     def _release(self, *keys):
         for key in keys:
+            if key == 'head':
+                self.head_relative = False
+                self.head_offset = None
             if self.claimed[key]:
                 self.claimed[key] = False
                 self.get_logger().info(f'VR released {key}')
+
+    # ------------------------------------------------------------------
+    # GR00T takeover
+    # ------------------------------------------------------------------
+
+    def _groot_status_callback(self, msg: String):
+        try:
+            data = ast.literal_eval(msg.data)   # groot_client publishes str(dict)
+        except (ValueError, SyntaxError, MemoryError, RecursionError):
+            return
+        if isinstance(data, dict):
+            self.groot_status = (time.monotonic(), data)
+
+    def _recording_status_callback(self, msg: String):
+        # STOPPED, STARTING:<ds>/<bag> or RECORDING:<ds>/<bag> (data_recorder)
+        self.is_recording = not msg.data.startswith('STOPPED')
+
+    def _groot_running(self, now):
+        entry = self.groot_status
+        if entry is None or now - entry[0] > GROOT_STATUS_STALE_S:
+            return False
+        return entry[1].get('state') in GROOT_RUNNING
+
+    def _set_passthrough(self, active):
+        if self.passthrough_mode_active != active:
+            self.passthrough_mode_active = active
+            self.get_logger().info(f'Passthrough mode: {"ON" if active else "OFF"}')
+            self.vr_monitor.set_passthrough_mode(active)
+
+    def _update_mode(self, state, now):
+        """TELEOP -> OBSERVE -> TAKEOVER -> TELEOP (see module doc)."""
+        if not self.groot_takeover:
+            self.mode = 'TELEOP'
+            return
+        running = self._groot_running(now)
+        if self.mode == 'TELEOP':
+            if running:
+                self.mode = 'OBSERVE'
+                self._release('left_arm', 'right_arm', 'head', 'back', 'base')
+                self.base_stop_until = 0.0   # no zero-velocity tail over GR00T's base
+                self.grip_active = {'left': False, 'right': False}
+                self._set_passthrough(True)
+                self.get_logger().info(
+                    'GR00T run active: VR observing (left stick click to take over)')
+        elif self.mode == 'OBSERVE':
+            if not running:
+                self.mode = 'TELEOP'
+                self.get_logger().info('GR00T run ended without a takeover: VR teleop')
+            elif self.left_click_edge:
+                self.left_click_edge = False      # consumed: no passthrough toggle too
+                if self.estop_active:
+                    self.get_logger().warn('Takeover ignored: e-stop is latched')
+                elif state is None:
+                    self.get_logger().warn('Takeover ignored: no robot state')
+                else:
+                    self._take_over(state, now)
+        elif self.mode == 'TAKEOVER':
+            if now - self.takeover_time > TAKEOVER_MIN_S and not running and not self.is_recording:
+                self.mode = 'TELEOP'
+                self.get_logger().info('Takeover episode finished: VR teleop')
+
+    def _commanded(self, servo):
+        v = servo.target_location
+        return v if math.isfinite(v) else servo.current_location
+
+    def _take_over(self, state, now):
+        """Freeze everything at the commanded pose and take it from GR00T."""
+        servos = state.servo_state
+        for side in ('left', 'right'):
+            off = ARM_OFFSET[side]
+            self._claim_arm(side, state)
+            # Seed from the command, not the measurement: a squeezing gripper (or
+            # an arm under load) reads looser than commanded.
+            joints = {j: self._commanded(servos[off + i]) for i, j in enumerate(ARM_JOINTS)}
+            self.arms[side].seed_targets(joints)
+            self.arms[side].hold_gripper(joints['gripper'])
+            self.arms[side].reset_tracking()
+            self.grip_active[side] = False
+            self._copy_arm_targets(side)
+            for i in range(off, off + 6):
+                self.published[i] = self.desired[i]
+        self._claim_head(state)
+        for i in (HEAD_YAW, HEAD_PITCH, HEAD_ROLL):
+            self.desired[i] = self.published[i] = self._commanded(servos[i])
+        self.head_relative = True
+        self.head_offset = None
+        self._claim_back(state)
+        self.claimed['base'] = True
+        self.cmd_vel = Twist()
+
+        self.mode = 'TAKEOVER'
+        self.takeover_time = now
+        self._set_passthrough(False)
+
+        task = (self.groot_status[1].get('task') if self.groot_status else '') or ''
+        event = String()
+        event.data = json.dumps({'stamp_ns': self.get_clock().now().nanoseconds, 'task': task})
+        self.takeover_pub.publish(event)
+        if not self.is_recording:
+            self.recording_start_pub.publish(Bool(data=True))
+            self.is_recording = True
+        self.get_logger().warn(f'TAKEOVER: robot frozen, recording correction of "{task}"')
 
     def _hold_current_pose(self, state):
         """Re-seed every claimed subsystem to the measured pose (no motion)."""
@@ -369,8 +521,19 @@ class AlfieTeleopVRNode(Node):
         state = self.get_robot_state()
 
         with self.cmd_lock:
+            left = goals['left']
+            if left is not None:
+                buttons = (left.metadata or {}).get('buttons') or {}
+                click = bool(buttons.get('thumbstick', False))
+                self.left_click_edge = click and not self.left_thumbstick_pressed
+                self.left_thumbstick_pressed = click
+            else:
+                self.left_click_edge = False
+
             self._update_link_state(goals, now)
-            if state is not None and not self.estop_active:
+            self._update_mode(state, now)
+            # OBSERVE: GR00T drives; VR input other than the takeover click is ignored
+            if state is not None and not self.estop_active and self.mode != 'OBSERVE':
                 self._apply_vr_input(goals, state, dt)
             self._publish(now, dt)
 
@@ -386,7 +549,7 @@ class AlfieTeleopVRNode(Node):
         if headset != self.headset_connected:
             self.headset_connected = headset
             self.get_logger().info(f'Headset {"connected" if headset else "lost"}')
-            if not headset and not self.passthrough_mode_active:
+            if not headset and not self.passthrough_mode_active and self.mode != 'TAKEOVER':
                 self._release('head')
 
         # Passthrough (left stick click) stops headset telemetry but keeps the head locked in
@@ -429,13 +592,11 @@ class AlfieTeleopVRNode(Node):
             ly = -float(stick.get('x', 0.0)) * self.max_linear_vel  # strafe (ROS +y = left)
             buttons = meta.get('buttons') or {}
 
-            # Left stick click toggles passthrough (X is browser-only: hold for the controls key)
-            left_click = bool(buttons.get('thumbstick', False))
-            if left_click and not self.left_thumbstick_pressed:
-                self.passthrough_mode_active = not self.passthrough_mode_active
-                self.get_logger().info(f'Passthrough mode: {"ON" if self.passthrough_mode_active else "OFF"}')
-                self.vr_monitor.set_passthrough_mode(self.passthrough_mode_active)
-            self.left_thumbstick_pressed = left_click
+            # Left stick click toggles passthrough (X is browser-only: hold for the controls key).
+            # The edge is detected in control_tick; in OBSERVE it is the takeover instead.
+            if self.left_click_edge:
+                self.left_click_edge = False
+                self._set_passthrough(not self.passthrough_mode_active)
 
             button_y = _button(buttons, 'y')
             if button_y and not self.left_y_button_pressed:
@@ -488,13 +649,27 @@ class AlfieTeleopVRNode(Node):
                 return
             yaw, pitch, roll = (math.radians(float(rot.get(k, 0.0))) for k in ('y', 'x', 'z'))
 
-        if abs(math.degrees(yaw)) < HEAD_YAW_WRAP_GUARD_DEG:
+        yaw_ok = abs(math.degrees(yaw)) < HEAD_YAW_WRAP_GUARD_DEG
+        mapped = (yaw * self.head_yaw_sign * self.head_yaw_multiplier,
+                  pitch * self.head_pitch_sign * self.head_pitch_multiplier,
+                  roll * self.head_roll_sign * self.head_roll_multiplier)
+        offset = (0.0, 0.0, 0.0)
+        if self.head_relative:
+            if self.head_offset is None:
+                if not yaw_ok:
+                    return    # latch on a sample whose yaw is unambiguous
+                # First headset sample after takeover: hold the frozen head pose
+                self.head_offset = [self.desired[i] - m for i, m in
+                                    zip((HEAD_YAW, HEAD_PITCH, HEAD_ROLL), mapped)]
+            offset = self.head_offset
+
+        if yaw_ok:
             self.desired[HEAD_YAW] = _clamp(
-                yaw * self.head_yaw_sign * self.head_yaw_multiplier, -self.head_yaw_limit, self.head_yaw_limit)
+                mapped[0] + offset[0], -self.head_yaw_limit, self.head_yaw_limit)
         self.desired[HEAD_PITCH] = _clamp(
-            pitch * self.head_pitch_sign * self.head_pitch_multiplier, -self.head_pitch_limit, self.head_pitch_limit)
+            mapped[1] + offset[1], -self.head_pitch_limit, self.head_pitch_limit)
         self.desired[HEAD_ROLL] = _clamp(
-            roll * self.head_roll_sign * self.head_roll_multiplier, -self.head_roll_limit, self.head_roll_limit)
+            mapped[2] + offset[2], -self.head_roll_limit, self.head_roll_limit)
 
     def _update_arm(self, side, goal, state, dt):
         """Grip-held delta tracking for one arm."""

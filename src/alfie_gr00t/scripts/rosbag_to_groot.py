@@ -48,6 +48,7 @@ try:
     from rclpy.serialization import deserialize_message
     from sensor_msgs.msg import CompressedImage
     from geometry_msgs.msg import Twist
+    from std_msgs.msg import String
     # Import custom message types
     import importlib
     alfie_msgs = importlib.import_module('alfie_msgs.msg')
@@ -152,6 +153,8 @@ class EpisodeData:
     states: List[np.ndarray] = field(default_factory=list)
     actions: List[np.ndarray] = field(default_factory=list)
     images: Dict[str, List[Tuple[float, np.ndarray]]] = field(default_factory=dict)
+    # VR takeover of a GR00T run ({stamp_ns, task}) when the bag is a correction
+    takeover: Optional[dict] = None
 
     def __post_init__(self):
         # Initialize image lists for each camera
@@ -179,6 +182,14 @@ class RosbagToGrootConverter:
     # STARTUP_WINDOW_NS of the first state message are startup and trimmed.
     HOLE_NS = int(0.1e9)
     STARTUP_WINDOW_NS = int(8e9)
+    # VR takeover bags (see alfie_teleop_vr): the takeover event is latched, so
+    # only one stamped this close before the bag's first state belongs to it.
+    TAKEOVER_TOPIC = '/alfie/groot/takeover'
+    TAKEOVER_WINDOW_NS = int(15e9)
+    # The robot is frozen from the takeover until the operator moves; keep at
+    # most this much of that still lead-in (demos also open with a short still).
+    TAKEOVER_LEAD_IN_NS = int(0.5e9)
+    MOTION_TOL = 0.01   # rad / m change in an action that counts as motion
 
     def __init__(
         self,
@@ -457,6 +468,22 @@ class RosbagToGrootConverter:
         stamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
         return stamp_ns if stamp_ns > 0 else bag_time_ns
 
+    def _first_motion_ns(self, state_msgs, after_ns: int) -> Optional[int]:
+        """Time of the first state message after after_ns whose action differs
+        from the action at after_ns (or commands base velocity), else None."""
+        held = None
+        for ts, msg in state_msgs:
+            if ts < after_ns:
+                continue
+            action = self.extract_action(msg)
+            if held is None:
+                held = action
+                continue
+            if (np.abs(action[6:] - held[6:]).max() > self.MOTION_TOL
+                    or np.abs(action[:6]).max() > self.MOTION_TOL):
+                return ts
+        return None
+
     def read_rosbag(self, demo_dir: Path) -> Optional[EpisodeData]:
         """Read a ROS2 bag and extract all relevant data."""
         # Find the MCAP file
@@ -478,6 +505,7 @@ class RosbagToGrootConverter:
         # Raw data storage with timestamps
         state_msgs = []  # (timestamp_ns, RobotLowState)
         image_msgs = {k: [] for k in self.CAMERA_TOPICS.values()}  # camera_key -> [(ts_ns, image)]
+        takeovers = []  # parsed takeover events ({stamp_ns, task})
 
         # Read the bag
         storage_options = StorageOptions(uri=str(mcap_file), storage_id='mcap')
@@ -498,6 +526,13 @@ class RosbagToGrootConverter:
             if topic == '/alfie/robotlowstate':
                 msg = deserialize_message(data, RobotLowState)
                 state_msgs.append((self._msg_time_ns(msg, timestamp_ns), msg))
+            elif topic == self.TAKEOVER_TOPIC:
+                try:
+                    event = json.loads(deserialize_message(data, String).data)
+                    takeovers.append({'stamp_ns': int(event['stamp_ns']),
+                                      'task': str(event.get('task') or '')})
+                except (ValueError, KeyError, TypeError):
+                    print(f"  Warning: unreadable takeover event in {demo_dir.name}")
             elif topic in self.CAMERA_TOPICS:
                 msg = deserialize_message(data, CompressedImage)
                 cam_key = self.CAMERA_TOPICS[topic]
@@ -546,6 +581,18 @@ class RosbagToGrootConverter:
                     late_holes.append((name, (hole_end - first_state_ns) / 1e9,
                                        int(ts[i + 1] - ts[i]) / 1e6))
         end_time_ns = state_msgs[-1][0]
+
+        # A takeover bag: the robot sat frozen through the recorder startup
+        # until the operator moved. Trim that still lead-in to TAKEOVER_LEAD_IN_NS.
+        own = [e for e in takeovers
+               if first_state_ns - self.TAKEOVER_WINDOW_NS <= e['stamp_ns'] <= end_time_ns]
+        if own:
+            episode.takeover = max(own, key=lambda e: e['stamp_ns'])
+            start_time_ns = max(start_time_ns, episode.takeover['stamp_ns'])
+            first_motion_ns = self._first_motion_ns(state_msgs, start_time_ns)
+            if first_motion_ns is not None:
+                start_time_ns = max(start_time_ns,
+                                    first_motion_ns - self.TAKEOVER_LEAD_IN_NS)
         trimmed_s = (start_time_ns - first_state_ns) / 1e9
         if trimmed_s > 0:
             print(f"  Trimmed {trimmed_s:.2f}s of recorder startup from {demo_dir.name}")
@@ -881,8 +928,13 @@ class RosbagToGrootConverter:
         task_index: int,
         demo_number: int,
         total_demos: int,
+        task_from_bag: bool = False,
     ) -> Optional[Tuple[int, Dict]]:
-        """Process a single episode (thread-safe)."""
+        """Process a single episode (thread-safe).
+
+        task_from_bag: a takeover bag takes its task from the takeover event
+        (the GR00T run's task text) when that text is in meta/tasks.jsonl.
+        """
         started = time.monotonic()
         with self.print_lock:
             print(f"\nStarting {demo_dir.name} -> episode_{episode_index:06d} "
@@ -896,6 +948,15 @@ class RosbagToGrootConverter:
 
         with self.print_lock:
             print(f"  Extracted {len(episode.states)} frames from {demo_dir.name}")
+            if episode.takeover is not None:
+                text = episode.takeover['task']
+                match = [i for i, t in self.tasks_map.items() if t == text]
+                if task_from_bag and match:
+                    task_index = match[0]
+                elif task_from_bag:
+                    print(f"  Warning: takeover task '{text}' is not in tasks.jsonl; "
+                          f"using task {task_index}")
+                print(f"  VR takeover episode (task {task_index})")
 
         # Save parquet
         parquet_path, num_frames = self.save_episode_parquet(
@@ -920,7 +981,10 @@ class RosbagToGrootConverter:
             'length': num_frames,
             'duration': episode.timestamps[-1] if episode.timestamps else 0,
             'source': demo_dir.name,
+            'origin': 'takeover' if episode.takeover is not None else 'demo',
         }
+        if episode.takeover is not None:
+            metadata['takeover_task'] = episode.takeover['task']
 
         return num_frames, metadata
 
@@ -1029,7 +1093,8 @@ class RosbagToGrootConverter:
                 for i, (demo_dir, episode_index, ep_task) in enumerate(work_items):
                     is_rebuild = demo_dir.name in rebuild_names
                     result = self.process_single_episode(
-                        demo_dir, episode_index, ep_task, i + 1, total_to_process
+                        demo_dir, episode_index, ep_task, i + 1, total_to_process,
+                        task_from_bag=not is_rebuild,
                     )
                     if result is None:
                         self.failed_demos.append(demo_dir.name)
@@ -1054,6 +1119,7 @@ class RosbagToGrootConverter:
                             ep_task,
                             i + 1,
                             total_to_process,
+                            demo_dir.name not in rebuild_names,
                         )
                         futures[future] = i
 

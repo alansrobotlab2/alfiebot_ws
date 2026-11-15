@@ -238,6 +238,7 @@ kbd {
 .ep-row:hover { background: var(--bg-sunken); }
 .ep-row.selected { background: color-mix(in srgb, var(--accent) 14%, var(--bg-sunken)); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .ep-dur { color: var(--text-dim); text-align: right; }
+.origin-tag { margin-left: 6px; padding: 0 4px; border-radius: 4px; font-size: 0.75em; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); }
 .ep-flag { color: var(--text-dim); font-weight: 700; text-align: center; }
 .ep-flag.bad { color: var(--danger); }
 .empty { color: var(--text-dim); padding: 20px; text-align: center; }
