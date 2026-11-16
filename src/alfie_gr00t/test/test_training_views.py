@@ -63,3 +63,13 @@ def test_build_names(tmp_path):
     (tmp_path / '.2026-11-20_b02.tmp').mkdir()
     assert tv.next_build_name(tmp_path, day) == '2026-11-20_b03'
     assert tv.latest_build(tmp_path) == '2026-11-20_b01'
+
+
+def test_view_names_follow_the_chosen_fields():
+    ep = {'family': 'pick_place', 'source': 'correction', 'task_id': 'pick_up_soda_can',
+          'round': 2, 'surface': '', 'objects': ['soda can']}
+    assert tv.view_name(ep) == 'pick_place__correction'
+    assert tv.view_name(ep, ['task_id', 'source', 'round']) == 'pick_up_soda_can__correction__2'
+    assert tv.view_name(ep, ['surface']) == 'none'
+    with pytest.raises(ValueError):
+        tv.view_name({'source': 'heldout'}, ['source'])

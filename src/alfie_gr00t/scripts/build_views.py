@@ -12,7 +12,8 @@ immutable folder (rules: alfie_gr00t/training_views.py):
         manifest.json    which episodes went where, and from what code/registry
         mix.json         sampling share of each train view (frame-proportional
                          unless --ratio); paths relative to the build folder
-        <family>__<source>/lerobot/     train views, e.g. pick_place__demo
+        <family>__<source>/lerobot/     train views, e.g. pick_place__demo; --group-by
+                                        splits on other episode fields instead
         heldout/lerobot/                the held-out episodes, never trained on
     <views-root>/latest -> the newest build
     <data-root>/../catalog/episodes.parquet   one row per episode of every
@@ -205,6 +206,9 @@ def main():
     ap.add_argument('--previous', default=None,
                     help='build whose held-out episodes stay held out (default: the '
                          'newest build; "none" starts a new held-out set)')
+    ap.add_argument('--group-by', default=','.join(tv.DEFAULT_GROUP_BY), metavar='FIELDS',
+                    help='episode fields that split training into views, comma separated '
+                         '(default %(default)s; e.g. task_id,source or family,source,round)')
     ap.add_argument('--exclude-marginal', action='store_true',
                     help='leave episodes rated marginal out of training too')
     ap.add_argument('--wording', choices=tv.WORDINGS, default='text',
@@ -242,9 +246,15 @@ def main():
             die(f'{len(wrong)} episodes differ in length from build {name} '
                 f'(first: {wrong[0]}); nothing written')
         heldout_facts, ratios = source_manifest['heldout'], None
+        group_by = source_manifest.get('group_by')
     else:
         name = tv.next_build_name(views_root)
         wording = args.wording
+        group_by = [f.strip() for f in args.group_by.split(',') if f.strip()]
+        known = {k for ep in by_uid.values() for k in ep}
+        if not group_by or set(group_by) - known:
+            die(f'--group-by: no episode has the field(s) '
+                f'{", ".join(sorted(set(group_by) - known)) or "(none given)"}')
         usable, excluded = [], {}
         for uid, ep in by_uid.items():
             if registry.by_id(ep.get('task_id') or '') is None:
@@ -273,7 +283,7 @@ def main():
             elif ep.get('quality') == 'marginal' and args.exclude_marginal:
                 excluded[uid] = 'marginal'
             else:
-                lists.setdefault(tv.view_name(ep), []).append(uid)
+                lists.setdefault(tv.view_name(ep, group_by), []).append(uid)
         heldout_facts = {'rule': 'per task_id x source: the lowest sha256(salt:episode_uid) '
                                  'among quality ok, ceil(fraction x eligible) of them, at '
                                  'least minimum, never all, none from a group smaller than '
@@ -340,6 +350,7 @@ def main():
         'alfiebot_commit': commit,
         'alfiebot_dirty': bool(git('status', '--porcelain', '--', str(REPO_PKG))),
         'wording': wording,
+        'group_by': group_by,
         'sessions': {n: {'closed': s['info'].get('closed'), 'hw': s['info'].get('hw'),
                          'episodes': len(s['episodes']),
                          'registry_commit': s['info'].get('registry_commit')}

@@ -1,7 +1,8 @@
 """Rules for turning closed recording sessions into a training build.
 
 A build (scripts/build_views.py) is one immutable folder of LeRobot datasets:
-a train view per task family x source, one held-out view, the sampling weights
+a train view per group of episodes (task family x source unless told
+otherwise), one held-out view, the sampling weights
 (mix.json) and a manifest of exactly which episodes went where. This module
 holds the decisions, with no file access, so both machines and the tests share
 them. Stdlib only.
@@ -27,6 +28,8 @@ DEFAULT_MINIMUM = 1
 # corrections of a task are worth more in training than as a test set of one.
 DEFAULT_MIN_GROUP = 5
 HELDOUT_VIEW = 'heldout'
+# Episode fields that decide which train view an episode goes into.
+DEFAULT_GROUP_BY = ('family', 'source')
 BUILD_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})_b(\d{2,})$')
 # Which registry string a view's episodes are labelled with.
 WORDINGS = ('text', 'instruction')
@@ -40,9 +43,21 @@ def stratum(ep: dict) -> str:
     return f'{ep["task_id"]}/{ep["source"]}'
 
 
-def view_name(ep: dict) -> str:
-    """Train view of an episode: task family x source."""
-    return f'{ep["family"]}__{ep["source"]}'
+def view_name(ep: dict, group_by=DEFAULT_GROUP_BY) -> str:
+    """Train view of an episode: its values of the ``group_by`` fields, joined by __.
+
+    Any episode field works (family, source, task_id, round, object, hw, ...).
+    A missing or empty value reads ``none``.
+    """
+    parts = []
+    for field in group_by:
+        value = ep.get(field)
+        text = 'none' if value in (None, '', []) else str(value)
+        parts.append(re.sub(r'[^A-Za-z0-9.-]+', '_', text).strip('_') or 'none')
+    name = '__'.join(parts)
+    if not name or name == HELDOUT_VIEW:
+        raise ValueError(f'{name!r} cannot be a train view name')
+    return name
 
 
 def select_heldout(episodes, fraction=DEFAULT_FRACTION, minimum=DEFAULT_MINIMUM,

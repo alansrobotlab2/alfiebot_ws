@@ -258,8 +258,8 @@ The episode manager marks corrections `C<round>`; tag why you took over
 
 Training with takeovers:
 - They stay in the same raw session as the demos recorded with them.
-  `build_views.py` puts them in their own view per task family
-  (`pick_place__correction`), weighted with `--ratio`.
+  `build_views.py` puts them in their own view (`<family>__correction` by
+  default), weighted with `--ratio`.
 - Once a task has 5 corrections rated ok, the build holds some out
   (`heldout/`): does the model predict the correction from a bad spot?
 - Set the **correction round** before recording against a new checkpoint; each
@@ -491,7 +491,7 @@ needs pyarrow, so run it with the Isaac-GR00T venv python):
     ├── 2026-11-20_b01/           one build: never changed after it is written
     │   ├── manifest.json         which episode went where; code and registry commits; held-out rule
     │   ├── mix.json              sampling share of each train view
-    │   ├── pick_place__demo/lerobot/         train views: task family x source
+    │   ├── pick_place__demo/lerobot/         train views: named from the episodes' family and source
     │   ├── pick_place__correction/lerobot/
     │   └── heldout/lerobot/      never trained on
     └── latest -> 2026-11-20_b01
@@ -500,8 +500,12 @@ needs pyarrow, so run it with the Isaac-GR00T venv python):
 - **Views.** Each is a normal GR00T LeRobot dataset: episodes renumbered from 0,
   `task_index` renumbered against the view's own `tasks.jsonl`, videos
   hard-linked to the session's. Every row keeps its session fields and its
-  `episode_uid`. Corrections (and `scripted_recovery`, `autonomous_success`)
-  each get their own view per family, so they can be weighted.
+  `episode_uid`. Training is split into views by task family and source
+  unless told otherwise, so `pick_place__correction` is simply the corrections
+  of the `pick_place` family and a new family or source needs no code change.
+  `--group-by task_id,source` or `--group-by family,source,round` splits on any
+  other episode fields, to weight a single task or the latest correction round
+  on its own.
 - **Left out.** Episodes rated `bad`. `marginal` episodes are trained on
   (`--exclude-marginal` drops them) and never held out.
 - **Held out.** Chosen at each build: within every task x source group, the
