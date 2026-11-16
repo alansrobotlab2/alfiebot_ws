@@ -99,6 +99,10 @@ DETAIL_KEYS = ('episode_uid', 'task_id', 'family', 'round', 'policy_ckpt', 'run_
                'legacy_dataset', 'legacy_episode_index')
 
 
+# Written by the GR00T loader into any folder it reads; never part of a session.
+STATS_FILES = ('stats.json', 'relative_stats.json')
+
+
 class Dataset:
     """One dataset folder. Re-reads metadata on every call; it is small."""
 
@@ -356,8 +360,16 @@ class Dataset:
         if unlabelled:
             raise DatasetError(f'{len(unlabelled)} episodes have no task yet; tag or delete '
                                f'them before closing')
+        episodes = self.episodes()
         info.update(extra)
         info['schema'] = self.schema()
+        # What a copy of the session must contain, so a sync can be checked.
+        info['episodes'] = len(episodes)
+        info['frames'] = sum(int(ep.get('length') or 0) for ep in episodes)
+        # Normalisation stats belong to a training build, not to a session; a
+        # loader pointed at this folder may have left some behind.
+        for name in STATS_FILES:
+            (self.meta / name).unlink(missing_ok=True)
         _write_atomic(self.root / 'session.json', json.dumps(info, indent=2) + '\n')
         closed = close_session(self.root)
         return [f'session {self.name} closed at {closed["closed"]}']

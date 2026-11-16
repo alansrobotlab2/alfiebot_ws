@@ -57,11 +57,14 @@ mixes tasks, demos and corrections. Each session is one folder under
 - The hardware version comes from `config/hardware.yaml` (`current`).
 - A session is **open** while you record into it and review it. **Closing** it
   (episode manager) makes it final: the recorder, the converter and the episode
-  manager refuse to change a closed session. Only closed sessions are synced to
-  the training machine.
-- The catalog (`catalog/episodes.parquet`), the held-out split and the training
-  folders (`views/`) are built on the training machine from the closed sessions
-  and the registry. Nothing on the robot writes them.
+  manager refuse to change a closed session, episode deletion included;
+  anything recorded later goes into a new session. Closing writes the episode
+  and frame counts into `session.json` and removes any stats files. Only closed
+  sessions are synced and trained on.
+- Training never reads a session directly. `scripts/build_views.py` turns the
+  closed sessions into a **build** under `~/alfie_data/views/` (see "Building a
+  Training Set"), and `scripts/sync_sessions.py` copies closed sessions to the
+  training machine.
 
 The recorder, converter and episode manager derive their paths from
 `alfie_gr00t/dataset_paths.py`. `--data-root` / `ALFIE_DATA_ROOT` moves the
@@ -254,11 +257,13 @@ The episode manager marks corrections `C<round>`; tag why you took over
 ("Why taken over") while reviewing.
 
 Training with takeovers:
-- They stay in the same raw session as the demos recorded with them; the
-  training-side export splits by `source` to weight them.
-- Hold a few takeover episodes out as an offline test (`groot_open_loop_eval.py`):
-  does the model predict the correction from a bad spot?
-- Regenerate stats (below); the converter doesn't.
+- They stay in the same raw session as the demos recorded with them.
+  `build_views.py` puts them in their own view per task family
+  (`pick_place__correction`), weighted with `--ratio`.
+- Once a task has 5 corrections rated ok, the build holds some out
+  (`heldout/`): does the model predict the correction from a bad spot?
+- Set the **correction round** before recording against a new checkpoint; each
+  row also keeps `policy_ckpt` and `run_id`.
 - Retrain from the base model on demos and takeovers together, rather than
   continuing from the last checkpoint on new data alone.
 
@@ -467,32 +472,92 @@ python3 src/alfie_gr00t/scripts/rosbag_to_groot.py \
     --dataset 2026-11-20_s02_hw2 --num-threads 8 --use-gpu
 ```
 
-### Generate normalization statistics
+## Building a Training Set
 
-The trainer refuses to load a dataset without `meta/stats.json`, and
-`relative_stats.json` must be regenerated whenever the action `delta_indices`
-in `alfiebot_config.py` change. From the Isaac-GR00T checkout:
+Training reads a **build**, never a session. A build is made from every closed
+session by `scripts/build_views.py` (rules in `alfie_gr00t/training_views.py`;
+needs pyarrow, so run it with the Isaac-GR00T venv python):
 
 ```bash
-python gr00t/data/stats.py \
-    --dataset-path ~/alfie_data/raw/2026-11-11_s01_hw2/lerobot \
-    --embodiment-tag NEW_EMBODIMENT \
-    --modality-config-path ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/alfiebot_config.py
+~/Isaac-GR00T/.venv/bin/python scripts/build_views.py --dry-run   # show the split
+~/Isaac-GR00T/.venv/bin/python scripts/build_views.py
 ```
+
+```
+~/alfie_data/
+├── raw/                          closed sessions (the source)
+├── catalog/episodes.parquet      one row per episode of every closed session, rebuilt each run
+└── views/
+    ├── 2026-11-20_b01/           one build: never changed after it is written
+    │   ├── manifest.json         which episode went where; code and registry commits; held-out rule
+    │   ├── mix.json              sampling share of each train view
+    │   ├── pick_place__demo/lerobot/         train views: task family x source
+    │   ├── pick_place__correction/lerobot/
+    │   └── heldout/lerobot/      never trained on
+    └── latest -> 2026-11-20_b01
+```
+
+- **Views.** Each is a normal GR00T LeRobot dataset: episodes renumbered from 0,
+  `task_index` renumbered against the view's own `tasks.jsonl`, videos
+  hard-linked to the session's. Every row keeps its session fields and its
+  `episode_uid`. Corrections (and `scripted_recovery`, `autonomous_success`)
+  each get their own view per family, so they can be weighted.
+- **Left out.** Episodes rated `bad`. `marginal` episodes are trained on
+  (`--exclude-marginal` drops them) and never held out.
+- **Held out.** Chosen at each build: within every task x source group, the
+  episodes rated `ok` with the lowest hash of their `episode_uid`, 10% rounded
+  up (`--heldout-fraction`), at least one, none from a group of fewer than 5.
+  Everything the previous build held out stays held out, so a later checkpoint
+  never trains on an earlier one's test episodes (`--previous none` starts
+  over, on purpose).
+- **Weights.** `mix.json` gives each train view the share of sampled frames.
+  The default is its share of frames, which is what pooling the folders would
+  do; `--ratio pick_place__correction=0.12` fixes one and the rest split what
+  is left.
+- **Wording.** `--wording text` (default) labels episodes with the string the
+  deployed policy hears; `--wording instruction` is the v6 wording. The robot
+  client must change with it.
+- **Stats.** None are written. The GR00T trainer generates `stats.json` and
+  `relative_stats.json` in each view on first use and merges them across views;
+  `LeRobotEpisodeLoader` on its own (evals) needs `gr00t/data/stats.py` run on
+  the view first.
+
+New builds are made on the training machine, which is where the held-out set
+is chosen. A checkpoint is kept with the `manifest.json` of its build; on the
+robot the same build is written again from the local sessions for engine
+calibration (train views) and evaluation (`heldout/`):
+
+```bash
+~/Isaac-GR00T/.venv/bin/python scripts/build_views.py --from-manifest <checkpoint>/manifest.json
+```
+
+It refuses to write anything if an episode of the build is missing locally.
+
+### Copy sessions to the training machine
+
+```bash
+python3 scripts/sync_sessions.py user@workstation:alfie_data/raw            # compare only
+python3 scripts/sync_sessions.py user@workstation:alfie_data/raw --push     # copy
+```
+
+Only closed sessions go. Run it on the workstation with `--pull` and the
+robot's address if the robot cannot log in there. `--no-bags` leaves the raw
+bags behind (training does not read them, but the robot then holds the only
+copy).
 
 ### Fine-tune (GR00T N1.7)
 
-`alfiebot_config.py` trains a 32-step horizon (2.1 s at 15 FPS) with RELATIVE
-actions for the back, arms and head and ABSOLUTE actions for the base velocity
-and grippers; `launch_finetune.py` turns relative actions on itself. The image
-settings below match the base model's processor (short edge 256, 0.95 crop) so
-the 352x256 camera frames are used at native aspect:
+`alfiebot_config.py` sets the action horizon and representation (RELATIVE
+back, arms and head; ABSOLUTE base velocity and grippers). The image settings
+match the base model's processor (short edge 256, 0.95 crop) so the 352x256
+camera frames are used at native aspect. `build_views.py` prints the
+`--dataset-path` / `--dataset-mix-ratios` arguments of a build
+(`--dataset-mix-ratios` is a flag of the Isaac-GR00T fork):
 
 ```bash
-cd ~/Isaac-GR00T && source .venv/bin/activate && source scripts/activate_orin.sh
 python gr00t/experiment/launch_finetune.py \
     --base-model-path nvidia/GR00T-N1.7-3B \
-    --dataset-path ~/alfie_data/raw/2026-11-11_s01_hw2/lerobot \
+    --dataset-path ~/alfie_data/views/latest/pick_place__demo/lerobot \
     --embodiment-tag NEW_EMBODIMENT \
     --modality-config-path ~/alfiebot_ws/src/alfie_gr00t/alfie_gr00t/alfiebot_config.py \
     --shortest-image-edge 256 --crop-fraction 0.95 \
@@ -501,9 +566,8 @@ python gr00t/experiment/launch_finetune.py \
     --output-dir ~/Isaac-GR00T/alfie-gr00t
 ```
 
-Several datasets train together by joining their paths with `:` in
-`--dataset-path` (`--ds-weights-alpha` sets the mixture weighting). After
-training, `action_chunk_size` in `groot_client.yaml` must equal the horizon.
+After training, `action_chunk_size` in `groot_client.yaml` must equal the
+horizon.
 
 ### All options
 
