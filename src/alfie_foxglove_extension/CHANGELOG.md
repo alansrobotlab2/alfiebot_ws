@@ -14,6 +14,14 @@
   words, Enter. The number keys 1-9 no longer tag; T focuses the picker.
 - Episode Manager: an episode copied in from an older dataset shows which
   dataset and episode number it was.
+- Episode Manager: what training does with an episode. The quality buttons say
+  what each rating means for training; an episode held out by the newest
+  training build is marked `h`; an episode of a closed session can be left out
+  of future builds with a reason ("Exclude from training") and brought back.
+- Episode Manager: sessions of an earlier day that were never closed are marked
+  in the session list, since only closed sessions are trained on. The close
+  dialog says so. Surface offers the ones already used. The stats reminders
+  are gone: stats belong to a training build.
 
 ## 0.3.0
 

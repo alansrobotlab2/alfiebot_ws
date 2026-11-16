@@ -286,6 +286,24 @@ export function EpisodeManager({
     patchEpisode(index, fields);
   };
 
+  const exclude = async (excluded: boolean, reason: string) => {
+    if (!episode) {
+      return;
+    }
+    const index = episode.index;
+    const res = await api.exclude(index, excluded, reason);
+    if (!res.ok) {
+      say(`not saved: ${res.error ?? "unknown error"}`);
+      return;
+    }
+    patchEpisode(index, { excluded: excluded ? reason : null });
+    say(
+      excluded
+        ? `${episodeName(index)} left out of future training builds`
+        : `${episodeName(index)} back in future training builds`,
+    );
+  };
+
   const setContext = async (update: Partial<RecordingContext>) => {
     const res = await api.setContext(update);
     if (!res.ok) {
@@ -321,7 +339,12 @@ export function EpisodeManager({
         <>
           <p>
             A closed session is final: its <b>{summary.episodes.length}</b> episodes can no longer
-            be relabelled, re-rated, deleted or converted. Do this once the review is done.
+            be relabelled, re-rated, deleted or converted, and nothing more is recorded into it. Do
+            this once the review is done: it is the last chance to rate an episode <b>bad</b>.
+          </p>
+          <p>
+            Closing is what makes the session available to training. Only closed sessions are copied
+            to the training machine and built into training sets.
           </p>
           {pending !== 0 && (
             <p>
@@ -372,9 +395,7 @@ export function EpisodeManager({
               its row in <code>episodes.jsonl</code>
             </li>
           </ul>
-          <p className="dim">
-            Other episodes keep their indices. Regenerate stats before training.
-          </p>
+          <p className="dim">Other episodes keep their indices.</p>
         </>
       ),
       confirm: "Delete",
@@ -560,17 +581,6 @@ export function EpisodeManager({
             : " Pick the task under Next recording, then record some demonstrations."}
         </div>
       )}
-      {/* Stats for sessions are made on the training machine, for the merged training folders. */}
-      {summary.converted && summary.stats_stale && !summary.is_session && (
-        <div className="banner">
-          <code>meta/stats.json</code> is older than <code>episodes.jsonl</code>. Regenerate it
-          before training:
-          <code className="cmd">
-            python gr00t/data/stats.py --dataset-path {summary.path} --embodiment-tag NEW_EMBODIMENT
-            --modality-config-path alfiebot_config.py
-          </code>
-        </div>
-      )}
 
       <main className="layout">
         <EpisodeList
@@ -620,6 +630,7 @@ export function EpisodeManager({
                   onTask={(task) => void label(task)}
                   onFields={(fields) => void review(fields)}
                   onDelete={askDelete}
+                  onExclude={(excluded, reason) => void exclude(excluded, reason)}
                 />
                 <Details episode={episode} tasks={summary.tasks} fps={summary.fps} />
               </div>

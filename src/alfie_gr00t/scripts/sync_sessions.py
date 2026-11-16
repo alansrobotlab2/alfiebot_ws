@@ -12,7 +12,9 @@ incomplete. Whether a session is "synced" is decided by comparing the two
 sides (rsync dry run), never by a flag written into the session.
 
 Only closed sessions are copied (--pull asks the remote which are closed).
-Left out: the converter's decompressed bags (*.mcap; the *.mcap.zstd beside
+The exclusion log (exclusions.jsonl: episodes found bad after closing) is
+merged, so both sides end up with every decision. Left out: the converter's
+decompressed bags (*.mcap; the *.mcap.zstd beside
 them is the recording), stats files a GR00T loader may have written, and with
 --no-bags the whole demonstrations/ folder (training reads lerobot/ only).
 """
@@ -24,7 +26,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from alfie_gr00t import dataset_paths  # noqa: E402
+from alfie_gr00t import dataset_paths, training_views  # noqa: E402
 
 EXCLUDES = ['*.mcap', 'stats.json', 'relative_stats.json', '.copy_*', '.trim']
 
@@ -71,6 +73,29 @@ def rsync(src: str, dst: str, dry: bool, bags: bool):
     return [line for line in run.stdout.splitlines() if line[:2] in ('<f', '>f')]
 
 
+def merge_exclusions(root: Path, remote: str) -> str:
+    """Give both sides the union of their exclusion logs (either may add to it)."""
+    name = training_views.EXCLUSIONS_FILE
+    local = root / name
+    fetched = root / f'.{name}.remote'
+    fetched.unlink(missing_ok=True)
+    subprocess.run(['rsync', '-a', f'{remote}/{name}', str(fetched)], capture_output=True)
+    theirs = fetched.read_text() if fetched.is_file() else ''
+    fetched.unlink(missing_ok=True)
+    ours = local.read_text() if local.is_file() else ''
+    merged = training_views.merge_exclusions(ours, theirs)
+    if not merged:
+        return 'exclusions: none on either side'
+    if merged != ours:
+        local.write_text(merged)
+    if merged != theirs:
+        run = subprocess.run(['rsync', '-a', str(local), f'{remote}/{name}'],
+                             capture_output=True, text=True)
+        if run.returncode != 0:
+            sys.exit(f'could not copy {name}: {run.stderr.strip()}')
+    return f'exclusions: {len(merged.splitlines())} decisions on both sides'
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('remote', help='rsync location of the other data root')
@@ -110,6 +135,8 @@ def main():
         else:
             state = f'{len(files)} files to copy' if files else 'in sync'
         print(f'{name}: {state}')
+    if copy:
+        print(merge_exclusions(root, remote))
     if not copy and pending:
         print(f'{pending} of {len(names)} sessions differ; rerun with --push or --pull to copy')
 

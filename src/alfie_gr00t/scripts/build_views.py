@@ -23,8 +23,9 @@ Each view is a GR00T LeRobot v2.1 dataset: episodes renumbered from 0 in
 (session, episode) order, task_index renumbered against the view's own
 tasks.jsonl, parquet rewritten, videos hard-linked (copied across file
 systems). No stats files are written; the GR00T loader makes them on first
-use. Episodes rated bad are left out; marginal ones are trained on but never
-held out.
+use. Episodes rated bad are left out, as are those in <data-root>/exclusions.jsonl
+(episodes found bad after their session was closed; the episode manager adds
+them). Marginal ones are trained on but never held out.
 
 A checkpoint is kept with the manifest of the build it was trained from.
 --from-manifest reproduces that build on another machine (the robot, for
@@ -256,10 +257,13 @@ def main():
             die(f'--group-by: no episode has the field(s) '
                 f'{", ".join(sorted(set(group_by) - known)) or "(none given)"}')
         usable, excluded = [], {}
+        listed = tv.read_exclusions(root)
         for uid, ep in by_uid.items():
             if registry.by_id(ep.get('task_id') or '') is None:
                 die(f'{uid}: task {ep.get("task_id")!r} is not in the task registry')
-            if ep.get('quality') == 'bad':
+            if uid in listed:
+                excluded[uid] = f'excluded: {listed[uid]}' if listed[uid] else 'excluded'
+            elif ep.get('quality') == 'bad':
                 excluded[uid] = 'bad'
             else:
                 usable.append(ep)

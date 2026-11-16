@@ -506,8 +506,12 @@ needs pyarrow, so run it with the Isaac-GR00T venv python):
   `--group-by task_id,source` or `--group-by family,source,round` splits on any
   other episode fields, to weight a single task or the latest correction round
   on its own.
-- **Left out.** Episodes rated `bad`. `marginal` episodes are trained on
-  (`--exclude-marginal` drops them) and never held out.
+- **Left out.** Episodes rated `bad`, and those in `raw/exclusions.jsonl`: an
+  episode found bad after its session was closed is excluded there with a
+  reason (episode manager, "Exclude from training"; it can be taken back),
+  because a closed session is not edited. `sync_sessions.py` merges the two
+  machines' lists. `marginal` episodes are trained on (`--exclude-marginal`
+  drops them) and never held out.
 - **Held out.** Chosen at each build: within every task x source group, the
   episodes rated `ok` with the lowest hash of their `episode_uid`, 10% rounded
   up (`--heldout-fraction`), at least one, none from a group of fewer than 5.

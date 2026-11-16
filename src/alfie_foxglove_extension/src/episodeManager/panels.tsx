@@ -154,11 +154,14 @@ function CommitInput({
   value,
   disabled,
   placeholder,
+  list,
   onCommit,
 }: {
   value: string;
   disabled?: boolean;
   placeholder?: string;
+  /** id of a <datalist> of suggestions. */
+  list?: string;
   onCommit: (value: string) => void;
 }): ReactElement {
   const [draft, setDraft] = useState(value);
@@ -176,6 +179,7 @@ function CommitInput({
       value={draft}
       disabled={disabled}
       placeholder={placeholder}
+      list={list}
       onChange={(e) => {
         setDraft(e.target.value);
       }}
@@ -281,10 +285,16 @@ function RecordingBar({
         <CommitInput
           value={ctx.surface}
           placeholder="floor, table…"
+          list="em-surfaces"
           onCommit={(surface) => {
             onContext({ surface });
           }}
         />
+        <datalist id="em-surfaces">
+          {(info.surfaces ?? []).map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
       </label>
       <div className="target">
         <span className="pill" title="Where the recorder writes the next episode">
@@ -331,6 +341,11 @@ export function TopBar({
   onContext: (update: Partial<RecordingContext>) => void;
 }): ReactElement {
   const closed = summary.closed != undefined;
+  // Sessions of an earlier day that were never closed: recorded, but invisible to training.
+  const today = localDay();
+  const leftOpen = (info.sessions ?? [])
+    .filter((s) => s.is_session && !s.closed && s.day != undefined && s.day < today)
+    .map((s) => s.name);
   // Counted here, not taken from the summary, so it follows tags made since the last reload.
   const untagged = summary.episodes.filter((ep) => ep.task_index == undefined).length;
   return (
@@ -359,10 +374,19 @@ export function TopBar({
             {info.datasets.map((d) => (
               <option key={d} value={d}>
                 {d}
+                {leftOpen.includes(d) ? " · still open" : ""}
               </option>
             ))}
           </select>
         </label>
+        {leftOpen.length !== 0 && (
+          <span
+            className="pill warn"
+            title={`Not closed, so not used for training: ${leftOpen.join(", ")}`}
+          >
+            {leftOpen.length} left open
+          </span>
+        )}
         <button
           type="button"
           className="btn"
@@ -435,6 +459,7 @@ export function Editor({
   onTask,
   onFields,
   onDelete,
+  onExclude,
 }: {
   episode: Episode;
   tasks: Task[];
@@ -449,6 +474,7 @@ export function Editor({
   onTask: (task: Task) => void;
   onFields: (fields: EpisodeFields) => void;
   onDelete: () => void;
+  onExclude: (excluded: boolean, reason: string) => void;
 }): ReactElement {
   const locked = busy || readOnly;
   return (
@@ -482,6 +508,7 @@ export function Editor({
                 type="button"
                 key={q}
                 disabled={locked}
+                title={QUALITY_HELP[q]}
                 className={`btn${episode.quality === q ? " current" : ""}`}
                 onClick={() => {
                   onFields({ quality: q });
@@ -522,6 +549,7 @@ export function Editor({
           />
         </label>
       </div>
+      {readOnly && <Exclusion episode={episode} busy={busy} onExclude={onExclude} />}
       <div className="editor-foot">
         <button type="button" className="btn danger" disabled={locked} onClick={onDelete}>
           Delete episode…
@@ -534,6 +562,76 @@ export function Editor({
         </span>
       </div>
     </section>
+  );
+}
+
+/** What a rating does to an episode when a training set is built. */
+const QUALITY_HELP: Record<string, string> = {
+  ok: "Used for training, and may be held out as a test episode",
+  marginal: "Used for training, never held out as a test episode",
+  bad: "Left out of training and testing; kept in the session",
+};
+
+function localDay(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/** Leaving an episode of a closed session out of training: the session cannot be edited. */
+function Exclusion({
+  episode,
+  busy,
+  onExclude,
+}: {
+  episode: Episode;
+  busy: boolean;
+  onExclude: (excluded: boolean, reason: string) => void;
+}): ReactElement {
+  const [reason, setReason] = useState("");
+  useEffect(() => {
+    setReason("");
+  }, [episode.index]);
+  if (episode.excluded != undefined) {
+    return (
+      <div className="exclusion">
+        <span className="warn">Left out of training: {episode.excluded || "no reason given"}</span>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() => {
+            onExclude(false, "");
+          }}
+        >
+          Include again
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="exclusion">
+      <input
+        type="text"
+        value={reason}
+        disabled={busy}
+        placeholder="Found bad after closing? Say why…"
+        onChange={(e) => {
+          setReason(e.target.value);
+        }}
+      />
+      <button
+        type="button"
+        className="btn"
+        disabled={busy || reason.trim() === ""}
+        title="Leaves the episode out of every training set built from now on. The session itself is not changed."
+        onClick={() => {
+          onExclude(true, reason.trim());
+        }}
+      >
+        Exclude from training
+      </button>
+    </div>
   );
 }
 
@@ -594,6 +692,18 @@ export function Details({
       </>,
     ],
     ["Recorded", episode.recorded ?? "--"],
+    ...(episode.excluded != undefined || episode.heldout != undefined || episode.quality === "bad"
+      ? ([
+          [
+            "Training",
+            episode.excluded != undefined
+              ? `left out: ${episode.excluded || "no reason given"}`
+              : episode.quality === "bad"
+                ? "left out: rated bad"
+                : `held out as a test episode in build ${episode.heldout ?? ""}`,
+          ],
+        ] as [string, ReactNode][])
+      : []),
     ...(episode.legacy_episode_index != undefined
       ? ([
           [

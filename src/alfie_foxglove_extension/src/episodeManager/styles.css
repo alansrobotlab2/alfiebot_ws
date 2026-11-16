@@ -489,3 +489,6 @@
 .em .pick-num { color: var(--text-dim); text-align: right; }
 .em .pick-id, .em .pick-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .em .pick-text { color: var(--text-dim); }
+.em .exclusion { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.em .exclusion input[type=text] { flex: 1 1 200px; }
+.em .exclusion .warn { flex: 1 1 200px; }

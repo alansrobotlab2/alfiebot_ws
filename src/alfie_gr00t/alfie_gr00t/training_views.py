@@ -149,3 +149,63 @@ def latest_build(views_root):
     names = sorted(d.name for d in root.iterdir()
                    if BUILD_RE.match(d.name) and (d / 'manifest.json').is_file())
     return names[-1] if names else None
+
+
+# -- exclusions --------------------------------------------------------------
+# A closed session is never edited, so an episode found to be bad afterwards is
+# excluded here instead: an append-only log beside the sessions, one JSON line
+# per decision {episode_uid, excluded, reason, at}. The latest line for an
+# episode wins, so an exclusion can be withdrawn. sync_sessions.py merges the
+# two machines' logs.
+
+EXCLUSIONS_FILE = 'exclusions.jsonl'
+
+
+def parse_exclusions(text: str):
+    """Decisions in a log's text, oldest first; unreadable lines are dropped."""
+    import json
+    entries = []
+    for line in text.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get('episode_uid') and entry.get('at'):
+            entries.append(entry)
+    return sorted(entries, key=lambda e: (e['at'], e['episode_uid']))
+
+
+def format_exclusions(entries) -> str:
+    import json
+    return ''.join(json.dumps(e, sort_keys=True) + '\n' for e in entries)
+
+
+def merge_exclusions(*texts) -> str:
+    """Union of several logs, each decision once, oldest first."""
+    import json
+    seen = {}
+    for text in texts:
+        for entry in parse_exclusions(text or ''):
+            seen[json.dumps(entry, sort_keys=True)] = entry
+    return format_exclusions(sorted(seen.values(), key=lambda e: (e['at'], e['episode_uid'])))
+
+
+def read_exclusions(data_root):
+    """{episode_uid: reason} of the episodes excluded right now."""
+    try:
+        text = (Path(data_root) / EXCLUSIONS_FILE).read_text()
+    except OSError:
+        return {}
+    current = {}
+    for entry in parse_exclusions(text):
+        current[entry['episode_uid']] = entry
+    return {uid: e.get('reason') or '' for uid, e in current.items() if e.get('excluded')}
+
+
+def add_exclusion(data_root, uid: str, excluded: bool, reason: str = ''):
+    """Append one decision to the log."""
+    entry = {'episode_uid': uid, 'excluded': bool(excluded), 'reason': reason.strip(),
+             'at': datetime.datetime.now().astimezone().isoformat(timespec='milliseconds')}
+    with open(Path(data_root) / EXCLUSIONS_FILE, 'a') as f:
+        f.write(format_exclusions([entry]))
+    return entry

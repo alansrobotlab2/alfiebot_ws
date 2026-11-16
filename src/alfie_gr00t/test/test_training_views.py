@@ -73,3 +73,20 @@ def test_view_names_follow_the_chosen_fields():
     assert tv.view_name(ep, ['surface']) == 'none'
     with pytest.raises(ValueError):
         tv.view_name({'source': 'heldout'}, ['source'])
+
+
+def test_exclusions_latest_decision_wins_and_logs_merge(tmp_path):
+    a, b = tmp_path / 'a', tmp_path / 'b'
+    a.mkdir()
+    b.mkdir()
+    assert tv.read_exclusions(a) == {}
+    tv.add_exclusion(a, 's/000001', True, 'clipped the table')
+    tv.add_exclusion(a, 's/000002', True, 'wrong can')
+    tv.add_exclusion(a, 's/000002', False)
+    tv.add_exclusion(b, 's/000009', True, 'eval outlier')
+    assert tv.read_exclusions(a) == {'s/000001': 'clipped the table'}
+    merged = tv.merge_exclusions((a / tv.EXCLUSIONS_FILE).read_text(),
+                                 (b / tv.EXCLUSIONS_FILE).read_text())
+    assert merged == tv.merge_exclusions(merged, (a / tv.EXCLUSIONS_FILE).read_text())
+    (a / tv.EXCLUSIONS_FILE).write_text(merged)
+    assert tv.read_exclusions(a) == {'s/000001': 'clipped the table', 's/000009': 'eval outlier'}

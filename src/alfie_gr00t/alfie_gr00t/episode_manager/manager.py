@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from alfie_gr00t import task_registry
-from alfie_gr00t.dataset_paths import create_session
+from alfie_gr00t import training_views
+from alfie_gr00t.dataset_paths import SESSION_RE, create_session, session_info
 from alfie_gr00t.episode_manager.dataset import ConvertJob, Dataset, DatasetError
 from alfie_gr00t.recording_context import (
     FAILURE_MODES, QUALITIES, SOURCES, merge_context,
@@ -200,11 +201,76 @@ class EpisodeManager:
                 'sources': list(SOURCES), 'qualities': list(QUALITIES),
                 'failure_modes': list(FAILURE_MODES)}
 
+    def session_list(self) -> List[Dict[str, Any]]:
+        """Every folder under the data root with whether it is still open."""
+        out = []
+        for name in self.datasets():
+            info = session_info(self.data_root / name)
+            match = SESSION_RE.match(name)
+            out.append({'name': name, 'is_session': info is not None,
+                        'closed': bool(info and info.get('closed')),
+                        'day': match.group(1) if match else None})
+        return out
+
+    def surfaces(self) -> List[str]:
+        """Surfaces already used in any session, for the recording bar to offer."""
+        seen = set()
+        for name in self.datasets():
+            path = self.data_root / name / 'lerobot' / 'meta' / 'episodes.jsonl'
+            try:
+                with open(path) as f:
+                    for line in f:
+                        if '"surface"' in line:
+                            seen.add(str(json.loads(line).get('surface') or ''))
+            except (OSError, ValueError):
+                continue
+        return sorted(s for s in seen if s)
+
+    def _training_facts(self, summary: Dict[str, Any]) -> None:
+        """Mark each episode with what training does with it: excluded after
+        closing (exclusions.jsonl) and held out by the newest build here."""
+        excluded = training_views.read_exclusions(self.data_root)
+        views_root = self.data_root.parent / 'views'
+        build = training_views.latest_build(views_root)
+        heldout: set = set()
+        if build:
+            try:
+                with open(views_root / build / 'manifest.json') as f:
+                    heldout = set(json.load(f)['views'].get(training_views.HELDOUT_VIEW, []))
+            except (OSError, ValueError, KeyError):
+                build = None
+        summary['build'] = build
+        for ep in summary['episodes']:
+            uid = ep.get('episode_uid')
+            ep['excluded'] = excluded.get(uid)
+            ep['heldout'] = build if uid in heldout else None
+
+    def exclude(self, index: int, excluded: bool, reason: str = '') -> Dict[str, Any]:
+        """Leave an episode out of future training builds (or take that back).
+
+        The way to drop an episode of a closed session, which cannot be edited.
+        """
+        reason = str(reason or '').strip()
+        if excluded and not reason:
+            return {'ok': False, 'error': 'say why the episode is excluded'}
+        for ep in self.dataset.episodes():
+            if int(ep['episode_index']) == index:
+                uid = ep.get('episode_uid') or f'{self.dataset.name}/{index:06d}'
+                training_views.add_exclusion(self.data_root, uid, excluded, reason)
+                what = f'excluded from training: {reason}' if excluded else 'no longer excluded'
+                self._log(f'[{self.dataset.name}] episode {index} {what}')
+                return {'ok': True, 'log': [f'episode {index} {what}']}
+        return {'ok': False, 'error': f'episode {index} not found'}
+
     def describe(self) -> Dict[str, Any]:
+        summary = self.dataset.summary(self.registry())
+        self._training_facts(summary)
         return {
             'data_root': str(self.data_root),
             'datasets': self.datasets(),
-            'dataset': self.dataset.summary(self.registry()),
+            'sessions': self.session_list(),
+            'surfaces': self.surfaces(),
+            'dataset': summary,
             'registry': self.registry_info(),
             'context': self.context,
             'python': self.python,

@@ -51,6 +51,10 @@ export type Episode = {
   /** Frame the task's done condition is confirmed. */
   done_frame: number | null;
   legacy_dataset?: string | null;
+  /** Why the episode is left out of training builds (set after closing), else null. */
+  excluded?: string | null;
+  /** The newest training build on this machine that holds the episode out, else null. */
+  heldout?: string | null;
   legacy_episode_index: number | null;
 };
 
@@ -110,11 +114,25 @@ export type DatasetSummary = {
   pending: string[];
   orphans: number;
   stats_stale: boolean;
+  /** Newest training build on this machine, if any. */
+  build?: string | null;
+};
+
+export type SessionEntry = {
+  name: string;
+  is_session: boolean;
+  closed: boolean;
+  /** YYYY-MM-DD of a session name. */
+  day: string | null;
 };
 
 export type DatasetInfo = {
   data_root: string;
   datasets: string[];
+  /** The same folders with whether each is still open. */
+  sessions?: SessionEntry[];
+  /** Surfaces already used in recordings, offered when setting the next one. */
+  surfaces?: string[];
   dataset: DatasetSummary;
   registry: Registry;
   /** null until the data recorder has been seen. */
@@ -164,6 +182,8 @@ export type Api = {
   newSession: () => Promise<Result>;
   closeSession: (force: boolean) => Promise<Result>;
   remove: (episode: number) => Promise<Result>;
+  /** Leave an episode out of future training builds, or take that back. */
+  exclude: (episode: number, excluded: boolean, reason: string) => Promise<Result>;
   /** Convert the new bags. One recorded without a task becomes an unlabelled episode. */
   convert: (force: boolean) => Promise<Result>;
   cancel: () => Promise<Result>;
@@ -211,6 +231,8 @@ export function makeApi(base: string): Api {
     newSession: async () => await post("/api/new_session"),
     closeSession: async (force: boolean) => await post("/api/close_session", { force }),
     remove: async (episode: number) => await post("/api/delete", { episode }),
+    exclude: async (episode: number, excluded: boolean, reason: string) =>
+      await post("/api/exclude", { episode, excluded, reason }),
     convert: async (force: boolean) => await post("/api/convert", { force, task: null }),
     cancel: async () => await post("/api/cancel"),
     videoUrl: (episode: number, camera: string, rev: number) =>

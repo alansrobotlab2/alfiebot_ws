@@ -121,6 +121,12 @@ export function EpisodeList({
           if (ep.quality !== "ok") {
             problems.push(`quality: ${ep.quality}`);
           }
+          if (ep.excluded != undefined) {
+            problems.push(`excluded from training: ${ep.excluded || "no reason given"}`);
+          }
+          if (ep.heldout != undefined) {
+            problems.push(`held out in build ${ep.heldout}`);
+          }
           return (
             <button
               type="button"
@@ -153,18 +159,20 @@ export function EpisodeList({
               </span>
               <span className="ep-dur mono">{fmtDuration(ep.duration)}</span>
               <span
-                className={`ep-flag${!ok || ep.quality === "bad" ? " bad" : ""}`}
+                className={`ep-flag${!ok || ep.quality === "bad" || ep.excluded != undefined ? " bad" : ""}`}
                 title={problems.join(", ")}
               >
                 {!ok
                   ? "!"
-                  : ep.quality === "bad"
+                  : ep.quality === "bad" || ep.excluded != undefined
                     ? "✗"
                     : ep.quality === "marginal"
                       ? "~"
-                      : !ep.has_source
-                        ? "·"
-                        : ""}
+                      : ep.heldout != undefined
+                        ? "h"
+                        : !ep.has_source
+                          ? "·"
+                          : ""}
               </span>
             </button>
           );

@@ -159,6 +159,8 @@ class _Handler(BaseHTTPRequestHandler):
             '/api/new_session': lambda p: self.manager.new_session(),
             '/api/close_session': lambda p: self.manager.close_session(bool(p.get('force'))),
             '/api/delete': lambda p: self.manager.delete(int(p['episode'])),
+            '/api/exclude': lambda p: self.manager.exclude(
+                int(p['episode']), bool(p.get('excluded', True)), str(p.get('reason') or '')),
             '/api/convert': lambda p: self.manager.convert(
                 int(p['task']) if p.get('task') is not None else None,
                 bool(p.get('force')), str(p.get('task_name') or ''),
