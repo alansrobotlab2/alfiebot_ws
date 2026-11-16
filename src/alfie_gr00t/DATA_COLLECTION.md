@@ -312,9 +312,11 @@ has no session, recording-context or quality controls.
 ros2 run alfie_gr00t episode_manager        # opens the newest session
 ```
 
-A banner appears when `meta/stats.json` is older than `episodes.jsonl`; stats are
-generated on the training machine for the merged training folders, so for a raw
-session it is only a reminder.
+The panel also shows what training does with an episode: `h` marks one the
+newest training build on this machine holds out, and an episode of a closed
+session can be left out of future builds with a reason ("Exclude from
+training"). Sessions of an earlier day that were never closed are marked in the
+session list, because only closed sessions are trained on.
 
 **Convert refuses to run while episodes have no bag** in `demonstrations/` (e.g.
 the bags were moved off the robot) unless you confirm: the converter treats a
@@ -607,20 +609,19 @@ lerobot/
 └── meta/
     ├── info.json
     ├── modality.json
-    ├── stats.json            (gr00t/data/stats.py)
-    ├── relative_stats.json   (gr00t/data/stats.py)
     ├── episodes.jsonl
     └── tasks.jsonl
 ```
 
 ## Next Steps
 
-After collecting 500+ demonstrations:
+After a recording sitting:
 
-1. **Convert to GR00T format** - Use `rosbag_to_groot.py` as described above
-2. **Review dataset** - Remove corrupted/failed episodes in the episode manager
-3. **Regenerate stats** - Run `gr00t/data/stats.py`
-4. **Train policy** - Fine-tune GR00T with `--dataset-path ~/alfie_data/raw/<session>/lerobot`
+1. **Convert and tag** - Convert the new bags and tag them in the episode manager
+2. **Review** - Rate episodes ok / marginal / bad; delete the unusable ones
+3. **Close the session** - Only closed sessions are trained on
+4. **Sync** - `sync_sessions.py` copies closed sessions to the training machine
+5. **Build and train** - `build_views.py` there, then fine-tune from the build
 
 ## Advanced Options
 
