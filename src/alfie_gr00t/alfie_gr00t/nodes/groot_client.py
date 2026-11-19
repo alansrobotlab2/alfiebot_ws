@@ -1790,8 +1790,8 @@ class GrootClientNode(Node):
 
         n = min(self.action_chunk_size, len(actions))
         chunk = np.array(actions[:n], dtype=np.float32)
-        # The back action is relative to the measured height, so small positive
-        # outputs at the top push it above anything in the training data.
+        # Optional cap on the back target (checkpoints trained with a RELATIVE
+        # back drift above the training data's 0.34 m top).
         if self.back_max_height > 0.0:
             np.minimum(chunk[:, 6], self.back_max_height, out=chunk[:, 6])
         return chunk

@@ -61,7 +61,7 @@ Ping: Client sends `{'ping': True}`, server returns `{'pong': True}`.
  - `launch/groot_inference.launch.py` — Launches the client only. All parameters come from `groot_client.yaml`; a launch arg overrides the yaml only when passed.
 
 ## Training Pipeline
- - Training config: `alfiebot_config.py` — Defines modality config (4 cameras, 22D state/action, 16-step horizon; RELATIVE back/arm/head actions, ABSOLUTE base velocity and grippers — N1.7 guidance; `launch_finetune.py` forces `use_relative_action=True`).
+ - Training config: `alfiebot_config.py` — Defines modality config (4 cameras, 22D state/action, 16-step horizon; RELATIVE arm/head actions, ABSOLUTE base velocity, back and grippers — N1.7 guidance; `launch_finetune.py` forces `use_relative_action=True`).
  - Data conversion: `scripts/rosbag_to_groot.py` — Converts ROS2 rosbags to LeRobot format (MP4 videos + parquet state/action data).
  - Datasets: one folder per dataset under `data/<dataset>/` (`alfie_gr00t/dataset_paths.py`): `demonstrations/` holds raw bags from `nodes/data_recorder.py`, `lerobot/` holds the converted GR00T LeRobot v2 output (pass this as `--dataset-path`). The recorder, converter and episode manager all take `--dataset NAME` / `dataset:=NAME` (env `ALFIE_DATASET`, `ALFIE_DATA_ROOT`). The soda-can challenge data is `data/can_do_challenge/` — 200 episodes, 2 tasks.
  - Takeover episodes: during a GR00T run, the VR node observes (releases all claims). A left stick click freezes the robot, stops groot_client and the agent task via the latched `/alfie/groot/takeover`, and records the operator's correction. The converter tags these `origin: takeover`, takes the task from the run, and trims the frozen lead-in (DATA_COLLECTION.md "Takeover Episodes").

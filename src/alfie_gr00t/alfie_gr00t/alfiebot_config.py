@@ -22,10 +22,11 @@ from gr00t.data.types import (
 # -50%, jerk -61%, Isaac-GR00T rtc_smoothness_eval.py), so 16 is kept for now.
 #
 # Representation (N1.7 guidance, getting_started/real_world_deployment.md):
-# RELATIVE (delta from the current state) for position-controlled joints,
-# which converges faster and keeps consecutive chunks consistent; ABSOLUTE for
-# the grippers (binary open/close) and for the base, which is a velocity
-# command with no positional state to be relative to. The dataset stores
+# RELATIVE (delta from the current state) for the arm and head joints, which
+# converges faster and keeps consecutive chunks consistent; ABSOLUTE for the
+# grippers (binary open/close), the base, which is a velocity command with no
+# positional state to be relative to, and the back (a RELATIVE back crept
+# above the 0.34 m top of the training data at the start of a run). The dataset stores
 # absolute values for everything; the processor converts at train/infer time.
 #
 # Changing delta_indices or the representations requires regenerating
@@ -71,8 +72,8 @@ alfiebot_config = {
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),
-            ActionConfig(  # back — position (meters), delta from current height
-                rep=ActionRepresentation.RELATIVE,
+            ActionConfig(  # back — position (meters), absolute height target
+                rep=ActionRepresentation.ABSOLUTE,
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),

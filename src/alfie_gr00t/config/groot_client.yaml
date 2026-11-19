@@ -94,8 +94,9 @@
     task_description: "find the can and pick it up"
 
     # Cap on the back target, m (0.0 = off). The top position in the training
-    # data is 0.34 m (highest demonstrated command 0.3407) and the relative
-    # back action creeps up to ~0.351 at the start of a run. OFF: with the cap
+    # data is 0.34 m (highest demonstrated command 0.3407); checkpoints with a
+    # RELATIVE back (checkpoint-20000/40000) creep up to ~0.351 at the start of
+    # a run. Back is ABSOLUTE from the next retrain on, which should remove it. OFF: with the cap
     # at 0.34 the robot was slow to look down and start (3 of 4 capped runs
     # took 16-33 s, all 11 uncapped runs under 10 s; 2026-11-13).
     back_max_height: 0.0

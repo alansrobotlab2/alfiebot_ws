@@ -558,7 +558,7 @@ copy).
 ### Fine-tune (GR00T N1.7)
 
 `alfiebot_config.py` sets the action horizon and representation (RELATIVE
-back, arms and head; ABSOLUTE base velocity and grippers). The image settings
+arms and head; ABSOLUTE base velocity, back and grippers). The image settings
 match the base model's processor (short edge 256, 0.95 crop) so the 352x256
 camera frames are used at native aspect. `build_views.py` prints the
 `--dataset-path` / `--dataset-mix-ratios` arguments of a build
